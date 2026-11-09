@@ -1,11 +1,35 @@
 // Gateway control API types (docs/ARCHITECTURE.md) plus the shapes of the portal's own JSON routes.
 // Type-only module: safe to import from client components.
-import type { WorkspaceStatus } from "@portal/db";
+import type { AgentKind, WorkspaceStatus } from "@portal/db";
+
+/** GET /control/agents: one of the agents enabled on this install (the chooser's cards, in display order). */
+export interface AgentInfo {
+  id: AgentKind;
+  /** Display name, as in AGENT_NAMES. */
+  name: string;
+  description: string;
+  /** The version in the workspace image, e.g. "0.27.0". */
+  version: string;
+}
+
+/** Body of POST /control/workspaces/:id/start and of POST /api/workspace/start. */
+export interface StartRequest {
+  /**
+   * Omitted: attach to whatever is starting or running; otherwise start the only agent enabled, or with several
+   * the workspace's last one (400 `agent_required` if it never ran one).
+   */
+  agent?: AgentKind;
+}
 
 export interface WorkspaceInfo {
   userId: number;
   status: WorkspaceStatus;
-  /** The agent (the Qwen Code Web Shell) answered its health check. */
+  /**
+   * The agent of the starting or running container; when stopped (or error), the one used last; null if the
+   * workspace never started.
+   */
+  agent: AgentKind | null;
+  /** The agent answered its health check. */
   ready: boolean;
   startedAt: number | null;
   lastActivityAt: number | null;
@@ -24,7 +48,7 @@ export interface WorkspaceInfo {
   busyReason: "task" | "llm" | "cpu" | null;
   /** Nobody uses it any more but it is still working; it stops once the work is done. */
   stopPending: boolean;
-  /** "logout" | "idle" | "admin" | "deactivated" | "deleted" | "capacity" | "error" | ... */
+  /** "logout" | "idle" | "admin" | "user" | "deactivated" | "deleted" | "capacity" | "error" | ... */
   stopReason: string | null;
   lastError: string | null;
 }
@@ -46,12 +70,14 @@ export interface ApiError {
   message: string;
 }
 
-/** GET /api/workspace/status and POST /api/workspace/start. */
+/** GET /api/workspace/status, POST /api/workspace/start and POST /api/workspace/stop. */
 export interface WorkspaceStatusResponse extends WorkspaceInfo {
   /** Whose workspace this session uses (the gateway routes the iframe there). */
   targetUserId: number;
   /** True when an admin is viewing someone else's workspace. */
   actingAs: boolean;
+  /** The agents enabled on this install, in display order: what the page offers when nothing runs. */
+  agents: AgentInfo[];
 }
 
 /** GET /api/admin/overview. Either part is null when the gateway could not provide it. */

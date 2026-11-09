@@ -3,8 +3,9 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import type { AgentKind } from "@portal/db";
 import { fetchJson } from "@/lib/fetch-json";
-import { summarizeWorkspace } from "@/lib/format";
+import { agentLabel, summarizeWorkspace } from "@/lib/format";
 import type { AdminOverview, WorkspaceInfo } from "@/lib/gateway-types";
 import type { UserSummary } from "@/lib/user-summary";
 import { Avatar } from "@/components/brand";
@@ -24,10 +25,12 @@ interface DashboardProps {
   initialOverview: AdminOverview;
   currentAdminId: number;
   idleTimeoutMinutes: number;
+  /** AGENT_NAMES, which this client component can't import from @portal/db. */
+  agentNames: Readonly<Record<AgentKind, string>>;
 }
 
 /** Host stats and the users table, with workspace state refreshed every 5 s. */
-export function AdminDashboard({ users, initialOverview, currentAdminId, idleTimeoutMinutes }: DashboardProps) {
+export function AdminDashboard({ users, initialOverview, currentAdminId, idleTimeoutMinutes, agentNames }: DashboardProps) {
   const router = useRouter();
   const [overview, setOverview] = useState(initialOverview);
 
@@ -73,7 +76,7 @@ export function AdminDashboard({ users, initialOverview, currentAdminId, idleTim
           <table className={TABLE_CLASS}>
             <thead>
               <tr>
-                {["Name", "Username", "Role", "Account", "Workspace", "Last sign-in"].map((heading) => (
+                {["Name", "Username", "Role", "Account", "Workspace", "Agent", "Last sign-in"].map((heading) => (
                   <th key={heading} scope="col" className={TH_CLASS}>
                     {heading}
                   </th>
@@ -91,6 +94,7 @@ export function AdminDashboard({ users, initialOverview, currentAdminId, idleTim
                   isSelf={user.id === currentAdminId}
                   workspace={overview.workspaces ? (workspaces.get(user.id) ?? null) : undefined}
                   idleTimeoutMinutes={idleTimeoutMinutes}
+                  agentNames={agentNames}
                 />
               ))}
             </tbody>
@@ -107,12 +111,14 @@ interface UserRowProps {
   /** undefined = unknown (gateway unavailable); null = no workspace row (stopped). */
   workspace: WorkspaceInfo | null | undefined;
   idleTimeoutMinutes: number;
+  agentNames: Readonly<Record<AgentKind, string>>;
 }
 
-function UserRow({ user, isSelf, workspace, idleTimeoutMinutes }: UserRowProps) {
+function UserRow({ user, isSelf, workspace, idleTimeoutMinutes, agentNames }: UserRowProps) {
   const [dialog, setDialog] = useState<UserDialogKind | null>(null);
   const summary = workspace === undefined ? null : summarizeWorkspace(workspace, idleTimeoutMinutes);
   const running = workspace?.status === "running" || workspace?.status === "starting";
+  const agent = workspace ? agentLabel(workspace, agentNames) : null;
   const cell = TD_CLASS;
 
   return (
@@ -140,6 +146,7 @@ function UserRow({ user, isSelf, workspace, idleTimeoutMinutes }: UserRowProps) 
           <span className="text-fg-muted">Unknown</span>
         )}
       </td>
+      <td className={`${cell} whitespace-nowrap ${running ? "text-fg" : "text-fg-muted"}`}>{agent ?? "—"}</td>
       <td className={`${cell} whitespace-nowrap text-fg-muted`}>
         {user.lastLoginAt ? <LocalTime at={user.lastLoginAt} relative /> : <span className="text-fg-muted">Never</span>}
       </td>

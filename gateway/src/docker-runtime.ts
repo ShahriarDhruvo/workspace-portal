@@ -1,16 +1,17 @@
 // ContainerRuntime backed by the Docker Engine API (dockerode, /var/run/docker.sock or DOCKER_HOST).
 import Docker from "dockerode";
+import { isAgentKind, type AgentKind } from "@portal/db";
+import { driverFor } from "./agents/index.ts";
 import type { Config, WorkspaceConfig } from "./config.ts";
 import {
+  AGENT_LABEL,
   containerName,
-  TOKEN_ENV,
   USER_ID_LABEL,
   WORKSPACE_LABEL,
   workspaceContainerOptions,
   workspaceNetworkOptions,
   type WorkspaceStartOptions,
 } from "./container-spec.ts";
-import { QWEN_PORT } from "./qwen.ts";
 import {
   WorkspaceImageMissingError,
   type ContainerRuntime,
@@ -77,9 +78,9 @@ export class DockerRuntime implements ContainerRuntime {
     return existing ? "replaced" : "created";
   }
 
-  async imageAvailable(): Promise<boolean> {
+  async imageAvailable(image: string): Promise<boolean> {
     try {
-      await this.#docker.getImage(this.#config.workspace.image).inspect();
+      await this.#docker.getImage(image).inspect();
       return true;
     } catch (error) {
       if (statusCode(error) === 404) return false;
@@ -88,13 +89,14 @@ export class DockerRuntime implements ContainerRuntime {
   }
 
   async startWorkspace(userId: number, options: WorkspaceStartOptions): Promise<StartedContainer> {
+    const driver = driverFor(options.agent);
     await this.removeContainer(containerName(userId));
     let container: Docker.Container;
     try {
-      container = await this.#docker.createContainer(workspaceContainerOptions(this.#config, userId, options));
+      container = await this.#docker.createContainer(workspaceContainerOptions(this.#config, userId, driver, options.credential));
     } catch (error) {
       if (statusCode(error) === 404 && /no such image/i.test(errorText(error))) {
-        throw new WorkspaceImageMissingError(this.#config.workspace.image);
+        throw new WorkspaceImageMissingError(this.#config.workspace.images[options.agent].image);
       }
       throw error;
     }
@@ -104,7 +106,7 @@ export class DockerRuntime implements ContainerRuntime {
       const network = this.#config.workspace.network;
       const ip = info.NetworkSettings.Networks[network]?.IPAddress;
       if (!ip) throw new Error(`workspace container has no address on network ${network}`);
-      return { id: container.id, ip, port: QWEN_PORT };
+      return { id: container.id, ip, port: driver.port };
     } catch (error) {
       await this.removeContainer(container.id).catch(() => undefined);
       throw error;
@@ -144,21 +146,23 @@ export class DockerRuntime implements ContainerRuntime {
     const rows = await this.#docker.listContainers({ all: true, filters: { label: [`${WORKSPACE_LABEL}=1`] } });
     return rows.map((row) => {
       const userId = Number(row.Labels[USER_ID_LABEL]);
+      const agent = containerAgent(row.Labels[AGENT_LABEL]);
       return {
         id: row.Id,
         userId: Number.isSafeInteger(userId) && userId > 0 ? userId : null,
+        agent,
         running: row.State === "running",
         ip: row.NetworkSettings.Networks[network]?.IPAddress || null,
-        port: QWEN_PORT,
+        port: agent === null ? null : driverFor(agent).port,
       };
     });
   }
 
-  /** The `qwen serve` token a running container was started with (to adopt it after a gateway restart). */
-  async serverToken(id: string): Promise<string | null> {
+  /** The credential a running container's agent was started with (to adopt it after a gateway restart). */
+  async credential(id: string, agent: AgentKind): Promise<string | null> {
     try {
       const info = await this.#docker.getContainer(id).inspect();
-      const prefix = `${TOKEN_ENV}=`;
+      const prefix = `${driverFor(agent).credentialEnv}=`;
       const entry = (info.Config.Env ?? []).find((item) => item.startsWith(prefix));
       return entry ? entry.slice(prefix.length) || null : null;
     } catch (error) {
@@ -257,4 +261,10 @@ function errorText(error: unknown): string {
   const json = (error as { json?: { message?: unknown } } | null)?.json;
   const message = typeof json?.message === "string" ? json.message : "";
   return `${error instanceof Error ? error.message : String(error)} ${message}`;
+}
+
+/** The agent label of a workspace container; containers from before agents had a label run Qwen Code. */
+export function containerAgent(label: string | undefined): AgentKind | null {
+  if (label === undefined) return "qwen";
+  return isAgentKind(label) ? label : null;
 }

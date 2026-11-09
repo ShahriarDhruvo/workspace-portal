@@ -5,19 +5,22 @@
 //     no-new-privileges, memory/CPU/PID limits, and the OOM killer's attention first;
 //   * a read-only root filesystem; writable are only the user's own home and workspace
 //     directories and an in-memory /tmp;
-//   * read-only, per-user copies of the Qwen Code settings and of /etc/passwd and /etc/group;
+//   * read-only, per-user copies of the agent's settings and of /etc/passwd and /etc/group;
 //     nothing on the host is mounted that another workspace also sees;
 //   * an *internal* network with inter-container traffic disabled: the only address it can reach
 //     is the gateway's service port (model + web search). No internet, no LAN, no other workspace.
+// All of this is the same whichever agent the workspace runs; the driver adds only its image,
+// port, environment and settings.
 import type Docker from "dockerode";
+import type { AgentKind } from "@portal/db";
+import { LLM_KEY_ENV, type AgentDriver } from "./agents/index.ts";
 import { MIB, type Config, type WorkspaceConfig } from "./config.ts";
 import { userPaths, workspaceOwner } from "./paths.ts";
-import { LLM_KEY_ENV, QWEN_SETTINGS_MOUNT } from "./qwen.ts";
 
 export const WORKSPACE_LABEL = "workspace-portal.workspace";
 export const USER_ID_LABEL = "workspace-portal.user-id";
-/** The env var carrying the per-start token of `qwen serve`; read back when adopting a container. */
-export const TOKEN_ENV = "QWEN_SERVER_TOKEN";
+/** The agent the container runs (an AgentKind). Containers from before the choice have none: Qwen Code. */
+export const AGENT_LABEL = "workspace-portal.agent";
 
 /** Swap allowed on top of the memory limit, so short spikes slow down instead of OOM-killing the agent. */
 const SWAP_HEADROOM_BYTES = 512 * MIB;
@@ -29,38 +32,36 @@ export function containerName(userId: number): string {
 }
 
 export interface WorkspaceStartOptions {
-  /** Bearer token `qwen serve` requires; new for every start. */
-  token: string;
+  agent: AgentKind;
+  /** The agent's credential (driver.credentialEnv); new for every start. */
+  credential: string;
 }
 
-export function workspaceContainerOptions(config: Config, userId: number, options: WorkspaceStartOptions): Docker.ContainerCreateOptions {
+export function workspaceContainerOptions(config: Config, userId: number, driver: AgentDriver, credential: string): Docker.ContainerCreateOptions {
   const ws = config.workspace;
   const paths = userPaths(config.dataDir, userId);
   const owner = workspaceOwner(ws.uidBase, userId);
   return {
     name: containerName(userId),
     Hostname: "workspace",
-    Image: ws.image,
+    Image: ws.images[driver.kind].image,
     User: `${owner.uid}:${owner.gid}`,
     WorkingDir: "/workspace",
-    Labels: { [WORKSPACE_LABEL]: "1", [USER_ID_LABEL]: String(userId) },
+    Labels: { [WORKSPACE_LABEL]: "1", [USER_ID_LABEL]: String(userId), [AGENT_LABEL]: driver.kind },
     Env: [
-      `${TOKEN_ENV}=${options.token}`,
       // A placeholder: the gateway replaces it with the real LLM key, which never enters a workspace.
       `${LLM_KEY_ENV}=portal`,
       "HOME=/home/user",
       "USER=user",
       "LOGNAME=user",
-      "QWEN_USAGE_STATISTICS_ENABLED=false",
-      // An approval nobody answers is declined after this long, so it can't keep the workspace up forever.
-      `QWEN_PERMISSION_TIMEOUT_MS=${config.idleTimeoutMs}`,
+      ...driver.containerEnv(credential, config),
     ],
     HostConfig: {
       // The data dir is labelled container_file_t by the installer, so no :z relabelling here.
       Binds: [
         `${paths.home}:/home/user`,
         `${paths.workspace}:/workspace`,
-        `${paths.qwenSettings}:${QWEN_SETTINGS_MOUNT}:ro`,
+        `${paths.agentSettings(driver.kind)}:${driver.settingsMount}:ro`,
         `${paths.passwd}:/etc/passwd:ro`,
         `${paths.group}:/etc/group:ro`,
       ],

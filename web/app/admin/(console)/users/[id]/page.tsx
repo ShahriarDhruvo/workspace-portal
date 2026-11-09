@@ -2,10 +2,10 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { eq } from "drizzle-orm";
-import { displayName, users } from "@portal/db";
+import { AGENT_NAMES, displayName, users } from "@portal/db";
 import { config } from "@/lib/config";
 import { getDb } from "@/lib/db";
-import { initials, summarizeWorkspace } from "@/lib/format";
+import { agentLabel, initials, summarizeWorkspace } from "@/lib/format";
 import { gateway, toApiError } from "@/lib/gateway";
 import type { WorkspaceInfo } from "@/lib/gateway-types";
 import { requireAdmin } from "@/lib/session";
@@ -95,6 +95,11 @@ export default async function UserPage({ params }: PageProps<"/admin/users/[id]"
               ? (summary.detail ?? summary.title ?? "Starts when the user signs in or opens it.")
               : workspaceError}
           </CardRow>
+          {workspace ? (
+            <CardRow title="Agent">
+              {agentLabel(workspace, AGENT_NAMES) ?? "None yet: chosen when the workspace first starts."}
+            </CardRow>
+          ) : null}
         </Card>
       </Section>
 

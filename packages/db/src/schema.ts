@@ -17,6 +17,15 @@ export type Role = (typeof ROLES)[number];
 export const WORKSPACE_STATUSES = ["stopped", "starting", "running", "stopping", "error"] as const;
 export type WorkspaceStatus = (typeof WORKSPACE_STATUSES)[number];
 
+/** The agents a workspace can run. A user's workspace runs one of them at a time. */
+export const AGENT_KINDS = ["qwen", "dsh"] as const;
+export type AgentKind = (typeof AGENT_KINDS)[number];
+export const AGENT_NAMES: Readonly<Record<AgentKind, string>> = { qwen: "Qwen Code", dsh: "DeepSeek Harness" };
+
+export function isAgentKind(value: unknown): value is AgentKind {
+  return typeof value === "string" && (AGENT_KINDS as readonly string[]).includes(value);
+}
+
 export const users = sqliteTable(
   "users",
   {
@@ -69,6 +78,8 @@ export const workspaces = sqliteTable("workspaces", {
   containerName: text("container_name"),
   ip: text("ip"),
   status: text("status", { enum: WORKSPACE_STATUSES }).notNull().default("stopped"),
+  /** The agent of the current container, or of the last one when stopped; null if never started. */
+  agent: text("agent", { enum: AGENT_KINDS }),
   startedAt: integer("started_at"),
   stoppedAt: integer("stopped_at"),
   lastActivityAt: integer("last_activity_at"),

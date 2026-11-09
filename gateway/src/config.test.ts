@@ -44,7 +44,11 @@ test("defaults match .env.example", () => {
   assert.deepEqual(config.llm, { upstreamUrl: "http://127.0.0.1:8080", apiKey: "", maxConcurrency: 3, maxConcurrencyPerUser: 2 });
   assert.deepEqual(config.search, { url: "http://127.0.0.1:8888", authorization: "", timeoutMs: 20_000, maxConcurrentPerUser: 2 });
   assert.deepEqual(config.workspace, {
-    image: "workspace-portal/workspace:qwen-0.27.0",
+    agents: ["qwen", "dsh"],
+    images: {
+      qwen: { version: "0.27.0", image: "workspace-portal/workspace:qwen-0.27.0" },
+      dsh: { version: "0.2.2-rc.1", image: "workspace-portal/workspace:dsh-0.2.2-rc.1" },
+    },
     network: "workspace-portal-ws",
     subnet: "172.29.0.0/16",
     gatewayIp: "172.29.0.1",
@@ -129,6 +133,21 @@ test("every problem is reported at once", () => {
 test("models are not configured through the environment any more", () => {
   const config = loadConfig({ ...secrets, LLM_MODEL_ID: "other", LLM_REASONING: "maybe", LLM_INPUT: "audio" });
   assert.equal("model" in config.llm, false, "system-defaults.json is the only source of models");
+});
+
+test("WORKSPACE_AGENTS and the agent versions select the agents and their images", () => {
+  const config = loadConfig({ ...secrets, WORKSPACE_AGENTS: " DSH , qwen,dsh ", DSH_VERSION: "0.3.0", QWEN_CODE_VERSION: "0.28.1-beta.2" });
+  assert.deepEqual(config.workspace.agents, ["dsh", "qwen"], "in the admin's order, without repeats");
+  assert.equal(config.workspace.images.dsh.image, "workspace-portal/workspace:dsh-0.3.0");
+  assert.equal(config.workspace.images.qwen.image, "workspace-portal/workspace:qwen-0.28.1-beta.2");
+  assert.deepEqual(loadConfig({ ...secrets, WORKSPACE_AGENTS: "qwen" }).workspace.agents, ["qwen"]);
+
+  assert.deepEqual(problems({ ...secrets, WORKSPACE_AGENTS: "qwen,claude" }), [
+    'WORKSPACE_AGENTS must list one or more of qwen, dsh, comma-separated (got "qwen,claude")',
+  ]);
+  assert.deepEqual(problems({ ...secrets, WORKSPACE_AGENTS: " , " }), ['WORKSPACE_AGENTS must list one or more of qwen, dsh, comma-separated (got ",")']);
+  // An image tag is built from it: nothing but a version.
+  assert.deepEqual(problems({ ...secrets, DSH_VERSION: "latest; rm -rf" }), ['DSH_VERSION must be a version such as 0.27.0 (got "latest; rm -rf")']);
 });
 
 test("SEARXNG_AUTHORIZATION must be one header value", () => {

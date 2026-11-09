@@ -1,7 +1,9 @@
 // WorkspaceManager: the state of every user's workspace container (one per user, shared by all of
 // that user's sessions), kept in memory and mirrored to the `workspaces` table. It starts and stops
-// containers, waits for Qwen Code to come up, tracks activity and whether the agent is working, stops
+// containers, waits for the agent to come up, tracks activity and whether the agent is working, stops
 // idle workspaces, enforces the running cap, and reconciles with what Docker actually runs.
+// A workspace runs one agent at a time (Qwen Code or DeepSeek Harness, chosen at start); what
+// differs between agents is behind their drivers (agents/).
 // The decisions themselves (busy, idle, what to stop or evict) are pure functions in policy.ts; the
 // files a container mounts are prepared by workspace-files.ts.
 //
@@ -12,11 +14,13 @@ import {
   countSessionsUsingWorkspace,
   workspaces,
   writeAudit,
+  type AgentKind,
   type AuditAction,
   type PortalDb,
   type Workspace,
   type WorkspaceStatus,
 } from "@portal/db";
+import { AgentConfigError, driverFor, type AgentDriver, type AgentEndpoint } from "./agents/index.ts";
 import type { Config } from "./config.ts";
 import { closeEndedSessions, type ConnectionRegistry } from "./connections.ts";
 import { containerName } from "./container-spec.ts";
@@ -33,15 +37,16 @@ import {
   type BusyReason,
   type ReapInput,
 } from "./policy.ts";
-import { agentWorking, fetchQwenHealth, generateServerToken, QwenConfigError } from "./qwen.ts";
-import { probeQwen, READY_TIMEOUT_MS, waitForReady, type ReadyResult } from "./readiness.ts";
+import { READY_TIMEOUT_MS, waitForReady, type ReadyResult } from "./readiness.ts";
 import { WorkspaceImageMissingError, type ContainerRuntime, type ContainerState, type ContainerSummary } from "./runtime.ts";
 import { prepareWorkspaceFiles, removeWorkspaceFiles } from "./workspace-files.ts";
 
 export interface WorkspaceInfo {
   userId: number;
   status: WorkspaceStatus;
-  /** Qwen Code answered its health check and can take prompts. */
+  /** The agent of the starting or running container; when stopped, the one used last; null if never started. */
+  agent: AgentKind | null;
+  /** The agent answered its readiness probe and can take prompts. */
   ready: boolean;
   startedAt: number | null;
   lastActivityAt: number | null;
@@ -87,6 +92,36 @@ export class StartError extends Error {
   }
 }
 
+/** The workspace runs another agent than the one asked for; it has to stop before switching. */
+export class AgentMismatchError extends Error {
+  readonly running: AgentKind;
+
+  constructor(running: AgentKind) {
+    super(`${driverFor(running).name} is already running in this workspace. Stop it to switch.`);
+    this.name = "AgentMismatchError";
+    this.running = running;
+  }
+}
+
+/** No agent was named and the workspace has never run one. */
+export class AgentRequiredError extends Error {
+  constructor() {
+    super("Choose an agent to start.");
+    this.name = "AgentRequiredError";
+  }
+}
+
+/** The agent asked for is not enabled on this install (WORKSPACE_AGENTS). */
+export class AgentUnavailableError extends Error {
+  constructor(agent: AgentKind) {
+    super(`${driverFor(agent).name} is not available on this portal.`);
+    this.name = "AgentUnavailableError";
+  }
+}
+
+/** Why a start was refused before anything happened. */
+export type StartRefusal = CapacityError | DeletingError | AgentMismatchError | AgentRequiredError | AgentUnavailableError;
+
 /** The container could not be stopped, so nothing was deleted. */
 export class StopError extends Error {
   constructor(message: string) {
@@ -100,7 +135,7 @@ export class StopError extends Error {
  * behind a stop in progress decides once that stop is done, and `done` then rejects with
  * CapacityError or DeletingError instead. `done` settles once the container runs.
  */
-export type StartAttempt = { ok: true; done: Promise<WorkspaceInfo> } | { ok: false; error: CapacityError | DeletingError };
+export type StartAttempt = { ok: true; done: Promise<WorkspaceInfo> } | { ok: false; error: StartRefusal };
 
 /** Why a workspace is being stopped, as recorded in stopReason and the audit log. */
 export interface StopCause {
@@ -111,11 +146,9 @@ export interface StopCause {
   lastError?: string | null;
 }
 
-/** Where to send a browser's requests, and the token that authenticates them to `qwen serve`. */
-export interface Upstream {
-  host: string;
-  port: number;
-  token: string;
+/** Where to send a browser's requests: the agent, its address, and the credential that authenticates the gateway to it. */
+export interface Upstream extends AgentEndpoint {
+  agent: AgentKind;
 }
 
 export interface WorkspaceManagerOptions {
@@ -147,10 +180,12 @@ interface Entry {
    * retries the removal and never adopts it.
    */
   leftoverContainerId: string | null;
+  /** The agent of the current container, or of the last one; null if it never ran one. */
+  kind: AgentKind | null;
   ip: string | null;
   port: number | null;
-  /** The bearer token of this container's `qwen serve`. */
-  token: string | null;
+  /** The credential of this container's agent (driver.credentialEnv). */
+  credential: string | null;
   startedAt: number | null;
   stoppedAt: number | null;
   /** Last activity of any kind: a person using it, or the agent working (drives the idle timeout). */
@@ -160,8 +195,8 @@ interface Entry {
   stopReason: string | null;
   lastError: string | null;
   memoryBytes: number | null;
-  /** From Qwen Code's health checks. */
-  agent: AgentState;
+  /** From the agent's status checks. */
+  agentState: AgentState;
   /** Average CPU use over the last sampling interval. */
   cpuCores: number | null;
   cpuSample: { cpuSeconds: number; at: number } | null;
@@ -197,9 +232,9 @@ const NO_CONTAINER: Partial<Entry> = {
   containerId: null,
   ip: null,
   port: null,
-  token: null,
+  credential: null,
   memoryBytes: null,
-  agent: NO_AGENT,
+  agentState: NO_AGENT,
   cpuCores: null,
   cpuSample: null,
   busyReason: null,
@@ -298,6 +333,7 @@ export class WorkspaceManager {
       return {
         userId,
         status: "stopped",
+        agent: null,
         ready: false,
         startedAt: null,
         lastActivityAt: null,
@@ -317,6 +353,7 @@ export class WorkspaceManager {
     return {
       userId,
       status: entry.status,
+      agent: entry.kind,
       ready: entry.ready,
       startedAt: entry.startedAt,
       lastActivityAt: entry.lastActivityAt,
@@ -347,8 +384,8 @@ export class WorkspaceManager {
   /** The proxy target of a ready workspace, or null while it is not ready. */
   upstream(userId: number): Upstream | null {
     const entry = this.#entries.get(userId);
-    if (!entry || entry.status !== "running" || !entry.ready || !entry.ip || entry.port === null || !entry.token) return null;
-    return { host: entry.ip, port: entry.port, token: entry.token };
+    const endpoint = entry && entry.status === "running" && entry.ready ? endpointOf(entry) : null;
+    return endpoint && entry?.kind ? { ...endpoint, agent: entry.kind } : null;
   }
 
   /** The user whose workspace container has this address (service API caller identity). */
@@ -404,19 +441,26 @@ export class WorkspaceManager {
   // ---------------------------------------------------------------- start
 
   /**
-   * Starts a workspace unless it is already starting or running. Refused while its data is being
-   * deleted. See StartAttempt for when capacity is decided.
+   * Starts the workspace with `agent` unless it is already starting or running. Without `agent`: the
+   * agent it ran last, else the only enabled one, else AgentRequiredError. One agent at a time:
+   * asking for another one while it runs is refused. Refused too while its data is being deleted.
+   * See StartAttempt for when capacity is decided.
    */
-  requestStart(userId: number): StartAttempt {
+  requestStart(userId: number, agent?: AgentKind): StartAttempt {
     const existing = this.#entries.get(userId);
     if (existing?.deleting) return { ok: false, error: new DeletingError() };
-    if (existing?.starting) return { ok: true, done: existing.starting };
-    if (existing?.stopping) return { ok: true, done: existing.stopping.then(() => this.start(userId)) };
-    if (existing && isActive(existing)) {
+    if (existing?.stopping) return { ok: true, done: existing.stopping.then(() => this.start(userId, agent)) };
+    if (existing && (existing.starting || isActive(existing)) && existing.kind !== null) {
+      if (agent !== undefined && agent !== existing.kind) return { ok: false, error: new AgentMismatchError(existing.kind) };
       // Someone is using it again: a stop that waited for the agent to finish is off.
       existing.stopPending = false;
-      return { ok: true, done: Promise.resolve(this.info(userId)) };
+      return { ok: true, done: existing.starting ?? Promise.resolve(this.info(userId)) };
     }
+
+    const enabled = this.#config.workspace.agents;
+    const kind = agent ?? existing?.kind ?? (enabled.length === 1 ? enabled[0]! : null);
+    if (kind === null) return { ok: false, error: new AgentRequiredError() };
+    if (!enabled.includes(kind)) return { ok: false, error: new AgentUnavailableError(kind) };
 
     const slot = this.#reserveSlot(userId);
     if (!slot.ok) return { ok: false, error: new CapacityError(this.#config.maxRunning) };
@@ -427,6 +471,7 @@ export class WorkspaceManager {
     patch(entry, {
       ...NO_CONTAINER,
       status: "starting",
+      kind,
       startedAt: now,
       lastActivityAt: now,
       lastUserActivityAt: now,
@@ -445,9 +490,9 @@ export class WorkspaceManager {
     return { ok: true, done };
   }
 
-  /** Like requestStart, but rejects with CapacityError, DeletingError or StartError. */
-  async start(userId: number): Promise<WorkspaceInfo> {
-    const attempt = this.requestStart(userId);
+  /** Like requestStart, but rejects with the StartRefusal or a StartError. */
+  async start(userId: number, agent?: AgentKind): Promise<WorkspaceInfo> {
+    const attempt = this.requestStart(userId, agent);
     if (!attempt.ok) throw attempt.error;
     return attempt.done;
   }
@@ -465,6 +510,8 @@ export class WorkspaceManager {
 
   async #launch(entry: Entry, eviction: Promise<WorkspaceInfo> | null): Promise<WorkspaceInfo> {
     const { userId } = entry;
+    const agent = entry.kind!;
+    const driver = driverFor(agent);
     try {
       if (eviction) {
         // Wait for the evicted container to go before starting another (memory headroom).
@@ -472,23 +519,23 @@ export class WorkspaceManager {
         // A stop that arrived meanwhile: nothing to start.
         if (entry.status !== "starting") return this.info(userId);
       }
-      await prepareWorkspaceFiles(this.#config, userId);
-      const token = generateServerToken();
-      const container = await this.#runtime.startWorkspace(userId, { token });
+      await prepareWorkspaceFiles(this.#config, userId, agent);
+      const credential = driver.generateCredential();
+      const container = await this.#runtime.startWorkspace(userId, { agent, credential });
       // startWorkspace removed every earlier container of this user, a leftover included.
-      patch(entry, { containerId: container.id, ip: container.ip, port: container.port, token, leftoverContainerId: null });
+      patch(entry, { containerId: container.id, ip: container.ip, port: container.port, credential, leftoverContainerId: null });
       // A stop that arrived meanwhile waits for this start and then removes the container.
       if (entry.status !== "starting") return this.info(userId);
       this.#claimIp(entry);
       this.#persist(entry);
-      this.#audit("workspace_started", userId);
-      this.#log.info("workspace container started", { userId, containerId: container.id, ip: container.ip });
+      this.#audit("workspace_started", userId, { agent });
+      this.#log.info("workspace container started", { userId, agent, containerId: container.id, ip: container.ip });
       this.#watchReadiness(entry);
       return this.info(userId);
     } catch (error) {
       if (entry.status !== "starting") return this.info(userId);
       const message =
-        error instanceof WorkspaceImageMissingError || error instanceof QwenConfigError
+        error instanceof WorkspaceImageMissingError || error instanceof AgentConfigError
           ? error.message
           : `could not start the workspace container: ${errorMessage(error)}`;
       await this.#fail(entry, message);
@@ -513,8 +560,10 @@ export class WorkspaceManager {
   }
 
   #watchReadiness(entry: Entry): void {
-    const { userId, containerId, ip, port, token } = entry;
-    if (containerId === null || ip === null || port === null || token === null) return;
+    const { userId, containerId } = entry;
+    const endpoint = endpointOf(entry);
+    if (containerId === null || endpoint === null || entry.kind === null) return;
+    const driver = driverFor(entry.kind);
     const abort = new AbortController();
     entry.readiness = abort;
     const startedAt = this.#now();
@@ -522,21 +571,21 @@ export class WorkspaceManager {
     const current = (): boolean => !abort.signal.aborted && entry.containerId === containerId && entry.status === "starting";
 
     void waitForReady({
-      probe: () => probeQwen(ip, port, token),
+      probe: () => driver.probeReady(endpoint),
       state: () => this.#runtime.state(containerId),
       signal: abort.signal,
     })
       .then(async (result) => {
         if (!current()) return;
         if (result.ok) {
-          // The probe was a health check that answered: an unknown agent state counts from here.
-          patch(entry, { status: "running", ready: true, readiness: null, agent: { ...NO_AGENT, answeredAt: this.#now() } });
+          // The probe answered: an unknown agent state counts from here.
+          patch(entry, { status: "running", ready: true, readiness: null, agentState: { ...NO_AGENT, answeredAt: this.#now() } });
           this.#persist(entry);
           this.#log.info("workspace ready", { userId, seconds: Math.round((this.#now() - startedAt) / 100) / 10 });
           return;
         }
         const tail = await this.#runtime.logsTail(containerId, LOG_TAIL_LINES).catch(() => "");
-        if (current()) await this.#fail(entry, withLogs(describeStartupFailure(result), tail));
+        if (current()) await this.#fail(entry, withLogs(describeStartupFailure(driver, result), tail));
       })
       .catch((error: unknown) => this.#log.error("readiness check failed", { userId, error }));
   }
@@ -785,22 +834,24 @@ export class WorkspaceManager {
   }
 
   /**
-   * Asks the workspace's Qwen Code whether the agent is working. Without an answer the last one is
-   * kept and the state becomes unknown (see agentCountsAsWorking).
+   * Asks the workspace's agent whether it is working. Without an answer the last one is kept and the
+   * state becomes unknown (see agentCountsAsWorking).
    */
   async #refreshAgentState(entry: Entry, options: { updateBusy?: boolean } = {}): Promise<void> {
-    const { ip, port, token, containerId } = entry;
-    if (!ip || port === null || !token) return;
-    const health = await fetchQwenHealth(ip, port, token);
+    const { containerId } = entry;
+    const endpoint = endpointOf(entry);
+    if (endpoint === null || entry.kind === null) return;
+    const driver = driverFor(entry.kind);
+    const status = await driver.fetchStatus(endpoint);
     if (entry.containerId !== containerId) return;
-    if (health === null) {
-      if (!entry.agent.unknown) this.#log.warn("Qwen Code did not answer its health check", { userId: entry.userId });
-      entry.agent = { ...entry.agent, unknown: true };
+    if (status === null) {
+      if (!entry.agentState.unknown) this.#log.warn(`${driver.name} did not answer its status check`, { userId: entry.userId });
+      entry.agentState = { ...entry.agentState, unknown: true };
     } else {
-      entry.agent = { working: agentWorking(health), answeredAt: this.#now(), unknown: false };
+      entry.agentState = { working: status.working, answeredAt: this.#now(), unknown: false };
       // The agent started or finished something more recently than anything else we saw.
-      if (health.idleSinceMs !== null) {
-        const agentActive = this.#now() - health.idleSinceMs;
+      if (status.idleSinceMs !== null) {
+        const agentActive = this.#now() - status.idleSinceMs;
         if (entry.lastActivityAt === null || agentActive > entry.lastActivityAt) {
           entry.lastActivityAt = agentActive;
           entry.activityDirty = true;
@@ -866,10 +917,10 @@ export class WorkspaceManager {
 
   /** Tracks a container that was already running (gateway restart); readiness is checked again. */
   async #adopt(entry: Entry, container: ContainerSummary): Promise<boolean> {
-    if (!container.ip) return false;
-    const token = await this.#runtime.serverToken(container.id).catch(() => null);
-    if (!token) {
-      this.#log.warn("cannot adopt workspace container: its token is unknown", { userId: entry.userId, containerId: container.id });
+    if (!container.ip || container.agent === null || container.port === null) return false;
+    const credential = await this.#runtime.credential(container.id, container.agent).catch(() => null);
+    if (!credential) {
+      this.#log.warn("cannot adopt workspace container: its credential is unknown", { userId: entry.userId, containerId: container.id });
       if (!entry.starting && !entry.stopping && !isActive(entry)) {
         patch(entry, { lastError: "After a gateway restart the running workspace could not be taken over (its access token was missing), so it was removed. Opening it starts it again." });
         this.#persist(entry);
@@ -881,10 +932,11 @@ export class WorkspaceManager {
     patch(entry, {
       ...NO_CONTAINER,
       status: "starting",
+      kind: container.agent,
       containerId: container.id,
       ip: container.ip,
       port: container.port,
-      token,
+      credential,
       startedAt: entry.startedAt ?? now,
       lastActivityAt: now,
       lastUserActivityAt: now,
@@ -893,7 +945,7 @@ export class WorkspaceManager {
     });
     this.#claimIp(entry);
     this.#persist(entry);
-    this.#log.info("adopted running workspace container", { userId: entry.userId, containerId: container.id });
+    this.#log.info("adopted running workspace container", { userId: entry.userId, agent: container.agent, containerId: container.id });
     this.#watchReadiness(entry);
     return true;
   }
@@ -904,7 +956,7 @@ export class WorkspaceManager {
   #assess(entry: Entry): ActivityAssessment {
     return assessActivity(
       {
-        agent: entry.agent,
+        agent: entry.agentState,
         llmBusy: this.#llm.pendingFor(entry.userId) > 0,
         cpuCores: entry.cpuCores,
         lastActivityAt: entry.lastActivityAt,
@@ -926,6 +978,7 @@ export class WorkspaceManager {
       containerName: null,
       ip: null,
       status: "stopped",
+      agent: null,
       startedAt: null,
       stoppedAt: null,
       lastActivityAt: null,
@@ -946,6 +999,7 @@ export class WorkspaceManager {
       containerName: containerId ? containerName(entry.userId) : null,
       ip: entry.ip,
       status: entry.status,
+      agent: entry.kind,
       startedAt: entry.startedAt,
       stoppedAt: entry.stoppedAt,
       lastActivityAt: entry.lastActivityAt,
@@ -981,9 +1035,10 @@ function entryFromRow(row: Workspace): Entry {
     ready: false,
     containerId: row.containerId,
     leftoverContainerId: null,
+    kind: row.agent,
     ip: row.ip,
     port: null,
-    token: null,
+    credential: null,
     startedAt: row.startedAt,
     stoppedAt: row.stoppedAt,
     lastActivityAt: row.lastActivityAt,
@@ -991,7 +1046,7 @@ function entryFromRow(row: Workspace): Entry {
     stopReason: row.stopReason,
     lastError: row.lastError,
     memoryBytes: null,
-    agent: NO_AGENT,
+    agentState: NO_AGENT,
     cpuCores: null,
     cpuSample: null,
     busyReason: null,
@@ -1004,11 +1059,17 @@ function entryFromRow(row: Workspace): Entry {
   };
 }
 
-function describeStartupFailure(result: Exclude<ReadyResult, { ok: true }>): string {
+/** Where the entry's agent listens, with its credential; null without a container to talk to. */
+function endpointOf(entry: Entry): AgentEndpoint | null {
+  if (!entry.ip || entry.port === null || !entry.credential) return null;
+  return { host: entry.ip, port: entry.port, credential: entry.credential };
+}
+
+function describeStartupFailure(driver: AgentDriver, result: Exclude<ReadyResult, { ok: true }>): string {
   if (result.reason === "exited") {
-    return `Qwen Code exited during startup (exit code ${result.exitCode ?? "unknown"}${result.oomKilled ? ", out of memory" : ""})`;
+    return `${driver.name} exited during startup (exit code ${result.exitCode ?? "unknown"}${result.oomKilled ? ", out of memory" : ""})`;
   }
-  return `Qwen Code did not answer within ${READY_TIMEOUT_MS / 1000} s`;
+  return `${driver.name} did not answer within ${READY_TIMEOUT_MS / 1000} s`;
 }
 
 function describeExit(state: Extract<ContainerState, { running: false }>): string {

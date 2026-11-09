@@ -80,13 +80,13 @@ apply() {
 }
 
 remove() {
-  nft delete table $TABLE 2>/dev/null || true
+  nft delete table "$TABLE" 2>/dev/null || true
   remove_legacy_iptables
   echo "workspace-portal firewall removed"
 }
 
 status() {
-  nft list table $TABLE 2>/dev/null || { echo "not applied: table $TABLE is missing" >&2; return 1; }
+  nft list table "$TABLE" 2>/dev/null || { echo "not applied: table $TABLE is missing" >&2; return 1; }
 }
 
 case "${1:-}" in

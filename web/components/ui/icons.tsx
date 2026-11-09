@@ -1,6 +1,7 @@
 // The portal's icons: lucide-react (as in the Web Shell), 16px with a thin 1.5 stroke, in currentColor.
 // Import icons from here rather than from lucide-react so size, stroke and aria-hidden stay consistent.
 import {
+  ArrowRightLeft,
   ArrowUpRight,
   Check,
   ChevronLeft,
@@ -57,3 +58,4 @@ export const StopIcon = icon(Square, "StopIcon");
 export const UserCheckIcon = icon(UserCheck, "UserCheckIcon");
 export const UserXIcon = icon(UserX, "UserXIcon");
 export const EyeIcon = icon(Eye, "EyeIcon");
+export const SwitchIcon = icon(ArrowRightLeft, "SwitchIcon");

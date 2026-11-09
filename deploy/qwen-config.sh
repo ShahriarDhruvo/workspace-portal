@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Installs the Qwen Code settings every workspace starts with, after checking them.
+# Installs the Qwen Code settings every workspace starts with, after checking them. DeepSeek Harness
+# workspaces take their models from the same files.
 #
 #   sudo bash deploy/qwen-config.sh install <file> [<file>]   settings.json and/or system-defaults.json
 #   sudo bash deploy/qwen-config.sh show                      print the installed files
@@ -16,7 +17,8 @@ require_root
 
 DIR="$(env_get PORTAL_DATA_DIR)/config/qwen"
 
-# The same rules as the gateway (gateway/src/qwen.ts): comments become whitespace, then strict JSON.
+# The same rules as the gateway (gateway/src/agents/qwen-settings.ts): comments become whitespace, then
+# strict JSON. Also warns about models DeepSeek Harness can't offer (gateway/src/agents/dsh-settings.ts).
 validate() { # file
   python3 - "$1" <<'PY'
 import json, sys
@@ -47,10 +49,21 @@ except ValueError as e:
     sys.exit(f"{path}: not valid JSON: {e}")
 if not isinstance(value, dict):
     sys.exit(f"{path}: must contain a JSON object")
-if name == "system-defaults.json":
-    providers = (value.get("modelProviders") or {}).get("openai")
-    if not isinstance(providers, list) or not any(isinstance(p, dict) and p.get("id") for p in providers):
-        sys.exit(f"{path}: must define at least one model under modelProviders.openai (an entry with an \"id\")")
+providers = (value.get("modelProviders") or {}).get("openai") if isinstance(value.get("modelProviders"), dict) else None
+models = [p for p in providers if isinstance(p, dict) and isinstance(p.get("id"), str) and p["id"].strip()] if isinstance(providers, list) else []
+if name == "system-defaults.json" and not models:
+    sys.exit(f"{path}: must define at least one model under modelProviders.openai (an entry with an \"id\")")
+# DeepSeek Harness needs context window - output limit >= 78020 and lowers the output limit to fit,
+# keeping at least 4096 tokens: a window under 82116 tokens leaves the model out of DeepSeek Harness.
+def number(entry, *keys, default):
+    for key in keys:
+        entry = entry.get(key) if isinstance(entry, dict) else None
+    return entry if isinstance(entry, (int, float)) and not isinstance(entry, bool) and entry > 0 else default
+small = [m["id"].strip() for m in models if number(m, "generationConfig", "contextWindowSize", default=131072) < 82116]
+if small:
+    sys.stderr.write(f"warning: {path}: DeepSeek Harness leaves out {', '.join(small)} (context window under 82116 tokens)\n")
+    if len(small) == len(models):
+        sys.stderr.write("warning: with only these models, DeepSeek Harness workspaces won't start\n")
 PY
 }
 

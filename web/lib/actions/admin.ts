@@ -5,7 +5,7 @@ import { refresh, revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { displayName, sessions, users, writeAudit, type SessionContext, type User } from "@portal/db";
 import { getDb } from "../db";
-import { describeError, endSessionsInBackground, gateway, releaseInBackground, startInBackground, toApiError } from "../gateway";
+import { describeError, endSessionsInBackground, gateway, openWorkspaceInBackground, releaseInBackground, toApiError } from "../gateway";
 import { clearLoginFailures } from "../login-throttle";
 import { generateTemporaryPassword } from "../password-generator";
 import { hashPassword } from "../passwords";
@@ -319,7 +319,8 @@ export async function openWorkspace(formData: FormData): Promise<void> {
     releaseInBackground([previous]);
     revalidateSessionViews();
   }
-  startInBackground(user.id);
+  // A stopped workspace with more than one agent enabled waits for the admin's choice on the viewing page.
+  openWorkspaceInBackground(user.id);
   redirect(`/admin/users/${user.id}/workspace`);
 }
 

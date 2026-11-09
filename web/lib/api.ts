@@ -1,6 +1,6 @@
 import "server-only";
 import type { SessionContext } from "@portal/db";
-import { GatewayError, toApiError } from "./gateway";
+import { GatewayError, gateway, toApiError } from "./gateway";
 import type { ApiError, WorkspaceInfo, WorkspaceStatusResponse } from "./gateway-types";
 import { checkApiAccess } from "./request-guards";
 import { getSession, renewSession } from "./session";
@@ -30,6 +30,15 @@ export async function apiSession(options: { admin?: boolean } = {}): Promise<Ses
   return access.session;
 }
 
-export function withTarget(info: WorkspaceInfo, session: SessionContext): WorkspaceStatusResponse {
-  return { ...info, targetUserId: session.target.id, actingAs: session.actingAs };
+/**
+ * The answer of the routes under /api/workspace: the gateway's view of the session's workspace once `pending`
+ * (a read, start or stop) settles, whose workspace it is, and the agents this install offers.
+ */
+export async function workspaceResponse(pending: Promise<WorkspaceInfo>, session: SessionContext): Promise<Response> {
+  try {
+    const [info, agents] = await Promise.all([pending, gateway.agents()]);
+    return json({ ...info, targetUserId: session.target.id, actingAs: session.actingAs, agents } satisfies WorkspaceStatusResponse);
+  } catch (error) {
+    return gatewayErrorResponse(error);
+  }
 }

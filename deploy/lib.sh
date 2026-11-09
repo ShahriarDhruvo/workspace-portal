@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Shared helpers for the deploy scripts. Source it; don't run it.
 #
 # Settings come from .env, falling back to .env.example, so every default lives in one place.
@@ -39,17 +40,64 @@ env_set() { # key value
   fi
 }
 
-# The workspace image is named after the Qwen Code version it contains; docker-compose.yml derives
-# the gateway's WORKSPACE_IMAGE the same way.
-workspace_image() { # [version]
-  printf 'workspace-portal/workspace:qwen-%s' "${1:-$(env_get QWEN_CODE_VERSION)}"
+# ---------------------------------------------------------------- agents and their images
+# The agents users can choose (WORKSPACE_AGENTS) and the versions their images contain. Images are
+# named workspace-portal/workspace:<agent>-<version>, as the gateway names them
+# (gateway/src/config.ts workspaceImage); one multi-target Dockerfile builds them all.
+AGENTS=(qwen dsh)
+
+agent_name() { # agent
+  case $1 in
+    qwen) printf 'Qwen Code' ;;
+    dsh) printf 'DeepSeek Harness' ;;
+    *) die "unknown agent \"$1\" (one of: ${AGENTS[*]})" ;;
+  esac
 }
 
-build_workspace_image() { # version [extra docker build args...]
-  local version=$1
-  shift
-  log "building $(workspace_image "$version") (Qwen Code $version)"
-  docker build --pull "$@" --build-arg "QWEN_CODE_VERSION=$version" -t "$(workspace_image "$version")" "$ROOT/workspace-image"
+# The .env key holding an agent's version (also the build argument of its Dockerfile stage).
+agent_version_key() { # agent
+  case $1 in
+    qwen) printf QWEN_CODE_VERSION ;;
+    dsh) printf DSH_VERSION ;;
+    *) die "unknown agent \"$1\" (one of: ${AGENTS[*]})" ;;
+  esac
+}
+
+agent_version() { env_get "$(agent_version_key "$1")"; } # agent
+
+# Sets ENABLED_AGENTS to the agents WORKSPACE_AGENTS enables, and dies on an unknown one. (Run in
+# the script's own shell, not in $(...), so that dying stops the script.)
+load_enabled_agents() {
+  local list agent
+  list=$(env_get WORKSPACE_AGENTS)
+  ENABLED_AGENTS=()
+  for agent in ${list//,/ }; do
+    agent_name "$agent" >/dev/null
+    ENABLED_AGENTS+=("$agent")
+  done
+  [[ ${#ENABLED_AGENTS[@]} -gt 0 ]] || die "WORKSPACE_AGENTS is empty: list one or more of ${AGENTS[*]}"
+}
+
+valid_version() { [[ $1 =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$ ]]; } # version
+
+workspace_image() { # agent [version]
+  printf 'workspace-portal/workspace:%s-%s' "$1" "${2:-$(agent_version "$1")}"
+}
+
+build_workspace_image() { # agent version [extra docker build args...]
+  local agent=$1 version=$2
+  shift 2
+  log "building $(workspace_image "$agent" "$version") ($(agent_name "$agent") $version)"
+  docker build --pull "$@" --target "$agent" --build-arg "$(agent_version_key "$agent")=$version" \
+    -t "$(workspace_image "$agent" "$version")" "$ROOT/workspace-image"
+}
+
+# The version of the agent an image really contains (asks the agent's own CLI, offline).
+image_agent_version() { # agent image
+  local cli
+  case $1 in qwen) cli=qwen ;; dsh) cli=dsh ;; esac
+  docker run --rm --network none --entrypoint "$cli" "$2" --version 2>/dev/null |
+    grep -oE '[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?' | head -n 1 || true
 }
 
 # The host's address on the default route (what users type in the browser on the LAN).

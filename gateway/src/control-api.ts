@@ -3,7 +3,8 @@
 import crypto from "node:crypto";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import { eq } from "drizzle-orm";
-import { users, type PortalDb } from "@portal/db";
+import { AGENT_KINDS, isAgentKind, users, type AgentKind, type PortalDb } from "@portal/db";
+import { driverFor } from "./agents/index.ts";
 import type { Config } from "./config.ts";
 import { SESSION_DISCONNECTED, type ConnectionRegistry } from "./connections.ts";
 import { readHostStats } from "./host-stats.ts";
@@ -11,7 +12,16 @@ import { HttpError, readJsonBody, sendError, sendJson, splitTarget } from "./htt
 import type { LlmQueue } from "./llm-queue.ts";
 import type { Logger } from "./log.ts";
 import type { SessionCache } from "./session-cache.ts";
-import { CapacityError, DeletingError, StartError, StopError, type WorkspaceManager } from "./workspaces.ts";
+import {
+  AgentMismatchError,
+  AgentRequiredError,
+  AgentUnavailableError,
+  CapacityError,
+  DeletingError,
+  StartError,
+  StopError,
+  type WorkspaceManager,
+} from "./workspaces.ts";
 
 export interface ControlDeps {
   config: Config;
@@ -24,8 +34,8 @@ export interface ControlDeps {
 }
 
 const MAX_BODY_BYTES = 16 * 1024;
-/** Why the web app stops a workspace: an admin's Stop, deactivation, deletion. */
-const STOP_REASONS = ["admin", "deactivated", "deleted"] as const;
+/** Why the web app stops a workspace: an admin's Stop, the user's own (to switch agents), deactivation, deletion. */
+const STOP_REASONS = ["admin", "user", "deactivated", "deleted"] as const;
 type StopReason = (typeof STOP_REASONS)[number];
 
 type Handler = (deps: ControlDeps, req: IncomingMessage, params: string[]) => Promise<unknown> | unknown;
@@ -39,17 +49,22 @@ interface Route {
 const ROUTES: Route[] = [
   { method: "GET", pattern: /^\/control\/health$/, handler: () => ({ ok: true }) },
   { method: "GET", pattern: /^\/control\/stats$/, handler: (deps) => readHostStats(deps.config, deps.manager, deps.llm) },
+  { method: "GET", pattern: /^\/control\/agents$/, handler: (deps) => ({ agents: agentList(deps.config) }) },
   { method: "GET", pattern: /^\/control\/workspaces$/, handler: (deps) => ({ workspaces: deps.manager.list() }) },
   { method: "GET", pattern: /^\/control\/workspaces\/([^/]+)$/, handler: (deps, _req, [id]) => deps.manager.info(userIdParam(id)) },
   {
     method: "POST",
     pattern: /^\/control\/workspaces\/([^/]+)\/start$/,
-    handler: async (deps, _req, [id]) => {
+    handler: async (deps, req, [id]) => {
       const userId = userIdParam(id);
+      const { agent } = startBody(await readJsonBody(req, MAX_BODY_BYTES));
       requireUser(deps.db, userId, "userId");
       try {
-        return await deps.manager.start(userId);
+        return await deps.manager.start(userId, agent);
       } catch (error) {
+        if (error instanceof AgentRequiredError) throw new HttpError(400, "agent_required", error.message);
+        if (error instanceof AgentUnavailableError) throw new HttpError(400, "agent_unavailable", error.message);
+        if (error instanceof AgentMismatchError) throw new HttpError(409, "agent_mismatch", error.message);
         if (error instanceof CapacityError) throw new HttpError(409, "capacity", error.message);
         if (error instanceof DeletingError) throw new HttpError(409, "deleting", error.message);
         if (error instanceof StartError) throw new HttpError(500, "start_failed", error.message);
@@ -157,12 +172,34 @@ function requireUser(db: PortalDb, userId: number, field: "userId" | "actorUserI
   throw new HttpError(400, "invalid_actor", `actorUserId ${userId} is not a user.`);
 }
 
-/** `{ reason?: StopReason, actorUserId?: number }`; the reason defaults to "admin". */
-function stopBody(body: unknown): { reason: StopReason; actorUserId: number | null } {
-  if (body !== undefined && (typeof body !== "object" || body === null || Array.isArray(body))) {
+/** The agents enabled on this install, in display order. */
+function agentList(config: Config): Array<{ id: AgentKind; name: string; description: string; version: string }> {
+  return config.workspace.agents.map((id) => {
+    const { name, description } = driverFor(id);
+    return { id, name, description, version: config.workspace.images[id].version };
+  });
+}
+
+/** A JSON object body, or none (an empty object). */
+function objectBody(body: unknown): Record<string, unknown> {
+  if (body === undefined) return {};
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
     throw new HttpError(400, "bad_request", "The body must be a JSON object.");
   }
-  const { reason, actorUserId } = (body ?? {}) as { reason?: unknown; actorUserId?: unknown };
+  return body as Record<string, unknown>;
+}
+
+/** `{ agent?: AgentKind }`; without one the workspace's last agent starts. */
+function startBody(body: unknown): { agent: AgentKind | undefined } {
+  const { agent } = objectBody(body);
+  if (agent === undefined || agent === null) return { agent: undefined };
+  if (!isAgentKind(agent)) throw new HttpError(400, "unknown_agent", `agent must be one of ${AGENT_KINDS.map((kind) => `"${kind}"`).join(", ")}.`);
+  return { agent };
+}
+
+/** `{ reason?: StopReason, actorUserId?: number }`; the reason defaults to "admin". */
+function stopBody(body: unknown): { reason: StopReason; actorUserId: number | null } {
+  const { reason, actorUserId } = objectBody(body);
   if (reason !== undefined && !STOP_REASONS.includes(reason as StopReason)) {
     throw new HttpError(400, "invalid_reason", `reason must be one of ${STOP_REASONS.map((r) => `"${r}"`).join(", ")}.`);
   }

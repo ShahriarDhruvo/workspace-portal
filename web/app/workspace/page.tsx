@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { displayName } from "@portal/db";
+import { AGENT_NAMES, displayName } from "@portal/db";
 import { config } from "@/lib/config";
 import { workspaceFrame } from "@/lib/workspace-frame";
 import { initials } from "@/lib/format";
@@ -19,6 +19,7 @@ export default async function WorkspacePage() {
       target={{ id: target.id, name: targetName, isViewer: !actingAs }}
       frame={workspaceFrame(session)}
       idleTimeoutMinutes={config.idleTimeoutMinutes}
+      agentNames={AGENT_NAMES}
       banner={actingAs ? <ViewingBanner>You are viewing {targetName}&apos;s workspace</ViewingBanner> : undefined}
     />
   );

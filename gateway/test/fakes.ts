@@ -1,12 +1,15 @@
-// In-process stand-ins for Docker, Qwen Code's `qwen serve` (the Web Shell) and the LLM server.
+// In-process stand-ins for Docker, the agents' web servers (Qwen Code's `qwen serve`, DeepSeek
+// Harness's `dsh web`) and the LLM server.
+import { createHash, createHmac } from "node:crypto";
 import fs from "node:fs";
 import http, { type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { WebSocketServer } from "ws";
+import type { AgentKind } from "@portal/db";
+import type { SettingsObject } from "../src/agents/qwen-settings.ts";
 import type { WorkspaceStartOptions } from "../src/container-spec.ts";
 import { userPaths } from "../src/paths.ts";
-import type { SettingsObject } from "../src/qwen.ts";
 import type { ContainerRuntime, ContainerSample, ContainerState, ContainerSummary, StartedContainer } from "../src/runtime.ts";
 
 export async function listenLocal(server: http.Server, port = 0, host = "127.0.0.1"): Promise<number> {
@@ -220,18 +223,194 @@ export async function startFakeQwen(token: string, options: { readyAfterMs: numb
   };
 }
 
+// ------------------------------------------------------------------ dsh web
+
+export interface FakeDsh {
+  host: string;
+  port: number;
+  /** The browser-session secret it was started with (DSH_COOKIE_SECRET). */
+  secret: string;
+  /** What `session/list` reports, and `session/state`'s pendingInput; tests change it to simulate the agent working. */
+  sessions: Array<{ id: string; running: boolean; pendingInput?: string[] }>;
+  /** Background jobs (`job/list` over the mux socket), by owning session. */
+  jobs: Array<{ owner: string; status: "running" | "exited" }>;
+  /** session/list calls that were answered. */
+  listCalls: number;
+  /** job/list streams that were answered. */
+  jobCalls: number;
+  /** While true, the session API answers 503 and job/list streams fail. */
+  apiFails: boolean;
+  /** Every request other than session/list, with the status the fake answered. */
+  requests: Array<RecordedRequest & { status: number }>;
+  /** Socket handshakes; `probe` for the gateway's own job checks (no Origin), the rest relayed browsers. */
+  sockets: Array<RecordedRequest & { probe: boolean }>;
+  close(): Promise<void>;
+}
+
+const DSH_AUTHORITY = "localhost:3080";
+const dshCookieName = `dsh-auth-${createHash("sha256").update(DSH_AUTHORITY).digest("base64url")}`;
+
+/** Like dsh: a valid, unexpired `v1.<body>.<signature>` cookie for this authority, signed with `secret`. */
+function validDshCookie(cookieHeader: string | undefined, secret: string): boolean {
+  const pair = (cookieHeader ?? "").split(";").map((part) => part.trim()).find((part) => part.startsWith(`${dshCookieName}=`));
+  const [version, body, signature] = (pair?.slice(dshCookieName.length + 1) ?? "").split(".");
+  if (version !== "v1" || !body || !signature) return false;
+  const expected = createHmac("sha256", Buffer.from(secret, "base64url")).update(body).digest("base64url");
+  if (signature !== expected) return false;
+  const claims = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as { authority?: string; issuedAt?: number; expiresAt?: number };
+  const now = Date.now();
+  return claims.authority === DSH_AUTHORITY && (claims.issuedAt ?? Infinity) <= now && (claims.expiresAt ?? 0) > now;
+}
+
+/** Why dsh would refuse this request (status), or null: loopback Host only, Origin = Host, no cross-site, a valid cookie. */
+function refuseDsh(req: IncomingMessage, secret: string): number | null {
+  const { host, origin } = req.headers;
+  if (host !== DSH_AUTHORITY) return 421;
+  if (origin !== undefined && origin !== `http://${host}`) return 403;
+  if (req.headers["sec-fetch-site"] === "cross-site") return 403;
+  return validDshCookie(req.headers.cookie, secret) ? null : 401;
+}
+
+export async function startFakeDsh(secret: string, options: { readyAfterMs: number; pingIntervalMs: number; host: string }): Promise<FakeDsh> {
+  const readyAt = Date.now() + options.readyAfterMs;
+  const state = { sessions: [] as FakeDsh["sessions"], jobs: [] as FakeDsh["jobs"], listCalls: 0, jobCalls: 0, apiFails: false };
+  const requests: FakeDsh["requests"] = [];
+  const sockets: FakeDsh["sockets"] = [];
+
+  const server = http.createServer(async (req, res) => {
+    const method = req.method ?? "GET";
+    const url = req.url ?? "/";
+    const { pathname } = new URL(url, "http://x");
+    // Like dsh: the port answers 404 everywhere for a moment before its routes exist.
+    if (Date.now() < readyAt) return void res.writeHead(404).end();
+    const status = refuseDsh(req, secret);
+    if ((pathname === "/api/session/list" || pathname === "/api/session/state") && method === "POST" && status === null) {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(chunk as Buffer);
+      type Args = { _request?: unknown; request?: { sessionId?: string } };
+      const call = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}") as { rpcId?: string; method?: string; payload?: { args?: Args } };
+      if (state.apiFails) return json(res, 503, { error: "unavailable" });
+      const answer = (value: unknown) => json(res, 200, { type: "server-response", rpcId: call.rpcId, result: value === undefined ? { ok: false, error: { code: "gateway/input-invalid" } } : { ok: true, value } });
+      const args = call.payload?.args;
+      if (call.method !== pathname.slice("/api/".length)) return answer(undefined);
+      if (call.method === "session/state") {
+        const session = state.sessions.find((s) => s.id === args?.request?.sessionId);
+        return answer(session && { running: session.running, active: true, pendingInput: session.pendingInput ?? [], queue: [] });
+      }
+      if (typeof args?._request !== "object") return answer(undefined);
+      state.listCalls++;
+      return answer({ items: state.sessions.map((s, index) => ({ sessionId: s.id, running: s.running, updatedAt: 1_000 + index, title: s.id })) });
+    }
+    const record = { method, url, headers: req.headers, status: status ?? 200 };
+    requests.push(record);
+    if (status !== null) return json(res, status, { error: http.STATUS_CODES[status] });
+    if (method === "GET" && pathname === "/") {
+      res.writeHead(200, { "content-type": "text/html", "set-cookie": `${dshCookieName}=refreshed; HttpOnly` }).end("<!doctype html><title>DeepSeek Harness</title>");
+    } else if (method === "POST" && pathname === "/api/session/create") {
+      json(res, 200, { type: "client-response", payload: { id: "s1" } });
+    } else if (pathname === "/connect" || pathname.startsWith("/oauth/") || pathname.startsWith("/open-in-app/")) {
+      // What the portal must never let a browser reach.
+      json(res, 200, { pairing: "would grant access" });
+    } else {
+      record.status = 404;
+      res.writeHead(404).end();
+    }
+  });
+
+  const wss = new WebSocketServer({ noServer: true });
+  server.on("upgrade", (req, socket, head) => {
+    const { pathname } = new URL(req.url ?? "/", "http://x");
+    const status = pathname === "/api/remote.mux" ? refuseDsh(req, secret) : 404;
+    if (status !== null) {
+      socket.end(`HTTP/1.1 ${status} ${http.STATUS_CODES[status]}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
+      return;
+    }
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      const probe = req.headers.origin === undefined;
+      sockets.push({ method: req.method ?? "", url: req.url ?? "", headers: req.headers, probe });
+      if (!probe) ws.send("hello from dsh");
+      // The mux protocol for job/list (one `open` per stream, rows as the first item); anything else is echoed.
+      ws.on("message", (data, isBinary) => {
+        const frame = (() => {
+          try {
+            return JSON.parse(data.toString()) as { type?: string; streamId?: string; endpoint?: string; payload?: { args?: { request?: { sessionId?: string } } } };
+          } catch {
+            return null;
+          }
+        })();
+        if (frame?.type === "cancel") return;
+        if (frame?.type !== "open" || frame.endpoint !== "job/list") return void ws.send(data, { binary: isBinary });
+        const sessionId = frame.payload?.args?.request?.sessionId;
+        if (state.apiFails || typeof sessionId !== "string") {
+          return void ws.send(JSON.stringify({ type: "error", streamId: frame.streamId, error: { code: "gateway/input-invalid" } }));
+        }
+        state.jobCalls++;
+        const jobs = state.jobs.filter((job) => job.owner === sessionId).map((job, index) => ({ id: `bash-${index}`, kind: "bash", owner: job.owner, status: job.status }));
+        ws.send(JSON.stringify({ type: "item", streamId: frame.streamId, value: { type: "rows", jobs } }));
+      });
+      const ping = setInterval(() => ws.ping(), options.pingIntervalMs);
+      ws.on("close", () => clearInterval(ping));
+    });
+  });
+
+  const port = await listenLocal(server, 0, options.host);
+  return {
+    host: options.host,
+    port,
+    secret,
+    get sessions() {
+      return state.sessions;
+    },
+    set sessions(value) {
+      state.sessions = value;
+    },
+    get jobs() {
+      return state.jobs;
+    },
+    set jobs(value) {
+      state.jobs = value;
+    },
+    get listCalls() {
+      return state.listCalls;
+    },
+    get jobCalls() {
+      return state.jobCalls;
+    },
+    get apiFails() {
+      return state.apiFails;
+    },
+    set apiFails(value: boolean) {
+      state.apiFails = value;
+    },
+    requests,
+    sockets,
+    async close() {
+      for (const client of wss.clients) client.terminate();
+      await closeServer(server);
+    },
+  };
+}
+
 // ------------------------------------------------------------------ container runtime
 
 interface FakeContainer {
   id: string;
   userId: number | null;
+  /** The agent label. */
+  agent: AgentKind;
   /** Address on the "workspace network"; null for orphans nobody serves. */
   ip: string | null;
   running: boolean;
   exitCode: number | null;
-  /** QWEN_SERVER_TOKEN from the container's environment; null when it has none. */
-  token: string | null;
-  qwen: FakeQwen | null;
+  /** The agent's credential from the container's environment; null when it has none. */
+  credential: string | null;
+  server: FakeAgentServer | null;
+}
+
+/** What every fake agent server has. */
+interface FakeAgentServer {
+  port: number;
+  close(): Promise<void>;
 }
 
 /** One startWorkspace call, with the files the gateway had rendered for it by then. */
@@ -239,14 +418,17 @@ export interface StartRecord {
   userId: number;
   containerId: string;
   options: WorkspaceStartOptions;
-  settings: SettingsObject;
-  systemDefaults: SettingsObject;
+  /** The agent's settings directory (file name → content). */
+  files: Record<string, string>;
+  /** Qwen Code's two settings files, parsed; null for other agents. */
+  settings: SettingsObject | null;
+  systemDefaults: SettingsObject | null;
 }
 
 /**
- * "Starts" a workspace by launching a fake `qwen serve` with the token the gateway chose. Like Docker,
- * it gives each running container its own address (127.0.0.2, 127.0.0.3, …) and hands a freed address
- * to the next container.
+ * "Starts" a workspace by launching the fake agent server it asks for, with the credential the
+ * gateway chose. Like Docker, it gives each running container its own address (127.0.0.2,
+ * 127.0.0.3, …) and hands a freed address to the next container.
  */
 export class FakeRuntime implements ContainerRuntime {
   readonly containers = new Map<string, FakeContainer>();
@@ -275,9 +457,15 @@ export class FakeRuntime implements ContainerRuntime {
   }
 
   qwenFor(userId: number): FakeQwen {
-    const { qwen } = this.containerFor(userId);
-    if (!qwen) throw new Error(`the workspace of user ${userId} has no fake qwen serve`);
-    return qwen;
+    const { agent, server } = this.containerFor(userId);
+    if (agent !== "qwen" || !server) throw new Error(`the workspace of user ${userId} has no fake qwen serve`);
+    return server as FakeQwen;
+  }
+
+  dshFor(userId: number): FakeDsh {
+    const { agent, server } = this.containerFor(userId);
+    if (agent !== "dsh" || !server) throw new Error(`the workspace of user ${userId} has no fake dsh`);
+    return server as FakeDsh;
   }
 
   startsFor(userId: number): StartRecord[] {
@@ -294,7 +482,7 @@ export class FakeRuntime implements ContainerRuntime {
   /** A container the gateway does not know about (as if left behind by someone else). */
   addOrphan(userId: number | null): string {
     const id = `orphan-${++this.#seq}`;
-    this.containers.set(id, { id, userId, ip: null, running: true, exitCode: null, token: null, qwen: null });
+    this.containers.set(id, { id, userId, agent: "qwen", ip: null, running: true, exitCode: null, credential: null, server: null });
     return id;
   }
 
@@ -309,7 +497,7 @@ export class FakeRuntime implements ContainerRuntime {
     const container = this.containerFor(userId);
     container.running = false;
     container.exitCode = exitCode;
-    await container.qwen?.close();
+    await container.server?.close();
   }
 
   async startWorkspace(userId: number, options: WorkspaceStartOptions): Promise<StartedContainer> {
@@ -327,28 +515,33 @@ export class FakeRuntime implements ContainerRuntime {
       if (!fs.existsSync(file)) throw new Error(`the gateway did not render ${file} before starting the container`);
       return fs.readFileSync(file, "utf8");
     };
-    const settings = JSON.parse(read(path.join(paths.qwenSettings, "settings.json"))) as SettingsObject;
-    const systemDefaults = JSON.parse(read(path.join(paths.qwenSettings, "system-defaults.json"))) as SettingsObject;
+    const settingsDir = paths.agentSettings(options.agent);
+    if (!fs.existsSync(settingsDir)) throw new Error(`the gateway did not render ${settingsDir} before starting the container`);
+    const files = Object.fromEntries(fs.readdirSync(settingsDir).map((name) => [name, read(path.join(settingsDir, name))]));
     read(paths.passwd);
     read(paths.group);
 
     const ip = this.#freeIp();
-    const qwen = await startFakeQwen(options.token, { readyAfterMs: this.readyAfterMs, pingIntervalMs: this.pingIntervalMs, host: ip });
+    const serverOptions = { readyAfterMs: this.readyAfterMs, pingIntervalMs: this.pingIntervalMs, host: ip };
+    const server =
+      options.agent === "qwen" ? await startFakeQwen(options.credential, serverOptions) : await startFakeDsh(options.credential, serverOptions);
     const id = `fake-${++this.#seq}`;
-    this.containers.set(id, { id, userId, ip, running: true, exitCode: null, token: options.token, qwen });
-    this.starts.push({ userId, containerId: id, options: { ...options }, settings, systemDefaults });
-    return { id, ip, port: qwen.port };
+    this.containers.set(id, { id, userId, agent: options.agent, ip, running: true, exitCode: null, credential: options.credential, server });
+    const parsed = (name: string): SettingsObject | null => (options.agent === "qwen" ? (JSON.parse(files[name]!) as SettingsObject) : null);
+    this.starts.push({ userId, containerId: id, options: { ...options }, files, settings: parsed("settings.json"), systemDefaults: parsed("system-defaults.json") });
+    return { id, ip, port: server.port };
   }
 
-  /** Like docker inspect: the token from the environment, also for a stopped container. */
-  async serverToken(id: string): Promise<string | null> {
-    return this.containers.get(id)?.token ?? null;
-  }
-
-  /** Simulates a container started without a token the gateway can read back. */
-  forgetToken(id: string): void {
+  /** Like docker inspect: the credential from the agent's env var, also for a stopped container. */
+  async credential(id: string, agent: AgentKind): Promise<string | null> {
     const container = this.containers.get(id);
-    if (container) container.token = null;
+    return container?.agent === agent ? container.credential : null;
+  }
+
+  /** Simulates a container started without a credential the gateway can read back. */
+  forgetCredential(id: string): void {
+    const container = this.containers.get(id);
+    if (container) container.credential = null;
   }
 
   async stopContainer(id: string): Promise<void> {
@@ -360,7 +553,7 @@ export class FakeRuntime implements ContainerRuntime {
   async removeContainer(id: string): Promise<void> {
     const container = this.containers.get(id);
     this.containers.delete(id);
-    await container?.qwen?.close();
+    await container?.server?.close();
   }
 
   async state(id: string): Promise<ContainerState> {
@@ -373,14 +566,15 @@ export class FakeRuntime implements ContainerRuntime {
     return [...this.containers.values()].map((c) => ({
       id: c.id,
       userId: c.userId,
+      agent: c.agent,
       running: c.running,
       ip: c.ip,
-      port: c.qwen?.port ?? 1,
+      port: c.server?.port ?? 1,
     }));
   }
 
-  async logsTail(): Promise<string> {
-    return "fake qwen: last log line\n";
+  async logsTail(id: string): Promise<string> {
+    return `fake ${this.containers.get(id)?.agent ?? "agent"}: last log line\n`;
   }
 
   async sample(id: string): Promise<ContainerSample> {

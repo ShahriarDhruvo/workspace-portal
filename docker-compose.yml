@@ -84,8 +84,11 @@ services:
       SEARXNG_AUTHORIZATION: ${SEARXNG_AUTHORIZATION:-}
       SEARXNG_TIMEOUT_SECONDS: ${SEARXNG_TIMEOUT_SECONDS:-}
       SEARCH_MAX_CONCURRENT_PER_USER: ${SEARCH_MAX_CONCURRENT_PER_USER:-}
-      # Named after the Qwen Code version it contains (deploy/lib.sh workspace_image does the same).
-      WORKSPACE_IMAGE: workspace-portal/workspace:qwen-${QWEN_CODE_VERSION:?set QWEN_CODE_VERSION in .env}
+      # The agents users choose from, and the versions their images contain: the gateway starts
+      # workspace-portal/workspace:<agent>-<version> (deploy/lib.sh workspace_image names them the same way).
+      WORKSPACE_AGENTS: ${WORKSPACE_AGENTS:-}
+      QWEN_CODE_VERSION: ${QWEN_CODE_VERSION:-}
+      DSH_VERSION: ${DSH_VERSION:-}
       WORKSPACE_NETWORK: ${WORKSPACE_NETWORK:-}
       WORKSPACE_SUBNET: ${WORKSPACE_SUBNET:-}
       WORKSPACE_GATEWAY_IP: ${WORKSPACE_GATEWAY_IP:-}

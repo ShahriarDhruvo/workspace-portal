@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { asc, desc } from "drizzle-orm";
-import { users } from "@portal/db";
+import { AGENT_NAMES, users } from "@portal/db";
 import { config } from "@/lib/config";
 import { getDb } from "@/lib/db";
 import { loadAdminOverview } from "@/lib/overview";
@@ -40,6 +40,7 @@ export default async function AdminPage() {
         initialOverview={overview}
         currentAdminId={session.user.id}
         idleTimeoutMinutes={overview.stats?.idleTimeoutMinutes ?? config.idleTimeoutMinutes}
+        agentNames={AGENT_NAMES}
       />
     </>
   );

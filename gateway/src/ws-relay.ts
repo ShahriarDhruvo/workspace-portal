@@ -1,22 +1,21 @@
-// WebSocket relay for the Web Shell's sockets (/terminal, /acp, /live/web). Both sides are
-// terminated: the gateway connects to the workspace first and accepts the browser only once the
-// workspace has accepted, so its answer (401/403/…) can be passed back as a plain HTTP status.
-// Browsers can't set headers on WebSockets, so the Web Shell offers its token as a
-// `qwen-bearer.<base64url>` subprotocol; the gateway checks it and sends the container's real token
-// in an Authorization header instead.
+// WebSocket relay for the agents' sockets (the driver's socketPaths). Both sides are terminated:
+// the gateway connects to the workspace first and accepts the browser only once the workspace has
+// accepted, so its answer (401/403/…) can be passed back as a plain HTTP status.
+// The driver puts the container's credential on the upstream handshake. For a token agent the
+// browser must present its session-bound token: browsers can't set headers on WebSockets, so the
+// UI offers it as a `qwen-bearer.<base64url>` subprotocol, which is checked and not passed on.
 import { STATUS_CODES, type IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import WebSocket, { WebSocketServer, type RawData } from "ws";
 import { tokensEqual, type SessionContext } from "@portal/db";
 import { checkAgentAccess, INVALID_TOKEN, unavailableError, type AgentDeps } from "./agent-access.ts";
+import { driverFor } from "./agents/index.ts";
 import { MIB } from "./config.ts";
 import { connectionRole } from "./connections.ts";
-import { bearerToken, qwenRequestHeaders, splitBearerSubprotocol } from "./headers.ts";
+import { bearerToken, splitBearerSubprotocol } from "./headers.ts";
 import { splitTarget } from "./http-util.ts";
 import type { Upstream } from "./workspaces.ts";
 
-/** The Web Shell's WebSocket endpoints. Anything else is refused before it reaches the workspace. */
-const SOCKET_PATHS: ReadonlySet<string> = new Set(["/terminal", "/acp", "/live/web"]);
 const HANDSHAKE_TIMEOUT_MS = 15_000;
 const PING_INTERVAL_MS = 20_000;
 const MAX_MISSED_PONGS = 2;
@@ -38,13 +37,13 @@ export function createWsRelay(deps: AgentDeps): UpgradeHandler {
   });
   return (req, socket, head) => {
     socket.on("error", () => socket.destroy());
-    if (!SOCKET_PATHS.has(splitTarget(req.url ?? "").pathname)) return rejectUpgrade(socket, 404, "not_found");
     if (!isWebSocketHandshake(req)) return rejectUpgrade(socket, 400, "bad_request");
     const access = checkAgentAccess(req, deps, true);
     if (!access.ok) return rejectUpgrade(socket, access.status, access.code, access.message);
+    // As on the HTTP side, a token the browser presents must be the right one, whatever the agent.
     const { token: offered, protocols } = splitBearerSubprotocol(req.headers["sec-websocket-protocol"]);
-    const presented = offered ?? bearerToken(req.headers.authorization);
-    if (presented === null || !tokensEqual(presented, access.browserToken)) {
+    const presented = presentedToken(offered, req.headers.authorization);
+    if (presented !== null && !tokensEqual(presented, access.browserToken)) {
       return rejectUpgrade(socket, 401, INVALID_TOKEN.code, INVALID_TOKEN.message);
     }
     const upstream = deps.manager.upstream(access.userId);
@@ -53,6 +52,10 @@ export function createWsRelay(deps: AgentDeps): UpgradeHandler {
       const { code, message, headers } = unavailableError(deps.manager.info(access.userId).status);
       return rejectUpgrade(socket, 503, code, message, headers);
     }
+    const driver = driverFor(upstream.agent);
+    if (!driver.socketPaths.has(splitTarget(req.url ?? "").pathname)) return rejectUpgrade(socket, 404, "not_found");
+    // A token agent's sockets need the token.
+    if (driver.browserAuth === "token" && presented === null) return rejectUpgrade(socket, 401, INVALID_TOKEN.code, INVALID_TOKEN.message);
     connect(deps, server, req, socket, head, upstream, access.context, access.userId, protocols);
   };
 }
@@ -68,9 +71,8 @@ function connect(
   userId: number,
   protocols: string[],
 ): void {
-  const authority = `${upstream.host}:${upstream.port}`;
-  const workspace = new WebSocket(`ws://${authority}${req.url ?? "/"}`, protocols, {
-    headers: qwenRequestHeaders(req.headers, authority, upstream.token, { websocket: true }),
+  const workspace = new WebSocket(`ws://${upstream.host}:${upstream.port}${req.url ?? "/"}`, protocols, {
+    headers: driverFor(upstream.agent).requestHeaders(req.headers, upstream, { authorised: true, websocket: true }),
     perMessageDeflate: false,
     followRedirects: false,
     handshakeTimeout: HANDSHAKE_TIMEOUT_MS,
@@ -204,6 +206,13 @@ export function relayCloseCode(code: number): number {
   if (code === 1005) return 1000;
   const sendable = (code >= 1000 && code <= 1014 && code !== 1004 && code !== 1006) || (code >= 3000 && code <= 4999);
   return sendable ? code : 1011;
+}
+
+/** The token a browser presents: the bearer subprotocol, else an Authorization header ("" when malformed); null if none. */
+function presentedToken(offered: string | null, authorization: string | undefined): string | null {
+  if (offered !== null) return offered;
+  if (authorization === undefined) return null;
+  return bearerToken(authorization) ?? "";
 }
 
 function isWebSocketHandshake(req: IncomingMessage): boolean {

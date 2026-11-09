@@ -1,6 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatBytes, formatDuration, formatRelative, initials, stopReasonText, summarizeWorkspace } from "./format.ts";
+import { AGENT_NAMES } from "@portal/db";
+import {
+  agentLabel,
+  formatBytes,
+  formatDuration,
+  formatRelative,
+  formatVersion,
+  initials,
+  stopReasonText,
+  summarizeWorkspace,
+} from "./format.ts";
 import type { WorkspaceInfo } from "./gateway-types.ts";
 
 test("formatBytes uses binary units", () => {
@@ -37,6 +47,7 @@ test("stop reasons in plain words", () => {
   assert.equal(stopReasonText("admin", 30), "by the administrator");
   assert.equal(stopReasonText("capacity", 30), "to free resources");
   assert.equal(stopReasonText("logout", 30), "because you signed out");
+  assert.equal(stopReasonText("user", 30), "to switch agents");
   assert.equal(stopReasonText("sessions_expired", 30), null, "never sent by the gateway");
   assert.equal(stopReasonText("something_new", 30), null);
   assert.equal(stopReasonText(null, 30), null);
@@ -45,6 +56,7 @@ test("stop reasons in plain words", () => {
 const running: WorkspaceInfo = {
   userId: 2,
   status: "running",
+  agent: "qwen",
   ready: true,
   startedAt: 1,
   lastActivityAt: 1,
@@ -71,4 +83,21 @@ test("summarizeWorkspace", () => {
   assert.ok(working.title?.includes("stops once the work is done"));
   const failed = summarizeWorkspace({ ...running, status: "error", ready: false, lastError: "boom" }, 30);
   assert.deepEqual([failed.tone, failed.label, failed.title], ["danger", "Error", "boom"]);
+});
+
+test("formatVersion", () => {
+  assert.equal(formatVersion("0.27.0"), "v0.27.0");
+  assert.equal(formatVersion("0.2.2-rc.1"), "v0.2.2-rc.1");
+  assert.equal(formatVersion("v1.0.0"), "v1.0.0");
+  assert.equal(formatVersion("nightly"), "nightly");
+});
+
+test("agentLabel names the running agent, or the last one once stopped", () => {
+  assert.equal(agentLabel(running, AGENT_NAMES), "Qwen Code");
+  assert.equal(agentLabel({ status: "starting", agent: "dsh" }, AGENT_NAMES), "DeepSeek Harness");
+  assert.equal(agentLabel({ status: "stopping", agent: "dsh" }, AGENT_NAMES), "DeepSeek Harness");
+  assert.equal(agentLabel({ status: "stopped", agent: "dsh" }, AGENT_NAMES), "last: DeepSeek Harness");
+  assert.equal(agentLabel({ status: "error", agent: "qwen" }, AGENT_NAMES), "last: Qwen Code");
+  assert.equal(agentLabel({ status: "stopped", agent: null }, AGENT_NAMES), null, "never started");
+  assert.equal(agentLabel(null, AGENT_NAMES), null, "no workspace row");
 });

@@ -13,6 +13,7 @@ import { SecretValue } from "@/components/ui/copy-button";
 import { Dialog, DialogFooter } from "@/components/ui/dialog";
 import { Field, FormError } from "@/components/ui/field";
 import { SubmitButton } from "@/components/ui/submit-button";
+import { BusyWarning } from "@/components/workspace/busy-warning";
 
 export type UserDialogKind = "stop" | "reset" | "deactivate" | "activate" | "delete";
 
@@ -22,18 +23,6 @@ export interface DialogUser {
   username: string;
   /** The user's agent is working right now (the dialogs that stop the workspace at once warn). */
   busy?: boolean;
-}
-
-/**
- * The warning of the dialogs whose action stops the workspace at once, even mid-task (stop, deactivate,
- * delete); `effect` says what that does to the task.
- */
-function BusyWarning({ name, effect }: { name: ReactNode; effect: string }) {
-  return (
-    <>
-      {name}&apos;s agent is <strong className="font-medium text-warning">working on a task right now</strong>. {effect}
-    </>
-  );
 }
 
 const IDLE: ActionState = { status: "idle" };
@@ -113,7 +102,7 @@ function DeleteUserDialog({ user, name, onClose }: { user: DialogUser; name: Rea
         <>
           {user.busy ? (
             <p className="mb-2">
-              <BusyWarning name={name} effect="Deleting the user ends it mid-way." />
+              <BusyWarning whose={<>{name}&apos;s</>} effect="Deleting the user ends it mid-way." />
             </p>
           ) : null}
           <p>
@@ -151,7 +140,7 @@ export function UserDialog({ kind, user, onClose }: { kind: UserDialogKind; user
           pendingLabel="Stopping…"
           description={
             user.busy ? (
-              <BusyWarning name={name} effect="Stopping ends it mid-way; files written so far are kept. Stop anyway?" />
+              <BusyWarning whose={<>{name}&apos;s</>} effect="Stopping ends it mid-way; files written so far are kept. Stop anyway?" />
             ) : (
               <>
                 Stop {name}&apos;s workspace now? Anything running in it ends; files are kept. It starts again the next
@@ -201,7 +190,7 @@ export function UserDialog({ kind, user, onClose }: { kind: UserDialogKind; user
             <>
               {user.busy ? (
                 <p className="mb-2">
-                  <BusyWarning name={name} effect="Deactivating the account ends it mid-way." />
+                  <BusyWarning whose={<>{name}&apos;s</>} effect="Deactivating the account ends it mid-way." />
                 </p>
               ) : null}
               <p>

@@ -2,9 +2,23 @@
 // Defaults match .env.example; docs/ARCHITECTURE.md documents every variable.
 import net from "node:net";
 import path from "node:path";
+import { AGENT_KINDS, isAgentKind, type AgentKind } from "@portal/db";
+
+/** The image of one agent, built by deploy/install.sh from workspace-image/ (target = the agent kind). */
+export interface AgentImage {
+  version: string;
+  image: string;
+}
+
+/** Workspace images are named after the agent and the version they contain (deploy/lib.sh does the same). */
+export function workspaceImage(kind: AgentKind, version: string): string {
+  return `workspace-portal/workspace:${kind}-${version}`;
+}
 
 export interface WorkspaceConfig {
-  image: string;
+  /** The agents users may choose from, in display order (WORKSPACE_AGENTS). */
+  agents: readonly AgentKind[];
+  images: Readonly<Record<AgentKind, AgentImage>>;
   /** Docker *internal* network: workspaces can reach the gateway's bridge address and nothing else. */
   network: string;
   subnet: string;
@@ -36,8 +50,13 @@ export interface Config {
   /** Host path of the portal data, mounted at the same path inside the gateway container. */
   dataDir: string;
   dbFile: string;
-  /** Admin-provided Qwen Code settings (settings.json, system-defaults.json), applied to every workspace. */
+  /**
+   * Admin-provided Qwen Code settings (settings.json, system-defaults.json), applied to every workspace.
+   * Its system-defaults.json also defines the models of DeepSeek Harness workspaces.
+   */
   qwenConfigDir: string;
+  /** Admin-provided DeepSeek Harness patch (patch.yml), applied before the portal's own. */
+  dshConfigDir: string;
   webPort: number;
   agentBind: string;
   /** User N's workspace is served on port agentPortBase + N (1 <= N < agentPortCount). */
@@ -99,6 +118,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     dataDir,
     dbFile: path.join(dataDir, "db", "portal.sqlite"),
     qwenConfigDir: path.join(dataDir, "config", "qwen"),
+    dshConfigDir: path.join(dataDir, "config", "dsh"),
     webPort: read.port("WEB_PORT", 3000),
     agentBind: read.ip("AGENT_BIND", "0.0.0.0"),
     agentPortBase: read.port("AGENT_PORT_BASE", 3100),
@@ -119,7 +139,11 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
       maxConcurrentPerUser: read.int("SEARCH_MAX_CONCURRENT_PER_USER", 2, 1),
     },
     workspace: {
-      image: read.nonEmpty("WORKSPACE_IMAGE", "workspace-portal/workspace:qwen-0.27.0"),
+      agents: read.agentList("WORKSPACE_AGENTS", "qwen,dsh"),
+      images: {
+        qwen: agentImage("qwen", read.version("QWEN_CODE_VERSION", "0.27.0")),
+        dsh: agentImage("dsh", read.version("DSH_VERSION", "0.2.2-rc.1")),
+      },
       network: read.nonEmpty("WORKSPACE_NETWORK", "workspace-portal-ws"),
       subnet: read.cidr("WORKSPACE_SUBNET", "172.29.0.0/16"),
       gatewayIp: read.ipv4("WORKSPACE_GATEWAY_IP", "172.29.0.1"),
@@ -151,6 +175,10 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   }
   if (read.problems.length > 0) throw new ConfigError(read.problems);
   return config;
+}
+
+function agentImage(kind: AgentKind, version: string): AgentImage {
+  return { version, image: workspaceImage(kind, version) };
 }
 
 /** Typed accessors over the environment that collect problems instead of throwing at the first one. */
@@ -252,6 +280,28 @@ class EnvReader {
   ipv4(name: string, fallback: string): string {
     const value = this.nonEmpty(name, fallback);
     if (!net.isIPv4(value)) this.problems.push(`${name} must be an IPv4 address (got "${value}")`);
+    return value;
+  }
+
+  /** A comma-separated list of agent kinds without repeats, at least one. */
+  agentList(name: string, fallback: string): AgentKind[] {
+    const raw = this.nonEmpty(name, fallback);
+    const items = raw.split(",").map((item) => item.trim().toLowerCase()).filter((item) => item !== "");
+    const unknown = items.filter((item) => !isAgentKind(item));
+    if (unknown.length > 0 || items.length === 0) {
+      this.problems.push(`${name} must list one or more of ${AGENT_KINDS.join(", ")}, comma-separated (got "${raw}")`);
+      return fallback.split(",").filter(isAgentKind);
+    }
+    return [...new Set(items.filter(isAgentKind))];
+  }
+
+  /** An npm-style version, as used in image tags. */
+  version(name: string, fallback: string): string {
+    const value = this.nonEmpty(name, fallback);
+    if (!/^\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.]+)?$/.test(value)) {
+      this.problems.push(`${name} must be a version such as 0.27.0 (got "${value}")`);
+      return fallback;
+    }
     return value;
   }
 

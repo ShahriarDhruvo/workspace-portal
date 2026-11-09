@@ -1,13 +1,17 @@
 # Workspace Portal
 
-A private web portal that gives every user their own AI coding workspace: a container running the
-[Qwen Code](https://github.com/QwenLM/qwen-code) Web Shell (`qwen serve`), with a shell, files, a
-headless browser and web search, all driven by a model you host.
+A private web portal that gives every user their own AI coding workspace: a container running the agent
+they choose, the [Qwen Code](https://github.com/QwenLM/qwen-code) Web Shell (`qwen serve`) or the
+DeepSeek Harness web UI (`dsh`), with a shell, files, a headless browser and web search, all driven by a
+model you host.
 
 - Username/password sign-in. One admin creates the users (first, middle and last name).
 - **One container per user**, shared by all of that user's sign-ins (two browsers, two devices: same workspace).
-- It starts at sign-in. It stops when the user signs out, or after 30 minutes without use, **but never while
-  the agent is working**. A long task keeps running after the user leaves, and the workspace stops once the task is done.
+- **One agent at a time.** When the workspace isn't running, the user chooses Qwen Code or DeepSeek Harness
+  and can switch later; both work on the same files.
+- It starts when the user opens it. It stops when the user signs out, or after 30 minutes without use, **but
+  never while the agent is working**. A long task keeps running after the user leaves, and the workspace stops
+  once the task is done.
 - The admin sees every workspace's state and can open any of them, even while the user is in it.
 - **Locked down by default:** a workspace can reach exactly two things, the model provider and the search
   engine, and only through the portal's gateway. It has no internet access, can't reach your LAN or other
@@ -16,7 +20,7 @@ headless browser and web search, all driven by a model you host.
 ```
  browser ──:3000──▶ web (Next.js)  ── sign-in, admin console, starts/stops workspaces
     │                   │ control API (127.0.0.1:4002)
-    └──:3100+id──▶ gateway ────────── Docker ──▶ wp-ws-<id>  (Qwen Code, one per user)
+    └──:3100+id──▶ gateway ────────── Docker ──▶ wp-ws-<id>  (Qwen Code or DeepSeek Harness, one per user)
                         ▲                              │
                         └─ 172.29.0.1:4001 ◀───────────┘ the only address a workspace can reach
                                ├─ /llm/v1    ──▶ LLM_UPSTREAM_URL (your model server)
@@ -30,8 +34,9 @@ headless browser and web search, all driven by a model you host.
 - [Install and start the web server](#install-and-start-the-web-server)
 - [Connect the model](#connect-the-model)
 - [Connect your SearXNG search engine](#connect-your-searxng-search-engine)
-- [Qwen Code settings for all workspaces](#qwen-code-settings-for-all-workspaces)
-- [Updating the workspace image](#updating-the-workspace-image)
+- [The agents: Qwen Code and DeepSeek Harness](#the-agents-qwen-code-and-deepseek-harness)
+- [Agent settings for all workspaces](#agent-settings-for-all-workspaces)
+- [Updating the workspace images](#updating-the-workspace-images)
 - [Using it](#using-it)
 - [Remote access with Tailscale](#remote-access-with-tailscale)
 - [Operations](#operations)
@@ -61,11 +66,16 @@ network and container items on a live install.
     snippets.
 
   There is no URL-fetch tool and no proxy, so nothing else on the internet is reachable.
-- Qwen Code's own internet features are off and pinned at system scope:
-  - auto-update, usage statistics, telemetry, the model catalogue refresh;
-  - `web_fetch` is denied, and built-in web search providers are removed.
+- The agents' own internet features are off, and users can't turn them back on:
+  - Qwen Code, pinned at system scope: auto-update, usage statistics, telemetry and the model catalogue
+    refresh are off, `web_fetch` is denied, and the built-in web search providers are removed.
+  - DeepSeek Harness, by a lockdown patch in the image that applies after the user's own settings: no
+    DeepSeek account or DeepSeek model routes, no built-in web fetch or web search, no plugin manager or
+    market, no feedback upload, and telemetry off.
 
-  With them off, a running workspace made no outside DNS lookups in testing.
+  With them off, a running Qwen Code workspace made no outside DNS lookups in testing. In a DeepSeek
+  Harness workspace the only ones came from the headless browser's Chromium asking for Google hosts; Docker's
+  resolver answers those with a failure and nothing leaves the host.
 
 **Files: only the user's own**
 - User N's workspace runs as its own UID (`WORKSPACE_UID_BASE + N`, 200000+N by default). That UID owns two
@@ -73,7 +83,7 @@ network and container items on a live install.
 - The container's root filesystem is read-only. Writable are `/home/user`, `/workspace` (the user's storage)
   and an in-memory `/tmp`.
 - The rest is mounted read-only and is a per-user copy:
-  - the Qwen Code settings (`/etc/workspace-portal/qwen/`);
+  - the running agent's settings (`/etc/workspace-portal/qwen/` or `/etc/workspace-portal/dsh/`);
   - `/etc/passwd` and `/etc/group`.
 
   No directory, socket or file is shared between workspaces.
@@ -90,10 +100,13 @@ network and container items on a live install.
 - The LLM API key and SearXNG credentials stay in the gateway; a workspace sees a placeholder key. Each of
   the two portal containers gets only the settings it uses: the web app never sees those credentials, and
   the gateway never sees the admin password.
-- Each container start gets a fresh random token for its `qwen serve`. It lives only in the gateway and in
+- Each container start gets a fresh random credential for its agent. It lives only in the gateway and in
   that container.
-- The browser gets a different token, derived from its portal session and that one workspace. The gateway
-  accepts it only together with the session cookie, and swaps it for the container's token.
+  - Qwen Code: the browser gets a different token, derived from its portal session and that one workspace.
+    The gateway accepts it only together with the session cookie, and swaps it for the container's token.
+  - DeepSeek Harness: the credential is the secret dsh signs its login cookie with. The browser never holds
+    a dsh cookie: the gateway signs a short-lived one for each request it forwards, after its own session
+    checks. Inside the container, the secret is in a file under `/tmp` and in no process's environment.
 - Sessions use an HttpOnly, SameSite=Lax cookie; passwords are hashed with Argon2id. Five failed sign-ins
   lock an account for 15 minutes.
 
@@ -102,6 +115,13 @@ network and container items on a live install.
   Its storage, service worker and scripts can't see another user's workspace, even in the same browser.
 - A session can use only the workspace it has open. An admin's session can use another user's workspace only
   after opening it from the admin console, which writes to the audit log.
+
+**Inside the workspace**
+- Qwen Code asks before it runs commands or edits files, unless the user picks another approval mode.
+- DeepSeek Harness runs the agent's commands in a Landlock sandbox. Without asking, they may write only
+  `/workspace`, `/tmp` and the home directory's caches. Anything else, including dsh's own settings and shell
+  start-up files, needs the user's approval. The terminal in the UI is the user's own and is not sandboxed.
+- Either way the container is the boundary: whatever runs inside it has the limits above.
 
 **What the admin can do:** read and use every workspace. That is by design.
 
@@ -128,7 +148,8 @@ The installer is idempotent; re-run it after pulling changes. It:
 2. creates `.env` from `.env.example` (mode 600), generating `GATEWAY_CONTROL_SECRET` and an `ADMIN_PASSWORD`;
 3. creates `PORTAL_DATA_DIR` (`/srv/workspace-portal`) with the ownership model above, plus the SELinux labels;
 4. installs the example Qwen Code settings into `PORTAL_DATA_DIR/config/qwen/` (never overwriting yours);
-5. builds the workspace image for `QWEN_CODE_VERSION` (a few minutes the first time) and the web and gateway images;
+5. builds a workspace image for each agent in `WORKSPACE_AGENTS` (`QWEN_CODE_VERSION`, `DSH_VERSION`; a few
+   minutes each the first time) and the web and gateway images;
 6. installs and starts the workspace firewall unit, and opens ports 3000 and 3101–3299 to your LAN (and to
    Tailscale, if present) in firewalld or ufw;
 7. starts the stack with `docker compose up -d` and prints the URL.
@@ -180,12 +201,12 @@ Workspaces talk to the gateway, and the gateway talks to your model server, so o
    For a provider whose base URL ends in `/v1` (for example `https://openrouter.ai/api/v1`), drop the `/v1`
    (`https://openrouter.ai/api`).
 
-2. Choose the models users see. They are listed under `modelProviders.openai` in Qwen Code's
+2. Choose the models users see, in both agents. They are listed under `modelProviders.openai` in Qwen Code's
    `system-defaults.json`, one entry per model: `id` is the name the model server expects (an `id` from
    `/v1/models`), and the entry also sets the display name, context window, output limit, image input,
    reasoning effort levels and sampling parameters. `model.name` picks the default. Start from
    `qwen-config/system-defaults.json`, which the installer has already put in place, and install your
-   version as described in [Qwen Code settings](#qwen-code-settings-for-all-workspaces):
+   version as described in [Qwen Code settings](#qwen-code):
 
    ```sh
    cp qwen-config/system-defaults.json /tmp/system-defaults.json   # then edit "id", "name", limits, …
@@ -194,6 +215,12 @@ Workspaces talk to the gateway, and the gateway talks to your model server, so o
 
    The portal rewrites each entry's `baseUrl` to the gateway and its key to a placeholder, so leave them
    out and never put real keys there. A workspace won't start without at least one model.
+
+   DeepSeek Harness offers the same models with the same default. It takes each model's id, name, context
+   window, output limit, image input and reasoning effort levels, but not the sampling parameters: it has no
+   setting for them, so the model server's defaults apply. Its context management needs
+   `context window − output limit ≥ 78020` tokens, so it lowers a model's output limit to fit, and leaves
+   out a model with a context window under 82116 tokens.
 
 3. Apply the change:
 
@@ -242,9 +269,29 @@ Only the query text, page, time range and language are sent to SearXNG. The work
 directly. The gateway's `limiter` setting in SearXNG (if you use its bot protection) sees the gateway's
 address, so allow it there.
 
-## Qwen Code settings for all workspaces
+## The agents: Qwen Code and DeepSeek Harness
 
-Every workspace starts `qwen serve` with two system settings files that the admin provides:
+`WORKSPACE_AGENTS` in `.env` lists the agents users choose from, in the order they are shown:
+
+```sh
+WORKSPACE_AGENTS=qwen,dsh        # both (the default); qwen = Qwen Code, dsh = DeepSeek Harness
+# WORKSPACE_AGENTS=qwen          # only Qwen Code: workspaces start without asking
+QWEN_CODE_VERSION=0.27.0         # the version each agent's image contains
+DSH_VERSION=0.2.2-rc.1
+```
+
+After a change, run `sudo bash deploy/install.sh`, which builds the image of a newly added agent. A workspace
+still running an agent you removed keeps it until it stops; after that, its user chooses again.
+
+Both agents run in the same locked-down container with the same limits and see the same `/workspace` and
+home directory, so switching agents keeps the user's files. Each keeps its own history: Qwen Code in
+`~/.qwen`, DeepSeek Harness in `~/.dsh`. DeepSeek Harness 0.2 is a preview release; its UI says so.
+
+## Agent settings for all workspaces
+
+### Qwen Code
+
+Every Qwen Code workspace starts `qwen serve` with two system settings files that the admin provides:
 
 | File | Scope | Typical content |
 |---|---|---|
@@ -285,48 +332,76 @@ portal and in `docker compose logs gateway`.
 
 Users keep their own Qwen Code settings, chats and memory in their home directory, which survives restarts.
 
-## Updating the workspace image
+### DeepSeek Harness
 
-The workspace image is built from `workspace-image/` and tagged `workspace-portal/workspace:qwen-<version>`.
-`QWEN_CODE_VERSION` in `.env` selects the Qwen Code version, and with it the image every workspace starts from.
+DeepSeek Harness takes its models from the same files (see [Connect the model](#connect-the-model)), with
+the portal's search and browser tools. Everything else is fixed by the portal, in two patches applied after
+the user's own settings, so the UI shows those settings as read-only:
 
-**Change the Qwen Code version** (on the server, in the project directory):
+- `workspace-image/dsh/lockdown.patch.yml`, built into the image: the internet features above off, the
+  sandbox and approvals, one workspace (`/workspace`). To change it, edit the file and rebuild with
+  `sudo bash deploy/update-image.sh dsh --refresh`.
+- `portal.patch.yml`, rendered by the gateway at every start into `PORTAL_DATA_DIR/users/<id>/system/dsh/`:
+  the models, the default model and the MCP servers.
+
+Users keep their own sessions, settings and skills in `~/.dsh` and `~/.agents`.
+
+## Updating the workspace images
+
+Each agent has its own image, built from `workspace-image/Dockerfile` (one target per agent, on a shared base
+with the tools and Chromium) and tagged `workspace-portal/workspace:<agent>-<version>`: `qwen-0.27.0`,
+`dsh-0.2.2-rc.1`. `QWEN_CODE_VERSION` and `DSH_VERSION` in `.env` select the version, and with it the image
+that agent's workspaces start from.
+
+**Change an agent's version** (on the server, in the project directory):
 
 ```sh
-sudo bash deploy/update-image.sh 0.28.0
+sudo bash deploy/update-image.sh qwen 0.28.0     # Qwen Code
+sudo bash deploy/update-image.sh dsh 0.2.3       # DeepSeek Harness
 ```
 
-This builds the image for that version, checks that it really contains it, sets `QWEN_CODE_VERSION` in
-`.env`, restarts the gateway and runs `deploy/verify-isolation.sh` against the new image. Running workspaces
-keep the old image until they stop; every new start uses the new one. To move everyone now, stop the running
+This builds the image for that version, checks that it really contains it, sets the version in `.env`,
+restarts the gateway and runs `deploy/verify-isolation.sh` against the new image. Running workspaces keep
+the old image until they stop; every new start uses the new one. To move everyone now, stop the running
 workspaces in the admin console.
 
-**Roll back** the same way: `sudo bash deploy/update-image.sh 0.27.0` (the old image is still there, so
-nothing is rebuilt).
+**Roll back** the same way, for example `sudo bash deploy/update-image.sh qwen 0.27.0` (the old image is
+still there, so nothing is rebuilt).
 
 **Security updates** for Chromium and the other Debian packages:
 
 ```sh
-sudo bash deploy/update-image.sh --refresh     # rebuild the current version from a fresh base image
+sudo bash deploy/update-image.sh --refresh       # rebuild every enabled agent's current version from a fresh base
+sudo bash deploy/update-image.sh dsh --refresh   # just one agent
 ```
 
 **Add tools or change other versions** by editing `workspace-image/Dockerfile` (for example an
-`apt-get install` line, or `ARG PLAYWRIGHT_MCP_VERSION`), then run `update-image.sh --refresh`. Keep the image
-free of credentials.
+`apt-get install` line in the base stage, or `ARG PLAYWRIGHT_MCP_VERSION`), then run `update-image.sh
+--refresh`. Keep the images free of credentials.
 
 Remove old images when you no longer need them: `sudo docker image rm workspace-portal/workspace:qwen-0.27.0`.
 
-Check Qwen Code's release notes before upgrading: the gateway relies on `qwen serve`'s token auth and
-`/health?deep=1`. If either changes, the workspace start and `verify-isolation.sh` show it.
+Check the release notes before upgrading:
+- Qwen Code: the gateway relies on `qwen serve`'s token auth and `/health?deep=1`.
+- DeepSeek Harness: the gateway relies on its login cookie format, its `session/list`, `session/state` and
+  `job/list` API, and the plugin ids in `workspace-image/dsh/lockdown.patch.yml`, which restates one preset
+  of that version in full. Compare that preset with the new version's (`dsh-web-app/presets/standard.patch.yml`
+  in the package) and check the composed configuration with `dsh --profile web --patch … --dump-config`.
+
+If one of these changes, the workspace start and `verify-isolation.sh` show it.
 
 ## Using it
 
 1. **Admin → New user** creates an account with a one-time temporary password. The user chooses their own at
    first sign-in.
-2. Signing in opens the workspace: the container starts (a few seconds) and the Qwen Code Web Shell appears,
-   in dark mode. The page loads it from that user's own port (`3100 + user id`), which must be reachable.
-3. **One container per user.** More sign-ins (another tab, browser or device) attach to the same container
-   and see the same sessions live.
+2. Signing in opens the workspace. If it isn't running, the user chooses an agent (Qwen Code or DeepSeek
+   Harness; the last one used is preselected), the container starts in a few seconds, and the agent's UI
+   appears. With a single agent enabled it starts right away. The page loads it from that user's own port
+   (`3100 + user id`), which must be reachable.
+3. **One container per user, one agent at a time.** More sign-ins (another tab, browser or device) attach to
+   the same container and see the same sessions live. **Switch agent** in the top bar stops the workspace
+   (it warns if the agent is working or the workspace is open elsewhere) and shows the choice again; files
+   are kept.
 4. **When it stops:**
    - after `IDLE_TIMEOUT_MINUTES` (30) without use, when nothing is running;
    - soon after the user signs out on every device, when nothing is running;
@@ -337,11 +412,12 @@ Check Qwen Code's release notes before upgrading: the gateway relies on `qwen se
    mid-task is told the workspace will stop by itself once the task is done.
 
    Two safety nets stop runaway cases:
-   - an approval prompt nobody answers is declined after `IDLE_TIMEOUT_MINUTES`;
+   - an approval prompt nobody answers doesn't keep the workspace up: Qwen Code declines it after
+     `IDLE_TIMEOUT_MINUTES`; a DeepSeek Harness turn that only waits for an answer doesn't count as work;
    - after `MAX_BUSY_HOURS` (24) without anyone using the workspace, work no longer keeps it running.
-5. **Admin console:** see every workspace (running, working, idle time, memory), and open, stop, deactivate,
-   reset or delete any user. Opening a user's workspace shows them an "Admin connected" notice and is
-   audit-logged.
+5. **Admin console:** see every workspace (running, working, idle time, memory, agent), and open, stop,
+   deactivate, reset or delete any user. Opening a user's workspace shows them an "Admin connected" notice and
+   is audit-logged. Opening a stopped one asks the admin which agent to start, preselecting the user's last.
 6. When all `MAX_RUNNING_WORKSPACES` slots are taken, a new start replaces the workspace that has been idle
    longest (over 5 minutes, and never a working one). If there is none, the user sees "try again".
 
@@ -371,7 +447,8 @@ All commands run in the project directory on the server.
 ```sh
 docker compose ps                                              # status
 docker compose logs -f gateway web                             # logs (JSON lines)
-docker ps --filter label=workspace-portal.workspace=1          # running workspaces (wp-ws-<user id>)
+docker ps --filter label=workspace-portal.workspace=1 \
+  --format '{{.Names}} {{.Label "workspace-portal.agent"}} {{.Status}}'   # running workspaces and their agents
 sudo bash deploy/verify-isolation.sh                           # prove a workspace reaches only the gateway
 sudo nft list table inet workspace_portal                      # the workspace firewall rules
 docker compose exec web node scripts/reset-admin-password.mjs  # forgot the admin password: prints a temporary one
@@ -381,10 +458,11 @@ docker compose exec web node scripts/reset-admin-password.mjs  # forgot the admi
 
 - `db/portal.sqlite`: accounts, sessions, audit log, LLM usage. It runs in WAL mode; back it up with
   `sqlite3 portal.sqlite ".backup /path/backup.sqlite"`, or stop the stack first.
-- `users/<id>/home`: Qwen Code state (`~/.qwen`: chats, memory, the user's settings) and caches.
+- `users/<id>/home`: the agents' state (Qwen Code's `~/.qwen`: chats, memory, the user's settings; DeepSeek
+  Harness's `~/.dsh` and `~/.agents`: sessions, settings, skills) and caches.
 - `users/<id>/workspace`: the user's files, `/workspace` in the container.
 - `users/<id>/system`: the rendered settings and passwd/group, regenerated at every start.
-- `config/qwen`: the admin's Qwen Code settings.
+- `config/qwen`: the admin's Qwen Code settings (also DeepSeek Harness's models).
 
 Deleting a user in the admin console removes their directory.
 
@@ -402,13 +480,16 @@ npm install
 npm run typecheck && npm test && npm run build
 npm run dev -w @portal/gateway   # needs Docker; reads ../.env
 npm run dev -w @portal/web       # http://localhost:3000; web/test/mock-gateway.mjs fakes the gateway for UI work
+                                 # (MOCK_AGENTS=qwen,dsh or =qwen sets the agents it offers)
 ```
 
 Layout:
 - `web/` is the Next.js portal.
 - `gateway/` holds the workspace manager, proxies, LLM queue and search MCP.
 - `packages/db/` is the SQLite schema shared by both.
-- `workspace-image/` is the Qwen Code container.
+- `workspace-image/` builds the workspace images: one Dockerfile with a target per agent, the start scripts,
+  and DeepSeek Harness's lockdown patch.
+- `gateway/src/agents/` holds what differs per agent: one driver each (`qwen.ts`, `dsh.ts`) and their settings.
 - `qwen-config/` holds the example settings.
 - `deploy/` has the installer, firewall, config upload, image update, uninstaller and isolation check
   (`lib.sh` holds what they share).
@@ -424,6 +505,9 @@ Layout:
 - Plain HTTP on the LAN: use Tailscale (above) or a VPN when you leave it.
 - The LLM queue is per gateway process. Usage is counted per user per day in `llm_usage`, but not shown in the
   UI yet.
+- DeepSeek Harness uses the model server's default sampling parameters (temperature, top-p, …), whatever
+  `system-defaults.json` says, and offers only models with a context window of at least 82116 tokens.
+- DeepSeek Harness 0.2 is a preview release, and its lockdown patch is specific to the version in `.env`.
 
 ## License
 

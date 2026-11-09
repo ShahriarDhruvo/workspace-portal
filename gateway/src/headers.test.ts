@@ -9,11 +9,11 @@ import {
   mergeFrameAncestors,
   originMatchesHost,
   parseHostHeader,
-  qwenRequestHeaders,
-  qwenResponseHeaders,
   rejectsCrossSite,
   splitBearerSubprotocol,
   workspaceCacheControl,
+  workspaceRequestHeaders,
+  workspaceResponseHeaders,
 } from "./headers.ts";
 
 const subprotocol = (token: string): string => `${BEARER_SUBPROTOCOL_PREFIX}${Buffer.from(token).toString("base64url")}`;
@@ -102,8 +102,8 @@ test("mergeFrameAncestors", () => {
   );
 });
 
-test("qwenRequestHeaders: no cookie, Origin, browser credentials or forwarding headers; Host is the workspace", () => {
-  const out = qwenRequestHeaders(
+test("workspaceRequestHeaders: no cookie, Origin, browser credentials or forwarding headers; Host is the workspace", () => {
+  const out = workspaceRequestHeaders(
     {
       host: "192.0.2.10:3107",
       origin: "http://192.0.2.10:3107",
@@ -128,11 +128,9 @@ test("qwenRequestHeaders: no cookie, Origin, browser credentials or forwarding h
       "last-event-id": "7",
     },
     "172.29.128.5:4170",
-    "container-token",
   );
   assert.deepEqual(out, {
     host: "172.29.128.5:4170",
-    authorization: "Bearer container-token",
     "accept-encoding": "gzip, br",
     "content-type": "application/json",
     "content-length": "12",
@@ -141,13 +139,13 @@ test("qwenRequestHeaders: no cookie, Origin, browser credentials or forwarding h
   });
 });
 
-test("qwenRequestHeaders sends no Authorization unless the gateway has one to give", () => {
-  const out = qwenRequestHeaders({ host: "h:3107", authorization: "Bearer browser-token", accept: "text/html" }, "10.0.0.2:4170", null);
-  assert.deepEqual(out, { host: "10.0.0.2:4170", accept: "text/html" }, "the browser's own token never goes upstream");
+test("workspaceRequestHeaders never passes the browser's own token upstream", () => {
+  const out = workspaceRequestHeaders({ host: "h:3107", authorization: "Bearer browser-token", accept: "text/html" }, "10.0.0.2:4170");
+  assert.deepEqual(out, { host: "10.0.0.2:4170", accept: "text/html" });
 });
 
-test("qwenRequestHeaders strips the WebSocket handshake fields for the relay", () => {
-  const ws = qwenRequestHeaders(
+test("workspaceRequestHeaders strips the WebSocket handshake fields for the relay", () => {
+  const ws = workspaceRequestHeaders(
     {
       host: "h:3107",
       origin: "http://h:3107",
@@ -161,10 +159,9 @@ test("qwenRequestHeaders strips the WebSocket handshake fields for the relay", (
       "user-agent": "test",
     },
     "10.0.0.2:4170",
-    "container-token",
     { websocket: true },
   );
-  assert.deepEqual(ws, { host: "10.0.0.2:4170", authorization: "Bearer container-token", "user-agent": "test" });
+  assert.deepEqual(ws, { host: "10.0.0.2:4170", "user-agent": "test" });
 });
 
 test("bearerToken reads only the Bearer scheme", () => {
@@ -188,8 +185,8 @@ test("splitBearerSubprotocol takes the token out of the offer and keeps the othe
   assert.equal(splitBearerSubprotocol(`${subprotocol("first")}, ${subprotocol("second")}`).token, "second");
 });
 
-test("qwenResponseHeaders strips cookies and framing denial, keeps encoding", () => {
-  const out = qwenResponseHeaders(
+test("workspaceResponseHeaders strips cookies and framing denial, keeps encoding", () => {
+  const out = workspaceResponseHeaders(
     {
       "set-cookie": ["session=1; HttpOnly"],
       "x-frame-options": "DENY",
@@ -210,16 +207,16 @@ test("qwenResponseHeaders strips cookies and framing denial, keeps encoding", ()
     "cache-control": "no-cache",
     "www-authenticate": "Bearer",
   });
-  assert.equal(qwenResponseHeaders({ "content-type": "text/css" }, { hostname: "h", webPort: 3000 })["content-security-policy"], "frame-ancestors http://h:3000 https://h:3000");
+  assert.equal(workspaceResponseHeaders({ "content-type": "text/css" }, { hostname: "h", webPort: 3000 })["content-security-policy"], "frame-ancestors http://h:3000 https://h:3000");
   // Only the portal may frame a workspace: not another workspace's port or any other service on the host.
   assert.equal(frameAncestorSources({ hostname: "portal.example", webPort: 8443 }), "http://portal.example:8443 https://portal.example:8443");
 });
 
-test("qwenResponseHeaders makes per-user responses uncacheable, but leaves 304s alone", () => {
-  const out = qwenResponseHeaders({ "content-type": "application/json", "cache-control": "max-age=600", expires: "Thu, 01 Jan 2099 00:00:00 GMT" }, { hostname: "h", webPort: 3000 }, 200);
+test("workspaceResponseHeaders makes per-user responses uncacheable, but leaves 304s alone", () => {
+  const out = workspaceResponseHeaders({ "content-type": "application/json", "cache-control": "max-age=600", expires: "Thu, 01 Jan 2099 00:00:00 GMT" }, { hostname: "h", webPort: 3000 }, 200);
   assert.equal(out["cache-control"], "private, no-store");
   assert.equal(out.expires, undefined);
-  const notModified = qwenResponseHeaders({ etag: '"abc"' }, { hostname: "h", webPort: 3000 }, 304);
+  const notModified = workspaceResponseHeaders({ etag: '"abc"' }, { hostname: "h", webPort: 3000 }, 304);
   assert.equal(notModified["cache-control"], undefined);
   assert.equal(notModified.etag, '"abc"');
 });

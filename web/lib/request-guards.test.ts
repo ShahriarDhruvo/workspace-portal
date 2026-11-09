@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { checkApiAccess, isSameOrigin } from "./request-guards.ts";
+import { checkApiAccess, isSameOrigin, parseStartRequest } from "./request-guards.ts";
 
 function post(headers: Record<string, string>): Request {
   return new Request("http://portal.test/api/workspace/start", { method: "POST", headers });
@@ -45,4 +45,25 @@ test("checkApiAccess: signed out 401, temporary password 403, admin routes for t
 
   const adminSession = { user: admin };
   assert.deepEqual(checkApiAccess(adminSession, { admin: true }), { session: adminSession });
+});
+
+test("parseStartRequest: an empty body or {} lets the gateway pick the last agent; {agent} names one", () => {
+  assert.deepEqual(parseStartRequest(""), { request: {} });
+  assert.deepEqual(parseStartRequest("  \n"), { request: {} });
+  assert.deepEqual(parseStartRequest("{}"), { request: {} });
+  assert.deepEqual(parseStartRequest('{"agent":"qwen"}'), { request: { agent: "qwen" } });
+  assert.deepEqual(parseStartRequest('{"agent":"dsh","other":1}'), { request: { agent: "dsh" } }, "other keys are dropped");
+});
+
+test("parseStartRequest refuses unknown agents and malformed bodies", () => {
+  const code = (body: string) => {
+    const result = parseStartRequest(body);
+    return "problem" in result ? result.problem.error : "ok";
+  };
+  for (const agent of ['"claude"', '"QWEN"', '""', "1", "null", '["qwen"]', '"__proto__"', '"toString"']) {
+    assert.equal(code(`{"agent":${agent}}`), "unknown_agent", agent);
+  }
+  assert.equal(code("{agent:qwen}"), "invalid_json");
+  for (const body of ["null", "[]", '"qwen"', "42"]) assert.equal(code(body), "bad_request", body);
+  assert.equal(code(`{"agent":"qwen","pad":"${"x".repeat(2000)}"}`), "bad_request", "too long");
 });

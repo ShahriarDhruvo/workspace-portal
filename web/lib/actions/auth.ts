@@ -4,7 +4,7 @@ import { and, eq, ne } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import { countSessionsUsingWorkspace, sessions, users, writeAudit, type PortalDb, type SessionContext } from "@portal/db";
 import { getDb } from "../db";
-import { endSessionsInBackground, gateway, startInBackground } from "../gateway";
+import { endSessionsInBackground, gateway, openWorkspaceInBackground } from "../gateway";
 import { clearLoginFailures, lockRemaining, lockoutMessage, pruneLoginAttempts, reserveLoginAttempt } from "../login-throttle";
 import { hashPassword, verifyPassword } from "../passwords";
 import { clearSessionCookie, cookieSessionId, getSession, requireUser, startSession } from "../session";
@@ -84,7 +84,9 @@ export async function login(_previous: LoginState, formData: FormData): Promise<
   await startSession(user.id);
   db.update(users).set({ lastLoginAt: now }).where(eq(users.id, user.id)).run();
   writeAudit(db, { action: "login", actorUserId: user.id });
-  startInBackground(user.id);
+  // Picks up a workspace still running (another device, a task finishing after sign-out); a stopped one
+  // starts here only if there is no agent to choose.
+  openWorkspaceInBackground(user.id);
   redirect(user.mustChangePassword ? "/change-password" : "/workspace");
 }
 

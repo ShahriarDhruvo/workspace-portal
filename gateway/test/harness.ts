@@ -1,7 +1,7 @@
 // A whole gateway in one process for the integration tests: a real database, the real agent,
 // control and service servers (one agent server per workspace port), a FakeRuntime whose
-// "containers" are fake `qwen serve` processes, a fake LLM server, a stub search backend and an
-// injectable clock.
+// "containers" are fake agent servers (`qwen serve`, `dsh web`), a fake LLM server, a stub search
+// backend and an injectable clock.
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -18,6 +18,7 @@ import {
   sessions,
   users,
   workspaces,
+  type AgentKind,
   type PortalDb,
 } from "@portal/db";
 import type { AgentDeps } from "../src/agent-access.ts";
@@ -175,8 +176,8 @@ export interface Gateway {
 
   info(userId: number): WorkspaceInfo;
   waitReady(userId: number): Promise<WorkspaceInfo>;
-  /** Starts a workspace through the manager and waits until it is ready. */
-  startReady(userId: number): Promise<WorkspaceInfo>;
+  /** Starts a workspace through the manager (default: the manager's choice) and waits until it is ready. */
+  startReady(userId: number, agent?: AgentKind): Promise<WorkspaceInfo>;
   auditActions(userId: number): Array<{ action: string; details: unknown; actorUserId: number | null }>;
   workspaceRow(userId: number): typeof workspaces.$inferSelect | undefined;
   errors(): string[];
@@ -198,6 +199,8 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
     UPLOAD_LIMIT_MB: "1",
     AGENT_PORT_BASE: String(randomBase()),
     AGENT_PORT_COUNT: String(PORT_COUNT),
+    // A Qwen-only install unless a test enables both (a start without a choice then starts Qwen Code).
+    WORKSPACE_AGENTS: "qwen",
     ...options.env,
   });
   const db = openDatabase(config.dbFile);
@@ -359,8 +362,8 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
 
     info,
     waitReady,
-    async startReady(userId) {
-      await manager.start(userId);
+    async startReady(userId, agent) {
+      await manager.start(userId, agent);
       return waitReady(userId);
     },
     auditActions(userId) {

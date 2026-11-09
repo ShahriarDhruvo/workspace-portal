@@ -74,4 +74,9 @@ export const MIGRATIONS: readonly string[] = [
     PRIMARY KEY (user_id, day)
   );
   `,
+  // 2: workspaces run one of several agents (AGENT_KINDS); null for rows from before the choice.
+  `
+  ALTER TABLE workspaces ADD COLUMN agent TEXT CHECK (agent IN ('qwen', 'dsh'));
+  UPDATE workspaces SET agent = 'qwen' WHERE container_id IS NOT NULL OR started_at IS NOT NULL;
+  `,
 ];

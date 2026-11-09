@@ -20,8 +20,7 @@ esac
 DATA_DIR=$(env_get PORTAL_DATA_DIR)
 
 log "stopping the stack"
-# docker-compose.yml needs QWEN_CODE_VERSION even to stop; any value will do here.
-QWEN_CODE_VERSION=$(env_get QWEN_CODE_VERSION 0) docker compose down --remove-orphans 2>/dev/null || true
+docker compose down --remove-orphans 2>/dev/null || true
 log "removing workspace containers and the workspace network"
 docker ps -aq --filter label=workspace-portal.workspace=1 | xargs -r docker rm -f >/dev/null
 docker network rm "$(env_get WORKSPACE_NETWORK)" >/dev/null 2>&1 || true

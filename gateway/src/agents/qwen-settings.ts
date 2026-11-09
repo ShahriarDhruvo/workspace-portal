@@ -1,109 +1,11 @@
-// Everything specific to Qwen Code's `qwen serve` (the Web Shell) inside a workspace container:
-// its port, the health endpoint the gateway uses for readiness and for "is the agent working?",
-// and the per-user settings files the gateway renders before every start.
-import crypto from "node:crypto";
+// Qwen Code's settings files, rendered per user before every start: the admin's settings.json and
+// system-defaults.json (from PORTAL_DATA_DIR/config/qwen), with the keys the portal depends on forced
+// on top. The models listed in system-defaults.json are the portal's model list for every agent.
 import fs from "node:fs";
-import http from "node:http";
 import path from "node:path";
-
-/** Where `qwen serve` listens on the container's own address (see workspace-image/start-workspace.sh). */
-export const QWEN_PORT = 4170;
-/** Name of the env var holding the placeholder LLM key; the gateway swaps in the real key. */
-export const LLM_KEY_ENV = "PORTAL_LLM_KEY";
-/** Mount point of the per-user settings directory (QWEN_CODE_SYSTEM_*_PATH in the image point here). */
-export const QWEN_SETTINGS_MOUNT = "/etc/workspace-portal/qwen";
-
-const HEALTH_TIMEOUT_MS = 3_000;
-
-/** A fresh random bearer token for one container start. */
-export function generateServerToken(): string {
-  return crypto.randomBytes(32).toString("base64url");
-}
-
-// ------------------------------------------------------------------ health
-
-/** The parts of `GET /health?deep=1` the gateway uses. All figures cover every session of the daemon. */
-export interface QwenHealth {
-  activePrompts: number;
-  pendingPermissions: number;
-  /** Agent, subagent, shell, background task or tool work the agent process reports as running. */
-  activeWork: boolean;
-  /** The agent process is up and can take prompts. */
-  channelAlive: boolean;
-  /** Time since the agent last started or finished something; null before the first session. */
-  idleSinceMs: number | null;
-}
-
-export function parseQwenHealth(body: unknown): QwenHealth | null {
-  if (typeof body !== "object" || body === null) return null;
-  const record = body as Record<string, unknown>;
-  if (record.status !== "ok") return null;
-  const count = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0);
-  const idle = record.idleSinceMs;
-  return {
-    activePrompts: count(record.activePrompts),
-    pendingPermissions: count(record.pendingPermissions),
-    activeWork: record.activeWork === true,
-    channelAlive: record.channelAlive === true,
-    idleSinceMs: typeof idle === "number" && Number.isFinite(idle) && idle >= 0 ? idle : null,
-  };
-}
-
-/** Reads `/health?deep=1` from a workspace; null when it does not answer or answers oddly. */
-export function fetchQwenHealth(host: string, port: number, token: string): Promise<QwenHealth | null> {
-  return new Promise((resolve) => {
-    const request = http.get(
-      {
-        host,
-        port,
-        path: "/health?deep=1",
-        headers: { authorization: `Bearer ${token}`, accept: "application/json" },
-        agent: false,
-        timeout: HEALTH_TIMEOUT_MS,
-      },
-      (response) => {
-        const chunks: Buffer[] = [];
-        let size = 0;
-        response.on("data", (chunk: Buffer) => {
-          size += chunk.length;
-          if (size > 64 * 1024) request.destroy();
-          else chunks.push(chunk);
-        });
-        response.on("end", () => {
-          if (response.statusCode !== 200) return resolve(null);
-          try {
-            resolve(parseQwenHealth(JSON.parse(Buffer.concat(chunks).toString("utf8"))));
-          } catch {
-            resolve(null);
-          }
-        });
-        response.on("error", () => resolve(null));
-      },
-    );
-    request.on("timeout", () => request.destroy());
-    request.on("error", () => resolve(null));
-  });
-}
-
-/**
- * The agent is doing something: a prompt, a tool, a subagent, a background task, or an approval it
- * waits for. An approval nobody answers needs no special case: `qwen serve` declines it after
- * --permission-response-timeout-ms, which the gateway sets to the idle timeout.
- */
-export function agentWorking(health: QwenHealth): boolean {
-  return health.activePrompts > 0 || health.pendingPermissions > 0 || health.activeWork;
-}
-
-// ------------------------------------------------------------------ settings
+import { AgentConfigError, LLM_KEY_ENV } from "./driver.ts";
 
 export type SettingsObject = Record<string, unknown>;
-
-export class QwenConfigError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "QwenConfigError";
-  }
-}
 
 /** The admin's settings, from PORTAL_DATA_DIR/config/qwen. Missing files are empty objects. */
 export interface AdminQwenConfig {
@@ -132,7 +34,7 @@ export function readSettingsFile(file: string): SettingsObject {
     text = fs.readFileSync(file, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
-    throw new QwenConfigError(`cannot read the Qwen Code settings file ${file}: ${(error as Error).message}`);
+    throw new AgentConfigError(`cannot read the Qwen Code settings file ${file}: ${(error as Error).message}`);
   }
   return parseSettingsText(text, file);
 }
@@ -143,9 +45,9 @@ export function parseSettingsText(text: string, label: string): SettingsObject {
   try {
     value = JSON.parse(stripJsonComments(text));
   } catch (error) {
-    throw new QwenConfigError(`the Qwen Code settings file ${label} is not valid JSON: ${(error as Error).message}`);
+    throw new AgentConfigError(`the Qwen Code settings file ${label} is not valid JSON: ${(error as Error).message}`);
   }
-  if (!isPlainObject(value)) throw new QwenConfigError(`the Qwen Code settings file ${label} must contain a JSON object`);
+  if (!isPlainObject(value)) throw new AgentConfigError(`the Qwen Code settings file ${label} must contain a JSON object`);
   return value;
 }
 
@@ -196,7 +98,7 @@ export interface RenderedSettings {
  * The two system settings files of a workspace: the admin's files, with the keys the portal
  * depends on (model endpoint, search, no internet features, no telemetry) forced on top. The models
  * come only from the admin's system-defaults.json; without one there is nothing to offer, so that is
- * a QwenConfigError.
+ * an AgentConfigError.
  */
 export function renderQwenSettings(options: RenderOptions): RenderedSettings {
   const { admin, serviceBaseUrl, browser } = options;
@@ -205,7 +107,7 @@ export function renderQwenSettings(options: RenderOptions): RenderedSettings {
   const openai = gatewayProviders(defaults.modelProviders, serviceBaseUrl);
   const firstId = openai.map((provider) => provider.id).find((id): id is string => typeof id === "string" && id.trim() !== "");
   if (firstId === undefined) {
-    throw new QwenConfigError(
+    throw new AgentConfigError(
       `the Qwen Code settings file ${admin.systemDefaultsFile} defines no model: add at least one entry with an "id" under modelProviders.openai`,
     );
   }
@@ -295,10 +197,10 @@ function clone(value: unknown): unknown {
   return value === undefined ? undefined : (JSON.parse(JSON.stringify(value)) as unknown);
 }
 
-function asObject(value: unknown): SettingsObject {
+export function asObject(value: unknown): SettingsObject {
   return isPlainObject(value) ? { ...value } : {};
 }
 
-function isPlainObject(value: unknown): value is SettingsObject {
+export function isPlainObject(value: unknown): value is SettingsObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

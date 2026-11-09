@@ -1,6 +1,5 @@
-// Waiting for Qwen Code to come up inside a freshly started (or adopted) workspace container.
+// Waiting for the agent to come up inside a freshly started (or adopted) workspace container.
 import { setTimeout as delay } from "node:timers/promises";
-import { fetchQwenHealth } from "./qwen.ts";
 import type { ContainerState } from "./runtime.ts";
 
 const READY_POLL_INTERVAL_MS = 500;
@@ -35,10 +34,4 @@ export async function waitForReady(options: ReadinessOptions): Promise<ReadyResu
       return { ok: false, reason: "aborted" };
     }
   }
-}
-
-/** Ready once `qwen serve` answers its health check and its agent process can take prompts. */
-export async function probeQwen(host: string, port: number, token: string): Promise<boolean> {
-  const health = await fetchQwenHealth(host, port, token);
-  return health !== null && health.channelAlive;
 }

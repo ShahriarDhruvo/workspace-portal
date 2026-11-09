@@ -1,4 +1,4 @@
-// The gateway's own pages, shown inside the portal's iframe instead of the Qwen Code Web Shell
+// The gateway's own pages, shown inside the portal's iframe instead of the agent's UI
 // while a workspace is starting, stopped or failing. Same dark look as the Web Shell and the portal.
 
 /** Agent-port paths under this prefix belong to the gateway and are never proxied to the workspace. */
@@ -123,6 +123,15 @@ export function otherWorkspacePage(portalUrl: string): string {
     title: "This workspace isn't open here",
     text: "Your session is using a different workspace. Open it again from the portal.",
     action: `<a class="button" href="${escapeHtml(portalUrl)}" target="_top">Go to the portal</a>`,
+  });
+}
+
+/** The workspace has never run an agent: the user picks one in the portal (the gateway doesn't guess). */
+export function chooseAgentPage(portalWorkspaceUrl: string): string {
+  return render({
+    title: "Choose an agent",
+    text: "Pick the agent for your workspace in the portal; it starts from there.",
+    action: `<a class="button" href="${escapeHtml(portalWorkspaceUrl)}" target="_top">Go to the portal</a>`,
   });
 }
 

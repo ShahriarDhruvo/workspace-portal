@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016,SC2034  # check() evaluates single-quoted conditions (see below)
 # Proves that a workspace can reach the gateway's service port (model + web search) and nothing else.
 #
 #   1. Host: the Docker engine, the workspace network and the firewall table are what the gateway
 #      and deploy/firewall.sh expect.
 #   2. Running workspaces: every wp-ws-* container has the restrictions the gateway applies.
-#   3. Reachability: a throwaway container on the workspace network (the workspace image, a
-#      workspace UID, read-only root, no capabilities) probes TCP, UDP, ICMP and IPv6 targets: the
-#      gateway's other ports, every host address, the LLM server and SearXNG directly, the router,
-#      the internet and the other workspaces.
+#   3. Reachability: for every enabled agent, a throwaway container on the workspace network (that
+#      agent's image, a workspace UID, read-only root, no capabilities) probes TCP, UDP, ICMP and
+#      IPv6 targets: the gateway's other ports, every host address, the LLM server and SearXNG
+#      directly, the router, the internet and the other workspaces.
 #
 # Safe to run any time; touches no user data.
 #   sudo bash deploy/verify-isolation.sh
@@ -27,11 +28,13 @@ AGENT_PORTS=$(agent_port_range)
 FIRST_AGENT_PORT=${AGENT_PORTS%-*}
 UID_BASE=$(env_get WORKSPACE_UID_BASE)
 DATA_DIR=$(env_get PORTAL_DATA_DIR)
-IMAGE=$(workspace_image)
+load_enabled_agents
 
 pass=0 fail=0
 ok() { echo "PASS  $1"; pass=$((pass + 1)); }
 bad() { echo "FAIL  $1"; fail=$((fail + 1)); }
+# The condition is a single-quoted expression evaluated here, so it reads the variables set just before
+# (hence the file-wide shellcheck directive at the top).
 check() { if eval "$2"; then ok "$1"; else bad "$1"; fi; } # description condition
 
 # ---------------------------------------------------------------- 1. host
@@ -57,6 +60,8 @@ for id in $running; do
   name=$(docker inspect -f '{{.Name}}' "$id"); name=${name#/}
   user_id=$(docker inspect -f '{{index .Config.Labels "workspace-portal.user-id"}}' "$id")
   user=$(docker inspect -f '{{.Config.User}}' "$id")
+  agent=$(docker inspect -f '{{index .Config.Labels "workspace-portal.agent"}}' "$id")
+  check "$name runs a known agent (${agent:-qwen, from before the agent label})" '[[ -z $agent || " ${AGENTS[*]} " == *" $agent "* ]]'
   check "$name runs as its own UID ($user)" '[[ $user == "$((UID_BASE + user_id)):$((UID_BASE + user_id))" ]]'
   check "$name: read-only root, all capabilities dropped, no-new-privileges, not privileged" \
     '[[ $(docker inspect -f "{{.HostConfig.ReadonlyRootfs}} {{.HostConfig.CapDrop}} {{.HostConfig.SecurityOpt}} {{.HostConfig.Privileged}}" "$id") == "true [ALL] [no-new-privileges:true] false" ]]'
@@ -164,16 +169,24 @@ NAME="wp-isolation-probe-$$"
 trap 'docker rm -f "$NAME" >/dev/null 2>&1 || true' EXIT
 # A UID in the workspace range that no real user has.
 PROBE_UID=$((UID_BASE + 99999))
-probe_output=$(docker run --rm --name "$NAME" --network "$NETWORK" --user "$PROBE_UID:$PROBE_UID" \
-  --read-only --tmpfs /tmp:rw,nosuid,nodev,size=16m --cap-drop ALL --security-opt no-new-privileges \
-  --pids-limit 128 --memory 256m --entrypoint /bin/bash \
-  -e GW="$GW" -e SERVICE_PORT="$SERVICE_PORT" -e ROUTER="${ROUTER:-}" \
-  -e CLOSED="$(printf '%s\n' "${closed[@]}")" \
-  "$IMAGE" -c "$PROBE" 2>&1) || true
-echo "$probe_output" | grep -v '^probe: '
-pass=$((pass + $(grep -c '^PASS' <<<"$probe_output" || true)))
-fail=$((fail + $(grep -c '^FAIL' <<<"$probe_output" || true)))
-grep -q '^probe: ' <<<"$probe_output" || bad "the probe container did not run to the end (see output above)"
+for agent in "${ENABLED_AGENTS[@]}"; do
+  image=$(workspace_image "$agent")
+  echo "-- from the $(agent_name "$agent") image ($image)"
+  if ! docker image inspect "$image" >/dev/null 2>&1; then
+    bad "$image exists (build it: sudo bash deploy/install.sh)"
+    continue
+  fi
+  probe_output=$(docker run --rm --name "$NAME" --network "$NETWORK" --user "$PROBE_UID:$PROBE_UID" \
+    --read-only --tmpfs /tmp:rw,nosuid,nodev,size=16m --cap-drop ALL --security-opt no-new-privileges \
+    --pids-limit 128 --memory 256m --entrypoint /bin/bash \
+    -e GW="$GW" -e SERVICE_PORT="$SERVICE_PORT" -e ROUTER="${ROUTER:-}" \
+    -e CLOSED="$(printf '%s\n' "${closed[@]}")" \
+    "$image" -c "$PROBE" 2>&1) || true
+  echo "$probe_output" | grep -v '^probe: '
+  pass=$((pass + $(grep -c '^PASS' <<<"$probe_output" || true)))
+  fail=$((fail + $(grep -c '^FAIL' <<<"$probe_output" || true)))
+  grep -q '^probe: ' <<<"$probe_output" || bad "the probe container ($agent) did not run to the end (see output above)"
+done
 
 echo "passed $pass, failed $fail"
 [[ $fail -eq 0 ]]

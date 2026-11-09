@@ -1,4 +1,4 @@
-import { apiSession, gatewayErrorResponse, json, withTarget } from "@/lib/api";
+import { apiSession, workspaceResponse } from "@/lib/api";
 import { gateway } from "@/lib/gateway";
 
 export const dynamic = "force-dynamic";
@@ -7,9 +7,5 @@ export const dynamic = "force-dynamic";
 export async function GET(): Promise<Response> {
   const session = await apiSession();
   if (session instanceof Response) return session;
-  try {
-    return json(withTarget(await gateway.getWorkspace(session.target.id), session));
-  } catch (error) {
-    return gatewayErrorResponse(error);
-  }
+  return workspaceResponse(gateway.getWorkspace(session.target.id), session);
 }

@@ -1,9 +1,11 @@
-// Workspace Portal gateway: owns the per-user Qwen Code containers, proxies browsers to them (one
-// port per user), and serves the only things workspaces can reach: the LLM and web search.
+// Workspace Portal gateway: owns the per-user agent containers (Qwen Code or DeepSeek Harness),
+// proxies browsers to them (one port per user), and serves the only things workspaces can reach:
+// the LLM and web search.
 // See docs/ARCHITECTURE.md.
 import type http from "node:http";
 import { getDatabase, loadSessionContext } from "@portal/db";
 import { createAgentServerFactory } from "./agent-proxy.ts";
+import { AgentConfigError, driverFor } from "./agents/index.ts";
 import { ConfigError, loadConfig, type Config } from "./config.ts";
 import { ConnectionRegistry } from "./connections.ts";
 import { createControlServer } from "./control-api.ts";
@@ -11,11 +13,9 @@ import { DockerRuntime, isSupportedDockerVersion, MIN_DOCKER_VERSION_TEXT } from
 import { listen } from "./listen.ts";
 import { LlmQueue } from "./llm-queue.ts";
 import { createLogger, type Logger } from "./log.ts";
-import { QwenConfigError } from "./qwen.ts";
 import { createSearxngBackend } from "./search-mcp.ts";
 import { createServiceServer } from "./service-api.ts";
 import { SessionCache } from "./session-cache.ts";
-import { renderWorkspaceSettings } from "./workspace-files.ts";
 import { WorkspaceManager } from "./workspaces.ts";
 
 /** How long the service listeners wait for the workspace bridge address to appear. */
@@ -26,12 +26,15 @@ const SHUTDOWN_GRACE_MS = 1_000;
 async function main(log: Logger): Promise<void> {
   const config = readConfig(log);
 
-  try {
-    renderWorkspaceSettings(config);
-  } catch (error) {
-    // Not fatal: the portal keeps working, and workspace starts report the same problem.
-    if (error instanceof QwenConfigError) log.error("Qwen Code settings are invalid; workspaces cannot start until they are fixed", { error: error.message });
-    else throw error;
+  for (const agent of config.workspace.agents) {
+    const driver = driverFor(agent);
+    try {
+      driver.renderSettings(config);
+    } catch (error) {
+      // Not fatal: the portal keeps working, and starts of this agent report the same problem.
+      if (!(error instanceof AgentConfigError)) throw error;
+      log.error(`${driver.name} settings are invalid; its workspaces cannot start until they are fixed`, { error: error.message });
+    }
   }
   const db = getDatabase(config.dbFile);
 
@@ -48,11 +51,14 @@ async function main(log: Logger): Promise<void> {
   if (network !== "exists") {
     log.info(`${network} the workspace network`, { network: config.workspace.network, subnet: config.workspace.subnet, internal: true });
   }
-  if (!(await runtime.imageAvailable())) {
-    log.error("workspace image not found; workspaces cannot start until it is built", {
-      image: config.workspace.image,
-      hint: `docker build -t ${config.workspace.image} workspace-image`,
-    });
+  for (const agent of config.workspace.agents) {
+    const { image } = config.workspace.images[agent];
+    if (!(await runtime.imageAvailable(image))) {
+      log.error(`${driverFor(agent).name} workspace image not found; its workspaces cannot start until it is built`, {
+        image,
+        hint: "sudo bash deploy/install.sh",
+      });
+    }
   }
 
   const llm = new LlmQueue(config.llm.maxConcurrency, config.llm.maxConcurrencyPerUser);
@@ -84,7 +90,7 @@ async function main(log: Logger): Promise<void> {
   log.info("gateway listening", {
     control: `127.0.0.1:${config.controlPort}`,
     workspaces: `${config.agentBind}:${firstPort}-${lastPort}`,
-    image: config.workspace.image,
+    agents: config.workspace.agents.map((agent) => config.workspace.images[agent].image),
     maxRunning: config.maxRunning,
     idleTimeoutMinutes: config.idleTimeoutMs / 60_000,
   });

@@ -13,7 +13,7 @@ import { hashSessionToken, llmUsage, sessions, workspaces } from "@portal/db";
 import { closeEndedSessions, PRESENCE_MS } from "../src/connections.ts";
 import { userPaths } from "../src/paths.ts";
 import { AGENT_UNKNOWN_GRACE_MS } from "../src/policy.ts";
-import type { SettingsObject } from "../src/qwen.ts";
+import type { SettingsObject } from "../src/agents/qwen-settings.ts";
 import { WorkspaceImageMissingError } from "../src/runtime.ts";
 import { createServiceServer } from "../src/service-api.ts";
 import { DeletingError, WorkspaceManager, type WorkspaceInfo } from "../src/workspaces.ts";
@@ -205,7 +205,7 @@ test("a document navigation starts the workspace, shows the starting page, then 
   );
   const dirs = userPaths(g.dataDir, alice);
   const mode = (file: string): number => fs.statSync(file).mode & 0o777;
-  assert.deepEqual([dirs.root, dirs.home, dirs.workspace, dirs.system, dirs.qwenSettings].map(mode), [0o711, 0o700, 0o700, 0o755, 0o755]);
+  assert.deepEqual([dirs.root, dirs.home, dirs.workspace, dirs.system, dirs.agentSettings("qwen")].map(mode), [0o711, 0o700, 0o700, 0o755, 0o755]);
 
   const page = await g.navigate(g.tokens.alice, alice);
   assert.equal(page.status, 200);
@@ -548,7 +548,9 @@ test("control API: health, stats, workspaces, errors", async () => {
   assert.equal(info.llmInFlight, 0);
   assert.equal(typeof info.idleSeconds, "number");
   assert.deepEqual(pick(info, ["busy", "busyReason", "stopPending"]), { busy: false, busyReason: null, stopPending: false });
+  assert.equal(info.agent, "qwen");
   assert.deepEqual(Object.keys(info).sort(), [
+    "agent",
     "busy",
     "busyReason",
     "connections",
@@ -931,7 +933,7 @@ test("a crashed container is noticed when the proxy can't reach it, and the next
   await g.waitReady(alice);
   const starts = g.runtime.startsFor(alice);
   assert.equal(starts.length, startsBefore + 1);
-  assert.notEqual(starts.at(-2)!.options.token, starts.at(-1)!.options.token, "every start gets a fresh token");
+  assert.notEqual(starts.at(-2)!.options.credential, starts.at(-1)!.options.credential, "every start gets a fresh token");
 });
 
 test("the stats refresh notices a crash without any request", async () => {
@@ -947,16 +949,16 @@ test("the stats refresh notices a crash without any request", async () => {
 
 test("a failed start shows the error page, and Try again starts it", async () => {
   const { alice } = g.ids;
-  g.runtime.failNextStart = new WorkspaceImageMissingError(g.config.workspace.image);
+  g.runtime.failNextStart = new WorkspaceImageMissingError(g.config.workspace.images.qwen.image);
   await g.navigate(g.tokens.alice, alice);
   await waitFor(() => g.info(alice).status === "error", "the start to fail");
-  assert.equal(g.info(alice).lastError, `workspace image ${g.config.workspace.image} not found`);
-  assert.deepEqual(g.auditActions(alice).at(-1)?.details, { error: `workspace image ${g.config.workspace.image} not found` });
+  assert.equal(g.info(alice).lastError, `workspace image ${g.config.workspace.images.qwen.image} not found`);
+  assert.deepEqual(g.auditActions(alice).at(-1)?.details, { error: `workspace image ${g.config.workspace.images.qwen.image} not found` });
 
   const page = await g.navigate(g.tokens.alice, alice);
   assert.equal(page.status, 503);
   assert.ok(page.body.includes("<h1>Your workspace couldn&#39;t start</h1>"));
-  assert.ok(page.body.includes(`<pre>workspace image ${g.config.workspace.image} not found</pre>`));
+  assert.ok(page.body.includes(`<pre>workspace image ${g.config.workspace.images.qwen.image} not found</pre>`));
   assert.equal(g.info(alice).status, "error", "the error page does not retry by itself");
   const socket = await upgrade(g.tokens.alice, alice);
   assert.deepEqual([socket.status, errorCode(socket)], [503, "workspace_error"]);
@@ -1223,7 +1225,7 @@ test("an agent whose health check fails counts as working for a grace period aft
     await gw.manager.refreshSamples();
     await gw.manager.reap();
     assert.deepEqual(pick(gw.info(alice), ["status", "busyReason", "stopPending"]), { status: "running", busyReason: "task", stopPending: true });
-    const warnings = gw.logs.filter((line) => (JSON.parse(line) as { msg: string }).msg === "Qwen Code did not answer its health check");
+    const warnings = gw.logs.filter((line) => (JSON.parse(line) as { msg: string }).msg === "Qwen Code did not answer its status check");
     assert.equal(warnings.length, 1, "warned once, not at every check");
 
     // Five minutes after the last answer it no longer counts as working.
@@ -1469,10 +1471,10 @@ test("after a gateway restart, running containers are adopted with their token a
     await gw.manager.stop(carol, "admin");
     // A row that says running, without a container.
     gw.db.update(workspaces).set({ status: "running" }).where(eq(workspaces.userId, carol)).run();
-    const aliceToken = gw.runtime.startsFor(alice)[0]!.options.token;
+    const aliceToken = gw.runtime.startsFor(alice)[0]!.options.credential;
     const { host: aliceHost, port: alicePort } = gw.runtime.qwenFor(alice);
     const bobContainer = gw.runtime.containerFor(bob).id;
-    gw.runtime.forgetToken(bobContainer); // its token cannot be read back
+    gw.runtime.forgetCredential(bobContainer); // its token cannot be read back
     const orphan = gw.runtime.addOrphan(9999);
     const unlabelled = gw.runtime.addOrphan(null);
     const starts = gw.runtime.starts.length;
@@ -1493,12 +1495,12 @@ test("after a gateway restart, running containers are adopted with their token a
     assert.equal(gw.runtime.containers.has(orphan), false);
     assert.equal(gw.runtime.containers.has(unlabelled), false);
     assert.equal(gw.runtime.containers.has(bobContainer), false, "a container the gateway cannot authenticate to is removed");
-    assert.ok(logged(gw, "cannot adopt workspace container: its token is unknown"));
+    assert.ok(logged(gw, "cannot adopt workspace container: its credential is unknown"));
     assert.equal(fresh.info(alice).status, "starting", "adopted; readiness is checked again");
     assert.equal(fresh.info(alice).lastActivityAt, gw.clock.now);
     await gw.waitReady(alice);
     assert.equal(gw.runtime.starts.length, starts, "nothing was started");
-    assert.deepEqual(fresh.upstream(alice), { host: aliceHost, port: alicePort, token: aliceToken });
+    assert.deepEqual(fresh.upstream(alice), { agent: "qwen", host: aliceHost, port: alicePort, credential: aliceToken });
 
     const api = await gw.xhr(gw.tokens.alice, alice, { path: "/api/sessions" });
     assert.equal(api.status, 200, "the adopted workspace is proxied with the token it was started with");
@@ -1510,7 +1512,7 @@ test("after a gateway restart, running containers are adopted with their token a
     assert.equal(gw.db.select().from(workspaces).where(and(eq(workspaces.userId, carol), eq(workspaces.status, "stopped"))).get()?.userId, carol);
 
     await gw.startReady(bob);
-    assert.notEqual(gw.runtime.startsFor(bob).at(-1)!.options.token, gw.runtime.startsFor(bob)[0]!.options.token);
+    assert.notEqual(gw.runtime.startsFor(bob).at(-1)!.options.credential, gw.runtime.startsFor(bob)[0]!.options.credential);
   }));
 
 test("invalid admin Qwen Code settings fail the start with a clear message", () =>
@@ -1574,8 +1576,8 @@ test("every start renders the workspace's Qwen Code settings, passwd and group",
 
     const paths = userPaths(gw.dataDir, alice);
     const read = (file: string): string => fs.readFileSync(file, "utf8");
-    const settingsFile = path.join(paths.qwenSettings, "settings.json");
-    const defaultsFile = path.join(paths.qwenSettings, "system-defaults.json");
+    const settingsFile = path.join(paths.agentSettings("qwen"), "settings.json");
+    const defaultsFile = path.join(paths.agentSettings("qwen"), "system-defaults.json");
     const settings = JSON.parse(read(settingsFile)) as Record<string, Record<string, unknown>>;
     const defaults = JSON.parse(read(defaultsFile)) as SettingsObject;
     const service = `http://${gw.config.workspace.gatewayIp}:${gw.config.servicePort}`;

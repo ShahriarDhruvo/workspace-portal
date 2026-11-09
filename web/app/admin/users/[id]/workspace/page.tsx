@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { notFound, redirect } from "next/navigation";
 import { eq } from "drizzle-orm";
-import { displayName, users } from "@portal/db";
+import { AGENT_NAMES, displayName, users } from "@portal/db";
 import { config } from "@/lib/config";
 import { workspaceFrame } from "@/lib/workspace-frame";
 import { getDb } from "@/lib/db";
@@ -65,6 +65,7 @@ export default async function ViewWorkspacePage({ params }: PageProps<"/admin/us
       target={{ id: user.id, name, isViewer: false }}
       frame={workspaceFrame(session)}
       idleTimeoutMinutes={config.idleTimeoutMinutes}
+      agentNames={AGENT_NAMES}
       banner={<ViewingBanner>Viewing {name}&apos;s workspace</ViewingBanner>}
     />
   );

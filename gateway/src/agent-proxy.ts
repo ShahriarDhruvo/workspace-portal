@@ -1,21 +1,23 @@
 // The agent ports: every browser request for a workspace. One port per user (AGENT_PORT_BASE + id),
 // so each workspace is its own browser origin. It checks the portal session, starts a stopped
-// workspace on document navigations only, and streams everything else to that user's
-// `qwen serve`, swapping the browser's session-bound token for the container's real one.
-// WebSocket upgrades go to ws-relay.ts.
+// workspace on document navigations only, and streams everything else to that user's agent, with
+// the container's credential added by the agent's driver (for token agents only when the browser
+// presented its session-bound token). WebSocket upgrades go to ws-relay.ts.
 import type http from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tokensEqual, type SessionContext } from "@portal/db";
 import { checkAgentAccess, INVALID_TOKEN, unavailableError, type AgentDeps } from "./agent-access.ts";
+import { driverFor, type AgentDriver } from "./agents/index.ts";
 import { MIB } from "./config.ts";
 import { connectionRole } from "./connections.ts";
 import { forward, PayloadTooLargeError } from "./forward.ts";
-import { bearerToken, frameAncestorSources, qwenRequestHeaders, qwenResponseHeaders, type FramePolicy, type HostParts } from "./headers.ts";
+import { bearerToken, frameAncestorSources, workspaceResponseHeaders, type FramePolicy, type HostParts } from "./headers.ts";
 import { createStreamingServer, isDocumentNavigation, sendError, splitTarget } from "./http-util.ts";
 import {
   PORTAL_PATH_PREFIX,
   START_PATH,
   capacityPage,
+  chooseAgentPage,
   errorPage,
   otherWorkspacePage,
   signedOutPage,
@@ -24,13 +26,7 @@ import {
   unreachablePage,
 } from "./pages.ts";
 import { createWsRelay } from "./ws-relay.ts";
-import { CapacityError } from "./workspaces.ts";
-
-/**
- * Web Shell endpoints that are not available through the portal: device pairing would hand the
- * container's real token to a browser.
- */
-const BLOCKED_PREFIXES = ["/web-shell/pairing"];
+import { AgentRequiredError, CapacityError, type StartRefusal } from "./workspaces.ts";
 
 /**
  * The path as a lenient router might see it: percent-decoded, backslashes and repeated slashes
@@ -57,9 +53,10 @@ function canonicalPath(pathname: string): string {
   return path.toLowerCase();
 }
 
-function isBlockedPath(pathname: string): boolean {
+/** The agent's features the portal refuses (see AgentDriver.blockedPrefixes), in any spelling. */
+export function isBlockedPath(driver: AgentDriver, pathname: string): boolean {
   const path = canonicalPath(pathname);
-  return BLOCKED_PREFIXES.some((prefix) => path.startsWith(prefix));
+  return driver.blockedPrefixes.some((prefix) => path.startsWith(prefix));
 }
 
 /** Returns a function that creates one agent server; main.ts listens with one per workspace port. */
@@ -77,15 +74,6 @@ export function createAgentServerFactory(deps: AgentDeps): () => http.Server {
     server.on("upgrade", onUpgrade);
     return server;
   };
-}
-
-/**
- * Requests that mean a person is using the workspace. The Web Shell polls several endpoints and
- * sends heartbeats while a tab is merely open, so reads and heartbeats don't count.
- */
-function isUserAction(method: string, pathname: string): boolean {
-  if (method === "GET" || method === "HEAD" || method === "OPTIONS") return false;
-  return !pathname.endsWith("/heartbeat");
 }
 
 async function handleRequest(deps: AgentDeps, req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -107,25 +95,31 @@ async function handleRequest(deps: AgentDeps, req: IncomingMessage, res: ServerR
   const { host, context, userId } = access;
   const { pathname } = splitTarget(target);
   if (pathname.startsWith(PORTAL_PATH_PREFIX)) return handlePortalPath(deps, req, res, userId, host, pathname);
-  if (isBlockedPath(pathname)) {
-    return sendError(res, 403, "not_available", "This feature is not available in the portal.");
-  }
 
-  // The Web Shell authenticates with a bearer token. Only this session's token for this workspace
-  // unlocks the container; requests without one (the page and its static assets) go through
-  // unauthenticated, and the workspace answers anything else with 401 itself.
-  const authenticated = req.headers.authorization !== undefined;
-  if (authenticated) {
+  // Whatever the agent, a token the browser presents must be this session's token for this workspace.
+  const presentsToken = req.headers.authorization !== undefined;
+  if (presentsToken) {
     const presented = bearerToken(req.headers.authorization);
     if (presented === null || !tokensEqual(presented, access.browserToken)) return sendError(res, 401, INVALID_TOKEN.code, INVALID_TOKEN.message);
   }
 
   const upstream = deps.manager.upstream(userId);
   if (!upstream) return handleUnavailable(deps, res, userId, host, navigation, req.headers["sec-fetch-site"] === "cross-site");
-  // An open Web Shell tab polls every few seconds: this session has the workspace open.
+  const driver = driverFor(upstream.agent);
+  if (isBlockedPath(driver, pathname)) {
+    return sendError(res, 403, "not_available", "This feature is not available in the portal.");
+  }
+
+  // A token agent's UI authenticates with that token: only requests that presented it get the
+  // container's credential; the others (the page and its static assets) go through unauthorised,
+  // and the agent answers anything else with 401 itself. A cookie agent gets the credential on
+  // every request: the session and port checks above authorise it.
+  const authorised = driver.browserAuth === "cookie" || presentsToken;
+
+  // An open agent tab polls every few seconds: this session has the workspace open.
   deps.connections.seen(userId, context.session.id, connectionRole(context));
 
-  if (navigation || isUserAction(method, pathname)) deps.manager.touch(userId);
+  if (navigation || driver.isUserAction(method, pathname)) deps.manager.touch(userId);
 
   const limit = deps.config.uploadLimitBytes;
   const tooLarge = (response: ServerResponse): void =>
@@ -135,12 +129,12 @@ async function handleRequest(deps: AgentDeps, req: IncomingMessage, res: ServerR
   await forward(req, res, {
     url: new URL(`http://${upstream.host}:${upstream.port}${target}`),
     method,
-    headers: qwenRequestHeaders(req.headers, `${upstream.host}:${upstream.port}`, authenticated ? upstream.token : null),
+    headers: driver.requestHeaders(req.headers, upstream, { authorised }),
     bodyLimit: limit,
     responseHeaders: (incoming) => {
       // An event stream is an open tab watching a session: report it, and close it with the session.
       if (String(incoming.headers["content-type"] ?? "").startsWith("text/event-stream")) trackStream(deps, res, userId, context);
-      return qwenResponseHeaders(incoming.headers, framing(deps, host), incoming.statusCode);
+      return workspaceResponseHeaders(incoming.headers, framing(deps, host), incoming.statusCode);
     },
     onError: (error, response) => {
       if (error instanceof PayloadTooLargeError) return tooLarge(response);
@@ -205,16 +199,20 @@ function handlePortalPath(
   });
 }
 
+/** Starts the agent the workspace ran last; the choice of agent itself is made in the portal. */
 function startAndRespond(deps: AgentDeps, res: ServerResponse, userId: number, host: HostParts, onStarted: () => void): void {
   deps.manager.touch(userId);
   const attempt = deps.manager.requestStart(userId);
-  if (!attempt.ok) {
-    const page = attempt.error instanceof CapacityError ? capacityPage(deps.config.maxRunning) : errorPage(attempt.error.message, null);
-    return sendPage(res, 503, page, framing(deps, host));
-  }
+  if (!attempt.ok) return sendPage(res, 503, refusalPage(deps, host, attempt.error), framing(deps, host));
   // Failures are recorded on the workspace; the starting page's next reload shows them.
   attempt.done.catch(() => undefined);
   onStarted();
+}
+
+function refusalPage(deps: AgentDeps, host: HostParts, error: StartRefusal): string {
+  if (error instanceof CapacityError) return capacityPage(deps.config.maxRunning);
+  if (error instanceof AgentRequiredError) return chooseAgentPage(`//${host.hostname}:${deps.config.webPort}/workspace`);
+  return errorPage(error.message, null);
 }
 
 function framing(deps: AgentDeps, host: HostParts): FramePolicy {

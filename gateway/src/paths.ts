@@ -1,14 +1,18 @@
 // Per-user directories under PORTAL_DATA_DIR and small file helpers.
 //
 // users/<id>/            root:root 0711  nothing but the three directories below
-//   home/                uid:uid   0700  mounted at /home/user (Qwen Code's ~/.qwen, chats, caches)
-//   workspace/           uid:uid   0700  mounted at /workspace (the user's files)
-//   system/              root:root 0755  mounted read-only: Qwen Code system settings, passwd, group
+//   home/                uid:uid   0700  mounted at /home/user (each agent's state in its own
+//                                         dot-dir: ~/.qwen, ~/.dsh; chats, caches)
+//   workspace/           uid:uid   0700  mounted at /workspace (the user's files, for either agent)
+//   system/              root:root 0755  rendered by the gateway, mounted read-only:
+//     <agent>/                            that agent's settings
+//     passwd, group
 //
 // uid is WORKSPACE_UID_BASE + user id, so no two workspaces share an owner, and a workspace never
 // owns anything outside its own home and workspace.
 import fs from "node:fs";
 import path from "node:path";
+import type { AgentKind } from "@portal/db";
 
 export interface UserPaths {
   root: string;
@@ -18,8 +22,8 @@ export interface UserPaths {
   workspace: string;
   /** Read-only files the gateway renders before every start. */
   system: string;
-  /** Mounted at QWEN_SETTINGS_MOUNT (settings.json, system-defaults.json). */
-  qwenSettings: string;
+  /** Mounted at the agent's settingsMount: the settings rendered for that agent. */
+  agentSettings(kind: AgentKind): string;
   passwd: string;
   group: string;
 }
@@ -37,7 +41,7 @@ export function userPaths(dataDir: string, userId: number): UserPaths {
     home: path.join(root, "home"),
     workspace: path.join(root, "workspace"),
     system,
-    qwenSettings: path.join(system, "qwen"),
+    agentSettings: (kind) => path.join(system, kind),
     passwd: path.join(system, "passwd"),
     group: path.join(system, "group"),
   };
@@ -52,10 +56,10 @@ export function workspaceOwner(uidBase: number, userId: number): FileOwner {
  * Creates the user's directories and gives the private ones to the workspace's own UID. A tree
  * left by another owner (an older install, or a changed WORKSPACE_UID_BASE) is handed over whole.
  */
-export async function ensureUserDirs(paths: UserPaths, owner: FileOwner): Promise<void> {
+export async function ensureUserDirs(paths: UserPaths, owner: FileOwner, agent: AgentKind): Promise<void> {
   ensureDir(paths.root, 0o711, { uid: 0, gid: 0 });
   ensureDir(paths.system, 0o755, { uid: 0, gid: 0 });
-  ensureDir(paths.qwenSettings, 0o755, { uid: 0, gid: 0 });
+  ensureDir(paths.agentSettings(agent), 0o755, { uid: 0, gid: 0 });
   for (const dir of [paths.home, paths.workspace]) {
     ensureDir(dir, 0o700, owner);
     const stat = fs.lstatSync(dir);

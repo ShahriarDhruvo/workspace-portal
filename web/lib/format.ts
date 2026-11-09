@@ -1,4 +1,5 @@
 // Display formatting shared by server and client components. Pure; unit tested.
+import type { AgentKind } from "@portal/db";
 import type { WorkspaceInfo } from "./gateway-types.ts";
 
 const BYTE_UNITS = ["B", "KiB", "MiB", "GiB", "TiB"] as const;
@@ -54,6 +55,8 @@ export function stopReasonText(reason: string | null, idleTimeoutMinutes: number
       return `after ${idleTimeoutMinutes} ${idleTimeoutMinutes === 1 ? "minute" : "minutes"} without activity`;
     case "admin":
       return "by the administrator";
+    case "user":
+      return "to switch agents";
     case "deactivated":
       return "because the account was deactivated";
     case "capacity":
@@ -65,6 +68,24 @@ export function stopReasonText(reason: string | null, idleTimeoutMinutes: number
     default:
       return null;
   }
+}
+
+/** An agent's version for display: "0.27.0" becomes "v0.27.0"; anything else is shown as it is. */
+export function formatVersion(version: string): string {
+  return /^\d/.test(version) ? `v${version}` : version;
+}
+
+/**
+ * The workspace's agent in a few words: its name while a container runs it, "last: <name>" once stopped, null
+ * if it never started. `names` is AGENT_NAMES (passed in, as client components can't import @portal/db values).
+ */
+export function agentLabel(
+  info: Pick<WorkspaceInfo, "status" | "agent"> | null,
+  names: Readonly<Record<AgentKind, string>>,
+): string | null {
+  if (!info?.agent) return null;
+  const name = names[info.agent];
+  return info.status === "stopped" || info.status === "error" ? `last: ${name}` : name;
 }
 
 function busyText(reason: WorkspaceInfo["busyReason"]): string {

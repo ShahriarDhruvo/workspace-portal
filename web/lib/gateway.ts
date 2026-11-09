@@ -1,7 +1,8 @@
 import "server-only";
 import { after } from "next/server";
+import { startOnOpen } from "./agent-choice";
 import { config } from "./config";
-import type { ApiError, HostStats, WorkspaceInfo } from "./gateway-types";
+import type { AgentInfo, ApiError, HostStats, StartRequest, WorkspaceInfo } from "./gateway-types";
 import type { DeletedSessions } from "./session-store";
 
 // Client for the gateway control API (docs/ARCHITECTURE.md, "Gateway control API").
@@ -69,16 +70,26 @@ async function call<T>(
   return payload as T;
 }
 
+/** Why the portal stops a workspace: an admin's Stop, the user's own (to switch agents), deactivation, deletion. */
+export type StopReason = "admin" | "user" | "deactivated" | "deleted";
+
 export const gateway = {
   stats: () => call<HostStats>("GET", "/control/stats"),
+  /** The agents enabled on this install, in display order. */
+  agents: async (timeoutMs?: number) =>
+    (await call<{ agents: AgentInfo[] }>("GET", "/control/agents", timeoutMs ? { timeoutMs } : {})).agents,
   listWorkspaces: async () => (await call<{ workspaces: WorkspaceInfo[] }>("GET", "/control/workspaces")).workspaces,
   getWorkspace: (userId: number, timeoutMs?: number) =>
     call<WorkspaceInfo>("GET", `/control/workspaces/${userId}`, timeoutMs ? { timeoutMs } : {}),
-  /** Creates and starts the container, then returns (status "starting"); poll getWorkspace until ready. 409 `capacity` when every slot is busy. */
-  start: (userId: number, timeoutMs = START_TIMEOUT_MS) =>
-    call<WorkspaceInfo>("POST", `/control/workspaces/${userId}/start`, { timeoutMs }),
+  /**
+   * Creates and starts the container with `request.agent` (default: see StartRequest), then returns (status
+   * "starting"); poll getWorkspace until ready. An already starting or running workspace just returns its
+   * state, or 409 `agent_mismatch` if it runs another agent. 409 `capacity` when every slot is busy.
+   */
+  start: (userId: number, request: StartRequest = {}, timeoutMs = START_TIMEOUT_MS) =>
+    call<WorkspaceInfo>("POST", `/control/workspaces/${userId}/start`, { body: request, timeoutMs }),
   /** The gateway writes the `workspace_stopped` audit entry, attributed to `actorUserId`. */
-  stop: (userId: number, reason: string, actorUserId?: number) =>
+  stop: (userId: number, reason: StopReason, actorUserId?: number) =>
     call<WorkspaceInfo>("POST", `/control/workspaces/${userId}/stop`, {
       body: { reason, actorUserId },
       timeoutMs: STOP_TIMEOUT_MS,
@@ -121,13 +132,18 @@ export function afterResponse(label: string, task: () => Promise<unknown>): void
 }
 
 /**
- * Asks the gateway to start a workspace without waiting for it. The short timeout only bounds this
- * request; the workspace page polls the status and shows capacity or other errors itself.
+ * A session has just started using this workspace (sign-in, an admin opening it). Without waiting for it,
+ * attaches to the workspace if it is starting or running (which calls off a pending stop), and starts a stopped
+ * one only when a single agent is enabled; otherwise the workspace page lets the person choose (startOnOpen).
+ * The short timeout only bounds this request; the page polls the status and shows capacity or other errors itself.
  */
-export function startInBackground(userId: number): void {
+export function openWorkspaceInBackground(userId: number): void {
   afterResponse(`start workspace ${userId}`, async () => {
+    const [info, agents] = await Promise.all([gateway.getWorkspace(userId), gateway.agents()]);
+    const request = startOnOpen(info, agents);
+    if (!request) return;
     try {
-      await gateway.start(userId, DEFAULT_TIMEOUT_MS);
+      await gateway.start(userId, request, DEFAULT_TIMEOUT_MS);
     } catch (error) {
       // A timeout only means the start takes longer than we wait; capacity is shown by the page.
       if (error instanceof GatewayError && (error.code === "timeout" || error.code === "capacity")) return;

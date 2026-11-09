@@ -4,7 +4,9 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import Database from "better-sqlite3";
 import { openDatabase, openForOwnershipChange, migrate } from "./db.ts";
+import { MIGRATIONS } from "./migrations.ts";
 import { users, sessions } from "./schema.ts";
 import { countSessionsUsingWorkspace, hashSessionToken, loadSessionContext, readCookie } from "./sessions.ts";
 
@@ -33,7 +35,22 @@ test("migrations are idempotent", () => {
   const db = tempDb();
   migrate(db.$client);
   migrate(db.$client);
-  assert.equal(db.$client.pragma("user_version", { simple: true }), 1);
+  assert.equal(db.$client.pragma("user_version", { simple: true }), MIGRATIONS.length);
+});
+
+test("migration 2 keeps existing workspaces as Qwen Code and refuses unknown agents", () => {
+  const client = new Database(":memory:");
+  client.exec(MIGRATIONS[0]!);
+  client.pragma("user_version = 1");
+  client.exec(`INSERT INTO users (username, first_name, last_name, password_hash, role, created_at, updated_at)
+               VALUES ('a', 'A', 'A', 'x', 'user', 0, 0), ('b', 'B', 'B', 'x', 'user', 0, 0)`);
+  client.exec(`INSERT INTO workspaces (user_id, status, started_at, updated_at) VALUES (1, 'stopped', 5, 0), (2, 'stopped', NULL, 0)`);
+  migrate(client);
+  assert.deepEqual(client.prepare("SELECT user_id, agent FROM workspaces ORDER BY user_id").all(), [
+    { user_id: 1, agent: "qwen" },
+    { user_id: 2, agent: null },
+  ]);
+  assert.throws(() => client.exec("UPDATE workspaces SET agent = 'other' WHERE user_id = 1"), /CHECK/);
 });
 
 test("only one admin can exist", () => {

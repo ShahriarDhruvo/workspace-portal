@@ -5,23 +5,17 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { AgentConfigError, LLM_KEY_ENV } from "./driver.ts";
 import {
-  agentWorking,
-  fetchQwenHealth,
-  generateServerToken,
-  LLM_KEY_ENV,
   loadAdminQwenConfig,
   mergeSettings,
-  parseQwenHealth,
   parseSettingsText,
-  QwenConfigError,
   readSettingsFile,
   renderQwenSettings,
   stripJsonComments,
   type AdminQwenConfig,
-  type QwenHealth,
   type SettingsObject,
-} from "./qwen.ts";
+} from "./qwen-settings.ts";
 
 const SERVICE = "http://172.29.0.1:4001";
 const DEFAULTS_FILE = "/data/config/qwen/system-defaults.json";
@@ -31,102 +25,6 @@ const ONE_MODEL: AdminQwenConfig = {
   systemDefaults: { modelProviders: { openai: [{ id: "qwen3.8-flash-next", name: "Qwen3.8 Flash-Next" }] } },
   systemDefaultsFile: DEFAULTS_FILE,
 };
-
-/** A real `GET /health?deep=1` answer of `qwen serve`. */
-const REAL_HEALTH = {
-  status: "ok",
-  workspaceCount: 1,
-  sessions: 2,
-  pendingPermissions: 1,
-  activePrompts: 1,
-  activeWork: true,
-  activeWorkReporting: true,
-  activeWorkStaleMs: 0,
-  connectedClients: 3,
-  channelAlive: true,
-  lastActivityAt: 1_760_000_000_000,
-  idleSinceMs: 4_200,
-};
-
-const quiet: QwenHealth = { activePrompts: 0, pendingPermissions: 0, activeWork: false, channelAlive: true, idleSinceMs: null };
-
-// ------------------------------------------------------------------ health
-
-test("parseQwenHealth reads the deep health answer", () => {
-  assert.deepEqual(parseQwenHealth(REAL_HEALTH), {
-    activePrompts: 1,
-    pendingPermissions: 1,
-    activeWork: true,
-    channelAlive: true,
-    idleSinceMs: 4_200,
-  });
-  assert.deepEqual(parseQwenHealth({ status: "ok" }), { ...quiet, channelAlive: false }, "missing fields are zero/false/null");
-});
-
-test("parseQwenHealth refuses odd answers and clamps odd figures", () => {
-  for (const bad of [null, undefined, "ok", 1, [], { status: "error" }, { ...REAL_HEALTH, status: "degraded" }]) {
-    assert.equal(parseQwenHealth(bad), null, JSON.stringify(bad));
-  }
-  assert.deepEqual(
-    parseQwenHealth({
-      status: "ok",
-      activePrompts: -2,
-      pendingPermissions: Number.NaN,
-      activeWork: "yes",
-      connectedClients: "3",
-      channelAlive: 1,
-      idleSinceMs: -5,
-    }),
-    { activePrompts: 0, pendingPermissions: 0, activeWork: false, channelAlive: false, idleSinceMs: null },
-  );
-  assert.equal(parseQwenHealth({ status: "ok", idleSinceMs: 0 })?.idleSinceMs, 0);
-  assert.equal(parseQwenHealth({ status: "ok", idleSinceMs: Number.POSITIVE_INFINITY })?.idleSinceMs, null);
-});
-
-test("agentWorking: prompts, approvals and reported work are work, however long they have waited", () => {
-  assert.equal(agentWorking(quiet), false);
-  assert.equal(agentWorking({ ...quiet, activePrompts: 1 }), true);
-  assert.equal(agentWorking({ ...quiet, activeWork: true, idleSinceMs: 120 * 60_000 }), true, "a background task");
-  // qwen serve declines an unanswered approval itself (--permission-response-timeout-ms); until then it is work.
-  assert.equal(agentWorking({ ...quiet, pendingPermissions: 1, idleSinceMs: 120 * 60_000 }), true, "an approval nobody answers");
-  assert.equal(agentWorking({ ...quiet, idleSinceMs: 0 }), false, "it just finished");
-});
-
-test("fetchQwenHealth sends the token to /health?deep=1 and gives up on odd answers", async () => {
-  const seen: http.IncomingHttpHeaders[] = [];
-  let reply: (res: http.ServerResponse) => void = (res) => res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(REAL_HEALTH));
-  const server = http.createServer((req, res) => {
-    assert.equal(req.url, "/health?deep=1");
-    seen.push(req.headers);
-    reply(res);
-  });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const { port } = server.address() as AddressInfo;
-  try {
-    assert.deepEqual(await fetchQwenHealth("127.0.0.1", port, "container-token"), parseQwenHealth(REAL_HEALTH));
-    assert.equal(seen[0]!.authorization, "Bearer container-token");
-    assert.equal(seen[0]!.accept, "application/json");
-
-    reply = (res) => res.writeHead(401, { "content-type": "application/json" }).end('{"error":"Unauthorized"}');
-    assert.equal(await fetchQwenHealth("127.0.0.1", port, "t"), null, "401");
-    reply = (res) => res.writeHead(500).end(JSON.stringify(REAL_HEALTH));
-    assert.equal(await fetchQwenHealth("127.0.0.1", port, "t"), null, "a 500 with a healthy-looking body");
-    reply = (res) => res.writeHead(200).end("<html>");
-    assert.equal(await fetchQwenHealth("127.0.0.1", port, "t"), null, "not JSON");
-    reply = (res) => res.writeHead(200).end(JSON.stringify({ ...REAL_HEALTH, padding: "x".repeat(100 * 1024) }));
-    assert.equal(await fetchQwenHealth("127.0.0.1", port, "t"), null, "too large");
-  } finally {
-    server.closeAllConnections();
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  }
-  assert.equal(await fetchQwenHealth("127.0.0.1", port, "t"), null, "connection refused");
-});
-
-test("generateServerToken is a fresh 256-bit base64url token", () => {
-  const a = generateServerToken();
-  assert.match(a, /^[A-Za-z0-9_-]{43}$/);
-  assert.notEqual(a, generateServerToken());
-});
 
 // ------------------------------------------------------------------ settings files
 
@@ -147,11 +45,11 @@ test("parseSettingsText accepts JSON with comments and reports anything else cle
   assert.deepEqual(parseSettingsText("", "x"), {});
   assert.deepEqual(parseSettingsText("  \n\t", "x"), {});
 
-  const broken = (text: string): QwenConfigError => {
+  const broken = (text: string): AgentConfigError => {
     try {
       parseSettingsText(text, "/data/config/qwen/settings.json");
     } catch (error) {
-      assert.ok(error instanceof QwenConfigError, String(error));
+      assert.ok(error instanceof AgentConfigError, String(error));
       return error;
     }
     assert.fail(`expected ${JSON.stringify(text)} to be refused`);
@@ -161,7 +59,7 @@ test("parseSettingsText accepts JSON with comments and reports anything else cle
   for (const notObject of ["[]", "[1]", "null", "42", '"text"', "true"]) {
     assert.equal(broken(notObject).message, "the Qwen Code settings file /data/config/qwen/settings.json must contain a JSON object", notObject);
   }
-  assert.equal(broken("{").name, "QwenConfigError");
+  assert.equal(broken("{").name, "AgentConfigError");
 });
 
 test("loadAdminQwenConfig: missing files are empty, unreadable or invalid ones throw", () => {
@@ -177,12 +75,12 @@ test("loadAdminQwenConfig: missing files are empty, unreadable or invalid ones t
     });
     fs.writeFileSync(path.join(dir, "system-defaults.json"), "{ nope");
     assert.throws(() => loadAdminQwenConfig(dir), (error: unknown) => {
-      assert.ok(error instanceof QwenConfigError);
+      assert.ok(error instanceof AgentConfigError);
       assert.match(error.message, new RegExp(`^the Qwen Code settings file ${path.join(dir, "system-defaults.json").replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")} is not valid JSON`));
       return true;
     });
     fs.mkdirSync(path.join(dir, "dir.json"));
-    assert.throws(() => readSettingsFile(path.join(dir, "dir.json")), /^QwenConfigError: cannot read the Qwen Code settings file .*dir\.json: /);
+    assert.throws(() => readSettingsFile(path.join(dir, "dir.json")), /^AgentConfigError: cannot read the Qwen Code settings file .*dir\.json: /);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -233,7 +131,7 @@ test("renderQwenSettings with one model and no other settings: the portal's keys
 });
 
 test("renderQwenSettings refuses a system-defaults.json without a model, naming the file", () => {
-  const expected = new QwenConfigError(
+  const expected = new AgentConfigError(
     `the Qwen Code settings file ${DEFAULTS_FILE} defines no model: add at least one entry with an "id" under modelProviders.openai`,
   );
   const without = (systemDefaults: SettingsObject): AdminQwenConfig => ({ settings: {}, systemDefaults, systemDefaultsFile: DEFAULTS_FILE });

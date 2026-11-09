@@ -33,8 +33,9 @@ set_if_missing() { env_value "$ENV_FILE" "$1" >/dev/null || env_set "$1" "$2"; }
 set_if_missing GATEWAY_CONTROL_SECRET "$(openssl rand -hex 32)"
 set_if_missing ADMIN_PASSWORD "$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20)"
 
-# Settings from earlier versions: the image tag is now derived from QWEN_CODE_VERSION, and the
-# models are defined in Qwen Code's system-defaults.json.
+# Settings from earlier versions: image tags are now derived from the agent versions, users choose
+# between the agents in WORKSPACE_AGENTS, and the models are defined in Qwen Code's
+# system-defaults.json (for every agent).
 if ! env_value "$ENV_FILE" QWEN_CODE_VERSION >/dev/null; then
   old_image=$(env_value "$ENV_FILE" WORKSPACE_IMAGE || true)
   if [[ $old_image == workspace-portal/workspace:qwen-* ]]; then
@@ -43,6 +44,8 @@ if ! env_value "$ENV_FILE" QWEN_CODE_VERSION >/dev/null; then
     env_set QWEN_CODE_VERSION "$(env_value .env.example QWEN_CODE_VERSION)"
   fi
 fi
+set_if_missing DSH_VERSION "$(env_value .env.example DSH_VERSION)"
+set_if_missing WORKSPACE_AGENTS "$(env_value .env.example WORKSPACE_AGENTS)"
 for key in WORKSPACE_IMAGE LLM_MODEL_ID LLM_MODEL_NAME LLM_CONTEXT_WINDOW LLM_MAX_TOKENS LLM_INPUT LLM_REASONING; do
   if grep -qE "^${key}=" "$ENV_FILE"; then
     sed -i "s|^${key}=|# no longer used: ${key}=|" "$ENV_FILE"
@@ -51,7 +54,10 @@ for key in WORKSPACE_IMAGE LLM_MODEL_ID LLM_MODEL_NAME LLM_CONTEXT_WINDOW LLM_MA
 done
 
 PORTAL_DATA_DIR=$(env_get PORTAL_DATA_DIR)
-QWEN_CODE_VERSION=$(env_get QWEN_CODE_VERSION)
+load_enabled_agents
+for agent in "${ENABLED_AGENTS[@]}"; do
+  valid_version "$(agent_version "$agent")" || die "$(agent_version_key "$agent") in .env is not a version (like 0.27.0)"
+done
 WEB_PORT=$(web_port)
 AGENT_PORTS=$(agent_port_range)
 
@@ -110,7 +116,13 @@ if command -v selinuxenabled >/dev/null && selinuxenabled; then
 fi
 
 # ---------------------------------------------------------------- images
-build_workspace_image "$QWEN_CODE_VERSION"
+# Every enabled agent's image (they share the base stage, so the second one builds quickly).
+for agent in "${ENABLED_AGENTS[@]}"; do
+  version=$(agent_version "$agent")
+  build_workspace_image "$agent" "$version"
+  installed=$(image_agent_version "$agent" "$(workspace_image "$agent")")
+  [[ $installed == "$version" ]] || die "$(workspace_image "$agent") reports $(agent_name "$agent") \"$installed\", expected $version"
+done
 log "building web and gateway"
 docker compose build --pull
 
@@ -190,7 +202,8 @@ cat <<DONE
     Portal:     http://$(host_ip || echo '<server-ip>'):${WEB_PORT}
     Workspaces: ports ${AGENT_PORTS} (one per user)
     Admin:      $(env_get ADMIN_USERNAME)   (first sign-in: grep ^ADMIN_PASSWORD ${ENV_FILE}; you choose a new one then)
-    Qwen Code:  ${QWEN_CODE_VERSION}, settings in ${PORTAL_DATA_DIR}/config/qwen (deploy/qwen-config.sh)
+$(for agent in "${ENABLED_AGENTS[@]}"; do printf '    Agent:      %s %s\n' "$(agent_name "$agent")" "$(agent_version "$agent")"; done)
+    Models:     ${PORTAL_DATA_DIR}/config/qwen (deploy/qwen-config.sh; used by every agent)
 
   Check the workspace isolation at any time:  sudo bash deploy/verify-isolation.sh
 

@@ -1,7 +1,7 @@
 // Request checks for the JSON Route Handlers. Pure (no request context, no server-only imports), so they
 // can be unit tested; lib/api.ts applies them.
-import type { User } from "@portal/db";
-import type { ApiError } from "./gateway-types.ts";
+import { isAgentKind, type User } from "@portal/db";
+import type { ApiError, StartRequest } from "./gateway-types.ts";
 
 /**
  * CSRF guard for state-changing routes. SameSite=Lax still lets same-site pages (such as content
@@ -44,4 +44,29 @@ export function checkApiAccess<S extends Caller>(
     return { problem: { status: 403, error: "forbidden", message: "Administrators only." } };
   }
   return { session };
+}
+
+/** `{"agent":"…"}` is a few dozen bytes; anything much longer is not a start request. */
+const MAX_START_BODY_LENGTH = 1024;
+
+/**
+ * Body of POST /api/workspace/start: empty or `{}` (the gateway's default, see StartRequest), or `{agent}`
+ * naming an agent kind. Whether this install enables that agent is the gateway's call (400 `agent_unavailable`).
+ */
+export function parseStartRequest(body: string): { request: StartRequest } | { problem: ApiError } {
+  if (body.trim() === "") return { request: {} };
+  if (body.length > MAX_START_BODY_LENGTH) return { problem: { error: "bad_request", message: "The request body is too long." } };
+  let value: unknown;
+  try {
+    value = JSON.parse(body);
+  } catch {
+    return { problem: { error: "invalid_json", message: "The request body isn't valid JSON." } };
+  }
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return { problem: { error: "bad_request", message: "The request body must be a JSON object." } };
+  }
+  const { agent } = value as Record<string, unknown>;
+  if (agent === undefined) return { request: {} };
+  if (!isAgentKind(agent)) return { problem: { error: "unknown_agent", message: "There is no such agent." } };
+  return { request: { agent } };
 }

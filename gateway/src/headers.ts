@@ -69,7 +69,7 @@ export function rejectsCrossSite(method: string, headers: IncomingHttpHeaders, u
   return upgrade || (method !== "GET" && method !== "HEAD");
 }
 
-// ------------------------------------------------------------------ Qwen Code recipe
+// ------------------------------------------------------------------ workspace requests and responses
 
 /** Browser-supplied fields never passed to a workspace. `expect` is answered by the gateway itself. */
 const STRIPPED_REQUEST = new Set([
@@ -86,20 +86,15 @@ const STRIPPED_REQUEST = new Set([
   "x-real-ip",
 ]);
 
-/** WebSocket subprotocol prefix the Web Shell uses to carry its bearer token (browsers can't set headers). */
+/** WebSocket subprotocol prefix a token agent's UI uses to carry its bearer token (browsers can't set headers). */
 export const BEARER_SUBPROTOCOL_PREFIX = "qwen-bearer.";
 
 /**
- * Headers for a request forwarded to a workspace's `qwen serve`. No cookie (the portal session stays
- * with the gateway), no Origin (the gateway checked it), and the container's own token as the only
- * credential, set only when the browser presented its valid workspace token.
+ * The browser's request headers as a workspace may see them, with Host set to `authority`: no
+ * cookie (the portal session stays with the gateway), no Origin (the gateway checked it), no
+ * credentials and no forwarding headers. The agent's driver adds its own credential.
  */
-export function qwenRequestHeaders(
-  incoming: IncomingHttpHeaders,
-  authority: string,
-  serverToken: string | null,
-  options: { websocket?: boolean } = {},
-): HeaderMap {
+export function workspaceRequestHeaders(incoming: IncomingHttpHeaders, authority: string, options: { websocket?: boolean } = {}): HeaderMap {
   const out = endToEndHeaders(incoming);
   for (const name of Object.keys(out)) {
     if (STRIPPED_REQUEST.has(name) || name.startsWith("sec-fetch-") || (options.websocket && name.startsWith("sec-websocket-"))) {
@@ -107,7 +102,6 @@ export function qwenRequestHeaders(
     }
   }
   out.host = authority;
-  if (serverToken !== null) out.authorization = `Bearer ${serverToken}`;
   return out;
 }
 
@@ -180,7 +174,7 @@ export function workspaceCacheControl(upstream: string | string[] | undefined): 
 }
 
 /** Workspace response headers as the browser gets them: no cookies, framing allowed for the portal only. */
-export function qwenResponseHeaders(upstream: IncomingHttpHeaders, frame: FramePolicy, status?: number): HeaderMap {
+export function workspaceResponseHeaders(upstream: IncomingHttpHeaders, frame: FramePolicy, status?: number): HeaderMap {
   const out = endToEndHeaders(upstream);
   delete out["set-cookie"];
   delete out["x-frame-options"];
