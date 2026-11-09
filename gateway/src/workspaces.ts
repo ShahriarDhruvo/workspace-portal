@@ -2,10 +2,11 @@
 // that user's sessions), kept in memory and mirrored to the `workspaces` table. It starts and stops
 // containers, waits for Qwen Code to come up, tracks activity and whether the agent is working, stops
 // idle workspaces, enforces the running cap, and reconciles with what Docker actually runs.
+// The decisions themselves (busy, idle, what to stop or evict) are pure functions in policy.ts; the
+// files a container mounts are prepared by workspace-files.ts.
 //
 // When a workspace stops: never while its agent is working. Otherwise when nobody has used it for
 // IDLE_TIMEOUT_MINUTES, or soon after the last session using it has ended (sign-out, expiry).
-import path from "node:path";
 import { eq } from "drizzle-orm";
 import {
   countSessionsUsingWorkspace,
@@ -17,15 +18,25 @@ import {
   type WorkspaceStatus,
 } from "@portal/db";
 import type { Config } from "./config.ts";
-import type { ConnectionRegistry } from "./connections.ts";
+import { closeEndedSessions, type ConnectionRegistry } from "./connections.ts";
 import { containerName } from "./container-spec.ts";
 import type { LlmQueue } from "./llm-queue.ts";
 import { errorMessage, type Logger } from "./log.ts";
-import { ensureUserDirs, removeUserData, renderGroup, renderPasswd, userPaths, workspaceOwner, writeFileAtomic } from "./paths.ts";
-import { averageCores, busyReason, chooseEviction, idleMs, reapVerdict, type ActivitySnapshot, type BusyReason, type ReapVerdict } from "./policy.ts";
-import { agentActivity, fetchQwenHealth, generateServerToken, loadAdminQwenConfig, QwenConfigError, renderQwenSettings } from "./qwen.ts";
+import {
+  assessActivity,
+  averageCores,
+  chooseEviction,
+  idleMs,
+  reapVerdict,
+  type ActivityAssessment,
+  type AgentState,
+  type BusyReason,
+  type ReapInput,
+} from "./policy.ts";
+import { agentWorking, fetchQwenHealth, generateServerToken, QwenConfigError } from "./qwen.ts";
 import { probeQwen, READY_TIMEOUT_MS, waitForReady, type ReadyResult } from "./readiness.ts";
 import { WorkspaceImageMissingError, type ContainerRuntime, type ContainerState, type ContainerSummary } from "./runtime.ts";
+import { prepareWorkspaceFiles, removeWorkspaceFiles } from "./workspace-files.ts";
 
 export interface WorkspaceInfo {
   userId: number;
@@ -38,7 +49,10 @@ export interface WorkspaceInfo {
   idleSeconds: number | null;
   /** From docker stats; null when not running or unknown. */
   memoryBytes: number | null;
-  /** Open browser connections (event streams, terminals) right now. */
+  /**
+   * Sessions that have it open right now: an open connection (event stream, socket) or a request in
+   * the last 20 s (presence).
+   */
   connections: { owner: number; admin: number };
   llmInFlight: number;
   /** The agent is working: it is never stopped for inactivity while this is true. */
@@ -58,6 +72,14 @@ export class CapacityError extends Error {
   }
 }
 
+/** The workspace's data is being deleted: it can't be started meanwhile. */
+export class DeletingError extends Error {
+  constructor() {
+    super("This workspace is being deleted.");
+    this.name = "DeletingError";
+  }
+}
+
 export class StartError extends Error {
   constructor(message: string) {
     super(message);
@@ -65,8 +87,20 @@ export class StartError extends Error {
   }
 }
 
-/** A start request's outcome. Capacity is decided synchronously; `done` settles once the container runs. */
-export type StartAttempt = { ok: true; done: Promise<WorkspaceInfo> } | { ok: false; error: CapacityError };
+/** The container could not be stopped, so nothing was deleted. */
+export class StopError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "StopError";
+  }
+}
+
+/**
+ * A start request's outcome. Capacity is usually decided before requestStart returns; a start queued
+ * behind a stop in progress decides once that stop is done, and `done` then rejects with
+ * CapacityError or DeletingError instead. `done` settles once the container runs.
+ */
+export type StartAttempt = { ok: true; done: Promise<WorkspaceInfo> } | { ok: false; error: CapacityError | DeletingError };
 
 /** Why a workspace is being stopped, as recorded in stopReason and the audit log. */
 export interface StopCause {
@@ -108,6 +142,11 @@ interface Entry {
   status: WorkspaceStatus;
   ready: boolean;
   containerId: string | null;
+  /**
+   * A container that should be gone but whose removal failed (a failed stop or start). Reconcile
+   * retries the removal and never adopts it.
+   */
+  leftoverContainerId: string | null;
   ip: string | null;
   port: number | null;
   /** The bearer token of this container's `qwen serve`. */
@@ -121,17 +160,19 @@ interface Entry {
   stopReason: string | null;
   lastError: string | null;
   memoryBytes: number | null;
-  /** From the last health check: the agent reports work. null when unknown. */
-  agentTask: boolean | null;
+  /** From Qwen Code's health checks. */
+  agent: AgentState;
   /** Average CPU use over the last sampling interval. */
   cpuCores: number | null;
   cpuSample: { cpuSeconds: number; at: number } | null;
-  busy: boolean;
+  /** The last busy reason seen by the stats refresh, to log when work starts. */
   busyReason: BusyReason;
   stopPending: boolean;
   /** In-flight start, until the container runs (readiness continues in the background). */
   starting: Promise<WorkspaceInfo> | null;
   stopping: Promise<WorkspaceInfo> | null;
+  /** In-flight deletion of the user's data; starts are refused meanwhile. */
+  deleting: Promise<void> | null;
   readiness: AbortController | null;
   activityDirty: boolean;
 }
@@ -146,6 +187,9 @@ function patch(entry: Entry, changes: Partial<Entry>): void {
   Object.assign(entry, changes);
 }
 
+/** Nothing known about the agent yet. */
+const NO_AGENT: AgentState = Object.freeze({ working: null, answeredAt: null, unknown: false });
+
 /** What an entry no longer has once its container is gone. */
 const NO_CONTAINER: Partial<Entry> = {
   ready: false,
@@ -155,10 +199,9 @@ const NO_CONTAINER: Partial<Entry> = {
   port: null,
   token: null,
   memoryBytes: null,
-  agentTask: null,
+  agent: NO_AGENT,
   cpuCores: null,
   cpuSample: null,
-  busy: false,
   busyReason: null,
   stopPending: false,
 };
@@ -196,8 +239,12 @@ export class WorkspaceManager {
     const stale: Entry[] = [];
     for (const row of this.#db.select().from(workspaces).all()) {
       const entry = entryFromRow(row);
-      if (row.status !== "stopped" && row.status !== "error") {
-        // Reconcile adopts the container if it still runs; otherwise this is how it stays.
+      if (row.status === "stopped" || row.status === "error") {
+        // A stopped workspace's row only names a container whose removal failed (see #persist).
+        patch(entry, { containerId: null, leftoverContainerId: row.containerId });
+      } else {
+        // Reconcile adopts the container if it still runs; otherwise this is how it stays. A stop
+        // that was under way is finished instead: that container is removed, not adopted.
         const wasStopping = row.status === "stopping";
         patch(entry, {
           ...NO_CONTAINER,
@@ -205,6 +252,7 @@ export class WorkspaceManager {
           stoppedAt: now,
           stopReason: wasStopping ? row.stopReason : "error",
           lastError: wasStopping ? row.lastError : "The workspace container was not running when the gateway started.",
+          leftoverContainerId: wasStopping ? row.containerId : null,
         });
         stale.push(entry);
       }
@@ -225,6 +273,10 @@ export class WorkspaceManager {
       this.#timers.push(timer);
     };
     every(REAP_INTERVAL_MS, "reaper", () => this.reap());
+    every(REAP_INTERVAL_MS, "session sweep", () => {
+      const closed = closeEndedSessions(this.#db, this.#connections, this.#now());
+      if (closed > 0) this.#log.info("closed the agent connections of ended sessions", { closed });
+    });
     every(RECONCILE_INTERVAL_MS, "reconcile", () => this.reconcile());
     every(SAMPLE_INTERVAL_MS, "stats refresh", () => this.refreshSamples());
     every(FLUSH_INTERVAL_MS, "activity flush", () => this.flushActivity());
@@ -261,19 +313,19 @@ export class WorkspaceManager {
       };
     }
     const active = isActive(entry);
-    const reason = active ? this.#busyReason(entry) : null;
+    const activity = active ? this.#assess(entry) : null;
     return {
       userId,
       status: entry.status,
       ready: entry.ready,
       startedAt: entry.startedAt,
       lastActivityAt: entry.lastActivityAt,
-      idleSeconds: active ? Math.floor(idleMs(this.#snapshot(entry), this.#now()) / 1000) : null,
+      idleSeconds: activity ? Math.floor(idleMs(activity, this.#now()) / 1000) : null,
       memoryBytes: active ? entry.memoryBytes : null,
       connections,
       llmInFlight,
-      busy: reason !== null,
-      busyReason: reason,
+      busy: activity?.busy ?? false,
+      busyReason: activity?.busyReason ?? null,
       stopPending: active && entry.stopPending,
       stopReason: entry.stopReason,
       lastError: entry.lastError,
@@ -319,7 +371,10 @@ export class WorkspaceManager {
     entry.activityDirty = true;
   }
 
-  /** The workspace's agent did something (an LLM or search request): activity, but not a person. */
+  /**
+   * The workspace's agent did something (an LLM or search request): activity, but not a person.
+   * Past MAX_BUSY_HOURS it no longer delays the idle stop (see assessActivity).
+   */
   noteAgentActivity(userId: number): void {
     const entry = this.#entries.get(userId);
     if (!entry || !isActive(entry)) return;
@@ -349,11 +404,12 @@ export class WorkspaceManager {
   // ---------------------------------------------------------------- start
 
   /**
-   * Starts a workspace unless it is already starting or running. The capacity decision (including
-   * picking a workspace to evict) is made before this returns.
+   * Starts a workspace unless it is already starting or running. Refused while its data is being
+   * deleted. See StartAttempt for when capacity is decided.
    */
   requestStart(userId: number): StartAttempt {
     const existing = this.#entries.get(userId);
+    if (existing?.deleting) return { ok: false, error: new DeletingError() };
     if (existing?.starting) return { ok: true, done: existing.starting };
     if (existing?.stopping) return { ok: true, done: existing.stopping.then(() => this.start(userId)) };
     if (existing && isActive(existing)) {
@@ -389,7 +445,7 @@ export class WorkspaceManager {
     return { ok: true, done };
   }
 
-  /** Like requestStart, but rejects with CapacityError or StartError. */
+  /** Like requestStart, but rejects with CapacityError, DeletingError or StartError. */
   async start(userId: number): Promise<WorkspaceInfo> {
     const attempt = this.requestStart(userId);
     if (!attempt.ok) throw attempt.error;
@@ -399,11 +455,10 @@ export class WorkspaceManager {
   #reserveSlot(requesterId: number): { ok: true; victim: number | null } | { ok: false } {
     const active = [...this.#entries.values()].filter(isActive);
     if (active.length < this.#config.maxRunning) return { ok: true, victim: null };
-    const candidates = active.map((entry) => ({
-      userId: entry.userId,
-      ready: entry.status === "running" && entry.ready && entry.stopping === null,
-      ...this.#snapshot(entry),
-    }));
+    const candidates = active.map((entry) => {
+      const { busy, lastActivityAt } = this.#assess(entry);
+      return { userId: entry.userId, ready: entry.status === "running" && entry.ready && entry.stopping === null, busy, lastActivityAt };
+    });
     const victim = chooseEviction(candidates, requesterId, this.#now());
     return victim === null ? { ok: false } : { ok: true, victim };
   }
@@ -411,14 +466,20 @@ export class WorkspaceManager {
   async #launch(entry: Entry, eviction: Promise<WorkspaceInfo> | null): Promise<WorkspaceInfo> {
     const { userId } = entry;
     try {
-      // Wait for the evicted container to go before starting another (memory headroom).
-      if (eviction) await eviction.catch(() => undefined);
-      this.#prepareFiles(userId);
+      if (eviction) {
+        // Wait for the evicted container to go before starting another (memory headroom).
+        await eviction.catch(() => undefined);
+        // A stop that arrived meanwhile: nothing to start.
+        if (entry.status !== "starting") return this.info(userId);
+      }
+      await prepareWorkspaceFiles(this.#config, userId);
       const token = generateServerToken();
       const container = await this.#runtime.startWorkspace(userId, { token });
-      patch(entry, { containerId: container.id, ip: container.ip, port: container.port, token });
+      // startWorkspace removed every earlier container of this user, a leftover included.
+      patch(entry, { containerId: container.id, ip: container.ip, port: container.port, token, leftoverContainerId: null });
       // A stop that arrived meanwhile waits for this start and then removes the container.
       if (entry.status !== "starting") return this.info(userId);
+      this.#claimIp(entry);
       this.#persist(entry);
       this.#audit("workspace_started", userId);
       this.#log.info("workspace container started", { userId, containerId: container.id, ip: container.ip });
@@ -436,24 +497,19 @@ export class WorkspaceManager {
   }
 
   /**
-   * The user's directories, owned by the workspace's own UID, and the read-only files mounted into
-   * the container: Qwen Code system settings (the admin's, with the portal's keys forced) and
-   * passwd/group naming that UID. Rendered at every start, so changed settings apply on restart.
+   * Docker hands a freed address to the next container. Should another workspace still claim it
+   * (its container died and nobody noticed yet), it no longer does: service API calls from this
+   * address are this workspace's.
    */
-  #prepareFiles(userId: number): void {
-    const paths = userPaths(this.#config.dataDir, userId);
-    const owner = workspaceOwner(this.#config.workspace.uidBase, userId);
-    const rendered = renderQwenSettings({
-      admin: loadAdminQwenConfig(this.#config.qwenConfigDir),
-      serviceBaseUrl: `http://${this.#config.workspace.gatewayIp}:${this.#config.servicePort}`,
-      model: this.#config.llm.model,
-      browser: this.#config.workspace.browser,
-    });
-    ensureUserDirs(paths, owner);
-    writeFileAtomic(path.join(paths.qwenSettings, "settings.json"), `${JSON.stringify(rendered.settings, null, 2)}\n`);
-    writeFileAtomic(path.join(paths.qwenSettings, "system-defaults.json"), `${JSON.stringify(rendered.systemDefaults, null, 2)}\n`);
-    writeFileAtomic(paths.passwd, renderPasswd(owner));
-    writeFileAtomic(paths.group, renderGroup(owner));
+  #claimIp(entry: Entry): void {
+    if (entry.ip === null) return;
+    for (const other of this.#entries.values()) {
+      if (other === entry || other.ip !== entry.ip) continue;
+      this.#log.warn("a workspace's address now belongs to another workspace", { userId: other.userId, ip: other.ip, newUserId: entry.userId });
+      other.ip = null;
+      this.#persist(other);
+      this.checkContainer(other.userId);
+    }
   }
 
   #watchReadiness(entry: Entry): void {
@@ -473,7 +529,8 @@ export class WorkspaceManager {
       .then(async (result) => {
         if (!current()) return;
         if (result.ok) {
-          patch(entry, { status: "running", ready: true, readiness: null });
+          // The probe was a health check that answered: an unknown agent state counts from here.
+          patch(entry, { status: "running", ready: true, readiness: null, agent: { ...NO_AGENT, answeredAt: this.#now() } });
           this.#persist(entry);
           this.#log.info("workspace ready", { userId, seconds: Math.round((this.#now() - startedAt) / 100) / 10 });
           return;
@@ -500,9 +557,14 @@ export class WorkspaceManager {
     this.#log.error("workspace failed to start", { userId, error: firstLine(message) });
     this.#connections.closeWorkspace(userId, CLOSE_INTERNAL_ERROR, "workspace failed");
     if (containerId) {
-      await this.#runtime
-        .removeContainer(containerId)
-        .catch((error: unknown) => this.#log.warn("could not remove failed workspace container", { userId, containerId, error }));
+      await this.#runtime.removeContainer(containerId).catch((error: unknown) => {
+        this.#log.warn("could not remove failed workspace container", { userId, containerId, error });
+        // Unless a new start has begun (it removes the container itself), reconcile retries.
+        if (entry.status === "error") {
+          entry.leftoverContainerId = containerId;
+          this.#persist(entry);
+        }
+      });
     }
   }
 
@@ -520,10 +582,13 @@ export class WorkspaceManager {
    */
   async release(userId: number): Promise<WorkspaceInfo> {
     const entry = this.#entries.get(userId);
-    if (!entry || !isActive(entry)) return this.info(userId);
-    if (countSessionsUsingWorkspace(this.#db, userId, this.#now()) > 0) return this.info(userId);
-    if (entry.status === "running" && entry.ready) await this.#refreshAgentState(entry);
-    if (this.#busyReason(entry) !== null) {
+    if (!entry || !isActive(entry) || this.#sessionsUsing(userId) > 0) return this.info(userId);
+    if (entry.status === "running" && entry.ready) {
+      await this.#refreshAgentState(entry);
+      // Someone may have signed in again, or the workspace stopped, while the agent was asked.
+      if (!isActive(entry) || this.#sessionsUsing(userId) > 0) return this.info(userId);
+    }
+    if (this.#assess(entry).busy) {
       if (!entry.stopPending) this.#log.info("last session ended while the agent is working; stopping when it is done", { userId });
       entry.stopPending = true;
       return this.info(userId);
@@ -531,10 +596,37 @@ export class WorkspaceManager {
     return this.stop(userId, "logout");
   }
 
-  /** Stops the workspace and deletes everything it stored (user deletion). */
-  async deleteData(userId: number): Promise<void> {
-    await this.stop(userId, "deleted");
-    removeUserData(userPaths(this.#config.dataDir, userId));
+  /**
+   * Stops the workspace and deletes everything it stored (user deletion). Starts are refused until
+   * it is done, a start queued behind the stop included. Rejects with StopError, deleting nothing,
+   * when the container can't be removed.
+   */
+  deleteData(userId: number): Promise<void> {
+    const existing = this.#entries.get(userId);
+    if (existing?.deleting) return existing.deleting;
+    const entry = existing ?? this.#createEntry(userId);
+    const done = this.#deleteEntry(entry, existing === undefined);
+    entry.deleting = done;
+    const clear = (): void => {
+      if (entry.deleting === done) entry.deleting = null;
+    };
+    done.then(clear, clear);
+    return done;
+  }
+
+  async #deleteEntry(entry: Entry, created: boolean): Promise<void> {
+    const { userId } = entry;
+    try {
+      await this.#stopEntry(entry, { reason: "deleted" });
+      // Also a container an earlier stop failed to remove: its mounts are the data about to go.
+      await this.#removeLeftover(entry).catch((error: unknown) => {
+        throw new StopError(`could not stop the workspace container, so its data was not deleted: ${errorMessage(error)}`);
+      });
+      await removeWorkspaceFiles(this.#config, userId);
+    } catch (error) {
+      if (created) this.#entries.delete(userId);
+      throw error;
+    }
     this.#entries.delete(userId);
     this.#db.delete(workspaces).where(eq(workspaces.userId, userId)).run();
   }
@@ -566,7 +658,8 @@ export class WorkspaceManager {
       if (containerId) await this.#runtime.stopContainer(containerId);
     } catch (error) {
       const message = `could not stop the workspace container: ${errorMessage(error)}`;
-      patch(entry, { ...NO_CONTAINER, status: "error", stoppedAt: this.#now(), lastError: message });
+      // The container may still run: reconcile retries the removal, and never adopts it.
+      patch(entry, { ...NO_CONTAINER, status: "error", stoppedAt: this.#now(), lastError: message, leftoverContainerId: containerId });
       this.#persist(entry);
       this.#audit("workspace_error", userId, { reason, error: message }, actorUserId);
       this.#log.error("workspace stop failed", { userId, containerId, error });
@@ -579,6 +672,18 @@ export class WorkspaceManager {
     else if (containerId) this.#audit("workspace_stopped", userId, { reason }, actorUserId);
     this.#log.info("workspace stopped", { userId, reason });
     return this.info(userId);
+  }
+
+  /** Removes a container a failed stop or start left behind; rejects if it still can't. */
+  async #removeLeftover(entry: Entry): Promise<void> {
+    const containerId = entry.leftoverContainerId;
+    if (!containerId) return;
+    await this.#runtime.stopContainer(containerId);
+    if (entry.leftoverContainerId === containerId) {
+      entry.leftoverContainerId = null;
+      this.#persist(entry);
+    }
+    this.#log.info("removed a workspace container left behind by a failed stop", { userId: entry.userId, containerId });
   }
 
   /** Checks a running workspace's container (after the proxy failed to reach it) and records an exit. */
@@ -619,23 +724,24 @@ export class WorkspaceManager {
   }
 
   async #reapOne(entry: Entry): Promise<void> {
-    if (this.#verdict(entry) === "keep") return;
+    let input = this.#reapInput(entry);
+    // Nobody uses it, but the agent is still working: it stops once the work is done.
+    entry.stopPending = input.sessions === 0 && input.busy;
+    if (reapVerdict(input) === "keep") return;
     // About to stop it: ask the agent once more, in case work started since the last check.
     const containerId = entry.containerId;
     await this.#refreshAgentState(entry);
     if (entry.status !== "running" || entry.containerId !== containerId || entry.stopping || entry.starting) return;
-    const verdict = this.#verdict(entry);
+    input = this.#reapInput(entry);
+    entry.stopPending = input.sessions === 0 && input.busy;
+    const verdict = reapVerdict(input);
     if (verdict === "keep") return;
     await this.#stopEntry(entry, { reason: verdict === "released" ? "logout" : "idle" });
   }
 
-  #verdict(entry: Entry): ReapVerdict {
-    const now = this.#now();
-    const sessions = countSessionsUsingWorkspace(this.#db, entry.userId, now);
-    const snapshot = this.#snapshot(entry);
-    // Nobody uses it, but the agent is still working: it stops once the work is done.
-    entry.stopPending = sessions === 0 && snapshot.busy;
-    return reapVerdict({ ...snapshot, now, idleTimeoutMs: this.#config.idleTimeoutMs, sessions });
+  #reapInput(entry: Entry): ReapInput {
+    const { busy, lastActivityAt } = this.#assess(entry);
+    return { busy, lastActivityAt, now: this.#now(), idleTimeoutMs: this.#config.idleTimeoutMs, sessions: this.#sessionsUsing(entry.userId) };
   }
 
   /**
@@ -678,20 +784,20 @@ export class WorkspaceManager {
     }
   }
 
-  /** Asks the workspace's Qwen Code whether the agent is working. Unknown when it does not answer. */
+  /**
+   * Asks the workspace's Qwen Code whether the agent is working. Without an answer the last one is
+   * kept and the state becomes unknown (see agentCountsAsWorking).
+   */
   async #refreshAgentState(entry: Entry, options: { updateBusy?: boolean } = {}): Promise<void> {
     const { ip, port, token, containerId } = entry;
     if (!ip || port === null || !token) return;
     const health = await fetchQwenHealth(ip, port, token);
     if (entry.containerId !== containerId) return;
     if (health === null) {
-      entry.agentTask = null;
+      if (!entry.agent.unknown) this.#log.warn("Qwen Code did not answer its health check", { userId: entry.userId });
+      entry.agent = { ...entry.agent, unknown: true };
     } else {
-      const activity = agentActivity(health, this.#config.idleTimeoutMs);
-      if (activity.abandoned && entry.agentTask !== false) {
-        this.#log.info("the agent only waits for an answer nobody is there to give; not counting it as work", { userId: entry.userId });
-      }
-      entry.agentTask = activity.working && !activity.abandoned;
+      entry.agent = { working: agentWorking(health), answeredAt: this.#now(), unknown: false };
       // The agent started or finished something more recently than anything else we saw.
       if (health.idleSinceMs !== null) {
         const agentActive = this.#now() - health.idleSinceMs;
@@ -706,25 +812,13 @@ export class WorkspaceManager {
 
   /** Recomputes busy from the latest signals; while busy, the workspace counts as active. */
   #updateBusy(entry: Entry): void {
-    const reason = this.#busyReason(entry);
+    const reason = this.#assess(entry).busyReason;
     if (reason !== null && reason !== entry.busyReason) this.#log.info("agent working", { userId: entry.userId, reason });
-    patch(entry, { busy: reason !== null, busyReason: reason });
+    entry.busyReason = reason;
     if (reason !== null) {
       entry.lastActivityAt = this.#now();
       entry.activityDirty = true;
     }
-  }
-
-  #busyReason(entry: Entry): BusyReason {
-    const now = this.#now();
-    const { maxBusyMs } = this.#config;
-    // Safety net for stuck agents: work stops counting this long after a person last did anything.
-    if (maxBusyMs > 0 && entry.lastUserActivityAt !== null && now - entry.lastUserActivityAt > maxBusyMs) return null;
-    return busyReason({
-      agentTask: entry.agentTask,
-      llmBusy: this.#llm.pendingFor(entry.userId) > 0,
-      cpuCores: entry.cpuCores,
-    });
   }
 
   /**
@@ -745,6 +839,12 @@ export class WorkspaceManager {
       if (entry && (entry.starting || entry.stopping || entry.containerId === container.id)) {
         // Being started or stopped right now, or already tracked (exits are handled below).
         if (container.running) running.add(container.id);
+        continue;
+      }
+      if (entry && entry.leftoverContainerId === container.id) {
+        await this.#removeLeftover(entry).catch((error: unknown) =>
+          this.#log.warn("could not remove a workspace container left behind by a failed stop", { userId: entry.userId, containerId: container.id, error }),
+        );
         continue;
       }
       if (entry && container.running && !isActive(entry) && (await this.#adopt(entry, container))) {
@@ -776,7 +876,7 @@ export class WorkspaceManager {
       }
       return false;
     }
-    if (entry.starting || entry.stopping || isActive(entry)) return false;
+    if (entry.starting || entry.stopping || entry.deleting || isActive(entry)) return false;
     const now = this.#now();
     patch(entry, {
       ...NO_CONTAINER,
@@ -791,6 +891,7 @@ export class WorkspaceManager {
       stopReason: null,
       lastError: null,
     });
+    this.#claimIp(entry);
     this.#persist(entry);
     this.#log.info("adopted running workspace container", { userId: entry.userId, containerId: container.id });
     this.#watchReadiness(entry);
@@ -799,8 +900,23 @@ export class WorkspaceManager {
 
   // ---------------------------------------------------------------- helpers
 
-  #snapshot(entry: Entry): ActivitySnapshot {
-    return { lastActivityAt: entry.lastActivityAt, busy: this.#busyReason(entry) !== null };
+  /** Busy, why, and where the idle countdown runs from (policy.ts decides). */
+  #assess(entry: Entry): ActivityAssessment {
+    return assessActivity(
+      {
+        agent: entry.agent,
+        llmBusy: this.#llm.pendingFor(entry.userId) > 0,
+        cpuCores: entry.cpuCores,
+        lastActivityAt: entry.lastActivityAt,
+        lastUserActivityAt: entry.lastUserActivityAt,
+      },
+      this.#now(),
+      this.#config.maxBusyMs,
+    );
+  }
+
+  #sessionsUsing(userId: number): number {
+    return countSessionsUsingWorkspace(this.#db, userId, this.#now());
   }
 
   #createEntry(userId: number): Entry {
@@ -822,9 +938,12 @@ export class WorkspaceManager {
   }
 
   #persist(entry: Entry): void {
+    // A stopped workspace keeps the id of a container whose removal failed, so a restarted gateway
+    // removes it too instead of adopting it.
+    const containerId = entry.containerId ?? entry.leftoverContainerId;
     const row = {
-      containerId: entry.containerId,
-      containerName: entry.containerId ? containerName(entry.userId) : null,
+      containerId,
+      containerName: containerId ? containerName(entry.userId) : null,
       ip: entry.ip,
       status: entry.status,
       startedAt: entry.startedAt,
@@ -861,6 +980,7 @@ function entryFromRow(row: Workspace): Entry {
     status: row.status,
     ready: false,
     containerId: row.containerId,
+    leftoverContainerId: null,
     ip: row.ip,
     port: null,
     token: null,
@@ -871,14 +991,14 @@ function entryFromRow(row: Workspace): Entry {
     stopReason: row.stopReason,
     lastError: row.lastError,
     memoryBytes: null,
-    agentTask: null,
+    agent: NO_AGENT,
     cpuCores: null,
     cpuSample: null,
-    busy: false,
     busyReason: null,
     stopPending: false,
     starting: null,
     stopping: null,
+    deleting: null,
     readiness: null,
     activityDirty: false,
   };

@@ -2,12 +2,13 @@
 
 import { and, eq, ne } from "drizzle-orm";
 import { redirect } from "next/navigation";
-import { countSessionsUsingWorkspace, sessions, users, writeAudit } from "@portal/db";
+import { countSessionsUsingWorkspace, sessions, users, writeAudit, type PortalDb, type SessionContext } from "@portal/db";
 import { getDb } from "../db";
-import { afterResponse, gateway, releaseInBackground, startInBackground } from "../gateway";
-import { clearLoginFailures, lockRemaining, lockoutMessage, loginLockRemaining, recordLoginFailure } from "../login-throttle";
+import { endSessionsInBackground, gateway, startInBackground } from "../gateway";
+import { clearLoginFailures, lockRemaining, lockoutMessage, pruneLoginAttempts, reserveLoginAttempt } from "../login-throttle";
 import { hashPassword, verifyPassword } from "../passwords";
-import { clearSessionCookie, deleteSessions, getSession, requireUser, startSession } from "../session";
+import { clearSessionCookie, cookieSessionId, getSession, requireUser, startSession } from "../session";
+import { deleteSessions, pruneExpiredSessions } from "../session-store";
 import { changePasswordSchema, fieldErrors, formText, loginSchema, type FieldErrors } from "../validation";
 
 export interface LoginState {
@@ -16,6 +17,30 @@ export interface LoginState {
 }
 
 const INCORRECT = "Incorrect username or password.";
+
+/**
+ * Ends the session this browser's cookie names, valid or not: deletes the row, records an admin's open
+ * view of someone's workspace as left, and after the response closes the session's agent connections and
+ * releases the workspace it used. Returns the session it was, or null if it was no longer valid.
+ */
+async function endBrowserSession(db: PortalDb): Promise<SessionContext | null> {
+  const sessionId = await cookieSessionId();
+  if (!sessionId) return null;
+  const session = await getSession();
+  const deleted = db.transaction(() => {
+    if (session?.actingAs) {
+      writeAudit(db, {
+        action: "admin_exited_workspace",
+        actorUserId: session.user.id,
+        targetUserId: session.target.id,
+        details: { reason: "signed_out" },
+      });
+    }
+    return deleteSessions(db, eq(sessions.id, sessionId));
+  });
+  endSessionsInBackground(deleted);
+  return session;
+}
 
 export async function login(_previous: LoginState, formData: FormData): Promise<LoginState> {
   const input = formText(formData, ["username", "password"]);
@@ -26,29 +51,36 @@ export async function login(_previous: LoginState, formData: FormData): Promise<
   const db = getDb();
   const now = Date.now();
 
-  const locked = loginLockRemaining(db, username, now);
-  if (locked > 0) return { error: lockoutMessage(locked), username };
+  // Housekeeping where both tables grow: stale attempt records, and sessions past their expiry.
+  pruneLoginAttempts(db, now);
+  endSessionsInBackground(pruneExpiredSessions(db, now));
+
+  // Counted as a failure before the (slow) verification, so parallel attempts can't outrun the lock.
+  const attempt = reserveLoginAttempt(db, username, now);
+  if (!attempt.allowed) return { error: lockoutMessage(attempt.lockedForMs), username };
 
   const user = db.select().from(users).where(eq(users.username, username)).get();
   // Always runs a full argon2 verification, also for unknown usernames.
   const valid = await verifyPassword(user?.passwordHash ?? null, password);
   if (!user || !valid) {
-    const state = recordLoginFailure(db, username, now);
     writeAudit(db, {
       action: "login_failed",
       targetUserId: user?.id ?? null,
       details: { username, reason: user ? "wrong_password" : "unknown_user" },
     });
-    const lock = lockRemaining(state, now);
+    const lock = lockRemaining(attempt.state, now);
     return { error: lock > 0 ? lockoutMessage(lock) : INCORRECT, username };
   }
+  // The right password: the attempt reserved above was no failed guess.
+  clearLoginFailures(db, username);
   if (!user.active) {
     // Only reachable with the right password, so this reveals nothing to someone guessing.
     writeAudit(db, { action: "login_failed", targetUserId: user.id, details: { username, reason: "deactivated" } });
     return { error: "This account is deactivated. Contact your administrator.", username };
   }
 
-  clearLoginFailures(db, username);
+  // Signing in replaces whatever session this browser still had (another account's, or an expired one).
+  await endBrowserSession(db);
   await startSession(user.id);
   db.update(users).set({ lastLoginAt: now }).where(eq(users.id, user.id)).run();
   writeAudit(db, { action: "login", actorUserId: user.id });
@@ -57,15 +89,11 @@ export async function login(_previous: LoginState, formData: FormData): Promise<
 }
 
 export async function signOut(): Promise<void> {
-  const session = await getSession();
+  const db = getDb();
+  const session = await endBrowserSession(db);
   let stillWorking = false;
   if (session) {
-    const db = getDb();
-    const released = deleteSessions(db, eq(sessions.id, session.session.id));
     writeAudit(db, { action: "logout", actorUserId: session.user.id });
-    const sessionId = session.session.id;
-    afterResponse("disconnect signed-out session", () => gateway.disconnect(sessionId));
-    releaseInBackground(released);
     // The last session out of a workspace whose agent is mid-task: the gateway lets the task finish
     // and stops the workspace afterwards. Say so on the sign-in page.
     if (countSessionsUsingWorkspace(db, session.target.id, Date.now()) === 0) {
@@ -98,7 +126,8 @@ export async function changePassword(_previous: ChangePasswordState, formData: F
 
   const db = getDb();
   const passwordHash = await hashPassword(newPassword);
-  const released = db.transaction(() => {
+  // Every other session of this account is signed out; this one carries on.
+  const deleted = db.transaction(() => {
     db.update(users)
       .set({ passwordHash, mustChangePassword: false, updatedAt: Date.now() })
       .where(eq(users.id, session.user.id))
@@ -106,6 +135,6 @@ export async function changePassword(_previous: ChangePasswordState, formData: F
     writeAudit(db, { action: "password_changed", actorUserId: session.user.id });
     return deleteSessions(db, and(eq(sessions.userId, session.user.id), ne(sessions.id, session.session.id)));
   });
-  releaseInBackground(released.filter((userId) => userId !== session.target.id));
+  endSessionsInBackground(deleted);
   redirect("/workspace");
 }

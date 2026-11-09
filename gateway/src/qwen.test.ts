@@ -5,9 +5,8 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
-import type { ModelConfig } from "./config.ts";
 import {
-  agentActivity,
+  agentWorking,
   fetchQwenHealth,
   generateServerToken,
   LLM_KEY_ENV,
@@ -24,17 +23,14 @@ import {
   type SettingsObject,
 } from "./qwen.ts";
 
-const MIN = 60_000;
 const SERVICE = "http://172.29.0.1:4001";
-const MODEL: ModelConfig = {
-  id: "qwen3.8-flash-next",
-  name: "Qwen3.8 Flash-Next",
-  contextWindow: 262144,
-  maxTokens: 32768,
-  input: ["text", "image"],
-  reasoning: true,
+const DEFAULTS_FILE = "/data/config/qwen/system-defaults.json";
+/** The smallest admin configuration a workspace can start with: one model. */
+const ONE_MODEL: AdminQwenConfig = {
+  settings: {},
+  systemDefaults: { modelProviders: { openai: [{ id: "qwen3.8-flash-next", name: "Qwen3.8 Flash-Next" }] } },
+  systemDefaultsFile: DEFAULTS_FILE,
 };
-const NO_ADMIN: AdminQwenConfig = { settings: {}, systemDefaults: {} };
 
 /** A real `GET /health?deep=1` answer of `qwen serve`. */
 const REAL_HEALTH = {
@@ -52,7 +48,7 @@ const REAL_HEALTH = {
   idleSinceMs: 4_200,
 };
 
-const quiet: QwenHealth = { activePrompts: 0, pendingPermissions: 0, activeWork: false, connectedClients: 0, channelAlive: true, idleSinceMs: null };
+const quiet: QwenHealth = { activePrompts: 0, pendingPermissions: 0, activeWork: false, channelAlive: true, idleSinceMs: null };
 
 // ------------------------------------------------------------------ health
 
@@ -61,7 +57,6 @@ test("parseQwenHealth reads the deep health answer", () => {
     activePrompts: 1,
     pendingPermissions: 1,
     activeWork: true,
-    connectedClients: 3,
     channelAlive: true,
     idleSinceMs: 4_200,
   });
@@ -82,32 +77,19 @@ test("parseQwenHealth refuses odd answers and clamps odd figures", () => {
       channelAlive: 1,
       idleSinceMs: -5,
     }),
-    { activePrompts: 0, pendingPermissions: 0, activeWork: false, connectedClients: 0, channelAlive: false, idleSinceMs: null },
+    { activePrompts: 0, pendingPermissions: 0, activeWork: false, channelAlive: false, idleSinceMs: null },
   );
   assert.equal(parseQwenHealth({ status: "ok", idleSinceMs: 0 })?.idleSinceMs, 0);
   assert.equal(parseQwenHealth({ status: "ok", idleSinceMs: Number.POSITIVE_INFINITY })?.idleSinceMs, null);
 });
 
-test("agentActivity: prompts, approvals and reported work are work", () => {
-  const after = 30 * MIN;
-  assert.deepEqual(agentActivity(quiet, after), { working: false, abandoned: false });
-  assert.deepEqual(agentActivity({ ...quiet, activePrompts: 1 }, after), { working: true, abandoned: false });
-  assert.deepEqual(agentActivity({ ...quiet, activeWork: true, idleSinceMs: 2 * after }, after), { working: true, abandoned: false }, "a background task is not abandoned");
-  assert.deepEqual(agentActivity({ ...quiet, pendingPermissions: 1, activePrompts: 1, connectedClients: 1, idleSinceMs: 2 * after }, after), {
-    working: true,
-    abandoned: false,
-  }, "someone has the workspace open and can answer");
-});
-
-test("agentActivity: an approval nobody is there to give is abandoned once it has waited long enough", () => {
-  const after = 30 * MIN;
-  const waiting: QwenHealth = { ...quiet, activePrompts: 1, pendingPermissions: 1, activeWork: true, idleSinceMs: after };
-  assert.deepEqual(agentActivity(waiting, after), { working: true, abandoned: true }, "exactly the limit counts");
-  assert.deepEqual(agentActivity({ ...waiting, idleSinceMs: after - 1 }, after), { working: true, abandoned: false }, "not long enough");
-  assert.deepEqual(agentActivity({ ...waiting, idleSinceMs: null }, after), { working: true, abandoned: false }, "unknown age");
-  assert.deepEqual(agentActivity({ ...waiting, connectedClients: 1 }, after), { working: true, abandoned: false });
-  assert.deepEqual(agentActivity({ ...waiting, activePrompts: 2 }, after), { working: true, abandoned: false }, "another prompt is still running");
-  assert.deepEqual(agentActivity({ ...waiting, activePrompts: 0, activeWork: false }, after), { working: true, abandoned: true });
+test("agentWorking: prompts, approvals and reported work are work, however long they have waited", () => {
+  assert.equal(agentWorking(quiet), false);
+  assert.equal(agentWorking({ ...quiet, activePrompts: 1 }), true);
+  assert.equal(agentWorking({ ...quiet, activeWork: true, idleSinceMs: 120 * 60_000 }), true, "a background task");
+  // qwen serve declines an unanswered approval itself (--permission-response-timeout-ms); until then it is work.
+  assert.equal(agentWorking({ ...quiet, pendingPermissions: 1, idleSinceMs: 120 * 60_000 }), true, "an approval nobody answers");
+  assert.equal(agentWorking({ ...quiet, idleSinceMs: 0 }), false, "it just finished");
 });
 
 test("fetchQwenHealth sends the token to /health?deep=1 and gives up on odd answers", async () => {
@@ -185,9 +167,14 @@ test("parseSettingsText accepts JSON with comments and reports anything else cle
 test("loadAdminQwenConfig: missing files are empty, unreadable or invalid ones throw", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "qwen-admin-"));
   try {
-    assert.deepEqual(loadAdminQwenConfig(path.join(dir, "missing")), NO_ADMIN);
+    const missing = path.join(dir, "missing");
+    assert.deepEqual(loadAdminQwenConfig(missing), { settings: {}, systemDefaults: {}, systemDefaultsFile: path.join(missing, "system-defaults.json") });
     fs.writeFileSync(path.join(dir, "settings.json"), '{ "ui": { "theme": "Dracula" } } // ok');
-    assert.deepEqual(loadAdminQwenConfig(dir), { settings: { ui: { theme: "Dracula" } }, systemDefaults: {} });
+    assert.deepEqual(loadAdminQwenConfig(dir), {
+      settings: { ui: { theme: "Dracula" } },
+      systemDefaults: {},
+      systemDefaultsFile: path.join(dir, "system-defaults.json"),
+    });
     fs.writeFileSync(path.join(dir, "system-defaults.json"), "{ nope");
     assert.throws(() => loadAdminQwenConfig(dir), (error: unknown) => {
       assert.ok(error instanceof QwenConfigError);
@@ -203,8 +190,8 @@ test("loadAdminQwenConfig: missing files are empty, unreadable or invalid ones t
 
 // ------------------------------------------------------------------ rendering
 
-test("renderQwenSettings without admin files: the portal's keys and the default model", () => {
-  const { settings, systemDefaults } = renderQwenSettings({ admin: NO_ADMIN, serviceBaseUrl: SERVICE, model: MODEL, browser: true });
+test("renderQwenSettings with one model and no other settings: the portal's keys", () => {
+  const { settings, systemDefaults } = renderQwenSettings({ admin: ONE_MODEL, serviceBaseUrl: SERVICE, browser: true });
   assert.deepEqual(settings, {
     $version: 4,
     general: { enableAutoUpdate: false, preventSystemSleep: false },
@@ -235,35 +222,32 @@ test("renderQwenSettings without admin files: the portal's keys and the default 
   assert.deepEqual(systemDefaults, {
     $version: 4,
     security: { auth: { selectedType: "openai" } },
-    model: { name: MODEL.id },
+    model: { name: "qwen3.8-flash-next" },
     modelProviders: {
-      openai: [
-        {
-          id: MODEL.id,
-          name: MODEL.name,
-          description: "Through the Workspace Portal gateway",
-          envKey: LLM_KEY_ENV,
-          baseUrl: `${SERVICE}/llm/v1`,
-          generationConfig: {
-            timeout: 3_600_000,
-            streamIdleTimeoutMs: 3_600_000,
-            streamMaxLifetimeMs: 3_600_000,
-            maxRetries: 1,
-            contextWindowSize: 262144,
-            modalities: { image: true },
-            samplingParams: { max_tokens: 32768 },
-          },
-          capabilities: { reasoning: { profile: "openai-effort", efforts: ["low", "medium", "xhigh"], defaultEffort: "medium" } },
-        },
-      ],
+      openai: [{ id: "qwen3.8-flash-next", name: "Qwen3.8 Flash-Next", baseUrl: `${SERVICE}/llm/v1`, envKey: LLM_KEY_ENV }],
     },
-  });
+  }, "the default model is the first one");
 
-  const plain = renderQwenSettings({ admin: NO_ADMIN, serviceBaseUrl: SERVICE, model: { ...MODEL, input: ["text"], reasoning: false }, browser: false });
-  const provider = (plain.systemDefaults.modelProviders as { openai: SettingsObject[] }).openai[0]!;
-  assert.equal(provider.capabilities, undefined, "no reasoning profile for a non-thinking model");
-  assert.deepEqual((provider.generationConfig as SettingsObject).modalities, { image: false });
+  const plain = renderQwenSettings({ admin: ONE_MODEL, serviceBaseUrl: SERVICE, browser: false });
   assert.deepEqual(Object.keys(plain.settings.mcpServers as SettingsObject), ["search"], "no browser tool when it is off");
+});
+
+test("renderQwenSettings refuses a system-defaults.json without a model, naming the file", () => {
+  const expected = new QwenConfigError(
+    `the Qwen Code settings file ${DEFAULTS_FILE} defines no model: add at least one entry with an "id" under modelProviders.openai`,
+  );
+  const without = (systemDefaults: SettingsObject): AdminQwenConfig => ({ settings: {}, systemDefaults, systemDefaultsFile: DEFAULTS_FILE });
+  for (const systemDefaults of [
+    {},
+    { modelProviders: {} },
+    { modelProviders: { openai: [] } },
+    { modelProviders: { openai: [{ name: "No id" }, { id: "  " }, "not a provider"] } },
+    { modelProviders: { anthropic: [{ id: "claude" }] } },
+  ]) {
+    assert.throws(() => renderQwenSettings({ admin: without(systemDefaults), serviceBaseUrl: SERVICE, browser: true }), expected, JSON.stringify(systemDefaults));
+  }
+  const settingsOnly: AdminQwenConfig = { ...without({}), settings: { modelProviders: { openai: [{ id: "big" }] } } };
+  assert.throws(() => renderQwenSettings({ admin: settingsOnly, serviceBaseUrl: SERVICE, browser: true }), expected, "models in settings.json alone are not enough");
 });
 
 test("renderQwenSettings keeps the admin's settings but forces the portal's keys", () => {
@@ -284,10 +268,11 @@ test("renderQwenSettings keeps the admin's settings but forces the portal's keys
         notes: { command: "/usr/local/bin/notes-mcp" },
       },
     },
-    systemDefaults: {},
+    systemDefaults: ONE_MODEL.systemDefaults,
+    systemDefaultsFile: DEFAULTS_FILE,
   };
   const before = structuredClone(admin);
-  const { settings } = renderQwenSettings({ admin, serviceBaseUrl: SERVICE, model: MODEL, browser: false });
+  const { settings } = renderQwenSettings({ admin, serviceBaseUrl: SERVICE, browser: false });
   assert.deepEqual(admin, before, "the admin's objects are not modified");
 
   assert.equal(settings.$version, 3, "the admin's settings version is kept");
@@ -307,51 +292,79 @@ test("renderQwenSettings keeps the admin's settings but forces the portal's keys
   assert.equal(servers.search!.httpUrl, `${SERVICE}/mcp/search`);
   assert.deepEqual(servers.notes, { command: "/usr/local/bin/notes-mcp" });
 
-  const withBrowser = renderQwenSettings({ admin, serviceBaseUrl: SERVICE, model: MODEL, browser: true });
+  const withBrowser = renderQwenSettings({ admin, serviceBaseUrl: SERVICE, browser: true });
   assert.equal((withBrowser.settings.mcpServers as Record<string, SettingsObject>).browser!.command, "/usr/local/bin/playwright-mcp");
-  assert.deepEqual(renderQwenSettings({ admin, serviceBaseUrl: SERVICE, model: MODEL, browser: false }).settings, settings, "rendering is repeatable");
+  assert.deepEqual(renderQwenSettings({ admin, serviceBaseUrl: SERVICE, browser: false }).settings, settings, "rendering is repeatable");
 });
 
 test("renderQwenSettings keeps the admin's OpenAI models but only through the gateway, without keys", () => {
   const admin: AdminQwenConfig = {
     settings: {},
     systemDefaults: {
-      model: { name: "big" },
+      model: { name: "small" },
       security: { auth: { selectedType: "gemini" } },
       ui: { theme: "GitHub" },
       modelProviders: {
         openai: [
-          { id: "big", name: "Big", baseUrl: "https://api.example.com/v1", envKey: "OPENAI_API_KEY", apiKey: "sk-secret", generationConfig: { timeout: 5 } },
+          {
+            id: "big",
+            name: "Big",
+            baseUrl: "https://api.example.com/v1",
+            envKey: "OPENAI_API_KEY",
+            apiKey: "sk-secret",
+            generationConfig: { timeout: 5, extra_headers: { apiKey: "sk-nested" } },
+            fallbacks: [{ apiKey: "sk-in-a-list", id: "spare" }],
+          },
           "not a provider",
           { id: "small", name: "Small" },
         ],
         anthropic: [{ id: "claude", baseUrl: "https://api.anthropic.com" }],
       },
     },
+    systemDefaultsFile: DEFAULTS_FILE,
   };
-  const { systemDefaults } = renderQwenSettings({ admin, serviceBaseUrl: SERVICE, model: MODEL, browser: true });
-  assert.deepEqual(systemDefaults.model, { name: "big" }, "users may pick another default; the admin's choice wins over the portal's");
+  const before = structuredClone(admin);
+  const { systemDefaults } = renderQwenSettings({ admin, serviceBaseUrl: SERVICE, browser: true });
+  assert.deepEqual(admin, before, "the admin's objects are not modified");
+  assert.deepEqual(systemDefaults.model, { name: "small" }, "the admin's default model is kept");
   assert.deepEqual(systemDefaults.ui, { theme: "GitHub" });
   assert.deepEqual(systemDefaults.security, { auth: { selectedType: "openai" } });
   assert.deepEqual(systemDefaults.modelProviders, {
     openai: [
-      { id: "big", name: "Big", baseUrl: `${SERVICE}/llm/v1`, envKey: LLM_KEY_ENV, generationConfig: { timeout: 5 } },
+      { id: "big", name: "Big", baseUrl: `${SERVICE}/llm/v1`, envKey: LLM_KEY_ENV, generationConfig: { timeout: 5, extra_headers: {} }, fallbacks: [{ id: "spare" }] },
       { id: "small", name: "Small", baseUrl: `${SERVICE}/llm/v1`, envKey: LLM_KEY_ENV },
     ],
   });
-  assert.equal(JSON.stringify(systemDefaults).includes("sk-secret"), false, "no API key reaches a workspace");
+  assert.equal(JSON.stringify(systemDefaults).includes("sk-"), false, "no API key reaches a workspace");
 
-  const empty = renderQwenSettings({
-    admin: { settings: {}, systemDefaults: { modelProviders: { openai: [] } } },
+  const unnamed = renderQwenSettings({
+    admin: { ...admin, systemDefaults: { ...admin.systemDefaults, model: { name: " ", maxSessionTurns: 9 } } },
     serviceBaseUrl: SERVICE,
-    model: MODEL,
     browser: true,
   });
-  assert.deepEqual(
-    (empty.systemDefaults.modelProviders as { openai: SettingsObject[] }).openai.map((p) => p.id),
-    [MODEL.id],
-    "no admin models: the configured default model",
-  );
+  assert.deepEqual(unnamed.systemDefaults.model, { name: "big", maxSessionTurns: 9 }, "no default model named: the first one");
+});
+
+test("renderQwenSettings applies the same provider rules to models listed in settings.json", () => {
+  const admin: AdminQwenConfig = {
+    ...ONE_MODEL,
+    settings: {
+      ui: { theme: "Dracula" },
+      modelProviders: {
+        openai: [{ id: "extra", baseUrl: "https://api.example.com/v1", envKey: "OPENAI_API_KEY", apiKey: "sk-secret", auth: { apiKey: "sk-nested" } }, 7],
+        gemini: [{ id: "gemini-pro", apiKey: "sk-gemini" }],
+      },
+    },
+  };
+  const { settings } = renderQwenSettings({ admin, serviceBaseUrl: SERVICE, browser: true });
+  assert.deepEqual(settings.modelProviders, { openai: [{ id: "extra", auth: {}, baseUrl: `${SERVICE}/llm/v1`, envKey: LLM_KEY_ENV }] });
+  assert.equal(JSON.stringify(settings).includes("sk-"), false, "no API key reaches a workspace");
+
+  for (const modelProviders of [{ gemini: [{ id: "gemini-pro", apiKey: "sk-gemini" }] }, { openai: [] }, "nonsense"]) {
+    const rendered = renderQwenSettings({ admin: { ...ONE_MODEL, settings: { modelProviders } }, serviceBaseUrl: SERVICE, browser: true });
+    assert.equal("modelProviders" in rendered.settings, false, `nothing left of ${JSON.stringify(modelProviders)}: the key goes`);
+  }
+  assert.equal("modelProviders" in renderQwenSettings({ admin: ONE_MODEL, serviceBaseUrl: SERVICE, browser: true }).settings, false, "none listed: none added");
 });
 
 test("mergeSettings merges objects deeply, replaces everything else, and ignores prototype keys", () => {

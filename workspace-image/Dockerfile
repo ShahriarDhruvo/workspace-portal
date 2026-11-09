@@ -14,12 +14,15 @@ FROM docker.io/library/node:24-bookworm-slim@sha256:c0a93797ee78814ae6d32fcca256
 ARG QWEN_CODE_VERSION=0.27.0
 ARG PLAYWRIGHT_MCP_VERSION=0.0.84
 
+# Without setuid/setgid programs nothing in a workspace can gain privileges (no-new-privileges at run
+# time already neutralises them; the find removes them outright).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates curl git jq less procps ripgrep tini unzip \
       python3 python3-venv \
       chromium fonts-liberation fonts-noto-core fonts-noto-color-emoji \
- && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/* \
+ && find / -xdev -perm /6000 -type f -exec chmod a-s {} +
 
 RUN npm install -g --no-fund --no-audit \
       "@qwen-code/qwen-code@${QWEN_CODE_VERSION}" \
@@ -27,9 +30,11 @@ RUN npm install -g --no-fund --no-audit \
  && npm cache clean --force \
  && rm -rf /root/.npm /tmp/*
 
-# Mount points. The real content comes from the user's own directories at run time.
+# Mount points. The real content comes from the user's own directories at run time. The base
+# image's "node" account is removed: workspaces run as their own per-user UID.
 RUN mkdir -p /home/user /workspace /etc/workspace-portal/qwen \
- && userdel --remove node 2>/dev/null || true
+ && (userdel --remove node 2>/dev/null || true) \
+ && ! id node 2>/dev/null
 
 COPY --chmod=0755 start-workspace.sh /usr/local/bin/start-workspace
 
@@ -49,5 +54,7 @@ ENV HOME=/home/user \
 
 WORKDIR /workspace
 EXPOSE 4170
-# No USER line: the gateway always sets the per-user UID; running this image as root is not supported.
+# The gateway always runs it as the user's own UID; anything else defaults to "nobody", and
+# start-workspace refuses to run as root.
+USER 65534:65534
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/start-workspace"]

@@ -11,7 +11,7 @@ import { HttpError, readJsonBody, sendError, sendJson, splitTarget } from "./htt
 import type { LlmQueue } from "./llm-queue.ts";
 import type { Logger } from "./log.ts";
 import type { SessionCache } from "./session-cache.ts";
-import { CapacityError, StartError, type WorkspaceManager } from "./workspaces.ts";
+import { CapacityError, DeletingError, StartError, StopError, type WorkspaceManager } from "./workspaces.ts";
 
 export interface ControlDeps {
   config: Config;
@@ -24,7 +24,9 @@ export interface ControlDeps {
 }
 
 const MAX_BODY_BYTES = 16 * 1024;
-const MAX_REASON_LENGTH = 64;
+/** Why the web app stops a workspace: an admin's Stop, deactivation, deletion. */
+const STOP_REASONS = ["admin", "deactivated", "deleted"] as const;
+type StopReason = (typeof STOP_REASONS)[number];
 
 type Handler = (deps: ControlDeps, req: IncomingMessage, params: string[]) => Promise<unknown> | unknown;
 
@@ -49,6 +51,7 @@ const ROUTES: Route[] = [
         return await deps.manager.start(userId);
       } catch (error) {
         if (error instanceof CapacityError) throw new HttpError(409, "capacity", error.message);
+        if (error instanceof DeletingError) throw new HttpError(409, "deleting", error.message);
         if (error instanceof StartError) throw new HttpError(500, "start_failed", error.message);
         throw error;
       }
@@ -80,7 +83,12 @@ const ROUTES: Route[] = [
     handler: async (deps, _req, [id]) => {
       const userId = userIdParam(id);
       deps.sessions.invalidateUser(userId);
-      await deps.manager.deleteData(userId);
+      try {
+        await deps.manager.deleteData(userId);
+      } catch (error) {
+        if (error instanceof StopError) throw new HttpError(500, "stop_failed", error.message);
+        throw error;
+      }
       return { ok: true };
     },
   },
@@ -149,17 +157,17 @@ function requireUser(db: PortalDb, userId: number, field: "userId" | "actorUserI
   throw new HttpError(400, "invalid_actor", `actorUserId ${userId} is not a user.`);
 }
 
-/** `{ reason?: string, actorUserId?: number }`; the reason defaults to "admin". */
-function stopBody(body: unknown): { reason: string; actorUserId: number | null } {
+/** `{ reason?: StopReason, actorUserId?: number }`; the reason defaults to "admin". */
+function stopBody(body: unknown): { reason: StopReason; actorUserId: number | null } {
   if (body !== undefined && (typeof body !== "object" || body === null || Array.isArray(body))) {
     throw new HttpError(400, "bad_request", "The body must be a JSON object.");
   }
   const { reason, actorUserId } = (body ?? {}) as { reason?: unknown; actorUserId?: unknown };
-  if (reason !== undefined && (typeof reason !== "string" || reason.trim() === "" || reason.length > MAX_REASON_LENGTH)) {
-    throw new HttpError(400, "invalid_reason", `reason must be a non-empty string of at most ${MAX_REASON_LENGTH} characters.`);
+  if (reason !== undefined && !STOP_REASONS.includes(reason as StopReason)) {
+    throw new HttpError(400, "invalid_reason", `reason must be one of ${STOP_REASONS.map((r) => `"${r}"`).join(", ")}.`);
   }
   if (actorUserId !== undefined && actorUserId !== null && !(Number.isSafeInteger(actorUserId) && (actorUserId as number) > 0)) {
     throw new HttpError(400, "invalid_actor", "actorUserId must be a positive integer.");
   }
-  return { reason: reason === undefined ? "admin" : reason.trim(), actorUserId: (actorUserId as number | null | undefined) ?? null };
+  return { reason: (reason as StopReason | undefined) ?? "admin", actorUserId: (actorUserId as number | null | undefined) ?? null };
 }

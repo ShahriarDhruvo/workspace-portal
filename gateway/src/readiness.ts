@@ -3,7 +3,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fetchQwenHealth } from "./qwen.ts";
 import type { ContainerState } from "./runtime.ts";
 
-export const READY_POLL_INTERVAL_MS = 500;
+const READY_POLL_INTERVAL_MS = 500;
 export const READY_TIMEOUT_MS = 90_000;
 
 export type ReadyResult =

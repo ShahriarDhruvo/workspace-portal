@@ -1,7 +1,7 @@
 import Link from "next/link";
+import { openMyWorkspace } from "@/lib/actions/admin";
 import { signOut } from "@/lib/actions/auth";
 import { Brand, UserChip } from "@/components/brand";
-import { buttonClass } from "@/components/ui/button";
 import { LogOutIcon, TerminalIcon } from "@/components/ui/icons";
 import { SubmitButton } from "@/components/ui/submit-button";
 import { AdminNav } from "./admin-nav";
@@ -16,10 +16,13 @@ export function AdminHeader({ name, initials }: { name: string; initials: string
       <span aria-hidden="true" className="h-4 border-l border-line" />
       <AdminNav />
       <div className="ml-auto flex min-w-0 items-center gap-2">
-        <Link href="/workspace" className={buttonClass("ghost", "sm")}>
-          <TerminalIcon />
-          <span className="max-sm:sr-only">My workspace</span>
-        </Link>
+        {/* An action, not a link: a session viewing someone's workspace must leave it first, and this
+            layout can be stale about that after client navigation. */}
+        <form action={openMyWorkspace}>
+          <SubmitButton variant="ghost" size="sm" icon={<TerminalIcon />}>
+            <span className="max-sm:sr-only">My workspace</span>
+          </SubmitButton>
+        </form>
         <UserChip name={name} initials={initials} />
         <form action={signOut}>
           <SubmitButton variant="outline" size="sm" icon={<LogOutIcon />}>

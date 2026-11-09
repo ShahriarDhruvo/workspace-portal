@@ -1,12 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { loadConfig } from "./config.ts";
+import { loadConfig, MIB } from "./config.ts";
 import { containerName, TOKEN_ENV, workspaceContainerOptions, workspaceNetworkOptions } from "./container-spec.ts";
 
-const MIB = 1024 * 1024;
 const config = loadConfig({
   GATEWAY_CONTROL_SECRET: "c".repeat(32),
-  PORTAL_DATA_DIR: "/srv/hp",
+  PORTAL_DATA_DIR: "/srv/workspace-portal",
   WORKSPACE_MEMORY: "2g",
   WORKSPACE_CPUS: "1.5",
   WORKSPACE_PIDS: "256",
@@ -36,11 +35,11 @@ test("workspace containers follow the container spec", () => {
     ],
     HostConfig: {
       Binds: [
-        "/srv/hp/users/42/home:/home/user",
-        "/srv/hp/users/42/workspace:/workspace",
-        "/srv/hp/users/42/system/qwen:/etc/workspace-portal/qwen:ro",
-        "/srv/hp/users/42/system/passwd:/etc/passwd:ro",
-        "/srv/hp/users/42/system/group:/etc/group:ro",
+        "/srv/workspace-portal/users/42/home:/home/user",
+        "/srv/workspace-portal/users/42/workspace:/workspace",
+        "/srv/workspace-portal/users/42/system/qwen:/etc/workspace-portal/qwen:ro",
+        "/srv/workspace-portal/users/42/system/passwd:/etc/passwd:ro",
+        "/srv/workspace-portal/users/42/system/group:/etc/group:ro",
       ],
       ReadonlyRootfs: true,
       Tmpfs: { "/tmp": `rw,nosuid,nodev,size=${256 * MIB}` },
@@ -64,7 +63,7 @@ test("a workspace only mounts its own user's directories, and only home and work
   for (const userId of [1, 7, 199]) {
     const binds = workspaceContainerOptions(config, userId, { token: "t" }).HostConfig!.Binds!;
     for (const bind of binds) {
-      assert.ok(bind.startsWith(`/srv/hp/users/${userId}/`), bind);
+      assert.ok(bind.startsWith(`/srv/workspace-portal/users/${userId}/`), bind);
       const writable = !bind.endsWith(":ro");
       assert.equal(writable, /\/(home|workspace):\/(home\/user|workspace)$/.test(bind), bind);
     }

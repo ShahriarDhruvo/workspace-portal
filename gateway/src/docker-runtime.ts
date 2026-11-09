@@ -1,6 +1,6 @@
 // ContainerRuntime backed by the Docker Engine API (dockerode, /var/run/docker.sock or DOCKER_HOST).
 import Docker from "dockerode";
-import type { Config } from "./config.ts";
+import type { Config, WorkspaceConfig } from "./config.ts";
 import {
   containerName,
   TOKEN_ENV,
@@ -21,20 +21,39 @@ import {
 } from "./runtime.ts";
 
 const STOP_GRACE_SECONDS = 10;
+/**
+ * Every Docker API call fails after this long without an answer. dockerode has no timeout of its
+ * own, and one hung call would otherwise hold up the reaper and the stats refresh for everyone.
+ * Comfortably above the slowest legitimate call, `stop -t 10`.
+ */
+export const DOCKER_API_TIMEOUT_MS = 60_000;
+/**
+ * Older engines forward DNS queries for outside names from internal networks (CVE-2024-29018),
+ * which would give workspaces a way out. Fixed in 25.0.5 and 26.0.0.
+ */
+const MIN_DOCKER_VERSION = [25, 0, 5] as const;
+export const MIN_DOCKER_VERSION_TEXT = MIN_DOCKER_VERSION.join(".");
 
 export class DockerRuntime implements ContainerRuntime {
   readonly #docker: Docker;
   readonly #config: Config;
 
-  constructor(config: Config, docker = new Docker()) {
+  constructor(config: Config, docker = new Docker({ timeout: DOCKER_API_TIMEOUT_MS })) {
     this.#config = config;
     this.#docker = docker;
   }
 
+  /** The Docker Engine's version, as `docker version` reports it for the server. */
+  async engineVersion(): Promise<string> {
+    const { Version } = await this.#docker.version();
+    return typeof Version === "string" ? Version : "";
+  }
+
   /**
-   * Creates the workspace network unless it exists. A network of that name without the isolation
-   * options (internal, no inter-container traffic) is replaced when nothing uses it, and refused
-   * otherwise: workspaces never start on a network that can reach the outside.
+   * Creates the workspace network unless it exists. A network of that name that differs from the
+   * one the gateway creates (isolation options, bridge name, addresses) is replaced when nothing
+   * uses it, and refused otherwise: workspaces never start on a network that can reach the outside,
+   * and the host firewall, which matches on the bridge name, must see the bridge it expects.
    */
   async ensureNetwork(): Promise<"exists" | "created" | "replaced"> {
     const name = this.#config.workspace.network;
@@ -44,10 +63,13 @@ export class DockerRuntime implements ContainerRuntime {
     } catch (error) {
       if (statusCode(error) !== 404) throw error;
     }
-    if (existing && isIsolated(existing)) return "exists";
+    const mismatches = existing ? networkMismatches(existing, this.#config.workspace) : [];
+    if (existing && mismatches.length === 0) return "exists";
     if (existing) {
       if (Object.keys(existing.Containers ?? {}).length > 0) {
-        throw new Error(`docker network ${name} is not an isolated internal network and containers use it; stop them and remove the network`);
+        throw new Error(
+          `docker network ${name} is not the isolated workspace network (${mismatches.join("; ")}) and containers use it; stop them and remove the network`,
+        );
       }
       await this.#docker.getNetwork(name).remove();
     }
@@ -161,9 +183,38 @@ export class DockerRuntime implements ContainerRuntime {
   }
 }
 
-/** The isolation options workspaceNetworkOptions sets; anything less is not acceptable. */
-function isIsolated(network: Docker.NetworkInspectInfo): boolean {
-  return network.Internal === true && network.Options?.["com.docker.network.bridge.enable_icc"] === "false";
+/** How an existing network differs from what workspaceNetworkOptions creates; empty when it matches. */
+function networkMismatches(network: Docker.NetworkInspectInfo, ws: WorkspaceConfig): string[] {
+  const options = network.Options ?? {};
+  const problems: string[] = [];
+  const expect = (what: string, actual: unknown, expected: unknown): void => {
+    if (actual !== expected) problems.push(`${what} is ${JSON.stringify(actual ?? null)}, expected ${JSON.stringify(expected)}`);
+  };
+  expect("Internal", network.Internal, true);
+  expect("EnableIPv6", network.EnableIPv6 === true, false);
+  expect("bridge name", options["com.docker.network.bridge.name"], ws.bridge);
+  expect("enable_icc", options["com.docker.network.bridge.enable_icc"], "false");
+  expect("enable_ip_masquerade", options["com.docker.network.bridge.enable_ip_masquerade"], "false");
+  const pools = network.IPAM?.Config ?? [];
+  if (pools.length !== 1) problems.push(`it has ${pools.length} IPAM pools, expected 1`);
+  const pool = pools[0];
+  if (pool) {
+    expect("Subnet", pool.Subnet, ws.subnet);
+    expect("Gateway", pool.Gateway, ws.gatewayIp);
+    expect("IPRange", pool.IPRange, ws.ipRange);
+  }
+  return problems;
+}
+
+/** Whether a Docker Engine version (`26.1.4`, `27.0.0-rc.1`, …) is at least MIN_DOCKER_VERSION. Unparseable is not. */
+export function isSupportedDockerVersion(version: string): boolean {
+  const match = /^(\d+)\.(\d+)\.(\d+)/.exec(version.trim());
+  if (!match) return false;
+  const parts = match.slice(1, 4).map(Number);
+  for (let i = 0; i < MIN_DOCKER_VERSION.length; i++) {
+    if (parts[i]! !== MIN_DOCKER_VERSION[i]) return parts[i]! > MIN_DOCKER_VERSION[i]!;
+  }
+  return true;
 }
 
 /** Joins the stdout/stderr frames of a non-TTY log stream (8-byte headers); TTY output passes as is. */
@@ -196,8 +247,6 @@ export function cpuSeconds(stats: Docker.ContainerStats): number | null {
   const total = stats.cpu_stats?.cpu_usage?.total_usage;
   return typeof total === "number" && Number.isFinite(total) && total >= 0 ? total / 1e9 : null;
 }
-
-export { averageCores } from "./policy.ts";
 
 function statusCode(error: unknown): number | undefined {
   const code = (error as { statusCode?: unknown } | null)?.statusCode;

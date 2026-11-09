@@ -3,13 +3,12 @@ import type { ReactNode } from "react";
 // Web Shell badge (20px pill, 12px/500) and status dot. Status tones are the tone's text on a 14% tint of
 // itself, as on the Daemon Status page; "solid" is the light-grey primary, "outline" a 1px border.
 
-export type Tone = "success" | "warning" | "danger" | "info" | "neutral" | "outline" | "solid";
+export type Tone = "success" | "warning" | "danger" | "neutral" | "outline" | "solid";
 
 const TAG_TONES: Record<Tone, string> = {
   success: "bg-success/14 text-success",
   warning: "bg-warning/14 text-warning",
   danger: "bg-danger/14 text-danger",
-  info: "bg-info/14 text-info",
   neutral: "bg-fg-muted/14 text-fg-muted",
   outline: "border border-line text-fg-muted",
   solid: "bg-primary text-fg-on-primary",

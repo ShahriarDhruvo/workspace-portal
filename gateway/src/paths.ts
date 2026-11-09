@@ -52,14 +52,14 @@ export function workspaceOwner(uidBase: number, userId: number): FileOwner {
  * Creates the user's directories and gives the private ones to the workspace's own UID. A tree
  * left by another owner (an older install, or a changed WORKSPACE_UID_BASE) is handed over whole.
  */
-export function ensureUserDirs(paths: UserPaths, owner: FileOwner): void {
+export async function ensureUserDirs(paths: UserPaths, owner: FileOwner): Promise<void> {
   ensureDir(paths.root, 0o711, { uid: 0, gid: 0 });
   ensureDir(paths.system, 0o755, { uid: 0, gid: 0 });
   ensureDir(paths.qwenSettings, 0o755, { uid: 0, gid: 0 });
   for (const dir of [paths.home, paths.workspace]) {
     ensureDir(dir, 0o700, owner);
     const stat = fs.lstatSync(dir);
-    if (stat.uid !== owner.uid || stat.gid !== owner.gid) chownTree(dir, owner);
+    if (stat.uid !== owner.uid || stat.gid !== owner.gid) await chownTree(dir, owner);
   }
 }
 
@@ -71,14 +71,17 @@ function ensureDir(dir: string, mode: number, owner: FileOwner): void {
   if ((stat.mode & 0o7777) !== mode) fs.chmodSync(dir, mode);
 }
 
-/** Changes the owner of a whole tree without following symlinks. */
-function chownTree(dir: string, owner: FileOwner): void {
+/**
+ * Changes the owner of a whole tree without following symlinks. Asynchronous, one entry at a time:
+ * a large home directory must not stall the gateway (or exhaust file descriptors).
+ */
+async function chownTree(dir: string, owner: FileOwner): Promise<void> {
   if (!canChown()) return;
-  fs.lchownSync(dir, owner.uid, owner.gid);
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+  await fs.promises.lchown(dir, owner.uid, owner.gid);
+  for (const entry of await fs.promises.readdir(dir, { withFileTypes: true })) {
     const child = path.join(dir, entry.name);
-    if (entry.isDirectory()) chownTree(child, owner);
-    else fs.lchownSync(child, owner.uid, owner.gid);
+    if (entry.isDirectory()) await chownTree(child, owner);
+    else await fs.promises.lchown(child, owner.uid, owner.gid);
   }
 }
 
@@ -102,24 +105,33 @@ export function renderGroup(owner: FileOwner): string {
 }
 
 /**
- * Deletes everything the user's workspace ever stored. Agents can leave directories without write
- * permission behind; the gateway restores access and retries.
+ * Deletes everything the user's workspace ever stored, without blocking the gateway on a large
+ * tree. Agents can leave directories without write permission behind; the gateway restores access
+ * and retries.
  */
-export function removeUserData(paths: UserPaths): void {
+export async function removeUserData(paths: UserPaths): Promise<void> {
   try {
-    fs.rmSync(paths.root, { recursive: true, force: true });
+    await fs.promises.rm(paths.root, { recursive: true, force: true });
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code !== "EACCES" && code !== "EPERM") throw error;
-    grantOwnerAccess(paths.root);
-    fs.rmSync(paths.root, { recursive: true, force: true });
+    await grantOwnerAccess(paths.root);
+    await fs.promises.rm(paths.root, { recursive: true, force: true });
   }
 }
 
-function grantOwnerAccess(dir: string): void {
-  fs.chmodSync(dir, 0o700);
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (entry.isDirectory()) grantOwnerAccess(path.join(dir, entry.name));
+async function grantOwnerAccess(dir: string): Promise<void> {
+  let entries: fs.Dirent[];
+  try {
+    await fs.promises.chmod(dir, 0o700);
+    entries = await fs.promises.readdir(dir, { withFileTypes: true });
+  } catch (error) {
+    // The failed attempt removes other parts of the tree in parallel and may still be at it.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  for (const entry of entries) {
+    if (entry.isDirectory()) await grantOwnerAccess(path.join(dir, entry.name));
   }
 }
 

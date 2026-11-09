@@ -8,19 +8,21 @@ import { STATUS_CODES, type IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import WebSocket, { WebSocketServer, type RawData } from "ws";
 import { tokensEqual, type SessionContext } from "@portal/db";
-import { checkAgentAccess, type AgentDeps } from "./agent-access.ts";
+import { checkAgentAccess, INVALID_TOKEN, unavailableError, type AgentDeps } from "./agent-access.ts";
+import { MIB } from "./config.ts";
+import { connectionRole } from "./connections.ts";
 import { bearerToken, qwenRequestHeaders, splitBearerSubprotocol } from "./headers.ts";
 import { splitTarget } from "./http-util.ts";
 import type { Upstream } from "./workspaces.ts";
 
 /** The Web Shell's WebSocket endpoints. Anything else is refused before it reaches the workspace. */
-export const SOCKET_PATHS: ReadonlySet<string> = new Set(["/terminal", "/acp", "/live/web"]);
+const SOCKET_PATHS: ReadonlySet<string> = new Set(["/terminal", "/acp", "/live/web"]);
 const HANDSHAKE_TIMEOUT_MS = 15_000;
 const PING_INTERVAL_MS = 20_000;
 const MAX_MISSED_PONGS = 2;
 /** Pause the sending side while more than this is waiting to be written to the other side. */
-const HIGH_WATER_BYTES = 4 * 1024 * 1024;
-const LOW_WATER_BYTES = 1024 * 1024;
+const HIGH_WATER_BYTES = 4 * MIB;
+const LOW_WATER_BYTES = MIB;
 
 type UpgradeHandler = (req: IncomingMessage, socket: Duplex, head: Buffer) => void;
 
@@ -39,12 +41,18 @@ export function createWsRelay(deps: AgentDeps): UpgradeHandler {
     if (!SOCKET_PATHS.has(splitTarget(req.url ?? "").pathname)) return rejectUpgrade(socket, 404, "not_found");
     if (!isWebSocketHandshake(req)) return rejectUpgrade(socket, 400, "bad_request");
     const access = checkAgentAccess(req, deps, true);
-    if (!access.ok) return rejectUpgrade(socket, access.status, access.code);
+    if (!access.ok) return rejectUpgrade(socket, access.status, access.code, access.message);
     const { token: offered, protocols } = splitBearerSubprotocol(req.headers["sec-websocket-protocol"]);
     const presented = offered ?? bearerToken(req.headers.authorization);
-    if (presented === null || !tokensEqual(presented, access.browserToken)) return rejectUpgrade(socket, 401, "unauthenticated");
+    if (presented === null || !tokensEqual(presented, access.browserToken)) {
+      return rejectUpgrade(socket, 401, INVALID_TOKEN.code, INVALID_TOKEN.message);
+    }
     const upstream = deps.manager.upstream(access.userId);
-    if (!upstream) return rejectUpgrade(socket, 503, "workspace_unavailable");
+    if (!upstream) {
+      // Like the HTTP side: never starts the workspace, so a reconnect loop can't wake it.
+      const { code, message, headers } = unavailableError(deps.manager.info(access.userId).status);
+      return rejectUpgrade(socket, 503, code, message, headers);
+    }
     connect(deps, server, req, socket, head, upstream, access.context, access.userId, protocols);
   };
 }
@@ -112,7 +120,7 @@ function bridge(deps: AgentDeps, browser: WebSocket, workspace: WebSocket, fromW
   const unregister = deps.connections.add({
     userId,
     sessionId: context.session.id,
-    role: context.actingAs ? "admin" : "owner",
+    role: connectionRole(context),
     close: (code, reason) => browser.close(code, reason),
   });
 
@@ -208,16 +216,18 @@ function isWebSocketHandshake(req: IncomingMessage): boolean {
   );
 }
 
-function rejectUpgrade(socket: Duplex, status: number, code: string): void {
+/** Answers a refused handshake with the gateway's usual JSON error. */
+function rejectUpgrade(socket: Duplex, status: number, code: string, message?: string, headers: Record<string, string> = {}): void {
   if (!socket.writable) {
     socket.destroy();
     return;
   }
   const reason = STATUS_CODES[status] ?? "Error";
-  const body = JSON.stringify({ error: code, message: reason });
+  const body = JSON.stringify({ error: code, message: message ?? reason });
+  const extra = Object.entries(headers).map(([name, value]) => `${name}: ${value}\r\n`).join("");
   socket.once("finish", () => socket.destroy());
   socket.end(
-    `HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\nContent-Type: application/json; charset=utf-8\r\n` +
+    `HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\nContent-Type: application/json; charset=utf-8\r\n${extra}` +
       `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`,
   );
 }

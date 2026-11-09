@@ -25,3 +25,10 @@ test("subject of a deleted user comes from details", () => {
   assert.equal(auditDetailsSubject('{"username":"bob"}'), "bob");
   assert.equal(auditDetailsSubject("{}"), null);
 });
+
+test("an admin leaving a workspace shows why: switched to another user, or signed out", () => {
+  assert.equal(auditActionLabel("admin_exited_workspace", true), "Left workspace");
+  assert.equal(formatAuditDetails(JSON.stringify({ reason: "switched" })), "Reason: switched");
+  assert.equal(formatAuditDetails(JSON.stringify({ reason: "signed_out" })), "Reason: signed out");
+  assert.equal(formatAuditDetails(null), "", "a plain Exit has no details");
+});

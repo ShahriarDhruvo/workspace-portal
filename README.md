@@ -37,6 +37,7 @@ headless browser and web search, all driven by a model you host.
 - [Operations](#operations)
 - [Development](#development)
 - [Limitations](#limitations)
+- [License](#license)
 
 ## Security model
 
@@ -48,11 +49,14 @@ network and container items on a live install.
   internet names, no NAT and no IPv6.
 - Inter-container traffic is disabled, so a workspace can't reach another workspace.
 - The one address a workspace can reach is the host side of that network (`172.29.0.1`). A host firewall
-  (`deploy/firewall.sh`, installed as `workspace-portal-firewall.service`) drops everything arriving there
-  except the gateway's service port. SSH, the portal, the LLM server and SearXNG on the host are all
-  unreachable, and nothing from the workspace network is forwarded anywhere.
+  (`deploy/firewall.sh`: an nftables table of its own, `inet workspace_portal`, loaded at boot by
+  `workspace-portal-firewall.service`) drops every connection from the workspace network except the one to
+  the gateway's service port. SSH, the portal, the LLM server and SearXNG on the host are all unreachable,
+  and nothing from the workspace network is forwarded anywhere. A drop in nftables is final, so rules that
+  Docker, firewalld or Tailscale add elsewhere can't reopen it.
 - On that port the gateway serves only:
-  - the model: `/llm/v1/…`, forwarded to `LLM_UPSTREAM_URL` with your real API key added;
+  - the model: chat completions, completions, embeddings and the model list under `/llm/v1/`, forwarded to
+    `LLM_UPSTREAM_URL` with your real API key added (any other path of the model server is refused);
   - web search: an MCP `web_search` tool that sends the query to `SEARXNG_URL` and returns titles, links and
     snippets.
 
@@ -77,12 +81,15 @@ network and container items on a live install.
   model and search results.
 
 **Privileges**
-- All capabilities are dropped, with no-new-privileges and memory, CPU and PID limits.
+- All capabilities are dropped, with no-new-privileges and memory, CPU and PID limits. The image has no
+  setuid or setgid programs and no user accounts of its own.
 - `tini` runs as PID 1, and the OOM killer picks workspaces before the LLM server.
 - The default seccomp profile applies, plus SELinux confinement on Fedora/RHEL.
 
 **Credentials**
-- The LLM API key and SearXNG credentials stay in the gateway; a workspace sees a placeholder key.
+- The LLM API key and SearXNG credentials stay in the gateway; a workspace sees a placeholder key. Each of
+  the two portal containers gets only the settings it uses: the web app never sees those credentials, and
+  the gateway never sees the admin password.
 - Each container start gets a fresh random token for its `qwen serve`. It lives only in the gateway and in
   that container.
 - The browser gets a different token, derived from its portal session and that one workspace. The gateway
@@ -100,8 +107,9 @@ network and container items on a live install.
 
 ## Requirements
 
-- Linux with Docker Engine 25+ and the compose plugin, `iptables`, `python3`, `openssl`, `curl`. Tested on
-  Fedora 44 with Docker 29.
+- Linux with Docker Engine 25.0.5 or newer and the compose plugin, `nftables` (the `nft` command), `python3`,
+  `openssl`, `curl`. Tested on Fedora 44 with Docker 29. Older Docker engines let containers on internal
+  networks resolve internet names (CVE-2024-29018), so the installer and the gateway refuse them.
 - An OpenAI-compatible model server (llama.cpp, vLLM, Ollama, a hosted API). It runs anywhere the server can reach.
 - A SearXNG instance with the JSON output format enabled (optional; without it searches return an error).
 - RAM: about 0.5 GB per idle workspace and up to `WORKSPACE_MEMORY` (3 GB) under load.
@@ -116,19 +124,21 @@ sudo bash deploy/install.sh
 
 The installer is idempotent; re-run it after pulling changes. It:
 
-1. creates `.env` from `.env.example`, generating `GATEWAY_CONTROL_SECRET` and an `ADMIN_PASSWORD`;
-2. creates `PORTAL_DATA_DIR` (`/srv/workspace-portal`) with the ownership model above, plus the SELinux labels;
-3. installs the example Qwen Code settings into `PORTAL_DATA_DIR/config/qwen/` (never overwriting yours);
-4. builds the workspace image (`WORKSPACE_IMAGE`, a few minutes the first time) and the web and gateway images;
-5. installs and starts the workspace firewall unit, and opens ports 3000 and 3101–3299 to your LAN (and to
+1. checks the host: Docker version, `nft`, and that workspace UIDs don't overlap a range in `/etc/subuid`;
+2. creates `.env` from `.env.example` (mode 600), generating `GATEWAY_CONTROL_SECRET` and an `ADMIN_PASSWORD`;
+3. creates `PORTAL_DATA_DIR` (`/srv/workspace-portal`) with the ownership model above, plus the SELinux labels;
+4. installs the example Qwen Code settings into `PORTAL_DATA_DIR/config/qwen/` (never overwriting yours);
+5. builds the workspace image for `QWEN_CODE_VERSION` (a few minutes the first time) and the web and gateway images;
+6. installs and starts the workspace firewall unit, and opens ports 3000 and 3101–3299 to your LAN (and to
    Tailscale, if present) in firewalld or ufw;
-6. starts the stack with `docker compose up -d` and prints the URL.
+7. starts the stack with `docker compose up -d` and prints the URL.
 
 From a development machine you can push and install in one step: `deploy/deploy.sh user@server`. It rsyncs
 the tree, keeping the server's `.env`.
 
 Edit `.env` before the first install if you need different ports, paths or limits. Every variable is
-documented in `.env.example`.
+documented in `.env.example`. Changing a port or a `WORKSPACE_*` network setting later needs a re-run of the
+installer, which regenerates the firewall from them; other settings need only `docker compose up -d`.
 
 **Starting, stopping and restarting the web server.** Run these in the project directory on the server, with
 sudo unless you are in the `docker` group:
@@ -148,7 +158,8 @@ The stack starts at boot (Docker is enabled by the installer). Open `http://<ser
 grep ^ADMIN_PASSWORD .env
 ```
 
-`ADMIN_PASSWORD` is only used to create the admin account. Changing the password in the portal doesn't update it.
+At that first sign-in the portal asks you to choose a new password. `ADMIN_PASSWORD` is only used to create
+the admin account; changing the password in the portal doesn't update it.
 
 ## Connect the model
 
@@ -169,20 +180,25 @@ Workspaces talk to the gateway, and the gateway talks to your model server, so o
    For a provider whose base URL ends in `/v1` (for example `https://openrouter.ai/api/v1`), drop the `/v1`
    (`https://openrouter.ai/api`).
 
-2. Choose the models users see. Two ways:
-   - **Simple:** set `LLM_MODEL_ID` (the model name the server expects), `LLM_MODEL_NAME`, `LLM_CONTEXT_WINDOW`,
-     `LLM_MAX_TOKENS`, `LLM_INPUT` (`text` or `text,image`) and `LLM_REASONING` in `.env`. These are used when
-     your `system-defaults.json` defines no models.
-   - **Full control** (several models, sampling parameters, reasoning effort levels): list them under
-     `modelProviders.openai` in `system-defaults.json`. See
-     [Qwen Code settings](#qwen-code-settings-for-all-workspaces) and the example in
-     `qwen-config/system-defaults.json`. The portal rewrites each entry's `baseUrl` to the gateway and its key
-     to a placeholder, so don't put real keys there.
+2. Choose the models users see. They are listed under `modelProviders.openai` in Qwen Code's
+   `system-defaults.json`, one entry per model: `id` is the name the model server expects (an `id` from
+   `/v1/models`), and the entry also sets the display name, context window, output limit, image input,
+   reasoning effort levels and sampling parameters. `model.name` picks the default. Start from
+   `qwen-config/system-defaults.json`, which the installer has already put in place, and install your
+   version as described in [Qwen Code settings](#qwen-code-settings-for-all-workspaces):
+
+   ```sh
+   cp qwen-config/system-defaults.json /tmp/system-defaults.json   # then edit "id", "name", limits, …
+   sudo bash deploy/qwen-config.sh install /tmp/system-defaults.json
+   ```
+
+   The portal rewrites each entry's `baseUrl` to the gateway and its key to a placeholder, so leave them
+   out and never put real keys there. A workspace won't start without at least one model.
 
 3. Apply the change:
 
    ```sh
-   docker compose up -d     # restarts the gateway with the new provider
+   docker compose up -d     # after .env changes: restarts the gateway with the new provider
    ```
 
    Workspaces pick up model changes at their next start. Stop running ones in the admin console to apply now.
@@ -190,8 +206,8 @@ Workspaces talk to the gateway, and the gateway talks to your model server, so o
 4. Check it from the server: `curl -s "$LLM_UPSTREAM_URL/v1/models"` should list your model. In a workspace,
    ask the agent anything. The gateway logs one JSON line per model request (`docker compose logs gateway`).
 
-   If the chat shows `404 model '…' is not served`, the model id in `LLM_MODEL_ID` or `system-defaults.json`
-   doesn't match an `id` from `/v1/models`. Fix it, then stop the workspace so it restarts with the new settings.
+   If the chat shows `404 model '…' is not served`, the model `id` in `system-defaults.json` doesn't match an
+   `id` from `/v1/models`. Fix it, then stop the workspace so it restarts with the new settings.
    A reply that never comes usually means the model server is busy with other requests: the gateway's
    `/control/stats` shows `llm.inFlight`, and the server's own log shows its queue.
 
@@ -271,39 +287,37 @@ Users keep their own Qwen Code settings, chats and memory in their home director
 
 ## Updating the workspace image
 
-The workspace image is built from `workspace-image/`. It pins Qwen Code and the Playwright MCP server with
-build arguments.
+The workspace image is built from `workspace-image/` and tagged `workspace-portal/workspace:qwen-<version>`.
+`QWEN_CODE_VERSION` in `.env` selects the Qwen Code version, and with it the image every workspace starts from.
 
-1. Pick the version and build a new tag on the server (in the project directory):
+**Change the Qwen Code version** (on the server, in the project directory):
 
-   ```sh
-   sudo docker build --pull \
-     --build-arg QWEN_CODE_VERSION=0.28.0 \
-     -t workspace-portal/workspace:qwen-0.28.0 workspace-image
-   ```
+```sh
+sudo bash deploy/update-image.sh 0.28.0
+```
 
-   To make the new version the default for future installs, edit the `ARG QWEN_CODE_VERSION=` line in
-   `workspace-image/Dockerfile`. `PLAYWRIGHT_MCP_VERSION` works the same way. You can also add tools here
-   (an `apt-get install` line); keep the image free of credentials.
+This builds the image for that version, checks that it really contains it, sets `QWEN_CODE_VERSION` in
+`.env`, restarts the gateway and runs `deploy/verify-isolation.sh` against the new image. Running workspaces
+keep the old image until they stop; every new start uses the new one. To move everyone now, stop the running
+workspaces in the admin console.
 
-2. Point the portal at it and restart the gateway:
+**Roll back** the same way: `sudo bash deploy/update-image.sh 0.27.0` (the old image is still there, so
+nothing is rebuilt).
 
-   ```sh
-   sed -i 's|^WORKSPACE_IMAGE=.*|WORKSPACE_IMAGE=workspace-portal/workspace:qwen-0.28.0|' .env
-   docker compose up -d
-   sudo bash deploy/verify-isolation.sh      # the new image still only reaches the gateway
-   ```
+**Security updates** for Chromium and the other Debian packages:
 
-3. Running workspaces keep the old image until they stop. New starts use the new one. To move everyone now,
-   stop the running workspaces in the admin console.
+```sh
+sudo bash deploy/update-image.sh --refresh     # rebuild the current version from a fresh base image
+```
 
-4. Roll back by setting `WORKSPACE_IMAGE` to the previous tag and running `docker compose up -d`. Remove old
-   tags when you no longer need them: `sudo docker image rm workspace-portal/workspace:qwen-0.27.0`.
+**Add tools or change other versions** by editing `workspace-image/Dockerfile` (for example an
+`apt-get install` line, or `ARG PLAYWRIGHT_MCP_VERSION`), then run `update-image.sh --refresh`. Keep the image
+free of credentials.
 
-Re-running `deploy/install.sh` rebuilds the tag named in `WORKSPACE_IMAGE` from the Dockerfile, which is the
-simplest way to pick up base image security updates. Check Qwen Code's release notes before upgrading: the
-gateway relies on `qwen serve`'s token auth and `/health?deep=1`. If either changes, `verify-isolation.sh` and
-the workspace start will show it.
+Remove old images when you no longer need them: `sudo docker image rm workspace-portal/workspace:qwen-0.27.0`.
+
+Check Qwen Code's release notes before upgrading: the gateway relies on `qwen serve`'s token auth and
+`/health?deep=1`. If either changes, the workspace start and `verify-isolation.sh` show it.
 
 ## Using it
 
@@ -318,8 +332,8 @@ the workspace start will show it.
    - soon after the user signs out on every device, when nothing is running;
    - when an admin stops it (immediately; the dialog warns if the agent is working).
 
-   It never stops while the agent is working: generating, running a tool or command, a subagent, a
-   background task, or using the CPU. The idle countdown starts when the work ends. A user who signs out
+   It never stops while the agent is working: generating, running a tool or command, waiting for an
+   approval, a subagent, a background task, or using the CPU. The idle countdown starts when the work ends. A user who signs out
    mid-task is told the workspace will stop by itself once the task is done.
 
    Two safety nets stop runaway cases:
@@ -359,7 +373,7 @@ docker compose ps                                              # status
 docker compose logs -f gateway web                             # logs (JSON lines)
 docker ps --filter label=workspace-portal.workspace=1          # running workspaces (wp-ws-<user id>)
 sudo bash deploy/verify-isolation.sh                           # prove a workspace reaches only the gateway
-sudo /usr/local/libexec/workspace-portal/firewall.sh status    # host firewall rules
+sudo nft list table inet workspace_portal                      # the workspace firewall rules
 docker compose exec web node scripts/reset-admin-password.mjs  # forgot the admin password: prints a temporary one
 ```
 
@@ -377,11 +391,8 @@ Deleting a user in the admin console removes their directory.
 **Uninstall:**
 
 ```sh
-docker compose down
-sudo docker rm -f $(sudo docker ps -aq --filter label=workspace-portal.workspace=1)
-sudo docker network rm workspace-portal-ws
-sudo systemctl disable --now workspace-portal-firewall
-sudo rm -rf /srv/workspace-portal /etc/workspace-portal /usr/local/libexec/workspace-portal
+sudo bash deploy/uninstall.sh               # removes the stack, workspaces, firewall and images; keeps the data
+sudo bash deploy/uninstall.sh --purge-data  # also deletes PORTAL_DATA_DIR (every account and file)
 ```
 
 ## Development
@@ -399,7 +410,8 @@ Layout:
 - `packages/db/` is the SQLite schema shared by both.
 - `workspace-image/` is the Qwen Code container.
 - `qwen-config/` holds the example settings.
-- `deploy/` has the installer, firewall, config upload and isolation check.
+- `deploy/` has the installer, firewall, config upload, image update, uninstaller and isolation check
+  (`lib.sh` holds what they share).
 
 `docs/ARCHITECTURE.md` describes the internals and every API.
 
@@ -412,3 +424,7 @@ Layout:
 - Plain HTTP on the LAN: use Tailscale (above) or a VPN when you leave it.
 - The LLM queue is per gateway process. Usage is counted per user per day in `llm_usage`, but not shown in the
   UI yet.
+
+## License
+
+[Apache License 2.0](LICENSE).

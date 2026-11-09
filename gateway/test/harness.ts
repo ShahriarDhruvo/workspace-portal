@@ -38,6 +38,8 @@ export const MIN = 60_000;
 export const CONTROL_SECRET = "control-secret-for-tests-0123456789";
 /** Workspace ports base+1 … base+PORT_COUNT-1: users 1-9. */
 const PORT_COUNT = 10;
+/** The admin's system-defaults.json every test gateway starts with: models come only from there. */
+export const SYSTEM_DEFAULTS = { modelProviders: { openai: [{ id: "qwen3.8-flash-next", name: "Qwen3.8 Flash-Next" }] } };
 const DAY = 24 * 60 * MIN;
 
 export type UserName = "alice" | "bob" | "carol" | "dave" | "admin";
@@ -54,12 +56,22 @@ export interface RequestOptions {
   path?: string;
   headers?: Record<string, string>;
   body?: string | Buffer;
+  /** Source address, e.g. a fake workspace container's 127.0.0.N. */
+  localAddress?: string;
 }
 
 export function request(port: number, options: RequestOptions = {}): Promise<Reply> {
   return new Promise((resolve, reject) => {
     const req = http.request(
-      { host: "127.0.0.1", port, method: options.method ?? "GET", path: options.path ?? "/", headers: options.headers, agent: false },
+      {
+        host: "127.0.0.1",
+        port,
+        method: options.method ?? "GET",
+        path: options.path ?? "/",
+        headers: options.headers,
+        localAddress: options.localAddress,
+        agent: false,
+      },
       (res) => {
         const chunks: Buffer[] = [];
         res.on("data", (chunk: Buffer) => chunks.push(chunk));
@@ -190,6 +202,8 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
   });
   const db = openDatabase(config.dbFile);
   const clock = { now: Date.now() };
+  fs.mkdirSync(config.qwenConfigDir, { recursive: true });
+  fs.writeFileSync(path.join(config.qwenConfigDir, "system-defaults.json"), JSON.stringify(SYSTEM_DEFAULTS));
 
   const addUser = (username: string, role: "admin" | "user"): number => {
     const now = Date.now();

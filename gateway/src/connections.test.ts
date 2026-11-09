@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ConnectionRegistry, PRESENCE_MS, type AgentConnection, type ConnectionRole } from "./connections.ts";
+import { connectionRole, ConnectionRegistry, PRESENCE_MS, type AgentConnection, type ConnectionRole } from "./connections.ts";
 
 function setup() {
   const clock = { now: 1_000_000 };
@@ -82,4 +82,37 @@ test("with more than a thousand sessions seen, only recent ones count", () => {
   registry.seen(1, "fresh-1", "owner");
   registry.seen(1, "fresh-2", "owner");
   assert.deepEqual(registry.count(1), { owner: 2, admin: 0 });
+});
+
+test("sweep closes and forgets only the session/workspace pairs that are no longer valid, asking once per pair", () => {
+  const { registry, closedWith, connect } = setup();
+  connect(7, "ended");
+  connect(7, "ended");
+  connect(7, "alive");
+  connect(7, "moved-admin", "admin"); // the admin has since opened workspace 8
+  connect(8, "moved-admin", "admin");
+  registry.seen(7, "ended-polling", "owner");
+  registry.seen(7, "alive", "owner");
+
+  const asked: string[] = [];
+  const valid = new Set(["7 alive", "8 moved-admin"]);
+  const closed = registry.sweep(
+    (sessionId, userId) => {
+      asked.push(`${userId} ${sessionId}`);
+      return valid.has(`${userId} ${sessionId}`);
+    },
+    4001,
+    "session ended",
+  );
+  assert.equal(closed, 3);
+  assert.deepEqual(closedWith.map((entry) => entry.sessionId).sort(), ["ended", "ended", "moved-admin"]);
+  assert.ok(closedWith.every((entry) => entry.code === 4001 && entry.reason === "session ended"));
+  assert.deepEqual(asked.sort(), ["7 alive", "7 ended", "7 ended-polling", "7 moved-admin", "8 moved-admin"], "each pair once");
+  assert.deepEqual(registry.count(7), { owner: 1, admin: 0 }, "only the live session is left");
+  assert.deepEqual(registry.count(8), { owner: 0, admin: 1 });
+});
+
+test("connectionRole: an admin viewing someone else's workspace is an admin connection", () => {
+  assert.equal(connectionRole({ actingAs: true }), "admin");
+  assert.equal(connectionRole({ actingAs: false }), "owner");
 });

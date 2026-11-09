@@ -13,7 +13,10 @@ export interface WorkspaceInfo {
   idleSeconds: number | null;
   /** From docker stats; null when not running or unknown. */
   memoryBytes: number | null;
-  /** Open agent WebSockets right now. */
+  /**
+   * Sessions that have the workspace open: an event stream or WebSocket right now, or a request within the
+   * last 20 s (an open Web Shell tab polls). Counted per session, by the session's role.
+   */
   connections: { owner: number; admin: number };
   llmInFlight: number;
   /** The agent is working: a turn in progress, an LLM request, or sustained CPU. Never idle-stopped. */
@@ -21,7 +24,7 @@ export interface WorkspaceInfo {
   busyReason: "task" | "llm" | "cpu" | null;
   /** Nobody uses it any more but it is still working; it stops once the work is done. */
   stopPending: boolean;
-  /** "logout" | "idle" | "admin" | "capacity" | "sessions_expired" | "error" | ... */
+  /** "logout" | "idle" | "admin" | "deactivated" | "deleted" | "capacity" | "error" | ... */
   stopReason: string | null;
   lastError: string | null;
 }

@@ -13,8 +13,6 @@ interface SubmitButtonProps {
   size?: ButtonSize;
   className?: string;
   disabled?: boolean;
-  name?: string;
-  value?: string;
 }
 
 /** Submit button that disables itself and shows a spinner while its form is pending. */
@@ -26,15 +24,11 @@ export function SubmitButton({
   size = "md",
   className = "",
   disabled,
-  name,
-  value,
 }: SubmitButtonProps) {
   const { pending } = useFormStatus();
   return (
     <button
       type="submit"
-      name={name}
-      value={value}
       disabled={pending || disabled}
       data-pending={pending ? "" : undefined}
       aria-busy={pending || undefined}

@@ -1,7 +1,9 @@
 # syntax=docker/dockerfile:1
 # Workspace Portal web app: the Next.js standalone server. Build from the repo root:
 #   docker build -f web/Dockerfile -t workspace-portal/web .
-# Runs as the image's `node` user (uid 1000) and listens on $HOSTNAME:$PORT (default 0.0.0.0:3000).
+# Runs as uid/gid 10001 (compose sets the same `user:`), which owns nothing in the image: the app is
+# root-owned and read-only to it, so a compromised process can't rewrite its own code. It writes only to
+# the mounted database directory. Listens on $HOSTNAME:$PORT (default 0.0.0.0:3000).
 
 ARG NODE_IMAGE=docker.io/library/node:24-bookworm-slim@sha256:c0a93797ee78814ae6d32fcca2561fdbbe423149c3f5389aad32d86e9fd85bd4
 
@@ -33,11 +35,11 @@ ENV NODE_ENV=production \
 WORKDIR /app
 # The standalone tree mirrors the monorepo: /app/node_modules (traced deps, native modules included)
 # and /app/web/server.js. Static assets, public files and the admin scripts are copied next to it.
-COPY --from=build --chown=node:node /repo/web/.next/standalone ./
-COPY --from=build --chown=node:node /repo/web/.next/static ./web/.next/static
-COPY --from=build --chown=node:node /repo/web/public ./web/public
-COPY --from=build --chown=node:node /repo/web/scripts ./web/scripts
-USER node
+COPY --from=build /repo/web/.next/standalone ./
+COPY --from=build /repo/web/.next/static ./web/.next/static
+COPY --from=build /repo/web/public ./web/public
+COPY --from=build /repo/web/scripts ./web/scripts
+USER 10001:10001
 WORKDIR /app/web
 EXPOSE 3000
 CMD ["node", "server.js"]

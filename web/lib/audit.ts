@@ -1,6 +1,7 @@
 // Human-readable audit log entries. Pure; unit tested.
+import type { AuditAction } from "@portal/db";
 
-const ACTION_LABELS: Record<string, string> = {
+const ACTION_LABELS: Record<AuditAction, string> = {
   login: "Signed in",
   login_failed: "Failed sign-in",
   logout: "Signed out",
@@ -14,8 +15,13 @@ const ACTION_LABELS: Record<string, string> = {
   admin_opened_workspace: "Opened workspace",
   admin_exited_workspace: "Left workspace",
   workspace_started: "Workspace started",
+  workspace_stopped: "Workspace stopped",
   workspace_error: "Workspace error",
 };
+
+function isKnownAction(action: string): action is AuditAction {
+  return Object.hasOwn(ACTION_LABELS, action);
+}
 
 const DETAIL_LABELS: Record<string, string> = {
   username: "Username",
@@ -36,8 +42,8 @@ function humanize(key: string): string {
 
 /** `workspace_stopped` is written by the gateway: with the admin as actor for Stop/deactivate, without one for idle/logout stops. */
 export function auditActionLabel(action: string, hasActor: boolean): string {
-  if (action === "workspace_stopped") return hasActor ? "Stopped workspace" : "Workspace stopped";
-  return ACTION_LABELS[action] ?? humanize(action);
+  if (action === "workspace_stopped" && hasActor) return "Stopped workspace";
+  return isKnownAction(action) ? ACTION_LABELS[action] : humanize(action);
 }
 
 function formatValue(value: unknown): string {

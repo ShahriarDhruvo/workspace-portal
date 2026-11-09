@@ -22,6 +22,40 @@ export function migrate(client: Database.Database): void {
 }
 
 /**
+ * Opens a database file so its owner can be changed through the descriptor (fchown), or returns null
+ * when it doesn't exist. The caller closes the descriptor.
+ *
+ * The directory belongs to the web app's account, so whoever controls that account can put anything
+ * at these names, such as a symlink to /var/run/docker.sock or a hard link to a root-owned file, for
+ * the root gateway to chown. So the last path component is never followed (O_NOFOLLOW), and the
+ * opened file must be a regular file with a single link; anything else is refused with an error.
+ * O_NONBLOCK keeps a planted FIFO from blocking the open; O_NOCTTY keeps a tty from becoming ours.
+ */
+export function openForOwnershipChange(name: string): number | null {
+  const { O_RDONLY, O_NOFOLLOW, O_NONBLOCK, O_NOCTTY } = fs.constants;
+  let fd: number;
+  try {
+    fd = fs.openSync(name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_NOCTTY);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return null;
+    if (code === "ELOOP") throw new Error(`Refusing to change the owner of ${name}: it is a symbolic link.`);
+    throw error;
+  }
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile()) throw new Error(`Refusing to change the owner of ${name}: it is not a regular file.`);
+    if (stat.nlink !== 1) {
+      throw new Error(`Refusing to change the owner of ${name}: it has ${stat.nlink} hard links, expected 1.`);
+    }
+    return fd;
+  } catch (error) {
+    fs.closeSync(fd);
+    throw error;
+  }
+}
+
+/**
  * The web app runs as its own service account and owns the database directory; the gateway runs as
  * root. A database file created (or left) by root would be read-only for the web app, so when this
  * process is root the files are given to the directory's owner. SQLite itself then keeps the -wal and
@@ -32,16 +66,19 @@ function alignOwnership(file: string): void {
   const dir = fs.statSync(path.dirname(file));
   if (dir.uid === 0) return;
   try {
+    // O_CREAT | O_EXCL: fails on anything already at the name, a symlink included, without following it.
     fs.writeFileSync(file, "", { mode: 0o600, flag: "wx" }); // an empty file is an empty database
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
   }
   for (const name of [file, `${file}-wal`, `${file}-shm`]) {
+    const fd = openForOwnershipChange(name);
+    if (fd === null) continue;
     try {
-      const stat = fs.statSync(name);
-      if (stat.uid !== dir.uid || stat.gid !== dir.gid) fs.chownSync(name, dir.uid, dir.gid);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      const stat = fs.fstatSync(fd);
+      if (stat.uid !== dir.uid || stat.gid !== dir.gid) fs.fchownSync(fd, dir.uid, dir.gid);
+    } finally {
+      fs.closeSync(fd);
     }
   }
 }

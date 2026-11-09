@@ -2,14 +2,13 @@ import "server-only";
 import { cache } from "react";
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { eq, type SQL } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import {
   SESSION_COOKIE_NAME,
   generateSessionToken,
   hashSessionToken,
   loadSessionContext,
   sessions,
-  type PortalDb,
   type SessionContext,
 } from "@portal/db";
 import { config } from "./config";
@@ -93,15 +92,8 @@ export async function clearSessionCookie(): Promise<void> {
   await writeSessionCookie("", 0);
 }
 
-/**
- * Deletes the matching sessions and returns the workspaces they were using (the owner, or the user
- * an admin session was viewing), so the caller can release them.
- */
-export function deleteSessions(db: PortalDb, where: SQL | undefined): number[] {
-  const rows = db
-    .delete(sessions)
-    .where(where)
-    .returning({ userId: sessions.userId, actingAsUserId: sessions.actingAsUserId })
-    .all();
-  return [...new Set(rows.map((row) => row.actingAsUserId ?? row.userId))];
+/** The session id (token hash) this browser's cookie names, valid or not; null without a cookie. */
+export async function cookieSessionId(): Promise<string | null> {
+  const token = (await cookies()).get(SESSION_COOKIE_NAME)?.value;
+  return token ? hashSessionToken(token) : null;
 }

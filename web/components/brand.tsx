@@ -1,14 +1,15 @@
 /**
- * Workspace Portal's own mark: a light-grey rounded square with a dark "W". Monochrome on purpose, so it sits
- * in the Web Shell's neutral chrome without borrowing anyone's logo or brand colour. app/icon.svg matches it.
+ * Workspace Portal's own mark: a rounded square in the primary grey with a "W" in the on-primary colour.
+ * Monochrome on purpose, so it sits in the Web Shell's neutral chrome without borrowing anyone's logo or
+ * brand colour. app/icon.svg is a standalone file that can't read the theme, so it repeats the two values.
  */
 export function PortalMark({ size = 22 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" focusable="false" className="shrink-0">
-      <rect width="24" height="24" rx="6" fill="#e5e5e5" />
+      <rect width="24" height="24" rx="6" className="fill-primary" />
       <path
         d="M6.25 8.25 9.1 16 12 9.75 14.9 16l2.85-7.75"
-        stroke="#171717"
+        className="stroke-fg-on-primary"
         strokeWidth="2"
         strokeLinecap="round"
         strokeLinejoin="round"

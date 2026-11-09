@@ -60,8 +60,6 @@ export function stopReasonText(reason: string | null, idleTimeoutMinutes: number
       return "to free resources";
     case "logout":
       return "because you signed out";
-    case "sessions_expired":
-      return "because your session expired";
     case "error":
       return "because it ran into an error";
     default:

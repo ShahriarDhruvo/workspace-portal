@@ -3,7 +3,10 @@ import type { ButtonSize, ButtonVariant } from "@/components/ui/button";
 import { RightUpIcon } from "@/components/ui/icons";
 import { SubmitButton } from "@/components/ui/submit-button";
 
-/** Points the admin's session at this user's workspace and goes there. */
+/**
+ * Points the admin's session at this user's workspace and goes there. For the admin's own row it leaves
+ * any workspace the session is viewing and goes to /workspace.
+ */
 export function OpenWorkspaceForm({
   userId,
   label = "Open workspace",

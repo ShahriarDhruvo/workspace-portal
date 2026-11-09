@@ -5,7 +5,6 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
-import type { ModelConfig } from "./config.ts";
 
 /** Where `qwen serve` listens on the container's own address (see workspace-image/start-workspace.sh). */
 export const QWEN_PORT = 4170;
@@ -29,8 +28,6 @@ export interface QwenHealth {
   pendingPermissions: number;
   /** Agent, subagent, shell, background task or tool work the agent process reports as running. */
   activeWork: boolean;
-  /** Open event streams: browser tabs looking at a session right now. */
-  connectedClients: number;
   /** The agent process is up and can take prompts. */
   channelAlive: boolean;
   /** Time since the agent last started or finished something; null before the first session. */
@@ -47,7 +44,6 @@ export function parseQwenHealth(body: unknown): QwenHealth | null {
     activePrompts: count(record.activePrompts),
     pendingPermissions: count(record.pendingPermissions),
     activeWork: record.activeWork === true,
-    connectedClients: count(record.connectedClients),
     channelAlive: record.channelAlive === true,
     idleSinceMs: typeof idle === "number" && Number.isFinite(idle) && idle >= 0 ? idle : null,
   };
@@ -89,26 +85,13 @@ export function fetchQwenHealth(host: string, port: number, token: string): Prom
   });
 }
 
-export interface AgentActivity {
-  /** The agent is doing something: a prompt, a tool, a subagent, a background task, or an approval it waits for. */
-  working: boolean;
-  /**
-   * Everything still running only waits for a person (an approval or a question), nobody has the
-   * workspace open, and that has lasted `abandonAfterMs`. Such work does not keep a workspace up.
-   */
-  abandoned: boolean;
-}
-
-export function agentActivity(health: QwenHealth, abandonAfterMs: number): AgentActivity {
-  const working = health.activePrompts > 0 || health.pendingPermissions > 0 || health.activeWork;
-  const onlyWaitingForPerson = health.pendingPermissions > 0 && health.pendingPermissions >= health.activePrompts;
-  const abandoned =
-    working &&
-    onlyWaitingForPerson &&
-    health.connectedClients === 0 &&
-    health.idleSinceMs !== null &&
-    health.idleSinceMs >= abandonAfterMs;
-  return { working, abandoned };
+/**
+ * The agent is doing something: a prompt, a tool, a subagent, a background task, or an approval it
+ * waits for. An approval nobody answers needs no special case: `qwen serve` declines it after
+ * --permission-response-timeout-ms, which the gateway sets to the idle timeout.
+ */
+export function agentWorking(health: QwenHealth): boolean {
+  return health.activePrompts > 0 || health.pendingPermissions > 0 || health.activeWork;
 }
 
 // ------------------------------------------------------------------ settings
@@ -126,15 +109,19 @@ export class QwenConfigError extends Error {
 export interface AdminQwenConfig {
   settings: SettingsObject;
   systemDefaults: SettingsObject;
+  /** Where systemDefaults came from, for error messages. */
+  systemDefaultsFile: string;
 }
 
-export const ADMIN_SETTINGS_FILE = "settings.json";
-export const ADMIN_DEFAULTS_FILE = "system-defaults.json";
+const ADMIN_SETTINGS_FILE = "settings.json";
+const ADMIN_DEFAULTS_FILE = "system-defaults.json";
 
 export function loadAdminQwenConfig(dir: string): AdminQwenConfig {
+  const systemDefaultsFile = path.join(dir, ADMIN_DEFAULTS_FILE);
   return {
     settings: readSettingsFile(path.join(dir, ADMIN_SETTINGS_FILE)),
-    systemDefaults: readSettingsFile(path.join(dir, ADMIN_DEFAULTS_FILE)),
+    systemDefaults: readSettingsFile(systemDefaultsFile),
+    systemDefaultsFile,
   };
 }
 
@@ -194,8 +181,6 @@ export interface RenderOptions {
   admin: AdminQwenConfig;
   /** http://<gateway bridge IP>:<service port>, the only address a workspace can reach. */
   serviceBaseUrl: string;
-  /** Default model, used when the admin's system-defaults.json defines no openai providers. */
-  model: ModelConfig;
   /** Offer the Playwright MCP browser. */
   browser: boolean;
 }
@@ -209,22 +194,24 @@ export interface RenderedSettings {
 
 /**
  * The two system settings files of a workspace: the admin's files, with the keys the portal
- * depends on (model endpoint, search, no internet features, no telemetry) forced on top.
+ * depends on (model endpoint, search, no internet features, no telemetry) forced on top. The models
+ * come only from the admin's system-defaults.json; without one there is nothing to offer, so that is
+ * a QwenConfigError.
  */
 export function renderQwenSettings(options: RenderOptions): RenderedSettings {
-  const { admin, serviceBaseUrl, model, browser } = options;
+  const { admin, serviceBaseUrl, browser } = options;
 
-  const defaults = mergeSettings(defaultSystemDefaults(model, serviceBaseUrl), admin.systemDefaults);
-  const providers = asObject(defaults.modelProviders);
-  const openai = Array.isArray(providers.openai) ? providers.openai.filter(isPlainObject) : [];
-  // Only OpenAI-compatible providers, and only through the gateway: the workspace has no other route.
-  defaults.modelProviders = {
-    openai: (openai.length > 0 ? openai : [defaultProvider(model, serviceBaseUrl)]).map((provider) => {
-      const entry: SettingsObject = { ...provider, baseUrl: `${serviceBaseUrl}/llm/v1`, envKey: LLM_KEY_ENV };
-      delete entry.apiKey;
-      return entry;
-    }),
-  };
+  const defaults = mergeSettings({}, admin.systemDefaults);
+  const openai = gatewayProviders(defaults.modelProviders, serviceBaseUrl);
+  const firstId = openai.map((provider) => provider.id).find((id): id is string => typeof id === "string" && id.trim() !== "");
+  if (firstId === undefined) {
+    throw new QwenConfigError(
+      `the Qwen Code settings file ${admin.systemDefaultsFile} defines no model: add at least one entry with an "id" under modelProviders.openai`,
+    );
+  }
+  defaults.modelProviders = { openai };
+  const model = asObject(defaults.model);
+  if (typeof model.name !== "string" || model.name.trim() === "") defaults.model = { ...model, name: firstId };
   defaults.security = mergeSettings(asObject(defaults.security), { auth: { selectedType: "openai" } });
   defaults.$version ??= 4;
 
@@ -236,6 +223,13 @@ export function renderQwenSettings(options: RenderOptions): RenderedSettings {
     security: { auth: { enforcedType: "openai", selectedType: "openai" } },
   });
   settings.$version ??= 4;
+  // The admin may list models here too (system scope); they get the same treatment. Without any
+  // left the key goes, so an empty list can't hide the models of system-defaults.json.
+  if (settings.modelProviders !== undefined) {
+    const providers = gatewayProviders(settings.modelProviders, serviceBaseUrl);
+    if (providers.length > 0) settings.modelProviders = { openai: providers };
+    else delete settings.modelProviders;
+  }
   const permissions = asObject(settings.permissions);
   const deny = Array.isArray(permissions.deny) ? permissions.deny.filter((rule): rule is string => typeof rule === "string") : [];
   settings.permissions = { ...permissions, deny: [...new Set([...deny, "web_fetch"])] };
@@ -268,37 +262,22 @@ export function renderQwenSettings(options: RenderOptions): RenderedSettings {
   return { settings, systemDefaults: defaults };
 }
 
-function defaultSystemDefaults(model: ModelConfig, serviceBaseUrl: string): SettingsObject {
-  return {
-    $version: 4,
-    security: { auth: { selectedType: "openai" } },
-    model: { name: model.id },
-    modelProviders: { openai: [defaultProvider(model, serviceBaseUrl)] },
-  };
+/**
+ * Only OpenAI-compatible providers, and only through the gateway (the workspace has no other route):
+ * every entry gets the gateway's URL and the placeholder key variable, and no API key at any depth.
+ */
+function gatewayProviders(modelProviders: unknown, serviceBaseUrl: string): SettingsObject[] {
+  const { openai } = asObject(modelProviders);
+  const entries = Array.isArray(openai) ? openai.filter(isPlainObject) : [];
+  return entries.map((provider) => ({ ...(withoutApiKeys(provider) as SettingsObject), baseUrl: `${serviceBaseUrl}/llm/v1`, envKey: LLM_KEY_ENV }));
 }
 
-function defaultProvider(model: ModelConfig, serviceBaseUrl: string): SettingsObject {
-  const provider: SettingsObject = {
-    id: model.id,
-    name: model.name,
-    description: "Through the Workspace Portal gateway",
-    envKey: LLM_KEY_ENV,
-    baseUrl: `${serviceBaseUrl}/llm/v1`,
-    generationConfig: {
-      // Agent turns on a busy local model can take long; Qwen Code's defaults would cut them off.
-      timeout: 3_600_000,
-      streamIdleTimeoutMs: 3_600_000,
-      streamMaxLifetimeMs: 3_600_000,
-      maxRetries: 1,
-      contextWindowSize: model.contextWindow,
-      modalities: { image: model.input.includes("image") },
-      samplingParams: { max_tokens: model.maxTokens },
-    },
-  };
-  if (model.reasoning) {
-    provider.capabilities = { reasoning: { profile: "openai-effort", efforts: ["low", "medium", "xhigh"], defaultEffort: "medium" } };
-  }
-  return provider;
+function withoutApiKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutApiKeys);
+  if (!isPlainObject(value)) return value;
+  const out: SettingsObject = {};
+  for (const [key, item] of Object.entries(value)) if (key !== "apiKey") out[key] = withoutApiKeys(item);
+  return out;
 }
 
 /** Deep merge for settings: objects merge key by key, anything else (arrays included) is replaced. */

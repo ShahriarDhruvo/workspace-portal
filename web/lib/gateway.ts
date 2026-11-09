@@ -1,7 +1,8 @@
 import "server-only";
 import { after } from "next/server";
 import { config } from "./config";
-import type { HostStats, WorkspaceInfo } from "./gateway-types";
+import type { ApiError, HostStats, WorkspaceInfo } from "./gateway-types";
+import type { DeletedSessions } from "./session-store";
 
 // Client for the gateway control API (docs/ARCHITECTURE.md, "Gateway control API").
 
@@ -92,6 +93,17 @@ export const gateway = {
     call<{ ok: true }>("DELETE", `/control/workspaces/${userId}/data`, { timeoutMs: STOP_TIMEOUT_MS }),
 };
 
+// The one place that turns failures into words: toApiError for people (JSON routes, pages, dialogs),
+// describeError for the server log.
+
+/** What to tell the user: the gateway's own message, or a generic one for anything else (logged). */
+export function toApiError(error: unknown): ApiError {
+  if (error instanceof GatewayError) return { error: error.code, message: error.message };
+  console.error("[portal] unexpected error:", error);
+  return { error: "internal", message: "Something went wrong in the portal." };
+}
+
+/** One log line with the gateway's code and status. */
 export function describeError(error: unknown): string {
   if (error instanceof GatewayError) return `${error.code} (${error.status}): ${error.message}`;
   return error instanceof Error ? error.message : String(error);
@@ -129,4 +141,16 @@ export function releaseInBackground(userIds: Iterable<number>): void {
   for (const userId of new Set(userIds)) {
     afterResponse(`release workspace ${userId}`, () => gateway.release(userId));
   }
+}
+
+/**
+ * The gateway side of deleting sessions. A deleted row only stops new requests; the terminals and event
+ * streams a session already has open stay up until it is disconnected. Then the workspaces those
+ * sessions used are released (each stops unless another session still uses it).
+ */
+export function endSessionsInBackground(deleted: DeletedSessions): void {
+  for (const sessionId of deleted.sessionIds) {
+    afterResponse("disconnect ended session", () => gateway.disconnect(sessionId));
+  }
+  releaseInBackground(deleted.workspaceUserIds);
 }

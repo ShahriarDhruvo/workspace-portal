@@ -5,11 +5,12 @@ import { refresh, revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { displayName, sessions, users, writeAudit, type SessionContext, type User } from "@portal/db";
 import { getDb } from "../db";
-import { GatewayError, describeError, gateway, releaseInBackground, startInBackground } from "../gateway";
+import { describeError, endSessionsInBackground, gateway, releaseInBackground, startInBackground, toApiError } from "../gateway";
 import { clearLoginFailures } from "../login-throttle";
 import { generateTemporaryPassword } from "../password-generator";
 import { hashPassword } from "../passwords";
-import { deleteSessions, requireAdmin } from "../session";
+import { requireAdmin } from "../session";
+import { deleteSessions } from "../session-store";
 import { fieldErrors, formText, newUserSchema, profileSchema, userIdSchema, type FieldErrors } from "../validation";
 
 // Every action re-checks the admin role (requireAdmin), validates its input with zod, and is audited.
@@ -19,12 +20,6 @@ export type ActionState =
   | { status: "idle" }
   | { status: "error"; message: string }
   | { status: "done"; temporaryPassword?: string };
-
-function gatewayProblem(error: unknown): string {
-  if (error instanceof GatewayError) return error.message;
-  console.error("[admin] unexpected error:", error);
-  return "Something went wrong.";
-}
 
 type Target = { user: User } | { error: string };
 
@@ -137,7 +132,7 @@ export async function resetPassword(_previous: ActionState, formData: FormData):
   const temporaryPassword = generateTemporaryPassword();
   const passwordHash = await hashPassword(temporaryPassword);
   const db = getDb();
-  const released = db.transaction(() => {
+  const deleted = db.transaction(() => {
     db.update(users)
       .set({ passwordHash, mustChangePassword: true, updatedAt: Date.now() })
       .where(eq(users.id, target.user.id))
@@ -146,7 +141,7 @@ export async function resetPassword(_previous: ActionState, formData: FormData):
     writeAudit(db, { action: "password_reset", actorUserId: session.user.id, targetUserId: target.user.id });
     return deleteSessions(db, eq(sessions.userId, target.user.id));
   });
-  releaseInBackground(released);
+  endSessionsInBackground(deleted);
   refresh();
   return { status: "done", temporaryPassword };
 }
@@ -159,15 +154,17 @@ export async function setUserActive(_previous: ActionState, formData: FormData):
   const db = getDb();
 
   if (target.user.active !== active) {
-    db.transaction(() => {
+    const deleted = db.transaction(() => {
       db.update(users).set({ active, updatedAt: Date.now() }).where(eq(users.id, target.user.id)).run();
       writeAudit(db, {
         action: active ? "user_activated" : "user_deactivated",
         actorUserId: session.user.id,
         targetUserId: target.user.id,
       });
-      if (!active) deleteSessions(db, eq(sessions.userId, target.user.id));
+      return active ? null : deleteSessions(db, eq(sessions.userId, target.user.id));
     });
+    // The stop below closes the workspace's connections too; this also covers a stop that fails.
+    if (deleted) endSessionsInBackground(deleted);
     refresh();
   }
   if (!active) {
@@ -176,7 +173,7 @@ export async function setUserActive(_previous: ActionState, formData: FormData):
     } catch (error) {
       return {
         status: "error",
-        message: `The account is deactivated, but its workspace could not be stopped: ${gatewayProblem(error)}`,
+        message: `The account is deactivated, but its workspace could not be stopped: ${toApiError(error).message}`,
       };
     }
   }
@@ -190,7 +187,7 @@ export async function stopWorkspace(_previous: ActionState, formData: FormData):
   try {
     await gateway.stop(target.user.id, "admin", session.user.id);
   } catch (error) {
-    return { status: "error", message: gatewayProblem(error) };
+    return { status: "error", message: toApiError(error).message };
   }
   refresh();
   return { status: "done" };
@@ -205,11 +202,13 @@ export async function deleteUser(_previous: ActionState, formData: FormData): Pr
   if (confirmation !== user.username) return { status: "error", message: "Type the username exactly to confirm." };
 
   const db = getDb();
-  // Sign the user out first so nothing restarts the workspace while its data is being removed.
-  db.transaction(() => {
+  // Sign the user out first so nothing restarts the workspace while its data is being removed. The data
+  // deletion stops the workspace; the release after the response matters only if that fails.
+  const deleted = db.transaction(() => {
     db.update(users).set({ active: false, updatedAt: Date.now() }).where(eq(users.id, user.id)).run();
-    deleteSessions(db, eq(sessions.userId, user.id));
+    return deleteSessions(db, eq(sessions.userId, user.id));
   });
+  endSessionsInBackground(deleted);
   try {
     await gateway.deleteData(user.id);
   } catch (error) {
@@ -224,7 +223,7 @@ export async function deleteUser(_previous: ActionState, formData: FormData): Pr
     refresh();
     return {
       status: "error",
-      message: `The workspace data could not be deleted, so the account was kept (now deactivated): ${gatewayProblem(error)}`,
+      message: `The workspace data could not be deleted, so the account was kept (now deactivated): ${toApiError(error).message}`,
     };
   }
   db.transaction(() => {
@@ -250,10 +249,40 @@ async function disconnectSession(sessionId: string): Promise<void> {
   }
 }
 
-/** The session's target is shown in layouts (the admin console's "viewing" banner), which client
- *  navigation otherwise reuses; revalidate them all so the redirect renders the new state. */
+/**
+ * The session's target is shown in layouts (the admin console's "viewing" banner), which client
+ * navigation otherwise reuses; revalidate the views that show it so the redirect renders the new state.
+ * Not "/": that would also invalidate the prerendered routes (/icon.svg, /_not-found), and the next
+ * request would try to write them back into the image's read-only .next directory.
+ */
 function revalidateSessionViews(): void {
-  revalidatePath("/", "layout");
+  revalidatePath("/admin", "layout");
+  revalidatePath("/workspace");
+}
+
+/**
+ * Points the session back at the admin's own workspace, when it is viewing someone else's: clears
+ * acting-as and audits it, disconnects the session (its open connections lead to the viewed workspace)
+ * and releases that workspace. Every way back to the admin's own workspace goes through here.
+ */
+async function leaveViewedWorkspace(session: SessionContext): Promise<void> {
+  if (!session.actingAs) return;
+  const viewed = session.target.id;
+  const db = getDb();
+  db.transaction(() => {
+    db.update(sessions).set({ actingAsUserId: null }).where(eq(sessions.id, session.session.id)).run();
+    writeAudit(db, { action: "admin_exited_workspace", actorUserId: session.user.id, targetUserId: viewed });
+  });
+  await disconnectSession(session.session.id);
+  releaseInBackground([viewed]);
+  revalidateSessionViews();
+}
+
+/** "My workspace": the admin's own workspace, after leaving any other the session is viewing. */
+export async function openMyWorkspace(): Promise<void> {
+  const session = await requireAdmin();
+  await leaveViewedWorkspace(session);
+  redirect("/workspace");
 }
 
 /** Points the admin's session at a user's workspace (the gateway routes the iframe by session target). */
@@ -261,7 +290,11 @@ export async function openWorkspace(formData: FormData): Promise<void> {
   const session = await requireAdmin();
   const id = userIdSchema.safeParse(formData.get("userId"));
   if (!id.success) redirect("/admin");
-  if (id.data === session.user.id) redirect("/workspace");
+  if (id.data === session.user.id) {
+    // /workspace would still show the viewed workspace until the session leaves it.
+    await leaveViewedWorkspace(session);
+    redirect("/workspace");
+  }
   const db = getDb();
   const user = db.select({ id: users.id }).from(users).where(eq(users.id, id.data)).get();
   if (!user) redirect("/admin");
@@ -269,6 +302,15 @@ export async function openWorkspace(formData: FormData): Promise<void> {
   if (session.session.actingAsUserId !== user.id) {
     const previous = session.target.id;
     db.transaction(() => {
+      // Going straight from one user's workspace to another's leaves the first one too.
+      if (session.actingAs) {
+        writeAudit(db, {
+          action: "admin_exited_workspace",
+          actorUserId: session.user.id,
+          targetUserId: previous,
+          details: { reason: "switched" },
+        });
+      }
       db.update(sessions).set({ actingAsUserId: user.id }).where(eq(sessions.id, session.session.id)).run();
       writeAudit(db, { action: "admin_opened_workspace", actorUserId: session.user.id, targetUserId: user.id });
     });
@@ -283,16 +325,6 @@ export async function openWorkspace(formData: FormData): Promise<void> {
 
 export async function exitWorkspace(): Promise<void> {
   const session = await requireAdmin();
-  const viewed = session.session.actingAsUserId;
-  if (viewed != null) {
-    const db = getDb();
-    db.transaction(() => {
-      db.update(sessions).set({ actingAsUserId: null }).where(eq(sessions.id, session.session.id)).run();
-      writeAudit(db, { action: "admin_exited_workspace", actorUserId: session.user.id, targetUserId: viewed });
-    });
-    await disconnectSession(session.session.id);
-    releaseInBackground([viewed]);
-    revalidateSessionViews();
-  }
+  await leaveViewedWorkspace(session);
   redirect("/admin");
 }

@@ -40,5 +40,6 @@ COPY --from=build /src/gateway/dist ./dist
 # Fail the build unless the native module and every external load in this image.
 RUN node -e "const db = require('better-sqlite3')(':memory:'); if (db.prepare('select 1 as x').get().x !== 1) process.exit(1)" \
  && node --input-type=module -e "await import('better-sqlite3'); await import('dockerode'); await import('ws')"
-USER node
+# No USER: docker-compose.yml runs it as root with only CHOWN, DAC_OVERRIDE and FOWNER, because it
+# creates each user's directories owned by that workspace's own UID.
 CMD ["node", "dist/main.js"]

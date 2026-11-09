@@ -9,8 +9,7 @@ import type { AdminOverview, WorkspaceInfo } from "@/lib/gateway-types";
 import type { UserSummary } from "@/lib/user-summary";
 import { Avatar } from "@/components/brand";
 import { LocalTime } from "@/components/local-time";
-import { buttonClass } from "@/components/ui/button";
-import { EditIcon, KeyIcon, RightUpIcon, StopIcon, TrashIcon, UserCheckIcon, UserXIcon } from "@/components/ui/icons";
+import { EditIcon, KeyIcon, StopIcon, TrashIcon, UserCheckIcon, UserXIcon } from "@/components/ui/icons";
 import { Menu, MenuItem, MenuLink, MenuSeparator } from "@/components/ui/menu";
 import { TABLE_CLASS, TABLE_SHELL_CLASS, TD_CLASS, TH_CLASS, TR_CLASS } from "@/components/ui/table";
 import { StatusDot, Tag } from "@/components/ui/tag";
@@ -146,14 +145,7 @@ function UserRow({ user, isSelf, workspace, idleTimeoutMinutes }: UserRowProps) 
       </td>
       <td className={`${cell} w-0`}>
         <div className="flex items-center justify-end gap-1">
-          {isSelf ? (
-            <Link href="/workspace" className={buttonClass("outline", "sm")}>
-              <RightUpIcon />
-              Open
-            </Link>
-          ) : (
-            <OpenWorkspaceForm userId={user.id} label="Open" />
-          )}
+          <OpenWorkspaceForm userId={user.id} label="Open" />
           <Menu label={`Actions for ${user.name}`}>
             <MenuItem icon={<StopIcon />} onSelect={() => setDialog("stop")} disabled={!running}>
               Stop workspace

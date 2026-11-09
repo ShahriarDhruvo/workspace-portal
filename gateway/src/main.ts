@@ -7,14 +7,15 @@ import { createAgentServerFactory } from "./agent-proxy.ts";
 import { ConfigError, loadConfig, type Config } from "./config.ts";
 import { ConnectionRegistry } from "./connections.ts";
 import { createControlServer } from "./control-api.ts";
-import { DockerRuntime } from "./docker-runtime.ts";
+import { DockerRuntime, isSupportedDockerVersion, MIN_DOCKER_VERSION_TEXT } from "./docker-runtime.ts";
 import { listen } from "./listen.ts";
 import { LlmQueue } from "./llm-queue.ts";
 import { createLogger, type Logger } from "./log.ts";
-import { loadAdminQwenConfig, QwenConfigError } from "./qwen.ts";
+import { QwenConfigError } from "./qwen.ts";
 import { createSearxngBackend } from "./search-mcp.ts";
 import { createServiceServer } from "./service-api.ts";
 import { SessionCache } from "./session-cache.ts";
+import { renderWorkspaceSettings } from "./workspace-files.ts";
 import { WorkspaceManager } from "./workspaces.ts";
 
 /** How long the service listeners wait for the workspace bridge address to appear. */
@@ -26,7 +27,7 @@ async function main(log: Logger): Promise<void> {
   const config = readConfig(log);
 
   try {
-    loadAdminQwenConfig(config.qwenConfigDir);
+    renderWorkspaceSettings(config);
   } catch (error) {
     // Not fatal: the portal keeps working, and workspace starts report the same problem.
     if (error instanceof QwenConfigError) log.error("Qwen Code settings are invalid; workspaces cannot start until they are fixed", { error: error.message });
@@ -35,6 +36,14 @@ async function main(log: Logger): Promise<void> {
   const db = getDatabase(config.dbFile);
 
   const runtime = new DockerRuntime(config);
+  const engine = await runtime.engineVersion();
+  if (!isSupportedDockerVersion(engine)) {
+    log.error(
+      `Docker Engine ${engine || "(unknown version)"} is not supported: ${MIN_DOCKER_VERSION_TEXT} or later is required, because older engines let containers on internal networks resolve outside names (CVE-2024-29018)`,
+      { version: engine, minimum: MIN_DOCKER_VERSION_TEXT },
+    );
+    process.exit(1);
+  }
   const network = await runtime.ensureNetwork();
   if (network !== "exists") {
     log.info(`${network} the workspace network`, { network: config.workspace.network, subnet: config.workspace.subnet, internal: true });

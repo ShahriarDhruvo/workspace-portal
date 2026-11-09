@@ -1,27 +1,23 @@
 @import "tailwindcss";
 @import "./theme.css" layer(base);
 
-/* Only the Web Shell palette is available as colour utilities. */
+/* Only the Web Shell palette and radii are available as utilities (no Tailwind defaults behind them). */
 @theme {
   --color-*: initial;
+  --radius-*: initial;
 }
 
 @theme inline {
   --font-sans: var(--shell-font-sans);
   --font-mono: var(--shell-font-mono);
 
-  --color-white: #ffffff;
-  --color-black: #000000;
-  --color-canvas: var(--shell-canvas);
   --color-base: var(--shell-bg);
   --color-surface: var(--shell-surface);
   --color-raised: var(--shell-surface-raised);
-  --color-selected: var(--shell-surface-selected);
   --color-input: var(--shell-input);
   --color-input-hover: var(--shell-input-hover);
   --color-hover: var(--shell-hover);
   --color-pressed: var(--shell-active);
-  --color-overlay: var(--shell-overlay);
 
   --color-fg: var(--shell-fg);
   --color-fg-muted: var(--shell-fg-muted);
@@ -36,14 +32,11 @@
   --color-line-faint: color-mix(in srgb, var(--shell-border) 50%, transparent);
 
   --color-primary: var(--shell-primary);
-  --color-link: var(--shell-link);
   --color-info: var(--shell-info);
   --color-focus: var(--shell-focus);
 
   --color-success: var(--shell-success);
   --color-warning: var(--shell-warning);
-  --color-warning-bg: var(--shell-warning-bg);
-  --color-warning-line: var(--shell-warning-border);
   --color-danger: var(--shell-danger);
   --color-danger-bg: var(--shell-danger-bg);
   --color-danger-line: var(--shell-danger-border);
@@ -51,12 +44,10 @@
   --color-attention: var(--shell-attention);
   --color-idle: var(--shell-idle);
 
-  --radius-xs: var(--shell-radius-xs);
   --radius-sm: var(--shell-radius-sm);
   --radius-md: var(--shell-radius-md);
   --radius-lg: var(--shell-radius-lg);
   --radius-xl: var(--shell-radius-xl);
-  --radius-2xl: var(--shell-radius-2xl);
   --radius-3xl: var(--shell-radius-3xl);
 
   --shadow-md: var(--shell-shadow-md);

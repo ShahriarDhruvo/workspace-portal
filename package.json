@@ -2,7 +2,12 @@
   "name": "workspace-portal",
   "private": true,
   "version": "0.1.0",
-  "description": "Multi-user portal that gives each user their own DeepSeek Harness (dsh) workspace container.",
+  "description": "Private multi-user portal: each user gets their own isolated Qwen Code workspace container.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/ShahriarDhruvo/workspace-portal.git"
+  },
   "workspaces": [
     "packages/*",
     "web",

@@ -36,6 +36,8 @@ test("stop reasons in plain words", () => {
   assert.equal(stopReasonText("idle", 30), "after 30 minutes without activity");
   assert.equal(stopReasonText("admin", 30), "by the administrator");
   assert.equal(stopReasonText("capacity", 30), "to free resources");
+  assert.equal(stopReasonText("logout", 30), "because you signed out");
+  assert.equal(stopReasonText("sessions_expired", 30), null, "never sent by the gateway");
   assert.equal(stopReasonText("something_new", 30), null);
   assert.equal(stopReasonText(null, 30), null);
 });

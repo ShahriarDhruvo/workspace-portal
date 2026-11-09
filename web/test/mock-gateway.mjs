@@ -1,7 +1,8 @@
 // Test double for the gateway, for local end-to-end runs of the web app. NOT used in production.
 // Implements the control API (docs/ARCHITECTURE.md) with in-memory workspace state, plus a tiny
 // workspace port per user (AGENT_PORT_BASE + id) that resolves the portal_session cookie like the real proxy,
-// refuses sessions using another workspace, and shows whose workspace it is.
+// refuses sessions using another workspace, and shows whose workspace it is. Like the real gateway, start
+// answers at once with "starting", and the workspace turns "running" and ready startMs later.
 //
 //   PORTAL_DATA_DIR=... GATEWAY_CONTROL_SECRET=... CONTROL_PORT=4002 AGENT_PORT_BASE=3100 AGENT_PORT_COUNT=20 node test/mock-gateway.mjs
 //
@@ -153,12 +154,11 @@ async function control(req, res, url) {
       workspaces.set(id, { ...current, status: "starting", ready: false, startedAt: now, lastActivityAt: now, stopReason: null });
       setTimeout(() => {
         const w = workspaces.get(id);
-        if (w?.status === "starting") workspaces.set(id, { ...w, status: "running", ready: true });
+        // Only this start: a stop and a new start in between have their own timer.
+        if (w?.status === "starting" && w.startedAt === now) workspaces.set(id, { ...w, status: "running", ready: true });
       }, settings.startMs);
     }
-    // Like the real gateway, answer once the workspace is ready.
-    const deadline = Date.now() + 90_000;
-    while (workspaces.get(id)?.status === "starting" && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
+    // Like the real gateway, answer right away; the caller polls GET /control/workspaces/:id until ready.
     return send(res, 200, info(id));
   }
   return send(res, 404, { error: "not_found", message: "Not found" });

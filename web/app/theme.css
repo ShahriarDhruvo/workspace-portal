@@ -20,7 +20,6 @@
   --shell-bg: #0a0a0a;              /* page bodies, auth screen, iframe backdrop */
   --shell-surface: #171717;         /* cards, data tables, menus, dialogs, the auth card */
   --shell-surface-raised: #262626;  /* code/secret wells, avatars, menu item focus */
-  --shell-surface-selected: #1e1e1e; /* sidebar-style hover and selected rows */
   --shell-input: rgba(255, 255, 255, 0.045);       /* input and outline-button fill */
   --shell-input-hover: rgba(255, 255, 255, 0.075); /* outline-button hover */
   --shell-hover: rgba(38, 38, 38, 0.5);            /* ghost button and table row hover */
@@ -42,16 +41,15 @@
   /* -- Accent: a light-grey primary, never a brand colour */
   --shell-primary: #e5e5e5;
   --shell-primary-dialog: #fafafa; /* primary inside dialogs */
-  --shell-link: #6785ff;
-  --shell-info: #6785ff;
+  --shell-info: #6785ff;           /* host meters below the warning level */
   --shell-focus: #737373;          /* control focus: border plus a 3px ring at 50% */
   --shell-focus-outline: #747476;  /* nav focus: 2px outline, offset 2px */
 
   /* -- Status */
   --shell-success: #48bb78;
+  /* Warning and danger are status tones (text, badges, dots, banners). The Web Shell draws its attention
+     icon and its destructive controls in different colours, so those keep their own tokens. */
   --shell-warning: #ecc94b;
-  --shell-warning-bg: rgba(236, 201, 75, 0.08);
-  --shell-warning-border: rgba(236, 201, 75, 0.2);
   --shell-danger: #fc8181;                      /* error text, error banners */
   --shell-danger-bg: rgba(252, 129, 129, 0.08);
   --shell-danger-border: rgba(252, 129, 129, 0.2);
@@ -60,20 +58,15 @@
   --shell-idle: #808598;
 
   /* -- Shape: 6px base. 4 small/menu items, 6 buttons/inputs/menus, 8 rows, 10 cards/dialogs,
-        12 large panels, 14 tables and the auth card, pills for badges. */
-  --shell-radius-xs: 3px;
+        14 tables and the auth card, pills for badges. */
   --shell-radius-sm: 4px;
   --shell-radius-md: 6px;
   --shell-radius-lg: 8px;
   --shell-radius-xl: 10px;
-  --shell-radius-2xl: 12px;
   --shell-radius-3xl: 14px;
 
   /* -- Elevation: shadows barely show on near-black, so overlays also draw a 1px border. */
   --shell-shadow-md: 0 4px 6px -1px #0000001a, 0 2px 4px -2px #0000001a;
-
-  /* -- Motion */
-  --shell-ease: cubic-bezier(0.4, 0, 0.2, 1);
 
   /* -- Scrollbars: 8px with a 2px track-coloured border, so about 4px of thumb shows. */
   --shell-scrollbar-size: 8px;

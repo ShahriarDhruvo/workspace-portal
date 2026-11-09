@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import type { ReactNode } from "react";
 import { notFound, redirect } from "next/navigation";
 import { eq } from "drizzle-orm";
 import { displayName, users } from "@portal/db";
@@ -20,7 +21,9 @@ export default async function ViewWorkspacePage({ params }: PageProps<"/admin/us
   const session = await requireAdmin();
   const id = userIdSchema.safeParse((await params).id);
   if (!id.success) notFound();
-  if (id.data === session.user.id) redirect("/workspace");
+  const isSelf = id.data === session.user.id;
+  // While the session views someone else's workspace, /workspace shows theirs, not the admin's own.
+  if (isSelf && !session.actingAs) redirect("/workspace");
   const user = getDb().select().from(users).where(eq(users.id, id.data)).get();
   if (!user) notFound();
 
@@ -29,26 +32,30 @@ export default async function ViewWorkspacePage({ params }: PageProps<"/admin/us
   const viewerName = displayName(viewer);
   const viewerInitials = initials(viewer.firstName, viewer.lastName);
 
+  if (isSelf) {
+    return (
+      <OpenPanel
+        viewer={{ name: viewerName, initials: viewerInitials }}
+        back={{ href: "/admin", label: "Users" }}
+        title={`Your session is viewing ${displayName(session.target)}'s workspace`}
+        open={<OpenWorkspaceForm userId={user.id} label="Open my workspace" variant="primary" size="md" />}
+      >
+        Opening your own workspace leaves theirs, which is recorded in the audit log.
+      </OpenPanel>
+    );
+  }
+
   if (!(session.actingAs && session.target.id === user.id)) {
     return (
-      <div className="min-h-dvh bg-base">
-        <AdminHeader name={viewerName} initials={viewerInitials} />
-        <main className="mx-auto flex w-full max-w-[560px] flex-col gap-4 px-5 py-6 sm:px-6">
-          <BackLink href={`/admin/users/${user.id}`}>{name}</BackLink>
-          <section className="flex flex-col gap-4 rounded-xl border border-line bg-surface p-4">
-            <div className="flex flex-col gap-1.5">
-              <h1 className="text-16 leading-snug font-medium">You are not viewing {name}&apos;s workspace</h1>
-              <p className="text-14 text-fg-muted">
-                Opening it points your session at their workspace, starts it if needed, and is recorded in the audit
-                log. {user.firstName} sees an &ldquo;Admin connected&rdquo; notice while you are in it.
-              </p>
-            </div>
-            <div className="flex justify-end">
-              <OpenWorkspaceForm userId={user.id} variant="primary" size="md" />
-            </div>
-          </section>
-        </main>
-      </div>
+      <OpenPanel
+        viewer={{ name: viewerName, initials: viewerInitials }}
+        back={{ href: `/admin/users/${user.id}`, label: name }}
+        title={`You are not viewing ${name}'s workspace`}
+        open={<OpenWorkspaceForm userId={user.id} variant="primary" size="md" />}
+      >
+        Opening it points your session at their workspace, starts it if needed, and is recorded in the audit log.{" "}
+        {user.firstName} sees an &ldquo;Admin connected&rdquo; notice while you are in it.
+      </OpenPanel>
     );
   }
 
@@ -60,5 +67,30 @@ export default async function ViewWorkspacePage({ params }: PageProps<"/admin/us
       idleTimeoutMinutes={config.idleTimeoutMinutes}
       banner={<ViewingBanner>Viewing {name}&apos;s workspace</ViewingBanner>}
     />
+  );
+}
+
+/** A page explaining what opening a workspace does, with the button that does it. */
+function OpenPanel(props: {
+  viewer: { name: string; initials: string };
+  back: { href: string; label: string };
+  title: string;
+  open: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <div className="min-h-dvh bg-base">
+      <AdminHeader name={props.viewer.name} initials={props.viewer.initials} />
+      <main className="mx-auto flex w-full max-w-[560px] flex-col gap-4 px-5 py-6 sm:px-6">
+        <BackLink href={props.back.href}>{props.back.label}</BackLink>
+        <section className="flex flex-col gap-4 rounded-xl border border-line bg-surface p-4">
+          <div className="flex flex-col gap-1.5">
+            <h1 className="text-16 leading-snug font-medium">{props.title}</h1>
+            <p className="text-14 text-fg-muted">{props.children}</p>
+          </div>
+          <div className="flex justify-end">{props.open}</div>
+        </section>
+      </main>
+    </div>
   );
 }

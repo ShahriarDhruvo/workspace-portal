@@ -5,6 +5,7 @@ import { StringDecoder } from "node:string_decoder";
 import { Transform, type TransformCallback } from "node:stream";
 import { sql } from "drizzle-orm";
 import { llmUsage, type PortalDb } from "@portal/db";
+import { MIB } from "./config.ts";
 
 export interface TokenUsage {
   promptTokens: number;
@@ -12,7 +13,7 @@ export interface TokenUsage {
 }
 
 /** Larger JSON bodies are passed through without being parsed for usage. */
-const MAX_JSON_BYTES = 8 * 1024 * 1024;
+const MAX_JSON_BYTES = 8 * MIB;
 /** SSE events larger than this are skipped (usage chunks are a few hundred bytes). */
 const MAX_EVENT_CHARS = 1024 * 1024;
 

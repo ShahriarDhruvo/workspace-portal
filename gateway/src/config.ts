@@ -3,17 +3,6 @@
 import net from "node:net";
 import path from "node:path";
 
-export type ModelInput = "text" | "image";
-
-export interface ModelConfig {
-  id: string;
-  name: string;
-  contextWindow: number;
-  maxTokens: number;
-  input: ModelInput[];
-  reasoning: boolean;
-}
-
 export interface WorkspaceConfig {
   image: string;
   /** Docker *internal* network: workspaces can reach the gateway's bridge address and nothing else. */
@@ -62,7 +51,6 @@ export interface Config {
     apiKey: string;
     maxConcurrency: number;
     maxConcurrencyPerUser: number;
-    model: ModelConfig;
   };
   search: SearchConfig;
   workspace: WorkspaceConfig;
@@ -87,7 +75,7 @@ export class ConfigError extends Error {
 }
 
 const MIN_SECRET_LENGTH = 16;
-const MIB = 1024 * 1024;
+export const MIB = 1024 * 1024;
 /** Workspace UIDs stay clear of system and human accounts and below the 32-bit limit. */
 const MIN_UID_BASE = 100_000;
 
@@ -123,14 +111,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
       apiKey: read.string("LLM_API_KEY", ""),
       maxConcurrency: read.int("LLM_MAX_CONCURRENCY", 3, 1),
       maxConcurrencyPerUser: read.int("LLM_MAX_CONCURRENCY_PER_USER", 2, 1),
-      model: {
-        id: read.nonEmpty("LLM_MODEL_ID", "qwen3.8-flash-next"),
-        name: read.nonEmpty("LLM_MODEL_NAME", "Qwen3.8 Flash-Next"),
-        contextWindow: read.int("LLM_CONTEXT_WINDOW", 262144, 1),
-        maxTokens: read.int("LLM_MAX_TOKENS", 32768, 1),
-        input: read.modelInput("LLM_INPUT", "text,image"),
-        reasoning: read.bool("LLM_REASONING", true),
-      },
     },
     search: {
       url: read.httpUrl("SEARXNG_URL", "http://127.0.0.1:8888"),
@@ -283,14 +263,5 @@ class EnvReader {
       this.problems.push(`${name} must be an IPv4 CIDR such as 172.29.0.0/16 (got "${value}")`);
     }
     return value;
-  }
-
-  modelInput(name: string, fallback: string): ModelInput[] {
-    const values = [...new Set(this.nonEmpty(name, fallback).split(",").map((part) => part.trim().toLowerCase()))];
-    if (!values.includes("text") || values.some((value) => value !== "text" && value !== "image")) {
-      this.problems.push(`${name} must be "text" or "text,image" (got "${values.join(",")}")`);
-      return ["text"];
-    }
-    return values as ModelInput[];
   }
 }

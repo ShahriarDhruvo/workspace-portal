@@ -1,6 +1,5 @@
 import "server-only";
-import { toApiError } from "./api";
-import { gateway } from "./gateway";
+import { gateway, toApiError } from "./gateway";
 import type { AdminOverview } from "./gateway-types";
 
 /** Workspaces and host stats for the admin dashboard; whatever the gateway can't provide is null. */

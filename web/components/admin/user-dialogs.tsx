@@ -20,8 +20,20 @@ export interface DialogUser {
   id: number;
   name: string;
   username: string;
-  /** The user's agent is working right now (the Stop dialog warns). */
+  /** The user's agent is working right now (the dialogs that stop the workspace at once warn). */
   busy?: boolean;
+}
+
+/**
+ * The warning of the dialogs whose action stops the workspace at once, even mid-task (stop, deactivate,
+ * delete); `effect` says what that does to the task.
+ */
+function BusyWarning({ name, effect }: { name: ReactNode; effect: string }) {
+  return (
+    <>
+      {name}&apos;s agent is <strong className="font-medium text-warning">working on a task right now</strong>. {effect}
+    </>
+  );
 }
 
 const IDLE: ActionState = { status: "idle" };
@@ -85,7 +97,7 @@ function ActionDialog(props: ActionDialogProps) {
   );
 }
 
-function DeleteUserDialog({ user, onClose }: { user: DialogUser; onClose: () => void }) {
+function DeleteUserDialog({ user, name, onClose }: { user: DialogUser; name: ReactNode; onClose: () => void }) {
   const [typed, setTyped] = useState("");
   return (
     <ActionDialog
@@ -99,8 +111,14 @@ function DeleteUserDialog({ user, onClose }: { user: DialogUser; onClose: () => 
       blocked={typed.trim().toLowerCase() !== user.username}
       description={
         <>
-          This permanently deletes <strong className="font-medium text-fg">{user.name}</strong>&apos;s account and every
-          file in their workspace. This can&apos;t be undone.
+          {user.busy ? (
+            <p className="mb-2">
+              <BusyWarning name={name} effect="Deleting the user ends it mid-way." />
+            </p>
+          ) : null}
+          <p>
+            This permanently deletes {name}&apos;s account and every file in their workspace. This can&apos;t be undone.
+          </p>
         </>
       }
       fields={
@@ -133,10 +151,7 @@ export function UserDialog({ kind, user, onClose }: { kind: UserDialogKind; user
           pendingLabel="Stopping…"
           description={
             user.busy ? (
-              <>
-                {name}&apos;s agent is <strong className="font-medium text-warning">working on a task right now</strong>.
-                Stopping ends it mid-way; files written so far are kept. Stop anyway?
-              </>
+              <BusyWarning name={name} effect="Stopping ends it mid-way; files written so far are kept. Stop anyway?" />
             ) : (
               <>
                 Stop {name}&apos;s workspace now? Anything running in it ends; files are kept. It starts again the next
@@ -184,8 +199,15 @@ export function UserDialog({ kind, user, onClose }: { kind: UserDialogKind; user
           fields={<input type="hidden" name="active" value="false" />}
           description={
             <>
-              {name} is signed out everywhere, their workspace stops, and they can&apos;t sign in until you activate the
-              account again. Their files are kept.
+              {user.busy ? (
+                <p className="mb-2">
+                  <BusyWarning name={name} effect="Deactivating the account ends it mid-way." />
+                </p>
+              ) : null}
+              <p>
+                {name} is signed out everywhere, their workspace stops, and they can&apos;t sign in until you activate the
+                account again. Their files are kept.
+              </p>
             </>
           }
         />
@@ -204,7 +226,7 @@ export function UserDialog({ kind, user, onClose }: { kind: UserDialogKind; user
         />
       );
     case "delete":
-      return <DeleteUserDialog user={user} onClose={onClose} />;
+      return <DeleteUserDialog user={user} name={name} onClose={onClose} />;
   }
 }
 

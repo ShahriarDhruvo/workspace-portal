@@ -22,17 +22,23 @@ Browser ──▶ :3100+N          gateway agent port  user N's workspace: sessi
     user's directories, owned by that user's workspace UID, and drives the Docker socket.
 * Workspaces live on the `workspace-portal-ws` network.
   * Docker creates it `Internal` (no default route, no NAT, no DNS for outside names). ICC and IPv6 are off.
-  * The host firewall (`deploy/firewall.sh`, chains `WPORTAL-IN` / `WPORTAL-FWD`) admits only
-    `172.29.0.1:SERVICE_PORT` from the bridge and drops all forwarding from it.
-  * The gateway refuses to use a network with that name that isn't internal with ICC off. It replaces such a
-    network when no container uses it.
+  * The host firewall (`deploy/firewall.sh`, nftables table `inet workspace_portal`, applied by
+    `workspace-portal-firewall.service` before docker.service) admits only new connections to
+    `172.29.0.1:SERVICE_PORT` from the bridge or subnet, and drops all forwarding from or to them. Its input
+    chain runs at priority `filter - 10`, before firewalld's and Docker's chains; a drop there is final.
+  * The gateway checks every attribute of an existing network with that name: internal, IPv6 off, bridge
+    name, ICC off, masquerade off, and exactly one IPAM pool with the configured subnet, gateway and IP
+    range. A network that differs is replaced when no container uses it; otherwise the gateway refuses to
+    start and lists the differences.
 * The LLM server and SearXNG are external; on the test server they are `127.0.0.1:8080` and `127.0.0.1:8888`.
   Only the gateway talks to them.
 
 ## Ports and env
 
-All config comes from `.env` at the repo root (documented line by line in `.env.example`). Both services
-read the same file.
+All config comes from `.env` at the repo root (documented line by line in `.env.example`).
+`docker-compose.yml` passes each service only the variables listed for it below, so web never sees the LLM or
+SearXNG credentials and the gateway never sees `ADMIN_PASSWORD`. An empty value means the default. The deploy
+scripts read `.env` through `deploy/lib.sh` (`env_get`), falling back to `.env.example`.
 
 | Var | Default | Used by | Meaning |
 |---|---|---|---|
@@ -43,14 +49,13 @@ read the same file.
 | `SERVICE_PORT` | `4001` | gateway, firewall | Service API on `WORKSPACE_GATEWAY_IP` |
 | `GATEWAY_CONTROL_SECRET` | random | both | Bearer token of the control API; also the HMAC key of workspace browser tokens |
 | `SESSION_COOKIE_SECURE`, `SESSION_TTL_HOURS` | `false`, `168` | web | Cookie `Secure` flag; sliding session lifetime |
-| `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ADMIN_*_NAME` | | web | Seeds the single admin on first start if no admin exists |
+| `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ADMIN_*_NAME` | | web | Seeds the single admin on first start if no admin exists, with `must_change_password` set |
 | `LLM_UPSTREAM_URL` | `http://127.0.0.1:8080` | gateway | OpenAI-compatible server root; the proxy appends `/v1/...` |
 | `LLM_API_KEY` | empty | gateway | Sent upstream as `Authorization: Bearer` if set |
-| `LLM_MODEL_ID`, `LLM_MODEL_NAME`, `LLM_CONTEXT_WINDOW`, `LLM_MAX_TOKENS`, `LLM_INPUT`, `LLM_REASONING` | | gateway | The default model in the rendered `system-defaults.json`, used when the admin's file defines no `modelProviders.openai` |
 | `LLM_MAX_CONCURRENCY` / `LLM_MAX_CONCURRENCY_PER_USER` | `3` / `2` | gateway | LLM queue limits |
 | `SEARXNG_URL`, `SEARXNG_AUTHORIZATION`, `SEARXNG_TIMEOUT_SECONDS` | `http://127.0.0.1:8888`, empty, `20` | gateway | SearXNG backend of the search MCP |
 | `SEARCH_MAX_CONCURRENT_PER_USER` | `2` | gateway | Concurrent searches per workspace |
-| `WORKSPACE_IMAGE` | `workspace-portal/workspace:qwen-0.27.0` | gateway, installer | Per-user image, built from `workspace-image/` |
+| `QWEN_CODE_VERSION` | `0.27.0` | compose, deploy scripts | Selects the per-user image `workspace-portal/workspace:qwen-<version>`, built from `workspace-image/`. Compose passes it to the gateway as `WORKSPACE_IMAGE` |
 | `WORKSPACE_NETWORK` / `_SUBNET` / `_GATEWAY_IP` / `_IP_RANGE` / `_BRIDGE` | `workspace-portal-ws` / `172.29.0.0/16` / `172.29.0.1` / `172.29.128.0/17` / `br-wportal` | gateway, firewall | The gateway creates the network at startup |
 | `WORKSPACE_UID_BASE` | `200000` | gateway | User N's workspace runs as uid/gid `base + N` |
 | `WORKSPACE_MEMORY` / `_CPUS` / `_PIDS` / `_SHM` / `_TMP` | `3g` / `4` / `1024` / `1g` / `1g` | gateway | Per-container limits; `_TMP` sizes the tmpfs `/tmp` |
@@ -59,6 +64,7 @@ read the same file.
 | `IDLE_TIMEOUT_MINUTES` | `30` | both | Idle stop; also the approval timeout of `qwen serve` |
 | `MAX_BUSY_HOURS` | `24` | gateway | Work stops counting as activity this long after a person last used the workspace (0 = never) |
 | `UPLOAD_LIMIT_MB` | `100` | gateway | Max request body through the agent proxy |
+| `FIREWALL_ALLOW_SOURCE` | detected | installer | Sources allowed to reach `WEB_PORT` and the agent ports in firewalld/ufw: default the LAN of the default route, plus `100.64.0.0/10` when `tailscale0` exists |
 
 Config validation: the agent port range must end below 65536, and `WEB_PORT`, `CONTROL_PORT` and
 `SERVICE_PORT` must lie outside it.
@@ -68,7 +74,7 @@ Config validation: the agent port range must end below 65536, and `WEB_PORT`, `C
 ```
 PORTAL_DATA_DIR/                      root 0755
   db/portal.sqlite (+ -wal, -shm)     10001 (web); the gateway hands files it creates to the dir's owner
-  config/qwen/                        root 0755: the admin's settings.json, system-defaults.json
+  config/qwen/                        root 0700 (files 0600): the admin's settings.json, system-defaults.json
   users/<id>/                         root 0711
     home/                             200000+id 0700  → /home/user  (~/.qwen: chats, memory, user settings)
     workspace/                        200000+id 0700  → /workspace
@@ -132,11 +138,11 @@ GET  /control/health                         → { ok: true }
 GET  /control/stats                          → HostStats
 GET  /control/workspaces                     → { workspaces: WorkspaceInfo[] }   (every user that has a row)
 GET  /control/workspaces/:userId             → WorkspaceInfo (status "stopped" if no row)
-POST /control/workspaces/:userId/start       → WorkspaceInfo   409 {error:"capacity"} when the cap is reached and nothing can be evicted
-POST /control/workspaces/:userId/stop        → WorkspaceInfo   body { reason?: "admin" | "deactivated" | "deleted", actorUserId?: number }; immediate, even while working
+POST /control/workspaces/:userId/start       → WorkspaceInfo   409 {error:"capacity"} when the cap is reached and nothing can be evicted; 409 {error:"deleting"} while its data is being deleted
+POST /control/workspaces/:userId/stop        → WorkspaceInfo   body { reason?: "admin" | "deactivated" | "deleted" (default "admin"), actorUserId?: number }; immediate, even while working
 POST /control/workspaces/:userId/release     → WorkspaceInfo   no session uses it any more: stop now, or once the agent's work is done (stopPending)
 POST /control/sessions/:sessionId/disconnect → { closed: number }  closes that session's open agent connections and presence
-DELETE /control/workspaces/:userId/data      → { ok: true }    stops the container and deletes the user's data directory
+DELETE /control/workspaces/:userId/data      → { ok: true }    stops the container and deletes the user's data directory; 500 {error:"stop_failed"} (nothing deleted) if the container can't be removed
 ```
 
 Start returns as soon as the container is created and started (`status: "starting"`, `ready: false`).
@@ -149,7 +155,8 @@ Other error codes:
 * 404: `user_not_found`, `not_found`.
 * 405: `method_not_allowed`.
 * 401: `unauthorized`.
-* 500: `start_failed`, `internal`.
+* 409: `capacity`, `deleting`.
+* 500: `start_failed`, `stop_failed`, `internal`.
 
 ```ts
 type WorkspaceInfo = {
@@ -188,7 +195,8 @@ For every HTTP request and WebSocket upgrade (`agent-access.ts`, `agent-proxy.ts
    `forbidden_origin`). `Sec-Fetch-Site: cross-site` is refused for non-GET/HEAD requests and for upgrades
    (403 `forbidden_cross_site`).
 2. **Session.** Read `portal_session` and call `loadSessionContext`. With no valid session, navigations get
-   the themed "You're signed out" page linking to `//<host>:WEB_PORT/login`; everything else gets 401.
+   the themed "You're signed out" page linking to `//<host>:WEB_PORT/login`; everything else gets 401
+   `unauthenticated`.
 3. **Port user.** `target.id` must equal the port's user. Otherwise navigations get "This workspace isn't
    open here" with a link back to the portal, and everything else gets 403 `other_workspace`. An admin
    reaches user N's port only after "Open workspace" set `acting_as_user_id = N`.
@@ -196,7 +204,7 @@ For every HTTP request and WebSocket upgrade (`agent-access.ts`, `agent-proxy.ts
    "Admin connected"). An open Web Shell tab polls every few seconds.
 5. **Blocked paths.** `/web-shell/pairing*` (device pairing would hand out the real token) gets 403.
    Paths under `/__portal/` are the gateway's own: `POST /__portal/start` is the "Try again" form.
-6. **Token.** See "Workspace browser token". WebSockets carry it as the subprotocol `qwen-bearer.<token>`
+6. **Token.** See "Workspace browser token"; a wrong one gets 401 `invalid_token`. WebSockets carry it as the subprotocol `qwen-bearer.<token>`
    next to `qwen-ws`. The relay strips it, opens the upstream socket with the real token in the
    Authorization header, and echoes the subprotocol the container selected.
 7. **Not running.** Only a document navigation (`Sec-Fetch-Mode: navigate`, or `Accept: text/html` when
@@ -204,21 +212,25 @@ For every HTTP request and WebSocket upgrade (`agent-access.ts`, `agent-proxy.ts
    * A cross-site navigation gets a Start button instead.
    * At the cap with nothing to evict: a capacity page.
    * After a failed start: an error page with `lastError`.
-   * Everything else, WebSockets included, gets a 503 (`workspace_starting` with `Retry-After`,
-     `workspace_error`, `workspace_stopped`) and does **not** start it. An open tab's reconnect loop must
-     not wake a stopped workspace.
+   * While the user's data is being deleted: a 503 page, and nothing starts.
+   * Everything else, WebSockets included, gets a 503 `{error, message}` (`workspace_starting` with
+     `Retry-After: 2`, `workspace_error`, `workspace_stopped`) and does **not** start it. An open tab's
+     reconnect loop must not wake a stopped workspace.
 8. **Forwarding.** Requests go to `http://<container ip>:4170`.
    * Cookie, Origin, Forwarded/X-Forwarded-* and Sec-Fetch-* are stripped, and Host is rewritten to the
      container address (`qwen serve` checks Host and Origin).
-   * On responses: `X-Frame-Options` is removed, and the CSP gets `frame-ancestors http://<host>:*
-     https://<host>:*`.
+   * On responses: `X-Frame-Options` is removed, and the CSP gets `frame-ancestors http://<host>:WEB_PORT
+     https://<host>:WEB_PORT`, so only the portal's own pages can frame a workspace.
    * Cache-Control is kept when it says `no-cache`, `no-store` or `immutable`; otherwise it becomes
      `private, no-store`.
    * `UPLOAD_LIMIT_MB` is enforced: 413 up front from Content-Length, and a streamed body is cut at the limit.
    * An unreachable container gives 502 `workspace_unreachable` (navigations get a themed page) and
      triggers a container check.
    * Event-stream responses and WebSockets are tracked per workspace and session, so
-     `/control/sessions/:id/disconnect` and stops can close them.
+     `/control/sessions/:id/disconnect` and stops can close them. Every 60 s the gateway also closes those
+     whose session no longer exists or has expired (WebSocket close code 4001).
+   * The agent and service servers have no overall request timeout (streams and uploads can run long),
+     but request headers must arrive within 60 s.
 9. **Person activity** (`touch`): a document navigation, any non-GET/HEAD/OPTIONS request except
    `*/heartbeat`, or a WebSocket message from the browser. Polls, heartbeats, event streams and frames
    from the container don't count, so an open but unused tab lets the workspace go idle.
@@ -233,11 +245,15 @@ userId. Unknown sources get 403. Containers have no capabilities and inter-conta
 they can't spoof an address.
 
 ```
-POST /llm/v1/*  and  GET /llm/v1/models  → LLM_UPSTREAM_URL/v1/*     streaming pass-through
-POST /mcp/search                          → built-in MCP server (streamable HTTP, stateless)
+POST /llm/v1/chat/completions, /llm/v1/completions, /llm/v1/embeddings  → LLM_UPSTREAM_URL/v1/…  streaming pass-through
+GET  /llm/v1/models, /llm/v1/models/<id>                                → LLM_UPSTREAM_URL/v1/…
+POST /mcp/search                                                         → built-in MCP server (streamable HTTP, stateless)
 ```
 
-* Paths with `.`/`..` segments, backslashes, or percent-encoded `.`, `/` or `\` get 400. Other paths get 404.
+* Checks run in this order: an unknown caller gets 403; a path with `.`/`..` segments, backslashes, or
+  percent-encoded `.`, `/` or `\` gets 400; then the allowlist above. Any other `/llm/v1/` path gets 404
+  `{error: {message, type: "not_found"}}`, a listed path with the wrong method 405 `method_not_allowed`
+  with an `Allow` header. Other paths get 404.
 * **LLM.**
   * Any incoming Authorization is replaced with `LLM_API_KEY` (or dropped). Workspaces hold the placeholder
     key `portal` in `PORTAL_LLM_KEY`.
@@ -263,7 +279,8 @@ At every start the gateway reads the admin's `config/qwen/settings.json` and `sy
 points `QWEN_CODE_SYSTEM_SETTINGS_PATH` and `QWEN_CODE_SYSTEM_DEFAULTS_PATH` at them. Qwen Code's precedence
 is system-defaults < user < workspace < system.
 
-* `system-defaults.json` is built from the gateway's default model (from `LLM_*`), merged with the admin's file.
+* `system-defaults.json` is the admin's file, which must define at least one model under
+  `modelProviders.openai` (otherwise the start fails with a `QwenConfigError`).
   * Only `modelProviders.openai` survives.
   * Every entry gets `baseUrl = http://WORKSPACE_GATEWAY_IP:SERVICE_PORT/llm/v1` and `envKey = PORTAL_LLM_KEY`,
     and loses `apiKey`.
@@ -307,9 +324,15 @@ The container also gets `QWEN_USAGE_STATISTICS_ENABLED=false`. The image sets `Q
   is removed.
 * A container that dies is noticed within 15 s or on the next failed proxy request. It becomes `stopped`
   with `stopReason: "error"`, audited as `workspace_error`.
-* Stop: `stop -t 10`, then remove. Data stays in the bind mounts.
+* Stop: `stop -t 10`, then remove. Data stays in the bind mounts. If Docker fails to remove it, the
+  container is kept as a leftover (its id stays in the row): reconcile retries the removal, and it is never
+  adopted again. The same holds for the cleanup after a failed start and for rows found `stopping` at boot.
+* Every Docker API call has a 60 s timeout.
 * Gateway restart: workspace containers keep running. The next gateway adopts them (it reads the token back
-  from the container's env) when it starts and every 5 min. Orphans are removed.
+  from the container's env) when it starts and every 5 min. Orphans are removed. A container IP claimed by a
+  newer workspace is taken from the old entry, whose container is then checked.
+* At boot the gateway exits unless the Docker Engine is 25.0.5 or newer (CVE-2024-29018: older engines
+  forward DNS queries from internal networks), and it validates the Qwen Code settings.
 
 ### Busy and idle
 
@@ -318,14 +341,18 @@ Every 15 s the gateway samples each running workspace:
 * **Agent state** from `GET /health?deep=1`. `task` means the agent is working: `activePrompts > 0`, or
   `activeWork` is true (tools, subagents, background shells, monitors; a stale report counts as working),
   or `pendingPermissions > 0`.
-  * Exception: an approval nobody can answer (`pendingPermissions`, no connected clients, and qwen's
-    `idleSinceMs` ≥ the idle timeout) is "abandoned" and doesn't count. `qwen serve` itself declines such an
-    approval after the same timeout.
+  * An approval waiting for an answer counts as work, connected or not. `qwen serve` declines one nobody
+    answers after `IDLE_TIMEOUT_MINUTES` (`--permission-response-timeout-ms`), and the idle countdown starts then.
+  * When the health check doesn't answer, the last known state stays and is marked unknown. The agent
+    then counts as working for 5 min after the last answer (a busy `qwen serve` can be slow to reply),
+    and as not working after that, so a broken `qwen serve` can't keep its workspace up.
 * **LLM:** a request queued or in flight in the gateway (`llm`).
 * **CPU:** average use above 0.15 cores over the window (`cpu`).
 
 `busyReason` is the first of these that applies. A busy workspace counts as active, and its idle countdown
-starts when the work ends. Safety net: after `MAX_BUSY_HOURS` without person activity, work no longer counts.
+starts when the work ends. Safety net: after `MAX_BUSY_HOURS` without person activity, work no longer counts,
+and neither do the agent's own LLM and search calls: the idle countdown runs from the person's last action.
+These rules are pure functions in `gateway/src/policy.ts`.
 
 ### Reaper (every 60 s)
 
@@ -359,14 +386,34 @@ For each running workspace, it computes a verdict, re-checks the agent state bef
 | `/admin/users/[id]/workspace` | admin | Red banner "Viewing <name>'s workspace · Exit" + iframe on that user's port |
 | `/admin/audit` | admin | Audit log |
 
-* Login: verify (argon2id), create the session, call `POST /control/workspaces/:id/start` (capacity errors
-  are shown by the page), then redirect to `/change-password` if required, else `/workspace`.
-* Sign out: delete the session row, `release` the workspace that session used, clear the cookie, and redirect
-  to `/login`, with `?working=1` when the workspace stays up to finish its work.
+**Ending a session** always has two halves (`endSessionsInBackground` in `web/lib/gateway.ts`): deleting the
+row stops new requests, and after the response the web app calls `disconnect` for each deleted session (its
+open terminals and streams would stay up otherwise) and `release` for each workspace those sessions used.
+
+* Login:
+  1. Housekeeping: delete stale `login_attempts` rows, and end expired sessions.
+  2. `reserveLoginAttempt`, in one IMMEDIATE transaction before argon2: refuse a locked username, or else count
+     the attempt as a failure up front, so parallel guesses can't outrun the lock. A correct password clears
+     the record.
+  3. Verify (argon2id; a dummy verification for unknown usernames).
+  4. End the session this browser's cookie still names, if any (an admin's open view of someone's workspace
+     is audited as left with reason `signed_out`). Create the new session.
+  5. Call `POST /control/workspaces/:id/start` (capacity errors are shown by the page), then redirect to
+     `/change-password` if required, else `/workspace`.
+* Sign out: end the session, clear the cookie, and redirect to `/login`, with `?working=1` when the workspace
+  stays up to finish its work.
+* Change password: end the account's other sessions; this one carries on.
 * Admin "Open workspace": set `acting_as_user_id`, write the audit entry, `disconnect` this session (its old
-  token dies with the target change), `start` the target, then redirect. "Exit": clear it, write the audit
-  entry, `disconnect`, `release` the target.
-* Deactivate / reset password: delete the user's sessions, then `release` (deactivate also `stop`s).
-* Delete user: `DELETE /control/workspaces/:id/data`, then delete the row (audit first).
+  token dies with the target change), `start` the target, then redirect.
+* Leaving a viewed workspace (`leaveViewedWorkspace`): clear `acting_as_user_id`, audit
+  `admin_exited_workspace`, `disconnect`, `release` the target. It runs on "Exit", on "My workspace" in the admin
+  header, and when the admin opens their own workspace from the dashboard or their user page (audit reason
+  `switched`).
+* Deactivate / reset password: end the user's sessions (deactivate also `stop`s the workspace).
+* Delete user: deactivate the account and end its sessions, then `DELETE /control/workspaces/:id/data` (it stops
+  the workspace), then audit and delete the row. If the data can't be deleted, the account stays, deactivated.
+
+The web container runs as uid/gid 10001 with a root-owned, read-only app; it writes only to `db/`. It refuses to
+start without a `GATEWAY_CONTROL_SECRET` of at least 16 characters.
 * The iframe URL is built server-side (`workspace-frame.ts`): the port comes from `agentPortFor`, the token
   from `agentBrowserToken`. If the user id doesn't fit the port range, the page says so instead.

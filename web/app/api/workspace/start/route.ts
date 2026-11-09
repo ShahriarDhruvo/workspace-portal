@@ -1,11 +1,14 @@
-import { apiSession, gatewayErrorResponse, isSameOrigin, json, jsonError, withTarget } from "@/lib/api";
+import { apiSession, gatewayErrorResponse, json, jsonError, withTarget } from "@/lib/api";
 import { gateway } from "@/lib/gateway";
+import { isSameOrigin } from "@/lib/request-guards";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Starts the session's workspace and answers once it is ready (or 409 `capacity`). A Route Handler
- * rather than a Server Action: actions run one at a time per page, and this can take a minute.
+ * Starts the session's workspace. The gateway answers as soon as the container is up (`starting`, or
+ * 409 `capacity`); the workspace page then polls /api/workspace/status until it is ready. A Route
+ * Handler rather than a Server Action: actions run one at a time per page, and the start can still
+ * take up to 30 s when the gateway first has to evict an idle workspace.
  */
 export async function POST(request: Request): Promise<Response> {
   if (!isSameOrigin(request)) return jsonError(403, "forbidden", "Cross-origin request refused.");

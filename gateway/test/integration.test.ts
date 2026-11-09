@@ -10,11 +10,13 @@ import path from "node:path";
 import { and, eq } from "drizzle-orm";
 import WebSocket from "ws";
 import { hashSessionToken, llmUsage, sessions, workspaces } from "@portal/db";
-import { PRESENCE_MS } from "../src/connections.ts";
+import { closeEndedSessions, PRESENCE_MS } from "../src/connections.ts";
 import { userPaths } from "../src/paths.ts";
+import { AGENT_UNKNOWN_GRACE_MS } from "../src/policy.ts";
 import type { SettingsObject } from "../src/qwen.ts";
 import { WorkspaceImageMissingError } from "../src/runtime.ts";
-import { WorkspaceManager, type WorkspaceInfo } from "../src/workspaces.ts";
+import { createServiceServer } from "../src/service-api.ts";
+import { DeletingError, WorkspaceManager, type WorkspaceInfo } from "../src/workspaces.ts";
 import { closeServer, listenLocal } from "./fakes.ts";
 import {
   bearerSubprotocol,
@@ -61,6 +63,21 @@ function pick<T extends object, K extends keyof T>(value: T, keys: K[]): Pick<T,
 
 const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
 
+/** A WebSocket handshake whose refusal can be read (status, JSON body, headers), on the shared gateway. */
+function upgrade(token: string | null, userId: number, protocols?: string[]): Promise<Reply> {
+  const offered = protocols ?? ["qwen-ws", ...(token ? [bearerSubprotocol(g.browserToken(token, userId))] : [])];
+  const headers: Record<string, string> = {
+    origin: g.agentOrigin(userId),
+    connection: "Upgrade",
+    upgrade: "websocket",
+    "sec-websocket-version": "13",
+    "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==",
+    "sec-websocket-protocol": offered.join(", "),
+  };
+  if (token) headers.cookie = cookie(token);
+  return request(g.agentPort(userId), { path: "/terminal", headers });
+}
+
 // ------------------------------------------------------------------ signed out, stopped, origin, other users
 
 test("signed-out navigations get the themed page; other requests get 401", async () => {
@@ -88,6 +105,10 @@ test("XHR and WebSocket requests to a stopped workspace get 503 and never start 
   assert.equal(errorCode(api), "workspace_stopped");
   assert.equal((await g.xhr(g.tokens.alice, alice, { path: "/api/sessions", bearer: "wrong" })).status, 401, "a wrong token is refused first");
   assert.deepEqual(await g.openSocket(g.tokens.alice, alice), { status: 503 });
+  const socket = await upgrade(g.tokens.alice, alice);
+  assert.deepEqual([socket.status, json(socket)], [503, { error: "workspace_stopped", message: "The workspace is not running." }], "the same codes as HTTP");
+  const badToken = await upgrade(g.tokens.alice, alice, ["qwen-ws", bearerSubprotocol("wrong")]);
+  assert.deepEqual([badToken.status, json(badToken)], [401, { error: "invalid_token", message: "Reload the portal page to reconnect to your workspace." }]);
   const asset = await request(g.agentPort(alice), { path: "/assets/app.js", headers: { cookie: cookie(g.tokens.alice), accept: "*/*" } });
   assert.equal(asset.status, 503, "no Sec-Fetch-Mode and no text/html in Accept: not a navigation");
   assert.equal(g.info(alice).status, "stopped");
@@ -169,6 +190,8 @@ test("a document navigation starts the workspace, shows the starting page, then 
   const early = await g.xhr(g.tokens.alice, alice, { path: "/api/sessions" });
   assert.equal(early.status, 503);
   assert.equal(errorCode(early), "workspace_starting");
+  const earlySocket = await upgrade(g.tokens.alice, alice);
+  assert.deepEqual([earlySocket.status, errorCode(earlySocket), earlySocket.headers["retry-after"]], [503, "workspace_starting", "2"]);
 
   await g.waitReady(alice);
   g.runtime.readyAfterMs = 0; // later starts need not show the starting page
@@ -194,7 +217,7 @@ test("a document navigation starts the workspace, shows the starting page, then 
   const qwen = g.runtime.qwenFor(alice);
   const seen = qwen.requests.at(-1)!;
   assert.equal(seen.url, "/");
-  assert.equal(seen.headers.host, `127.0.0.1:${qwen.port}`);
+  assert.equal(seen.headers.host, `${qwen.host}:${qwen.port}`);
   assert.equal(seen.headers.cookie, undefined);
   assert.equal(seen.headers.origin, undefined);
   assert.equal(seen.headers.authorization, undefined, "the static shell is fetched without a token");
@@ -251,7 +274,7 @@ test("the browser's token is swapped for the container's; cookies and Origin sta
   for (const authorization of wrong) {
     const reply = await g.xhr(g.tokens.alice, alice, { path: "/api/sessions", bearer: null, headers: { authorization } });
     assert.equal(reply.status, 401, authorization);
-    assert.deepEqual(json(reply), { error: "Unauthorized", message: "Reload the portal page to reconnect to your workspace." });
+    assert.deepEqual(json(reply), { error: "invalid_token", message: "Reload the portal page to reconnect to your workspace." });
   }
   assert.equal(qwen.requests.length, before, "refused by the gateway");
 
@@ -266,7 +289,7 @@ test("the browser's token is swapped for the container's; cookies and Origin sta
   assert.equal(echo.body, "ping");
   const seen = qwen.requests.at(-1)!;
   assert.equal(seen.headers.authorization, `Bearer ${qwen.token}`);
-  assert.equal(seen.headers.host, `127.0.0.1:${qwen.port}`);
+  assert.equal(seen.headers.host, `${qwen.host}:${qwen.port}`);
   assert.equal(seen.headers.cookie, undefined);
   assert.equal(seen.headers.origin, undefined, "the browser sent one; the gateway checked it and dropped it");
   assert.equal(seen.headers["x-forwarded-for"], undefined);
@@ -409,7 +432,7 @@ test("WebSocket /terminal: the token travels as a subprotocol and is swapped; th
   const handshake = qwen.sockets.at(-1)!;
   assert.equal(handshake.headers.authorization, `Bearer ${qwen.token}`);
   assert.equal(handshake.headers["sec-websocket-protocol"], "qwen-ws", "the browser's token is not offered upstream");
-  assert.equal(handshake.headers.host, `127.0.0.1:${qwen.port}`);
+  assert.equal(handshake.headers.host, `${qwen.host}:${qwen.port}`);
   assert.equal(handshake.headers.cookie, undefined);
   assert.equal(handshake.headers.origin, undefined);
 
@@ -559,7 +582,10 @@ test("control API: health, stats, workspaces, errors", async () => {
   const unknownUser = await g.control("POST", "/control/workspaces/9999/start");
   assert.equal(unknownUser.status, 404);
   assert.equal(errorCode(unknownUser), "user_not_found");
-  assert.equal((await g.control("POST", `/control/workspaces/${dave}/stop`, { reason: 42 })).status, 400);
+  for (const reason of [42, "logout", "idle", "Admin", " admin", ""]) {
+    const reply = await g.control("POST", `/control/workspaces/${dave}/stop`, { reason });
+    assert.deepEqual([reply.status, errorCode(reply)], [400, "invalid_reason"], JSON.stringify(reason));
+  }
   assert.equal((await g.control("POST", `/control/workspaces/${dave}/stop`, { actorUserId: 9999 })).status, 400);
   const badJson = await request(g.ports.control, {
     method: "POST",
@@ -796,6 +822,62 @@ test("the service API refuses unknown callers and odd paths", async () => {
   assert.equal((await request(g.ports.service, { path: "/mcp/search/../../llm/v1/models" })).status, 404);
 });
 
+test("the LLM proxy only offers generation, embeddings and the model list", async () => {
+  g.caller.userId = g.ids.alice;
+  const forwarded = g.llm.requests.length;
+  const notOffered = [
+    ["GET", "/llm/v1/files"],
+    ["POST", "/llm/v1/files"],
+    ["DELETE", "/llm/v1/files/file-1"],
+    ["POST", "/llm/v1/batches"],
+    ["POST", "/llm/v1/fine_tuning/jobs"],
+    ["POST", "/llm/v1/responses"],
+    ["GET", "/llm/v1/"],
+    ["POST", "/llm/v1/chat/completions/"],
+    ["GET", "/llm/v1/models/"],
+  ] as const;
+  for (const [method, path] of notOffered) {
+    const reply = await request(g.ports.service, { method, path });
+    assert.equal(reply.status, 404, `${method} ${path}`);
+    assert.deepEqual(json(reply), { error: { message: `${path} is not available to workspaces.`, type: "not_found" } });
+  }
+  const wrongMethod = [
+    ["GET", "/llm/v1/chat/completions", "POST"],
+    ["PUT", "/llm/v1/embeddings", "POST"],
+    ["POST", "/llm/v1/models", "GET"],
+    ["DELETE", "/llm/v1/models/qwen3.8-flash-next", "GET"],
+  ] as const;
+  for (const [method, path, allow] of wrongMethod) {
+    const reply = await request(g.ports.service, { method, path });
+    assert.equal(reply.status, 405, `${method} ${path}`);
+    assert.equal(reply.headers.allow, allow);
+    assert.deepEqual(json(reply), { error: { message: `Use ${allow} for ${path}.`, type: "method_not_allowed" } });
+  }
+  assert.equal(g.llm.requests.length, forwarded, "none of them reached the LLM server");
+
+  const offered = [
+    ["GET", "/llm/v1/models/qwen3.8-flash-next"],
+    ["GET", "/llm/v1/models/Qwen/Qwen3-8B"],
+    ["POST", "/llm/v1/completions"],
+    ["POST", "/llm/v1/embeddings"],
+  ] as const;
+  for (const [method, path] of offered) {
+    const body = method === "POST" ? "{}" : undefined;
+    const reply = await request(g.ports.service, { method, path, headers: { "content-type": "application/json" }, body });
+    assert.equal(reply.status, 200, `${method} ${path}`);
+    assert.equal(g.llm.requests.at(-1)!.url, path.slice("/llm".length));
+  }
+  g.caller.userId = null;
+});
+
+test("agent and service servers wait at most a minute for request headers, and never time out a request", () => {
+  const service = createServiceServer({ config: g.config, db: g.db, manager: g.manager, llm: g.llmQueue, log: g.log, search: g.searches as never });
+  for (const server of [g.createAgentServer(), service]) {
+    assert.equal(server.headersTimeout, 60_000, "a client that never finishes its headers is dropped (slowloris)");
+    assert.equal(server.requestTimeout, 0, "uploads, event streams and generations take as long as they take");
+  }
+});
+
 function mcp(body: unknown): Promise<Reply> {
   return request(g.ports.service, {
     method: "POST",
@@ -876,6 +958,8 @@ test("a failed start shows the error page, and Try again starts it", async () =>
   assert.ok(page.body.includes("<h1>Your workspace couldn&#39;t start</h1>"));
   assert.ok(page.body.includes(`<pre>workspace image ${g.config.workspace.image} not found</pre>`));
   assert.equal(g.info(alice).status, "error", "the error page does not retry by itself");
+  const socket = await upgrade(g.tokens.alice, alice);
+  assert.deepEqual([socket.status, errorCode(socket)], [503, "workspace_error"]);
 
   const crossSite = await request(g.agentPort(alice), {
     method: "POST",
@@ -1028,34 +1112,30 @@ test("signing out while the agent works leaves the workspace running until the w
     assert.equal(gw.runtime.startsFor(alice).length, 2);
   }));
 
-test("an approval nobody is there to answer does not keep a workspace up", () =>
+test("an unanswered approval counts as work until qwen serve declines it, however long nobody looks", () =>
   withGateway({}, async (gw) => {
     const { alice } = gw.ids;
     await gw.startReady(alice);
     const qwen = gw.runtime.qwenFor(alice);
-    Object.assign(qwen.health, { activePrompts: 1, pendingPermissions: 1, activeWork: true, connectedClients: 1, idleSinceMs: 0 });
-    await gw.manager.refreshSamples();
-    assert.equal(gw.info(alice).busyReason, "task", "someone is looking at the question");
-
-    // The tab is closed. Until the question has waited for the idle timeout, it still counts.
-    gw.clock.now += 29 * MIN;
-    Object.assign(qwen.health, { connectedClients: 0, idleSinceMs: 29 * MIN });
+    Object.assign(qwen.health, { activePrompts: 1, pendingPermissions: 1, activeWork: true, connectedClients: 0, idleSinceMs: 0 });
     await gw.manager.refreshSamples();
     assert.equal(gw.info(alice).busyReason, "task");
 
-    gw.clock.now += 2 * MIN;
+    // Nobody has the workspace open and the question has waited past the idle timeout: still work.
+    gw.clock.now += 31 * MIN;
     qwen.health.idleSinceMs = 31 * MIN;
     await gw.manager.refreshSamples();
-    assert.deepEqual(pick(gw.info(alice), ["busy", "busyReason"]), { busy: false, busyReason: null });
-    assert.ok(logged(gw, "the agent only waits for an answer nobody is there to give; not counting it as work"));
     await gw.manager.reap();
-    assert.equal(gw.info(alice).status, "running", "idle for 2 minutes only");
+    assert.deepEqual(pick(gw.info(alice), ["status", "busyReason"]), { status: "running", busyReason: "task" });
 
-    gw.clock.now += 29 * MIN;
-    qwen.health.idleSinceMs = 60 * MIN;
+    // qwen serve declines it (--permission-response-timeout-ms) and the turn ends: the countdown starts.
+    Object.assign(qwen.health, { activePrompts: 0, pendingPermissions: 0, activeWork: false, idleSinceMs: 0 });
+    await gw.manager.refreshSamples();
+    assert.equal(gw.info(alice).busy, false);
+    gw.clock.now += 31 * MIN;
+    qwen.health.idleSinceMs = 31 * MIN;
     await gw.manager.reap();
-    assert.equal(gw.info(alice).status, "stopped");
-    assert.equal(gw.info(alice).stopReason, "idle");
+    assert.deepEqual(pick(gw.info(alice), ["status", "stopReason"]), { status: "stopped", stopReason: "idle" });
   }));
 
 test("MAX_BUSY_HOURS: work stops counting that long after a person last did something", () =>
@@ -1079,7 +1159,7 @@ test("MAX_BUSY_HOURS: work stops counting that long after a person last did some
     gw.caller.userId = alice;
     assert.equal((await mcpOn(gw, { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "web_search", arguments: { query: "x" } } })).status, 200);
     assert.equal(gw.info(alice).lastActivityAt, gw.clock.now);
-    assert.equal(gw.info(alice).busy, false);
+    assert.deepEqual(pick(gw.info(alice), ["busy", "idleSeconds"]), { busy: false, idleSeconds: 61 * 60 }, "idle since the person's last action");
 
     // A person using the workspace makes the work count again.
     assert.equal((await gw.xhr(gw.tokens.alice, alice, { method: "POST", path: "/api/echo", body: "still there?" })).status, 200);
@@ -1092,6 +1172,228 @@ test("MAX_BUSY_HOURS: work stops counting that long after a person last did some
     await gw.manager.reap();
     assert.equal(gw.info(alice).status, "stopped");
     assert.equal(gw.info(alice).stopReason, "idle");
+  }));
+
+test("MAX_BUSY_HOURS: an agent that keeps calling the LLM is stopped once nobody has done anything for that long", () =>
+  withGateway({ env: { MAX_BUSY_HOURS: "1" } }, async (gw) => {
+    const { alice } = gw.ids;
+    await gw.startReady(alice); // the person's last action
+    const qwen = gw.runtime.qwenFor(alice);
+    qwen.health.activePrompts = 1;
+    gw.caller.userId = alice;
+    const callLlm = async (): Promise<void> => {
+      const reply = await request(gw.ports.service, { method: "POST", path: "/llm/v1/chat/completions", headers: { "content-type": "application/json" }, body: "{}" });
+      assert.equal(reply.status, 200);
+    };
+
+    // A stuck loop: a step and an LLM call every 10 minutes.
+    for (let step = 1; step <= 5; step++) {
+      gw.clock.now += 10 * MIN;
+      qwen.health.idleSinceMs = 0;
+      await callLlm();
+      await gw.manager.refreshSamples();
+      await gw.manager.reap();
+      assert.deepEqual(pick(gw.info(alice), ["status", "busyReason"]), { status: "running", busyReason: "task" });
+    }
+
+    gw.clock.now += 11 * MIN;
+    await callLlm();
+    await gw.manager.refreshSamples();
+    assert.equal(gw.info(alice).lastActivityAt, gw.clock.now, "its calls are still recorded");
+    assert.deepEqual(pick(gw.info(alice), ["busy", "idleSeconds"]), { busy: false, idleSeconds: 61 * 60 });
+    await gw.manager.reap();
+    assert.deepEqual(pick(gw.info(alice), ["status", "stopReason"]), { status: "stopped", stopReason: "idle" });
+  }));
+
+test("an agent whose health check fails counts as working for a grace period after its last answer, then as done", () =>
+  withGateway({}, async (gw) => {
+    const { alice } = gw.ids;
+    const release = async (): Promise<WorkspaceInfo> => json<WorkspaceInfo>(await gw.control("POST", `/control/workspaces/${alice}/release`));
+    await gw.startReady(alice);
+    const qwen = gw.runtime.qwenFor(alice);
+    qwen.health.activePrompts = 1;
+    await gw.manager.refreshSamples(); // the last answer: working
+
+    // qwen serve stops answering (overloaded or broken) and the person signs out.
+    qwen.healthFails = true;
+    gw.clock.now += MIN;
+    gw.db.delete(sessions).where(eq(sessions.userId, alice)).run();
+    assert.deepEqual(pick(await release(), ["status", "busyReason", "stopPending"]), { status: "running", busyReason: "task", stopPending: true });
+    gw.clock.now += 3 * MIN;
+    await gw.manager.refreshSamples();
+    await gw.manager.reap();
+    assert.deepEqual(pick(gw.info(alice), ["status", "busyReason", "stopPending"]), { status: "running", busyReason: "task", stopPending: true });
+    const warnings = gw.logs.filter((line) => (JSON.parse(line) as { msg: string }).msg === "Qwen Code did not answer its health check");
+    assert.equal(warnings.length, 1, "warned once, not at every check");
+
+    // Five minutes after the last answer it no longer counts as working.
+    gw.clock.now = gw.clock.now - 4 * MIN + AGENT_UNKNOWN_GRACE_MS;
+    await gw.manager.refreshSamples();
+    assert.deepEqual(pick(gw.info(alice), ["busy", "busyReason"]), { busy: false, busyReason: null });
+    await gw.manager.reap();
+    assert.deepEqual(pick(gw.info(alice), ["status", "stopReason", "stopPending"]), { status: "stopped", stopReason: "logout", stopPending: false });
+  }));
+
+test("release counts the sessions again after asking the agent: signing in meanwhile keeps the workspace", () =>
+  withGateway({}, async (gw) => {
+    const { alice } = gw.ids;
+    await gw.startReady(alice);
+    const qwen = gw.runtime.qwenFor(alice);
+    gw.db.delete(sessions).where(eq(sessions.userId, alice)).run();
+    qwen.onHealth = () => {
+      qwen.onHealth = null;
+      gw.tokens.alice = gw.addSession(alice);
+    };
+    const released = json<WorkspaceInfo>(await gw.control("POST", `/control/workspaces/${alice}/release`));
+    assert.equal(qwen.onHealth, null, "the agent was asked");
+    assert.deepEqual(pick(released, ["status", "stopPending"]), { status: "running", stopPending: false });
+    assert.deepEqual(gw.runtime.runningUsers(), [alice]);
+  }));
+
+test("a container whose stop failed is never taken over again; reconcile removes it once Docker can", () =>
+  withGateway({}, async (gw) => {
+    const { alice } = gw.ids;
+    await gw.startReady(alice);
+    const container = gw.runtime.containerFor(alice).id;
+    gw.runtime.failStops = new Error("Docker did not answer");
+    const stopped = await gw.manager.stop(alice, "admin");
+    assert.deepEqual(pick(stopped, ["status", "ready", "lastError"]), {
+      status: "error",
+      ready: false,
+      lastError: "could not stop the workspace container: Docker did not answer",
+    });
+    assert.equal(gw.manager.upstream(alice), null);
+    assert.equal(gw.workspaceRow(alice)?.containerId, container, "remembered for a restarted gateway");
+
+    await gw.manager.reconcile();
+    assert.equal(gw.info(alice).status, "error", "not adopted");
+    assert.ok(gw.runtime.containers.has(container));
+    assert.ok(logged(gw, "could not remove a workspace container left behind by a failed stop"));
+
+    gw.manager.shutdown();
+    const fresh = new WorkspaceManager({ config: gw.config, db: gw.db, runtime: gw.runtime, llm: gw.llmQueue, connections: gw.connections, log: gw.log, now: () => gw.clock.now });
+    await fresh.init();
+    gw.useManager(fresh);
+    assert.equal(fresh.info(alice).status, "error", "a restarted gateway does not adopt it either");
+    assert.ok(gw.runtime.containers.has(container));
+
+    gw.runtime.failStops = null;
+    await fresh.reconcile();
+    assert.equal(gw.runtime.containers.has(container), false);
+    assert.equal(gw.workspaceRow(alice)?.containerId, null);
+    assert.ok(logged(gw, "removed a workspace container left behind by a failed stop"));
+    await gw.startReady(alice);
+    assert.equal(gw.runtime.startsFor(alice).length, 2);
+  }));
+
+test("while a user's data is being deleted no start gets through; a failed stop deletes nothing", () =>
+  withGateway({}, async (gw) => {
+    const { alice } = gw.ids;
+    await gw.startReady(alice);
+    const root = userPaths(gw.dataDir, alice).root;
+
+    let finishStop!: () => void;
+    gw.runtime.stopGate = new Promise<void>((resolve) => (finishStop = resolve));
+    const stopping = gw.manager.stop(alice, "admin");
+    const queued = gw.manager.start(alice); // waits for the stop
+    const deleting = gw.manager.deleteData(alice);
+    const refused = await gw.control("POST", `/control/workspaces/${alice}/start`);
+    assert.deepEqual([refused.status, json(refused)], [409, { error: "deleting", message: "This workspace is being deleted." }]);
+    const page = await gw.navigate(gw.tokens.alice, alice);
+    assert.equal(page.status, 503);
+    assert.ok(page.body.includes("This workspace is being deleted."));
+
+    gw.runtime.stopGate = null;
+    finishStop();
+    await stopping;
+    await assert.rejects(queued, DeletingError, "the start queued behind the stop");
+    await deleting;
+    assert.equal(fs.existsSync(root), false);
+    assert.equal(gw.workspaceRow(alice), undefined);
+    assert.equal(gw.runtime.startsFor(alice).length, 1, "nothing started");
+
+    // Docker can't remove the container: the data stays, and the web app is told.
+    await gw.startReady(alice);
+    gw.runtime.failStops = new Error("Docker did not answer");
+    const failed = await gw.control("DELETE", `/control/workspaces/${alice}/data`);
+    assert.equal(failed.status, 500);
+    assert.deepEqual(json(failed), { error: "stop_failed", message: "could not stop the workspace container, so its data was not deleted: Docker did not answer" });
+    assert.ok(fs.existsSync(root));
+    assert.equal(gw.info(alice).status, "error");
+
+    gw.runtime.failStops = null;
+    assert.deepEqual(json(await gw.control("DELETE", `/control/workspaces/${alice}/data`)), { ok: true }, "trying again removes the leftover container first");
+    assert.equal(fs.existsSync(root), false);
+    assert.deepEqual(gw.runtime.runningUsers(), []);
+  }));
+
+test("the service API knows a workspace by its container's address, also once Docker gives that address to another", () =>
+  withGateway({}, async (gw) => {
+    const { alice, bob } = gw.ids;
+    // The real caller lookup (the shared harness server takes the caller from gw.caller instead).
+    const service = createServiceServer({ config: gw.config, db: gw.db, manager: gw.manager, llm: gw.llmQueue, log: gw.log, search: { search: async () => "" } });
+    const port = await listenLocal(service);
+    try {
+      const requests = (userId: number): number => gw.db.select().from(llmUsage).where(eq(llmUsage.userId, userId)).get()?.requests ?? 0;
+      const callFrom = (address: string): Promise<Reply> =>
+        request(port, { method: "POST", path: "/llm/v1/chat/completions", headers: { "content-type": "application/json" }, body: "{}", localAddress: address });
+
+      await gw.startReady(alice);
+      const address = gw.runtime.qwenFor(alice).host;
+      assert.equal((await callFrom(address)).status, 200);
+      assert.equal(requests(alice), 1);
+      assert.equal((await callFrom("127.0.0.1")).status, 403, "no workspace has this address");
+
+      // Alice's container dies unnoticed, and Docker gives its address to Bob's.
+      await gw.runtime.crash(alice);
+      await gw.startReady(bob);
+      assert.equal(gw.runtime.qwenFor(bob).host, address);
+      assert.equal((await callFrom(address)).status, 200);
+      assert.deepEqual([requests(alice), requests(bob)], [1, 1], "Bob's calls are Bob's");
+      assert.ok(logged(gw, "a workspace's address now belongs to another workspace"));
+      await waitFor(() => gw.info(alice).status === "stopped", "Alice's crash to be noticed");
+      assert.equal(gw.info(alice).stopReason, "error");
+    } finally {
+      await closeServer(service);
+    }
+  }));
+
+test("the session sweep closes connections of sessions that ended, or of an admin who moved on", () =>
+  withGateway({}, async (gw) => {
+    const { alice } = gw.ids;
+    await gw.startReady(alice);
+    const second = gw.addSession(alice);
+    gw.actAs(gw.tokens.admin, alice);
+    const ended = await gw.openSocket(gw.tokens.alice, alice);
+    const kept = await gw.openSocket(second, alice);
+    const viewing = await gw.openSocket(gw.tokens.admin, alice);
+    assert.ok("socket" in ended && "socket" in kept && "socket" in viewing);
+    assert.deepEqual(gw.info(alice).connections, { owner: 2, admin: 1 });
+    assert.equal(closeEndedSessions(gw.db, gw.connections, gw.clock.now), 0, "every session still uses the workspace");
+
+    // Removed without a disconnect call reaching the gateway; the admin went back to their own workspace.
+    const endedClosed = closed(ended.socket);
+    const viewingClosed = closed(viewing.socket);
+    gw.db.delete(sessions).where(eq(sessions.id, hashSessionToken(gw.tokens.alice))).run();
+    gw.actAs(gw.tokens.admin, null);
+    assert.equal(closeEndedSessions(gw.db, gw.connections, gw.clock.now), 2);
+    assert.deepEqual([await endedClosed, await viewingClosed], [4001, 4001]);
+    assert.equal(kept.socket.readyState, WebSocket.OPEN);
+    await waitFor(() => gw.info(alice).connections.admin === 0 && gw.info(alice).connections.owner === 1, "the closed connections to be gone");
+  }));
+
+test("a system-defaults.json without a model fails the start, naming the file", () =>
+  withGateway({}, async (gw) => {
+    const { alice } = gw.ids;
+    const file = path.join(gw.config.qwenConfigDir, "system-defaults.json");
+    const expected = { error: "start_failed", message: `the Qwen Code settings file ${file} defines no model: add at least one entry with an "id" under modelProviders.openai` };
+    fs.writeFileSync(file, JSON.stringify({ modelProviders: { openai: [{ name: "No id" }] } }));
+    const reply = await gw.control("POST", `/control/workspaces/${alice}/start`);
+    assert.deepEqual([reply.status, json(reply)], [500, expected]);
+    fs.rmSync(file);
+    const missing = await gw.control("POST", `/control/workspaces/${alice}/start`);
+    assert.deepEqual([missing.status, json(missing)], [500, expected], "models are no longer configured in the environment");
+    assert.equal(gw.runtime.starts.length, 0);
   }));
 
 function mcpOn(gw: Gateway, body: unknown): Promise<Reply> {
@@ -1168,7 +1470,7 @@ test("after a gateway restart, running containers are adopted with their token a
     // A row that says running, without a container.
     gw.db.update(workspaces).set({ status: "running" }).where(eq(workspaces.userId, carol)).run();
     const aliceToken = gw.runtime.startsFor(alice)[0]!.options.token;
-    const alicePort = gw.runtime.qwenFor(alice).port;
+    const { host: aliceHost, port: alicePort } = gw.runtime.qwenFor(alice);
     const bobContainer = gw.runtime.containerFor(bob).id;
     gw.runtime.forgetToken(bobContainer); // its token cannot be read back
     const orphan = gw.runtime.addOrphan(9999);
@@ -1196,7 +1498,7 @@ test("after a gateway restart, running containers are adopted with their token a
     assert.equal(fresh.info(alice).lastActivityAt, gw.clock.now);
     await gw.waitReady(alice);
     assert.equal(gw.runtime.starts.length, starts, "nothing was started");
-    assert.deepEqual(fresh.upstream(alice), { host: "127.0.0.1", port: alicePort, token: aliceToken });
+    assert.deepEqual(fresh.upstream(alice), { host: aliceHost, port: alicePort, token: aliceToken });
 
     const api = await gw.xhr(gw.tokens.alice, alice, { path: "/api/sessions" });
     assert.equal(api.status, 200, "the adopted workspace is proxied with the token it was started with");

@@ -8,7 +8,7 @@
 // and, for anything the Web Shell authenticates, the session-bound workspace token (checked by the
 // proxy, which swaps it for the container's real token).
 import type { IncomingMessage } from "node:http";
-import { agentBrowserToken, userIdForAgentPort, type SessionContext } from "@portal/db";
+import { agentBrowserToken, userIdForAgentPort, type SessionContext, type WorkspaceStatus } from "@portal/db";
 import type { Config } from "./config.ts";
 import type { ConnectionRegistry } from "./connections.ts";
 import { originMatchesHost, parseHostHeader, rejectsCrossSite, type HostParts } from "./headers.ts";
@@ -42,8 +42,23 @@ export type AgentAccess =
       host: HostParts | null;
     };
 
+/** 401 for a request whose workspace token is not this session's token for this workspace. */
+export const INVALID_TOKEN = { code: "invalid_token", message: "Reload the portal page to reconnect to your workspace." } as const;
+
+/**
+ * The 503 for an API request or WebSocket that reaches a workspace that isn't ready. It never
+ * starts the workspace: an open tab's reconnect loop must not wake a stopped one.
+ */
+export function unavailableError(status: WorkspaceStatus): { code: string; message: string; headers: Record<string, string> } {
+  if (status === "starting" || status === "running") {
+    return { code: "workspace_starting", message: "The workspace is starting.", headers: { "retry-after": "2" } };
+  }
+  if (status === "error") return { code: "workspace_error", message: "The workspace failed to start.", headers: {} };
+  return { code: "workspace_stopped", message: "The workspace is not running.", headers: {} };
+}
+
 /** The workspace (user id) a connection reached, from the local port it arrived on. */
-export function workspaceForSocket(config: Config, localPort: number | undefined): number | null {
+function workspaceForSocket(config: Config, localPort: number | undefined): number | null {
   return localPort === undefined ? null : userIdForAgentPort(config.agentPortBase, config.agentPortCount, localPort);
 }
 

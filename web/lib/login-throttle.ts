@@ -1,6 +1,6 @@
 // Failed-login throttling: a username is locked for 15 minutes after 5 failures within 15 minutes.
 // Unknown usernames are tracked the same way, so the lock reveals nothing about which names exist.
-import { eq } from "drizzle-orm";
+import { eq, lte, sql } from "drizzle-orm";
 import { loginAttempts, type PortalDb } from "@portal/db";
 
 export const MAX_FAILURES = 5;
@@ -48,26 +48,47 @@ function readState(db: PortalDb, username: string): AttemptState | undefined {
     .get();
 }
 
-/** Milliseconds until `username` may try again (0 = not locked). */
-export function loginLockRemaining(db: PortalDb, username: string, now = Date.now()): number {
-  return lockRemaining(readState(db, username), now);
-}
+export type LoginReservation =
+  | { allowed: false; lockedForMs: number }
+  | { allowed: true; /** The state with this attempt counted as a failure. */ state: AttemptState };
 
-/** Records one failed attempt and returns the new state (check it for a fresh lock). */
-export function recordLoginFailure(db: PortalDb, username: string, now = Date.now()): AttemptState {
+/**
+ * Takes the right to check one password. In one IMMEDIATE (write-locked) transaction it refuses a locked
+ * username, or else counts the attempt as a failure up front, before the slow argon2 verification. So
+ * parallel attempts can't all pass a lock check that only their later failures would have tripped:
+ * the fifth reservation in the window sets the lock and every later one is refused. When the password
+ * turns out to be right, the caller clears the record (clearLoginFailures).
+ */
+export function reserveLoginAttempt(db: PortalDb, username: string, now = Date.now()): LoginReservation {
   // better-sqlite3 transactions are synchronous on one connection, so statements issued through
-  // `db` inside the callback are part of the (IMMEDIATE, write-locked) transaction.
+  // `db` inside the callback are part of the transaction.
   return db.transaction(
-    () => {
-      const next = nextFailureState(readState(db, username), now);
+    (): LoginReservation => {
+      const current = readState(db, username);
+      const lockedForMs = lockRemaining(current, now);
+      if (lockedForMs > 0) return { allowed: false, lockedForMs };
+      const state = nextFailureState(current, now);
       db.insert(loginAttempts)
-        .values({ username, ...next })
-        .onConflictDoUpdate({ target: loginAttempts.username, set: next })
+        .values({ username, ...state })
+        .onConflictDoUpdate({ target: loginAttempts.username, set: state })
         .run();
-      return next;
+      return { allowed: true, state };
     },
     { behavior: "immediate" },
   );
+}
+
+/**
+ * Deletes records that no longer affect anything: the lock has lifted, or (without a lock) the failure
+ * window has passed. nextFailureState would start afresh for these anyway. Returns how many went.
+ */
+export function pruneLoginAttempts(db: PortalDb, now = Date.now()): number {
+  return db
+    .delete(loginAttempts)
+    .where(
+      lte(sql`coalesce(${loginAttempts.lockedUntil}, ${loginAttempts.firstFailureAt} + ${FAILURE_WINDOW_MS}, 0)`, now),
+    )
+    .run().changes;
 }
 
 export function clearLoginFailures(db: PortalDb, username: string): void {

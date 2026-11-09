@@ -3,12 +3,13 @@
 // web-search MCP server (queries SEARXNG_URL). Callers are identified by their source address;
 // containers run without capabilities on a network without inter-container traffic, so they
 // cannot spoof it.
-import http, { type IncomingMessage, type ServerResponse } from "node:http";
+import type http from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import type { PortalDb } from "@portal/db";
 import type { Config } from "./config.ts";
 import { forward, type ForwardResult } from "./forward.ts";
 import { endToEndHeaders, llmRequestHeaders } from "./headers.ts";
-import { remoteAddress, sendError, sendJson, splitTarget } from "./http-util.ts";
+import { createStreamingServer, remoteAddress, sendError, sendJson, splitTarget } from "./http-util.ts";
 import type { LlmQueue, ReleaseSlot } from "./llm-queue.ts";
 import type { Logger } from "./log.ts";
 import { createLimiter, handleSearchMcp, type SearchBackend } from "./search-mcp.ts";
@@ -30,6 +31,19 @@ export interface ServiceDeps {
 const LLM_PREFIX = "/llm/v1/";
 const MCP_PATH = "/mcp/search";
 
+/**
+ * The only LLM endpoints a workspace may use, by path under /v1/. The proxy adds the real API key,
+ * so with a hosted provider anything else (files, batches, fine-tuning, deletions) would be every
+ * workspace's to use. A model id may contain slashes (`models/Qwen/Qwen3-8B`).
+ */
+const LLM_ROUTES: ReadonlyArray<{ path: RegExp; method: "GET" | "POST" }> = [
+  { path: /^chat\/completions$/, method: "POST" },
+  { path: /^completions$/, method: "POST" },
+  { path: /^embeddings$/, method: "POST" },
+  { path: /^models$/, method: "GET" },
+  { path: /^models\/[^/]+(?:\/[^/]+)*$/, method: "GET" },
+];
+
 type Limiter = ReturnType<typeof createLimiter>;
 
 export function createServiceServer(deps: ServiceDeps): http.Server {
@@ -41,8 +55,8 @@ export function createServiceServer(deps: ServiceDeps): http.Server {
     if (!limiter) limiters.set(userId, (limiter = createLimiter(deps.config.search.maxConcurrentPerUser)));
     return limiter;
   };
-  // No request timeout: LLM streams run as long as generation does.
-  return http.createServer({ requestTimeout: 0 }, (req, res) => {
+  // LLM streams run as long as generation does.
+  return createStreamingServer((req, res) => {
     handle(deps, resolveCaller, limiterFor, req, res).catch((error: unknown) => {
       deps.log.error("service request failed", { error });
       if (!res.headersSent) sendError(res, 500, "internal", "Internal error.");
@@ -75,9 +89,21 @@ async function handle(
   }
   if (pathname.startsWith(LLM_PREFIX)) {
     if (!isPlainPath(pathname)) return sendError(res, 400, "bad_request", "Invalid path.");
+    const method = req.method ?? "GET";
+    const allowed = LLM_ROUTES.filter((route) => route.path.test(pathname.slice(LLM_PREFIX.length)));
+    if (allowed.length === 0) return sendLlmError(res, 404, "not_found", `${pathname} is not available to workspaces.`);
+    if (!allowed.some((route) => route.method === method)) {
+      const allow = allowed.map((route) => route.method).join(", ");
+      return sendLlmError(res, 405, "method_not_allowed", `Use ${allow} for ${pathname}.`, { allow });
+    }
     return proxyLlm(deps, req, res, userId, pathname, search);
   }
   return sendError(res, 404, "not_found", "Unknown route.");
+}
+
+/** The error shape OpenAI clients understand (the LLM server's own errors pass through as they are). */
+function sendLlmError(res: ServerResponse, status: number, type: string, message: string, headers?: Record<string, string>): void {
+  sendJson(res, status, { error: { message, type } }, headers);
 }
 
 /** No dot segments or encoded separators, so the LLM server only ever sees /v1/… paths. */
@@ -131,7 +157,7 @@ async function proxyLlm(
       },
       onError: (error, response) => {
         deps.log.warn("LLM server did not answer", { userId, error });
-        sendJson(response, 502, { error: { message: "The LLM server is not reachable.", type: "llm_unreachable" } });
+        sendLlmError(response, 502, "llm_unreachable", "The LLM server is not reachable.");
       },
     });
   } finally {

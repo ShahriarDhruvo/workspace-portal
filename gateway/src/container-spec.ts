@@ -10,7 +10,7 @@
 //   * an *internal* network with inter-container traffic disabled: the only address it can reach
 //     is the gateway's service port (model + web search). No internet, no LAN, no other workspace.
 import type Docker from "dockerode";
-import type { Config, WorkspaceConfig } from "./config.ts";
+import { MIB, type Config, type WorkspaceConfig } from "./config.ts";
 import { userPaths, workspaceOwner } from "./paths.ts";
 import { LLM_KEY_ENV, QWEN_SETTINGS_MOUNT } from "./qwen.ts";
 
@@ -20,7 +20,7 @@ export const USER_ID_LABEL = "workspace-portal.user-id";
 export const TOKEN_ENV = "QWEN_SERVER_TOKEN";
 
 /** Swap allowed on top of the memory limit, so short spikes slow down instead of OOM-killing the agent. */
-const SWAP_HEADROOM_BYTES = 512 * 1024 * 1024;
+const SWAP_HEADROOM_BYTES = 512 * MIB;
 /** Makes workspaces the OOM killer's first choice, so the LLM server survives a memory shortage. */
 const OOM_SCORE_ADJ = 500;
 

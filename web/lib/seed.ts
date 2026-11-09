@@ -1,18 +1,27 @@
-import "server-only";
+// Creates the admin account on first start. Takes the database and the settings as arguments (no
+// server-only imports) so it can be unit tested; startup.ts passes getDb() and adminSeedSettings().
 import { eq } from "drizzle-orm";
-import { users, writeAudit } from "@portal/db";
-import { adminSeedSettings } from "./config";
-import { getDb } from "./db";
-import { hashPassword } from "./passwords";
-import { newUserSchema } from "./validation";
+import { users, writeAudit, type PortalDb } from "@portal/db";
+import { hashPassword } from "./passwords.ts";
+import { newUserSchema } from "./validation.ts";
 
-/** Creates the single admin account from ADMIN_* settings if no admin exists. Never touches an existing admin. */
-export async function seedAdmin(): Promise<void> {
-  const db = getDb();
+/** The ADMIN_* settings (config.ts `adminSeedSettings`). */
+export interface AdminSeedSettings {
+  username: string;
+  password: string;
+  firstName: string;
+  middleName: string;
+  lastName: string;
+}
+
+/**
+ * Creates the single admin account from ADMIN_* settings if no admin exists. Never touches an existing admin.
+ * The admin must choose a new password at the first sign-in: ADMIN_PASSWORD sits in .env in plain text.
+ */
+export async function seedAdmin(db: PortalDb, settings: AdminSeedSettings): Promise<void> {
   const hasAdmin = db.select({ id: users.id }).from(users).where(eq(users.role, "admin")).get();
   if (hasAdmin) return;
 
-  const settings = adminSeedSettings();
   if (!settings.password) {
     console.error(
       "[seed] No admin account exists and ADMIN_PASSWORD is empty, so none was created. " +
@@ -43,7 +52,7 @@ export async function seedAdmin(): Promise<void> {
           lastName,
           passwordHash,
           role: "admin",
-          mustChangePassword: false,
+          mustChangePassword: true,
           createdAt: now,
           updatedAt: now,
         })

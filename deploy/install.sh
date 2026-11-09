@@ -1,20 +1,19 @@
 #!/usr/bin/env bash
 # Workspace Portal installer. Run on the server, as root, from the project directory:
 #   sudo bash deploy/install.sh
-# Idempotent: re-running rebuilds the images and restarts the stack, keeping .env and data.
+# Idempotent: re-running rebuilds the images (same versions as in .env) and restarts the stack,
+# keeping .env, the Qwen Code settings and all data.
 set -euo pipefail
-
-ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+# shellcheck source=deploy/lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 cd "$ROOT"
 OWNER=${SUDO_USER:-root}
 
-log() { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
-die() { printf '\033[1;31mxx\033[0m %s\n' "$*" >&2; exit 1; }
-
-[[ $EUID -eq 0 ]] || die "run as root: sudo bash deploy/install.sh"
+require_root
 command -v docker >/dev/null || die "docker is not installed"
 docker compose version >/dev/null 2>&1 || die "the docker compose plugin is not installed"
-command -v iptables >/dev/null || die "iptables is not installed"
+command -v nft >/dev/null || die "nftables (the nft command) is not installed: dnf install nftables / apt install nftables"
+docker_version_ok || die "Docker $(docker version --format '{{.Server.Version}}' 2>/dev/null || echo '?') is too old: 25.0.5 or newer is required (older engines let containers on internal networks resolve internet names, CVE-2024-29018)"
 
 # The stack restarts itself after a reboot only if dockerd starts at boot; a socket-activated
 # Docker (the Fedora default) would wait for the first client instead.
@@ -24,60 +23,76 @@ if ! systemctl is-enabled --quiet docker.service 2>/dev/null; then
 fi
 
 # ---------------------------------------------------------------- .env
-rand_hex() { openssl rand -hex 32; }
-rand_password() { tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20; }
-
-if [[ ! -f .env ]]; then
+if [[ ! -f $ENV_FILE ]]; then
   log "creating .env from .env.example"
-  cp .env.example .env
+  (umask 077 && cp .env.example "$ENV_FILE")
 fi
-set_if_empty() { # key value
-  local key=$1 value=$2
-  if grep -qE "^${key}=$" .env; then
-    sed -i "s|^${key}=$|${key}=${value}|" .env
-  elif ! grep -qE "^${key}=" .env; then
-    echo "${key}=${value}" >>.env
-  fi
-}
-set_if_empty GATEWAY_CONTROL_SECRET "$(rand_hex)"
-set_if_empty ADMIN_PASSWORD "$(rand_password)"
-chmod 600 .env
-chown "$OWNER": .env
+chmod 600 "$ENV_FILE"
+chown "$OWNER": "$ENV_FILE"
+set_if_missing() { env_value "$ENV_FILE" "$1" >/dev/null || env_set "$1" "$2"; }
+set_if_missing GATEWAY_CONTROL_SECRET "$(openssl rand -hex 32)"
+set_if_missing ADMIN_PASSWORD "$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20)"
 
-# Read the few settings this script needs without executing .env as shell code.
-env_get() { # key default
-  local line
-  line=$(grep -E "^$1=" .env | tail -n 1 || true)
-  line=${line#*=}
-  line=${line%\"}; line=${line#\"}; line=${line%\'}; line=${line#\'}
-  printf '%s' "${line:-$2}"
-}
-PORTAL_DATA_DIR=$(env_get PORTAL_DATA_DIR /srv/workspace-portal)
-WORKSPACE_IMAGE=$(env_get WORKSPACE_IMAGE workspace-portal/workspace:qwen-0.27.0)
-WEB_PORT=$(env_get WEB_PORT 3000)
-AGENT_PORT_BASE=$(env_get AGENT_PORT_BASE 3100)
-AGENT_PORT_COUNT=$(env_get AGENT_PORT_COUNT 200)
-AGENT_PORTS="$((AGENT_PORT_BASE + 1))-$((AGENT_PORT_BASE + AGENT_PORT_COUNT - 1))"
-ADMIN_USERNAME=$(env_get ADMIN_USERNAME admin)
-FIREWALL_ALLOW_SOURCE=$(env_get FIREWALL_ALLOW_SOURCE "")
+# Settings from earlier versions: the image tag is now derived from QWEN_CODE_VERSION, and the
+# models are defined in Qwen Code's system-defaults.json.
+if ! env_value "$ENV_FILE" QWEN_CODE_VERSION >/dev/null; then
+  old_image=$(env_value "$ENV_FILE" WORKSPACE_IMAGE || true)
+  if [[ $old_image == workspace-portal/workspace:qwen-* ]]; then
+    env_set QWEN_CODE_VERSION "${old_image##*:qwen-}"
+  else
+    env_set QWEN_CODE_VERSION "$(env_value .env.example QWEN_CODE_VERSION)"
+  fi
+fi
+for key in WORKSPACE_IMAGE LLM_MODEL_ID LLM_MODEL_NAME LLM_CONTEXT_WINDOW LLM_MAX_TOKENS LLM_INPUT LLM_REASONING; do
+  if grep -qE "^${key}=" "$ENV_FILE"; then
+    sed -i "s|^${key}=|# no longer used: ${key}=|" "$ENV_FILE"
+    log "commented out the setting ${key} in .env (no longer used)"
+  fi
+done
+
+PORTAL_DATA_DIR=$(env_get PORTAL_DATA_DIR)
+QWEN_CODE_VERSION=$(env_get QWEN_CODE_VERSION)
+WEB_PORT=$(web_port)
+AGENT_PORTS=$(agent_port_range)
+
+# ---------------------------------------------------------------- host checks
+# Workspace UIDs must not fall inside a range /etc/subuid or /etc/subgid hands to a host account:
+# that account could then read workspace files through a user namespace (podman unshare).
+uid_first=$(env_get WORKSPACE_UID_BASE)
+uid_last=$((uid_first + $(env_get AGENT_PORT_COUNT)))
+for file in /etc/subuid /etc/subgid; do
+  [[ -r $file ]] || continue
+  while IFS=: read -r name start size; do
+    [[ $start =~ ^[0-9]+$ && $size =~ ^[0-9]+$ ]] || continue
+    if ((start <= uid_last && start + size - 1 >= uid_first)); then
+      die "workspace UIDs ${uid_first}-${uid_last} overlap ${name}'s range in ${file} (${start}-$((start + size - 1))). Set WORKSPACE_UID_BASE in .env to a free range."
+    fi
+  done <"$file"
+done
+
+if command -v selinuxenabled >/dev/null && selinuxenabled &&
+  ! docker info --format '{{.SecurityOptions}}' 2>/dev/null | grep -q 'name=selinux'; then
+  warn "SELinux is on, but Docker's SELinux support is off, so containers are not SELinux-confined."
+  warn "To turn it on, add \"selinux-enabled\": true to /etc/docker/daemon.json and restart Docker (affects every Docker container)."
+fi
 
 # ---------------------------------------------------------------- data dirs
 # Ownership is the access model:
 #   db/          the web app's service account (10001) only; the gateway reaches it as root.
 #   users/<id>/  created by the gateway, owned by that user's own UID (WORKSPACE_UID_BASE + id).
-#   config/      root-owned; the Qwen Code settings an admin uploads for every workspace.
+#   config/      root only; the Qwen Code settings an admin installs for every workspace.
 log "preparing ${PORTAL_DATA_DIR}"
 install -d -m 0755 -o root -g root "${PORTAL_DATA_DIR}"
 install -d -m 0700 -o 10001 -g 10001 "${PORTAL_DATA_DIR}/db"
 install -d -m 0711 -o root -g root "${PORTAL_DATA_DIR}/users"
-install -d -m 0755 -o root -g root "${PORTAL_DATA_DIR}/config" "${PORTAL_DATA_DIR}/config/qwen"
+install -d -m 0700 -o root -g root "${PORTAL_DATA_DIR}/config" "${PORTAL_DATA_DIR}/config/qwen"
 # An older install ran the web app as uid 1000.
 if [[ -f "${PORTAL_DATA_DIR}/db/portal.sqlite" ]]; then chown 10001:10001 "${PORTAL_DATA_DIR}"/db/portal.sqlite*; fi
 # Starter Qwen Code settings for every workspace (never overwrites an admin's own files).
 for file in settings.json system-defaults.json; do
   if [[ ! -f "${PORTAL_DATA_DIR}/config/qwen/${file}" ]]; then
     log "installing the example Qwen Code ${file}"
-    install -m 0644 -o root -g root "qwen-config/${file}" "${PORTAL_DATA_DIR}/config/qwen/${file}"
+    install -m 0600 -o root -g root "qwen-config/${file}" "${PORTAL_DATA_DIR}/config/qwen/${file}"
   fi
 done
 
@@ -95,37 +110,36 @@ if command -v selinuxenabled >/dev/null && selinuxenabled; then
 fi
 
 # ---------------------------------------------------------------- images
-log "building the workspace image ${WORKSPACE_IMAGE} (first build takes a few minutes)"
-docker build --pull -t "${WORKSPACE_IMAGE}" workspace-image
-
+build_workspace_image "$QWEN_CODE_VERSION"
 log "building web and gateway"
 docker compose build --pull
 
 # ---------------------------------------------------------------- firewall
-log "installing the workspace firewall unit"
+log "installing the workspace firewall (nftables table inet workspace_portal)"
 # systemd gets its own copy of the script and settings: under SELinux it may not read /home.
 install -d -m 0755 /usr/local/libexec/workspace-portal /etc/workspace-portal
 install -m 0755 deploy/firewall.sh /usr/local/libexec/workspace-portal/firewall.sh
 {
-  echo "# Generated by deploy/install.sh from ${ROOT}/.env"
+  echo "# Generated by deploy/install.sh from ${ENV_FILE}"
   for key in WORKSPACE_SUBNET WORKSPACE_GATEWAY_IP WORKSPACE_BRIDGE SERVICE_PORT; do
-    value=$(env_get "$key" "")
-    if [[ -n "$value" ]]; then echo "${key}=${value}"; fi
+    echo "${key}=$(env_get "$key")"
   done
 } >/etc/workspace-portal/firewall.env
 chmod 0644 /etc/workspace-portal/firewall.env
-cat >/etc/systemd/system/workspace-portal-firewall.service <<UNIT
+# Before docker.service, so the rules exist before any workspace starts; after nftables.service and
+# firewalld, which may load whole rulesets of their own at boot.
+cat >/etc/systemd/system/workspace-portal-firewall.service <<'UNIT'
 [Unit]
-Description=Workspace Portal workspace firewall rules
-After=docker.service firewalld.service
-Requires=docker.service
-PartOf=docker.service
+Description=Workspace Portal workspace firewall (nftables)
+After=nftables.service firewalld.service
+Before=docker.service
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
 EnvironmentFile=/etc/workspace-portal/firewall.env
 ExecStart=/usr/local/libexec/workspace-portal/firewall.sh apply
+ExecReload=/usr/local/libexec/workspace-portal/firewall.sh apply
 ExecStop=/usr/local/libexec/workspace-portal/firewall.sh remove
 
 [Install]
@@ -133,26 +147,26 @@ WantedBy=multi-user.target docker.service
 UNIT
 systemctl daemon-reload
 systemctl enable workspace-portal-firewall.service >/dev/null
-systemctl restart workspace-portal-firewall.service
+# Reload when it is already running: "apply" swaps the rules atomically, while a restart would remove
+# them for a moment.
+systemctl reload-or-restart workspace-portal-firewall.service
 
-# Let the LAN (and Tailscale, when present) reach the portal and the workspace ports, only when a
-# host firewall is active. FIREWALL_ALLOW_SOURCE in .env overrides the detected LAN.
-DEFAULT_DEV=$(ip -4 route show default | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
-SOURCES=${FIREWALL_ALLOW_SOURCE:-$(ip -4 route show dev "${DEFAULT_DEV:-lo}" scope link proto kernel 2>/dev/null | awk '{print $1; exit}')}
-if ip link show tailscale0 >/dev/null 2>&1 && [[ -z "$FIREWALL_ALLOW_SOURCE" ]]; then SOURCES="${SOURCES} 100.64.0.0/10"; fi
-if systemctl is-active --quiet firewalld && [[ -n "${SOURCES// /}" ]]; then
-  for source in $SOURCES; do
-    for port in "${WEB_PORT}" "${AGENT_PORTS}"; do
-      rule="rule family=\"ipv4\" source address=\"${source}\" port port=\"${port}\" protocol=\"tcp\" accept"
-      if ! firewall-cmd --permanent --query-rich-rule="$rule" >/dev/null 2>&1; then
-        log "firewalld: allowing ${source} -> tcp/${port}"
-        firewall-cmd --permanent --add-rich-rule="$rule" >/dev/null
-      fi
-    done
-  done
+# Let the LAN (and Tailscale, when present) reach the portal and the workspace ports, when a host
+# firewall is active. FIREWALL_ALLOW_SOURCE in .env overrides the detected sources.
+sources=$(portal_sources)
+if systemctl is-active --quiet firewalld; then
+  [[ -n ${sources// /} ]] || warn "firewalld is active but no LAN was detected: set FIREWALL_ALLOW_SOURCE in .env and re-run"
+  while IFS= read -r rule; do
+    [[ -n $rule ]] || continue
+    if ! firewall-cmd --permanent --query-rich-rule="$rule" >/dev/null 2>&1; then
+      log "firewalld: ${rule}"
+      firewall-cmd --permanent --add-rich-rule="$rule" >/dev/null
+    fi
+  done < <(portal_rich_rules)
   firewall-cmd --reload >/dev/null
-elif command -v ufw >/dev/null && ufw status | grep -q "Status: active" && [[ -n "${SOURCES// /}" ]]; then
-  for source in $SOURCES; do
+elif command -v ufw >/dev/null && ufw status | grep -q "Status: active"; then
+  [[ -n ${sources// /} ]] || warn "ufw is active but no LAN was detected: set FIREWALL_ALLOW_SOURCE in .env and re-run"
+  for source in $sources; do
     ufw allow from "$source" to any port "${WEB_PORT}" proto tcp >/dev/null
     ufw allow from "$source" to any port "${AGENT_PORTS/-/:}" proto tcp >/dev/null
   done
@@ -169,15 +183,14 @@ for _ in $(seq 1 60); do
 done
 curl -fsS "http://127.0.0.1:${WEB_PORT}/api/health" >/dev/null || die "web app did not become healthy; see: docker compose logs web gateway"
 
-HOST_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')
 cat <<DONE
 
   Workspace Portal is running.
 
-    Portal:     http://${HOST_IP:-<server-ip>}:${WEB_PORT}
+    Portal:     http://$(host_ip || echo '<server-ip>'):${WEB_PORT}
     Workspaces: ports ${AGENT_PORTS} (one per user)
-    Admin:      ${ADMIN_USERNAME}
-    Password:   stored in ${ROOT}/.env  (grep ^ADMIN_PASSWORD ${ROOT}/.env)
+    Admin:      $(env_get ADMIN_USERNAME)   (first sign-in: grep ^ADMIN_PASSWORD ${ENV_FILE}; you choose a new one then)
+    Qwen Code:  ${QWEN_CODE_VERSION}, settings in ${PORTAL_DATA_DIR}/config/qwen (deploy/qwen-config.sh)
 
   Check the workspace isolation at any time:  sudo bash deploy/verify-isolation.sh
 

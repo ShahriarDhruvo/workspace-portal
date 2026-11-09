@@ -9,11 +9,11 @@ import { userPaths } from "../src/paths.ts";
 import type { SettingsObject } from "../src/qwen.ts";
 import type { ContainerRuntime, ContainerSample, ContainerState, ContainerSummary, StartedContainer } from "../src/runtime.ts";
 
-export async function listenLocal(server: http.Server, port = 0): Promise<number> {
+export async function listenLocal(server: http.Server, port = 0, host = "127.0.0.1"): Promise<number> {
   await new Promise<void>((resolve, reject) => {
     const onError = (error: Error): void => reject(error);
     server.once("error", onError);
-    server.listen(port, "127.0.0.1", () => {
+    server.listen(port, host, () => {
       server.off("error", onError);
       resolve();
     });
@@ -47,11 +47,17 @@ export interface FakeHealth {
 }
 
 export interface FakeQwen {
+  /** The container's address: each fake workspace listens on its own loopback address. */
+  host: string;
   port: number;
   /** The bearer token it was started with (QWEN_SERVER_TOKEN). */
   token: string;
   health: FakeHealth;
   healthChecks: number;
+  /** While true, health checks get a 503 (a broken or overloaded `qwen serve`). */
+  healthFails: boolean;
+  /** Runs when a health check arrives, before it is answered. */
+  onHealth: (() => void) | null;
   /** Every request other than health checks, with the status the fake answered. */
   requests: Array<RecordedRequest & { status: number }>;
   /** Bytes received by each upload request, and whether it arrived whole. */
@@ -78,11 +84,13 @@ const json = (res: http.ServerResponse, status: number, body: unknown): void => 
   res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(body));
 };
 
-export async function startFakeQwen(token: string, options: { readyAfterMs: number; pingIntervalMs: number }): Promise<FakeQwen> {
+export async function startFakeQwen(token: string, options: { readyAfterMs: number; pingIntervalMs: number; host: string }): Promise<FakeQwen> {
   const readyAt = Date.now() + options.readyAfterMs;
   const state = {
     health: { activePrompts: 0, pendingPermissions: 0, activeWork: false, connectedClients: 0, idleSinceMs: null, channelAlive: true } as FakeHealth,
     healthChecks: 0,
+    healthFails: false,
+    onHealth: null as (() => void) | null,
   };
   const requests: FakeQwen["requests"] = [];
   const uploads: FakeQwen["uploads"] = [];
@@ -94,6 +102,8 @@ export async function startFakeQwen(token: string, options: { readyAfterMs: numb
     const status = refuse(req, token);
     if (url === "/health?deep=1" && status === null) {
       state.healthChecks++;
+      state.onHealth?.();
+      if (state.healthFails) return json(res, 503, { error: "Service Unavailable" });
       const { health } = state;
       return json(res, 200, {
         status: "ok",
@@ -174,8 +184,9 @@ export async function startFakeQwen(token: string, options: { readyAfterMs: numb
     });
   });
 
-  const port = await listenLocal(server);
+  const port = await listenLocal(server, 0, options.host);
   return {
+    host: options.host,
     port,
     token,
     get health() {
@@ -186,6 +197,18 @@ export async function startFakeQwen(token: string, options: { readyAfterMs: numb
     },
     get healthChecks() {
       return state.healthChecks;
+    },
+    get healthFails() {
+      return state.healthFails;
+    },
+    set healthFails(value: boolean) {
+      state.healthFails = value;
+    },
+    get onHealth() {
+      return state.onHealth;
+    },
+    set onHealth(value: (() => void) | null) {
+      state.onHealth = value;
     },
     requests,
     uploads,
@@ -202,6 +225,8 @@ export async function startFakeQwen(token: string, options: { readyAfterMs: numb
 interface FakeContainer {
   id: string;
   userId: number | null;
+  /** Address on the "workspace network"; null for orphans nobody serves. */
+  ip: string | null;
   running: boolean;
   exitCode: number | null;
   /** QWEN_SERVER_TOKEN from the container's environment; null when it has none. */
@@ -218,7 +243,11 @@ export interface StartRecord {
   systemDefaults: SettingsObject;
 }
 
-/** "Starts" a workspace by launching a fake `qwen serve` on 127.0.0.1 with the token the gateway chose. */
+/**
+ * "Starts" a workspace by launching a fake `qwen serve` with the token the gateway chose. Like Docker,
+ * it gives each running container its own address (127.0.0.2, 127.0.0.3, …) and hands a freed address
+ * to the next container.
+ */
 export class FakeRuntime implements ContainerRuntime {
   readonly containers = new Map<string, FakeContainer>();
   readonly starts: StartRecord[] = [];
@@ -228,6 +257,10 @@ export class FakeRuntime implements ContainerRuntime {
   /** Cumulative CPU seconds per user, as docker stats reports them (default 0). */
   readonly cpuSeconds = new Map<number, number>();
   failNextStart: Error | null = null;
+  /** While set, stopping a container fails with this error (and the container keeps running). */
+  failStops: Error | null = null;
+  /** While set, stops wait for it: catches the gateway in the middle of a stop. */
+  stopGate: Promise<void> | null = null;
   #seq = 0;
   readonly #dataDir: string;
 
@@ -261,8 +294,15 @@ export class FakeRuntime implements ContainerRuntime {
   /** A container the gateway does not know about (as if left behind by someone else). */
   addOrphan(userId: number | null): string {
     const id = `orphan-${++this.#seq}`;
-    this.containers.set(id, { id, userId, running: true, exitCode: null, token: null, qwen: null });
+    this.containers.set(id, { id, userId, ip: null, running: true, exitCode: null, token: null, qwen: null });
     return id;
+  }
+
+  /** The lowest address no running container has, as Docker's IPAM would pick. */
+  #freeIp(): string {
+    const taken = new Set([...this.containers.values()].filter((c) => c.running).map((c) => c.ip));
+    for (let n = 2; n < 255; n++) if (!taken.has(`127.0.0.${n}`)) return `127.0.0.${n}`;
+    throw new Error("no free fake container address");
   }
 
   async crash(userId: number, exitCode = 1): Promise<void> {
@@ -292,11 +332,12 @@ export class FakeRuntime implements ContainerRuntime {
     read(paths.passwd);
     read(paths.group);
 
-    const qwen = await startFakeQwen(options.token, { readyAfterMs: this.readyAfterMs, pingIntervalMs: this.pingIntervalMs });
+    const ip = this.#freeIp();
+    const qwen = await startFakeQwen(options.token, { readyAfterMs: this.readyAfterMs, pingIntervalMs: this.pingIntervalMs, host: ip });
     const id = `fake-${++this.#seq}`;
-    this.containers.set(id, { id, userId, running: true, exitCode: null, token: options.token, qwen });
+    this.containers.set(id, { id, userId, ip, running: true, exitCode: null, token: options.token, qwen });
     this.starts.push({ userId, containerId: id, options: { ...options }, settings, systemDefaults });
-    return { id, ip: "127.0.0.1", port: qwen.port };
+    return { id, ip, port: qwen.port };
   }
 
   /** Like docker inspect: the token from the environment, also for a stopped container. */
@@ -311,6 +352,8 @@ export class FakeRuntime implements ContainerRuntime {
   }
 
   async stopContainer(id: string): Promise<void> {
+    await this.stopGate;
+    if (this.failStops) throw this.failStops;
     await this.removeContainer(id);
   }
 
@@ -331,7 +374,7 @@ export class FakeRuntime implements ContainerRuntime {
       id: c.id,
       userId: c.userId,
       running: c.running,
-      ip: "127.0.0.1",
+      ip: c.ip,
       port: c.qwen?.port ?? 1,
     }));
   }

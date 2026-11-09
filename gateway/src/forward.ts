@@ -1,5 +1,5 @@
 // Streams one HTTP request to an upstream and its response back, without buffering or timeouts.
-// Used by the agent proxy, the LLM and search-MCP proxies and the SearXNG relay.
+// Used by the agent proxy and the LLM proxy.
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import https from "node:https";
 import { pipeline, Transform, type Readable, type TransformCallback } from "node:stream";

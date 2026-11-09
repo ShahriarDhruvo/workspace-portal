@@ -5,10 +5,9 @@ import { eq } from "drizzle-orm";
 import { displayName, users } from "@portal/db";
 import { config } from "@/lib/config";
 import { getDb } from "@/lib/db";
-import { summarizeWorkspace } from "@/lib/format";
-import { gateway } from "@/lib/gateway";
+import { initials, summarizeWorkspace } from "@/lib/format";
+import { gateway, toApiError } from "@/lib/gateway";
 import type { WorkspaceInfo } from "@/lib/gateway-types";
-import { toApiError } from "@/lib/api";
 import { requireAdmin } from "@/lib/session";
 import { userIdSchema } from "@/lib/validation";
 import { BackLink } from "@/components/admin/back-link";
@@ -19,9 +18,7 @@ import { Avatar } from "@/components/brand";
 import { LocalTime } from "@/components/local-time";
 import { buttonClass } from "@/components/ui/button";
 import { Card, CardRow, Section } from "@/components/ui/card";
-import { RightUpIcon } from "@/components/ui/icons";
 import { StatusDot, Tag } from "@/components/ui/tag";
-import { initials } from "@/lib/format";
 
 function loadUser(id: string) {
   const parsed = userIdSchema.safeParse(id);
@@ -69,14 +66,7 @@ export default async function UserPage({ params }: PageProps<"/admin/users/[id]"
               </div>
             </div>
           </div>
-          {isSelf ? (
-            <Link href="/workspace" className={buttonClass("primary", "md")}>
-              <RightUpIcon />
-              Open workspace
-            </Link>
-          ) : (
-            <OpenWorkspaceForm userId={user.id} variant="primary" size="md" />
-          )}
+          <OpenWorkspaceForm userId={user.id} variant="primary" size="md" />
         </div>
       </div>
 

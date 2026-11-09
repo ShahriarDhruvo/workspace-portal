@@ -8,7 +8,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { HttpError, readJsonBody, sendJson } from "./http-util.ts";
 
 /** Protocol versions this server speaks; it answers with the client's if listed, else the newest. */
-export const MCP_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"] as const;
+const MCP_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"] as const;
 const SERVER_INFO = { name: "workspace-portal-search", version: "1.0.0" };
 const BODY_LIMIT_BYTES = 64 * 1024;
 const MAX_RESULTS = 10;
@@ -16,7 +16,7 @@ const MAX_SNIPPET_CHARS = 500;
 const MAX_QUERY_CHARS = 400;
 const TIME_RANGES = ["day", "week", "month", "year"] as const;
 
-export const WEB_SEARCH_TOOL = {
+const WEB_SEARCH_TOOL = {
   name: "web_search",
   title: "Web search",
   description:

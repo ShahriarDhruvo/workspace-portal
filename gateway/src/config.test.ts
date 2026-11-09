@@ -1,8 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ConfigError, loadConfig, parseByteSize } from "./config.ts";
+import { ConfigError, loadConfig, MIB, parseByteSize } from "./config.ts";
 
-const MIB = 1024 * 1024;
 const HOUR = 3_600_000;
 const secrets = { GATEWAY_CONTROL_SECRET: "c".repeat(64) };
 
@@ -42,15 +41,7 @@ test("defaults match .env.example", () => {
   assert.equal(config.controlSecret, "c".repeat(64));
   assert.equal(config.llm.upstreamUrl, "http://127.0.0.1:8080");
   assert.equal(config.llm.apiKey, "");
-  assert.deepEqual([config.llm.maxConcurrency, config.llm.maxConcurrencyPerUser], [3, 2]);
-  assert.deepEqual(config.llm.model, {
-    id: "qwen3.8-flash-next",
-    name: "Qwen3.8 Flash-Next",
-    contextWindow: 262144,
-    maxTokens: 32768,
-    input: ["text", "image"],
-    reasoning: true,
-  });
+  assert.deepEqual(config.llm, { upstreamUrl: "http://127.0.0.1:8080", apiKey: "", maxConcurrency: 3, maxConcurrencyPerUser: 2 });
   assert.deepEqual(config.search, { url: "http://127.0.0.1:8888", authorization: "", timeoutMs: 20_000, maxConcurrentPerUser: 2 });
   assert.deepEqual(config.workspace, {
     image: "workspace-portal/workspace:qwen-0.27.0",
@@ -80,8 +71,6 @@ test("values are parsed and normalised", () => {
     AGENT_PORT_BASE: "5000",
     AGENT_PORT_COUNT: "10",
     LLM_UPSTREAM_URL: "http://llm.internal:8000/",
-    LLM_REASONING: "false",
-    LLM_INPUT: "text",
     SEARXNG_URL: "https://search.internal/searx/",
     SEARXNG_AUTHORIZATION: " Basic dXNlcjpwYXNz ",
     SEARXNG_TIMEOUT_SECONDS: "5",
@@ -97,8 +86,6 @@ test("values are parsed and normalised", () => {
   assert.equal(config.qwenConfigDir, "/data/portal/config/qwen");
   assert.deepEqual([config.agentPortBase, config.agentPortCount], [5000, 10]);
   assert.equal(config.llm.upstreamUrl, "http://llm.internal:8000");
-  assert.equal(config.llm.model.reasoning, false);
-  assert.deepEqual(config.llm.model.input, ["text"]);
   assert.deepEqual(config.search, {
     url: "https://search.internal/searx",
     authorization: "Basic dXNlcjpwYXNz",
@@ -119,7 +106,7 @@ test("every problem is reported at once", () => {
       GATEWAY_CONTROL_SECRET: "short",
       AGENT_PORT_BASE: "70000",
       AGENT_PORT_COUNT: "1",
-      LLM_REASONING: "maybe",
+      LLM_MAX_CONCURRENCY: "0",
       PORTAL_DATA_DIR: "data",
       SEARXNG_URL: "ftp://search",
       WORKSPACE_UID_BASE: "1000",
@@ -130,13 +117,18 @@ test("every problem is reported at once", () => {
       "AGENT_PORT_BASE must be a TCP port (got 70000)",
       'AGENT_PORT_COUNT must be an integer >= 2 (got "1")',
       "GATEWAY_CONTROL_SECRET must be at least 16 characters",
-      'LLM_REASONING must be true or false (got "maybe")',
+      'LLM_MAX_CONCURRENCY must be an integer >= 1 (got "0")',
       'SEARXNG_URL must be an http(s) URL (got "ftp://search")',
       'WORKSPACE_UID_BASE must be an integer >= 100000 (got "1000")',
       'MAX_BUSY_HOURS must be an integer >= 0 (got "-1")',
     ],
   );
   assert.deepEqual(problems({}), ["GATEWAY_CONTROL_SECRET is required (deploy/install.sh generates it in .env)"]);
+});
+
+test("models are not configured through the environment any more", () => {
+  const config = loadConfig({ ...secrets, LLM_MODEL_ID: "other", LLM_REASONING: "maybe", LLM_INPUT: "audio" });
+  assert.equal("model" in config.llm, false, "system-defaults.json is the only source of models");
 });
 
 test("SEARXNG_AUTHORIZATION must be one header value", () => {

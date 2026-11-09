@@ -126,6 +126,6 @@ export function otherWorkspacePage(portalUrl: string): string {
   });
 }
 
-export function escapeHtml(text: string): string {
+function escapeHtml(text: string): string {
   return text.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
 }

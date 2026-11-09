@@ -1,5 +1,17 @@
 // Small HTTP helpers shared by the gateway's servers.
-import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from "node:http";
+import http, { type IncomingHttpHeaders, type IncomingMessage, type RequestListener, type ServerResponse } from "node:http";
+
+/** A client must send its request headers within this time. */
+const HEADERS_TIMEOUT_MS = 60_000;
+
+/**
+ * A server for open-ended exchanges (uploads, event streams, LLM generations): no request timeout.
+ * Node derives the headers timeout from the request timeout, so with none it would wait forever for
+ * headers too (slowloris); that one is set explicitly.
+ */
+export function createStreamingServer(handler: RequestListener): http.Server {
+  return http.createServer({ requestTimeout: 0, headersTimeout: HEADERS_TIMEOUT_MS }, handler);
+}
 
 export class HttpError extends Error {
   readonly status: number;

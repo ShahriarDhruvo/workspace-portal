@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { openDatabase, migrate } from "./db.ts";
+import { openDatabase, openForOwnershipChange, migrate } from "./db.ts";
 import { users, sessions } from "./schema.ts";
 import { countSessionsUsingWorkspace, hashSessionToken, loadSessionContext, readCookie } from "./sessions.ts";
 
@@ -110,4 +111,34 @@ test("agent browser tokens are bound to the session and the workspace", async ()
   assert.notEqual(token, agentBrowserToken("t".repeat(32), "session-a", 7));
   assert.ok(tokensEqual(token, token));
   assert.ok(!tokensEqual(token, token.slice(1)));
+});
+
+test("ownership changes refuse symlinks, hard links and non-files", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "portal-chown-"));
+  const file = path.join(dir, "portal.sqlite");
+  fs.writeFileSync(file, "");
+
+  const fd = openForOwnershipChange(file);
+  assert.equal(typeof fd, "number", "a plain file with one link is opened");
+  fs.closeSync(fd!);
+  assert.equal(openForOwnershipChange(`${file}-shm`), null, "a missing file is skipped");
+
+  // What a compromised web process could plant for the root gateway to chown.
+  const outside = path.join(dir, "docker.sock");
+  fs.writeFileSync(outside, "");
+  fs.symlinkSync(outside, `${file}-wal`);
+  assert.throws(() => openForOwnershipChange(`${file}-wal`), /symbolic link/);
+  fs.symlinkSync(path.join(dir, "missing"), `${file}-dangling`);
+  assert.throws(() => openForOwnershipChange(`${file}-dangling`), /symbolic link/);
+
+  fs.linkSync(outside, `${file}-shm`);
+  assert.throws(() => openForOwnershipChange(`${file}-shm`), /2 hard links/);
+  assert.throws(() => openForOwnershipChange(outside), /2 hard links/, "the link target is refused too");
+
+  fs.mkdirSync(`${file}-dir`);
+  assert.throws(() => openForOwnershipChange(`${file}-dir`), /not a regular file/);
+  // A FIFO would block a plain open forever; it must be refused at once.
+  execFileSync("mkfifo", [`${file}-fifo`]);
+  assert.throws(() => openForOwnershipChange(`${file}-fifo`), /not a regular file/);
+  fs.rmSync(dir, { recursive: true, force: true });
 });

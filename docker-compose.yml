@@ -1,11 +1,14 @@
 # Workspace Portal: the web app and the gateway. The per-user workspace containers are not listed
 # here. The gateway creates and removes them on demand from the image built from workspace-image/,
 # on an internal network it creates itself (no route anywhere except the gateway).
+#
+# Settings come from .env (docker compose reads it for the ${...} values below). Each service gets
+# only the variables it uses: the web app never sees the LLM or SearXNG credentials, and the
+# gateway never sees the admin password.
 name: workspace-portal
 
 x-common: &common
   restart: unless-stopped
-  env_file: .env
   cap_drop: [ALL]
   security_opt: ["no-new-privileges:true"]
   logging:
@@ -23,6 +26,19 @@ services:
     environment:
       HOSTNAME: ${WEB_BIND:-0.0.0.0}
       PORT: ${WEB_PORT:-3000}
+      PORTAL_DATA_DIR: ${PORTAL_DATA_DIR:-/srv/workspace-portal}
+      AGENT_PORT_BASE: ${AGENT_PORT_BASE:-}
+      AGENT_PORT_COUNT: ${AGENT_PORT_COUNT:-}
+      CONTROL_PORT: ${CONTROL_PORT:-}
+      GATEWAY_CONTROL_SECRET: ${GATEWAY_CONTROL_SECRET:-}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-}
+      SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-}
+      IDLE_TIMEOUT_MINUTES: ${IDLE_TIMEOUT_MINUTES:-}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      ADMIN_FIRST_NAME: ${ADMIN_FIRST_NAME:-}
+      ADMIN_MIDDLE_NAME: ${ADMIN_MIDDLE_NAME:-}
+      ADMIN_LAST_NAME: ${ADMIN_LAST_NAME:-}
     volumes:
       - ${PORTAL_DATA_DIR:-/srv/workspace-portal}/db:${PORTAL_DATA_DIR:-/srv/workspace-portal}/db
     depends_on:
@@ -47,6 +63,45 @@ services:
     user: "0:0"
     cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
     security_opt: ["no-new-privileges:true", "label=disable"]
+    # The Docker socket is equivalent to root on the host: the gateway is the trusted component,
+    # and it is the only one with that access.
+    read_only: true
+    tmpfs: ["/tmp:size=64m"]
+    environment:
+      PORTAL_DATA_DIR: ${PORTAL_DATA_DIR:-/srv/workspace-portal}
+      WEB_PORT: ${WEB_PORT:-}
+      AGENT_BIND: ${AGENT_BIND:-}
+      AGENT_PORT_BASE: ${AGENT_PORT_BASE:-}
+      AGENT_PORT_COUNT: ${AGENT_PORT_COUNT:-}
+      CONTROL_PORT: ${CONTROL_PORT:-}
+      SERVICE_PORT: ${SERVICE_PORT:-}
+      GATEWAY_CONTROL_SECRET: ${GATEWAY_CONTROL_SECRET:-}
+      LLM_UPSTREAM_URL: ${LLM_UPSTREAM_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MAX_CONCURRENCY: ${LLM_MAX_CONCURRENCY:-}
+      LLM_MAX_CONCURRENCY_PER_USER: ${LLM_MAX_CONCURRENCY_PER_USER:-}
+      SEARXNG_URL: ${SEARXNG_URL:-}
+      SEARXNG_AUTHORIZATION: ${SEARXNG_AUTHORIZATION:-}
+      SEARXNG_TIMEOUT_SECONDS: ${SEARXNG_TIMEOUT_SECONDS:-}
+      SEARCH_MAX_CONCURRENT_PER_USER: ${SEARCH_MAX_CONCURRENT_PER_USER:-}
+      # Named after the Qwen Code version it contains (deploy/lib.sh workspace_image does the same).
+      WORKSPACE_IMAGE: workspace-portal/workspace:qwen-${QWEN_CODE_VERSION:?set QWEN_CODE_VERSION in .env}
+      WORKSPACE_NETWORK: ${WORKSPACE_NETWORK:-}
+      WORKSPACE_SUBNET: ${WORKSPACE_SUBNET:-}
+      WORKSPACE_GATEWAY_IP: ${WORKSPACE_GATEWAY_IP:-}
+      WORKSPACE_IP_RANGE: ${WORKSPACE_IP_RANGE:-}
+      WORKSPACE_BRIDGE: ${WORKSPACE_BRIDGE:-}
+      WORKSPACE_UID_BASE: ${WORKSPACE_UID_BASE:-}
+      WORKSPACE_MEMORY: ${WORKSPACE_MEMORY:-}
+      WORKSPACE_CPUS: ${WORKSPACE_CPUS:-}
+      WORKSPACE_PIDS: ${WORKSPACE_PIDS:-}
+      WORKSPACE_SHM: ${WORKSPACE_SHM:-}
+      WORKSPACE_TMP: ${WORKSPACE_TMP:-}
+      WORKSPACE_BROWSER: ${WORKSPACE_BROWSER:-}
+      MAX_RUNNING_WORKSPACES: ${MAX_RUNNING_WORKSPACES:-}
+      IDLE_TIMEOUT_MINUTES: ${IDLE_TIMEOUT_MINUTES:-}
+      MAX_BUSY_HOURS: ${MAX_BUSY_HOURS:-}
+      UPLOAD_LIMIT_MB: ${UPLOAD_LIMIT_MB:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${PORTAL_DATA_DIR:-/srv/workspace-portal}:${PORTAL_DATA_DIR:-/srv/workspace-portal}
