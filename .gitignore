@@ -1,0 +1,17 @@
+node_modules/
+.next/
+dist/
+out/
+coverage/
+*.tsbuildinfo
+next-env.d.ts
+
+# local data and secrets
+.env
+.env.*
+!.env.example
+data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+

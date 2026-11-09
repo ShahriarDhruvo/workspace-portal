@@ -1,0 +1,184 @@
+#!/usr/bin/env bash
+# Workspace Portal installer. Run on the server, as root, from the project directory:
+#   sudo bash deploy/install.sh
+# Idempotent: re-running rebuilds the images and restarts the stack, keeping .env and data.
+set -euo pipefail
+
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$ROOT"
+OWNER=${SUDO_USER:-root}
+
+log() { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
+die() { printf '\033[1;31mxx\033[0m %s\n' "$*" >&2; exit 1; }
+
+[[ $EUID -eq 0 ]] || die "run as root: sudo bash deploy/install.sh"
+command -v docker >/dev/null || die "docker is not installed"
+docker compose version >/dev/null 2>&1 || die "the docker compose plugin is not installed"
+command -v iptables >/dev/null || die "iptables is not installed"
+
+# The stack restarts itself after a reboot only if dockerd starts at boot; a socket-activated
+# Docker (the Fedora default) would wait for the first client instead.
+if ! systemctl is-enabled --quiet docker.service 2>/dev/null; then
+  log "enabling docker.service at boot"
+  systemctl enable docker.service >/dev/null
+fi
+
+# ---------------------------------------------------------------- .env
+rand_hex() { openssl rand -hex 32; }
+rand_password() { tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20; }
+
+if [[ ! -f .env ]]; then
+  log "creating .env from .env.example"
+  cp .env.example .env
+fi
+set_if_empty() { # key value
+  local key=$1 value=$2
+  if grep -qE "^${key}=$" .env; then
+    sed -i "s|^${key}=$|${key}=${value}|" .env
+  elif ! grep -qE "^${key}=" .env; then
+    echo "${key}=${value}" >>.env
+  fi
+}
+set_if_empty GATEWAY_CONTROL_SECRET "$(rand_hex)"
+set_if_empty ADMIN_PASSWORD "$(rand_password)"
+chmod 600 .env
+chown "$OWNER": .env
+
+# Read the few settings this script needs without executing .env as shell code.
+env_get() { # key default
+  local line
+  line=$(grep -E "^$1=" .env | tail -n 1 || true)
+  line=${line#*=}
+  line=${line%\"}; line=${line#\"}; line=${line%\'}; line=${line#\'}
+  printf '%s' "${line:-$2}"
+}
+PORTAL_DATA_DIR=$(env_get PORTAL_DATA_DIR /srv/workspace-portal)
+WORKSPACE_IMAGE=$(env_get WORKSPACE_IMAGE workspace-portal/workspace:qwen-0.27.0)
+WEB_PORT=$(env_get WEB_PORT 3000)
+AGENT_PORT_BASE=$(env_get AGENT_PORT_BASE 3100)
+AGENT_PORT_COUNT=$(env_get AGENT_PORT_COUNT 200)
+AGENT_PORTS="$((AGENT_PORT_BASE + 1))-$((AGENT_PORT_BASE + AGENT_PORT_COUNT - 1))"
+ADMIN_USERNAME=$(env_get ADMIN_USERNAME admin)
+FIREWALL_ALLOW_SOURCE=$(env_get FIREWALL_ALLOW_SOURCE "")
+
+# ---------------------------------------------------------------- data dirs
+# Ownership is the access model:
+#   db/          the web app's service account (10001) only; the gateway reaches it as root.
+#   users/<id>/  created by the gateway, owned by that user's own UID (WORKSPACE_UID_BASE + id).
+#   config/      root-owned; the Qwen Code settings an admin uploads for every workspace.
+log "preparing ${PORTAL_DATA_DIR}"
+install -d -m 0755 -o root -g root "${PORTAL_DATA_DIR}"
+install -d -m 0700 -o 10001 -g 10001 "${PORTAL_DATA_DIR}/db"
+install -d -m 0711 -o root -g root "${PORTAL_DATA_DIR}/users"
+install -d -m 0755 -o root -g root "${PORTAL_DATA_DIR}/config" "${PORTAL_DATA_DIR}/config/qwen"
+# An older install ran the web app as uid 1000.
+if [[ -f "${PORTAL_DATA_DIR}/db/portal.sqlite" ]]; then chown 10001:10001 "${PORTAL_DATA_DIR}"/db/portal.sqlite*; fi
+# Starter Qwen Code settings for every workspace (never overwrites an admin's own files).
+for file in settings.json system-defaults.json; do
+  if [[ ! -f "${PORTAL_DATA_DIR}/config/qwen/${file}" ]]; then
+    log "installing the example Qwen Code ${file}"
+    install -m 0644 -o root -g root "qwen-config/${file}" "${PORTAL_DATA_DIR}/config/qwen/${file}"
+  fi
+done
+
+# SELinux (Fedora/RHEL): containers run as container_t and may only touch files labelled
+# container_file_t. Label the data dir once (persistently) instead of relabelling on every mount.
+if command -v selinuxenabled >/dev/null && selinuxenabled; then
+  log "labelling ${PORTAL_DATA_DIR} for containers (SELinux)"
+  if command -v semanage >/dev/null; then
+    semanage fcontext -a -t container_file_t "${PORTAL_DATA_DIR}(/.*)?" 2>/dev/null ||
+      semanage fcontext -m -t container_file_t "${PORTAL_DATA_DIR}(/.*)?"
+    restorecon -R "${PORTAL_DATA_DIR}"
+  else
+    chcon -R -t container_file_t "${PORTAL_DATA_DIR}"
+  fi
+fi
+
+# ---------------------------------------------------------------- images
+log "building the workspace image ${WORKSPACE_IMAGE} (first build takes a few minutes)"
+docker build --pull -t "${WORKSPACE_IMAGE}" workspace-image
+
+log "building web and gateway"
+docker compose build --pull
+
+# ---------------------------------------------------------------- firewall
+log "installing the workspace firewall unit"
+# systemd gets its own copy of the script and settings: under SELinux it may not read /home.
+install -d -m 0755 /usr/local/libexec/workspace-portal /etc/workspace-portal
+install -m 0755 deploy/firewall.sh /usr/local/libexec/workspace-portal/firewall.sh
+{
+  echo "# Generated by deploy/install.sh from ${ROOT}/.env"
+  for key in WORKSPACE_SUBNET WORKSPACE_GATEWAY_IP WORKSPACE_BRIDGE SERVICE_PORT; do
+    value=$(env_get "$key" "")
+    if [[ -n "$value" ]]; then echo "${key}=${value}"; fi
+  done
+} >/etc/workspace-portal/firewall.env
+chmod 0644 /etc/workspace-portal/firewall.env
+cat >/etc/systemd/system/workspace-portal-firewall.service <<UNIT
+[Unit]
+Description=Workspace Portal workspace firewall rules
+After=docker.service firewalld.service
+Requires=docker.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=/etc/workspace-portal/firewall.env
+ExecStart=/usr/local/libexec/workspace-portal/firewall.sh apply
+ExecStop=/usr/local/libexec/workspace-portal/firewall.sh remove
+
+[Install]
+WantedBy=multi-user.target docker.service
+UNIT
+systemctl daemon-reload
+systemctl enable workspace-portal-firewall.service >/dev/null
+systemctl restart workspace-portal-firewall.service
+
+# Let the LAN (and Tailscale, when present) reach the portal and the workspace ports, only when a
+# host firewall is active. FIREWALL_ALLOW_SOURCE in .env overrides the detected LAN.
+DEFAULT_DEV=$(ip -4 route show default | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
+SOURCES=${FIREWALL_ALLOW_SOURCE:-$(ip -4 route show dev "${DEFAULT_DEV:-lo}" scope link proto kernel 2>/dev/null | awk '{print $1; exit}')}
+if ip link show tailscale0 >/dev/null 2>&1 && [[ -z "$FIREWALL_ALLOW_SOURCE" ]]; then SOURCES="${SOURCES} 100.64.0.0/10"; fi
+if systemctl is-active --quiet firewalld && [[ -n "${SOURCES// /}" ]]; then
+  for source in $SOURCES; do
+    for port in "${WEB_PORT}" "${AGENT_PORTS}"; do
+      rule="rule family=\"ipv4\" source address=\"${source}\" port port=\"${port}\" protocol=\"tcp\" accept"
+      if ! firewall-cmd --permanent --query-rich-rule="$rule" >/dev/null 2>&1; then
+        log "firewalld: allowing ${source} -> tcp/${port}"
+        firewall-cmd --permanent --add-rich-rule="$rule" >/dev/null
+      fi
+    done
+  done
+  firewall-cmd --reload >/dev/null
+elif command -v ufw >/dev/null && ufw status | grep -q "Status: active" && [[ -n "${SOURCES// /}" ]]; then
+  for source in $SOURCES; do
+    ufw allow from "$source" to any port "${WEB_PORT}" proto tcp >/dev/null
+    ufw allow from "$source" to any port "${AGENT_PORTS/-/:}" proto tcp >/dev/null
+  done
+fi
+
+# ---------------------------------------------------------------- start
+log "starting the stack"
+docker compose up -d --remove-orphans
+
+log "waiting for the web app"
+for _ in $(seq 1 60); do
+  if curl -fsS "http://127.0.0.1:${WEB_PORT}/api/health" >/dev/null 2>&1; then break; fi
+  sleep 2
+done
+curl -fsS "http://127.0.0.1:${WEB_PORT}/api/health" >/dev/null || die "web app did not become healthy; see: docker compose logs web gateway"
+
+HOST_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')
+cat <<DONE
+
+  Workspace Portal is running.
+
+    Portal:     http://${HOST_IP:-<server-ip>}:${WEB_PORT}
+    Workspaces: ports ${AGENT_PORTS} (one per user)
+    Admin:      ${ADMIN_USERNAME}
+    Password:   stored in ${ROOT}/.env  (grep ^ADMIN_PASSWORD ${ROOT}/.env)
+
+  Check the workspace isolation at any time:  sudo bash deploy/verify-isolation.sh
+
+DONE

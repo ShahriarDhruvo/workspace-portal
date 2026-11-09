@@ -1,0 +1,129 @@
+/*
+ * Workspace Portal design tokens, matched to the default (dark) theme of the Qwen Code Web Shell that runs
+ * in the workspace iframe, so the portal chrome and the iframe read as one product.
+ *
+ * Dark only, like the Web Shell's default: it ignores prefers-color-scheme, and so does the portal.
+ * Values are the effective colours measured in the running Web Shell (shadcn/ui neutral greys on a
+ * near-black canvas, 1px white/10% borders, a light-grey primary, 6px base radius, 14px system UI text).
+ * The --shell-* names are neutral; app/globals.css maps them to Tailwind utilities.
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* -- Type: no web fonts, so these resolve to the system UI and mono fonts, as in the Web Shell. */
+  --shell-font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --shell-font-mono: "SF Mono", "Fira Code", "JetBrains Mono", "Cascadia Code", monospace;
+
+  /* -- Surfaces */
+  --shell-canvas: #0d0d0d;          /* html/body, theme-color, pre-paint background */
+  --shell-bg: #0a0a0a;              /* page bodies, auth screen, iframe backdrop */
+  --shell-surface: #171717;         /* cards, data tables, menus, dialogs, the auth card */
+  --shell-surface-raised: #262626;  /* code/secret wells, avatars, menu item focus */
+  --shell-surface-selected: #1e1e1e; /* sidebar-style hover and selected rows */
+  --shell-input: rgba(255, 255, 255, 0.045);       /* input and outline-button fill */
+  --shell-input-hover: rgba(255, 255, 255, 0.075); /* outline-button hover */
+  --shell-hover: rgba(38, 38, 38, 0.5);            /* ghost button and table row hover */
+  --shell-active: #262626;                         /* pressed, menu item focus */
+  --shell-overlay: rgba(0, 0, 0, 0.1);             /* dialog backdrop (barely dims, on purpose) */
+  --shell-selection: rgba(0, 128, 255, 0.3);
+
+  /* -- Borders (1px everywhere) */
+  --shell-border: rgba(255, 255, 255, 0.1);         /* cards, headers, tables, menus, dialogs */
+  --shell-border-strong: rgba(255, 255, 255, 0.15); /* inputs, outline buttons */
+  --shell-border-solid: #2a2a2a;                    /* dialog header rule, dividers */
+
+  /* -- Text */
+  --shell-fg: #fafafa;
+  --shell-fg-muted: #a1a1a1;      /* descriptions, section labels, table headers, icons */
+  --shell-fg-subtle: #808598;     /* hints, placeholders, field descriptions */
+  --shell-fg-on-primary: #171717;
+
+  /* -- Accent: a light-grey primary, never a brand colour */
+  --shell-primary: #e5e5e5;
+  --shell-primary-dialog: #fafafa; /* primary inside dialogs */
+  --shell-link: #6785ff;
+  --shell-info: #6785ff;
+  --shell-focus: #737373;          /* control focus: border plus a 3px ring at 50% */
+  --shell-focus-outline: #747476;  /* nav focus: 2px outline, offset 2px */
+
+  /* -- Status */
+  --shell-success: #48bb78;
+  --shell-warning: #ecc94b;
+  --shell-warning-bg: rgba(236, 201, 75, 0.08);
+  --shell-warning-border: rgba(236, 201, 75, 0.2);
+  --shell-danger: #fc8181;                      /* error text, error banners */
+  --shell-danger-bg: rgba(252, 129, 129, 0.08);
+  --shell-danger-border: rgba(252, 129, 129, 0.2);
+  --shell-destructive: #ff6467;                 /* destructive buttons and menu items (tint or outline, never solid) */
+  --shell-attention: #fbbf24;                   /* attention icon on state cards */
+  --shell-idle: #808598;
+
+  /* -- Shape: 6px base. 4 small/menu items, 6 buttons/inputs/menus, 8 rows, 10 cards/dialogs,
+        12 large panels, 14 tables and the auth card, pills for badges. */
+  --shell-radius-xs: 3px;
+  --shell-radius-sm: 4px;
+  --shell-radius-md: 6px;
+  --shell-radius-lg: 8px;
+  --shell-radius-xl: 10px;
+  --shell-radius-2xl: 12px;
+  --shell-radius-3xl: 14px;
+
+  /* -- Elevation: shadows barely show on near-black, so overlays also draw a 1px border. */
+  --shell-shadow-md: 0 4px 6px -1px #0000001a, 0 2px 4px -2px #0000001a;
+
+  /* -- Motion */
+  --shell-ease: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* -- Scrollbars: 8px with a 2px track-coloured border, so about 4px of thumb shows. */
+  --shell-scrollbar-size: 8px;
+  --shell-scrollbar-thumb: #3a3a3a;
+  --shell-scrollbar-thumb-hover: #525252;
+}
+
+/* ---- Base rules mirroring the Web Shell -------------------------------------------------------- */
+html,
+body {
+  height: 100%;
+  margin: 0;
+  background: var(--shell-canvas);
+  color: var(--shell-fg);
+}
+body {
+  font-family: var(--shell-font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
+/* Chrome ignores ::-webkit-scrollbar wherever the standard properties are set, so those are Firefox-only. */
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--shell-scrollbar-thumb) transparent;
+  }
+}
+::-webkit-scrollbar {
+  width: var(--shell-scrollbar-size);
+  height: var(--shell-scrollbar-size);
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  background: var(--shell-scrollbar-thumb);
+  background-clip: padding-box;
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--shell-scrollbar-thumb-hover);
+}

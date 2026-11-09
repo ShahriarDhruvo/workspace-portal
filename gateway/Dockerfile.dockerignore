@@ -1,0 +1,13 @@
+# Build context allowlist for gateway/Dockerfile (the context is the repository root).
+*
+!package.json
+!package-lock.json
+!packages/db/package.json
+!packages/db/tsconfig.json
+!packages/db/src/
+!gateway/package.json
+!gateway/tsconfig.json
+!gateway/build.mjs
+!gateway/src/
+!web/package.json
+**/*.test.ts

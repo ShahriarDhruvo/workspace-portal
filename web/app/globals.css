@@ -1,0 +1,151 @@
+@import "tailwindcss";
+@import "./theme.css" layer(base);
+
+/* Only the Web Shell palette is available as colour utilities. */
+@theme {
+  --color-*: initial;
+}
+
+@theme inline {
+  --font-sans: var(--shell-font-sans);
+  --font-mono: var(--shell-font-mono);
+
+  --color-white: #ffffff;
+  --color-black: #000000;
+  --color-canvas: var(--shell-canvas);
+  --color-base: var(--shell-bg);
+  --color-surface: var(--shell-surface);
+  --color-raised: var(--shell-surface-raised);
+  --color-selected: var(--shell-surface-selected);
+  --color-input: var(--shell-input);
+  --color-input-hover: var(--shell-input-hover);
+  --color-hover: var(--shell-hover);
+  --color-pressed: var(--shell-active);
+  --color-overlay: var(--shell-overlay);
+
+  --color-fg: var(--shell-fg);
+  --color-fg-muted: var(--shell-fg-muted);
+  --color-fg-subtle: var(--shell-fg-subtle);
+  --color-fg-on-primary: var(--shell-fg-on-primary);
+
+  --color-line: var(--shell-border);
+  --color-line-strong: var(--shell-border-strong);
+  --color-line-solid: var(--shell-border-solid);
+  /* Status cards and stat tiles draw the border at 74%; row separators at 50%. */
+  --color-line-soft: color-mix(in srgb, var(--shell-border) 74%, transparent);
+  --color-line-faint: color-mix(in srgb, var(--shell-border) 50%, transparent);
+
+  --color-primary: var(--shell-primary);
+  --color-link: var(--shell-link);
+  --color-info: var(--shell-info);
+  --color-focus: var(--shell-focus);
+
+  --color-success: var(--shell-success);
+  --color-warning: var(--shell-warning);
+  --color-warning-bg: var(--shell-warning-bg);
+  --color-warning-line: var(--shell-warning-border);
+  --color-danger: var(--shell-danger);
+  --color-danger-bg: var(--shell-danger-bg);
+  --color-danger-line: var(--shell-danger-border);
+  --color-destructive: var(--shell-destructive);
+  --color-attention: var(--shell-attention);
+  --color-idle: var(--shell-idle);
+
+  --radius-xs: var(--shell-radius-xs);
+  --radius-sm: var(--shell-radius-sm);
+  --radius-md: var(--shell-radius-md);
+  --radius-lg: var(--shell-radius-lg);
+  --radius-xl: var(--shell-radius-xl);
+  --radius-2xl: var(--shell-radius-2xl);
+  --radius-3xl: var(--shell-radius-3xl);
+
+  --shadow-md: var(--shell-shadow-md);
+
+  /* Type scale in use: size / line-height */
+  --text-11: 11px;
+  --text-11--line-height: 16px;
+  --text-12: 12px;
+  --text-12--line-height: 16px;
+  --text-13: 13px;
+  --text-13--line-height: 20px;
+  --text-14: 14px;
+  --text-14--line-height: 20px;
+  --text-16: 16px;
+  --text-16--line-height: 24px;
+  --text-18: 18px;
+  --text-18--line-height: 24px;
+  --text-22: 22px;
+  --text-22--line-height: 1.2;
+  --text-24: 24px;
+  --text-24--line-height: 32px;
+}
+
+@layer base {
+  /* Nav-style focus (links, tabs, icon buttons). Controls draw a border plus a 3px ring instead. */
+  :focus-visible {
+    outline: 2px solid var(--shell-focus-outline);
+    outline-offset: 2px;
+  }
+  input:focus-visible,
+  textarea:focus-visible,
+  select:focus-visible {
+    outline: none;
+  }
+  ::selection {
+    background: var(--shell-selection);
+  }
+  dialog::backdrop {
+    background: var(--shell-overlay);
+  }
+}
+
+/* Uppercase section and card labels (12px/600, .04em, muted). */
+@utility label-caps {
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--shell-fg-muted);
+}
+
+/* Ring spinner: a faint track with one solid quarter, in currentColor.
+   Override per use with --spinner-size and --spinner-width. */
+@utility spinner {
+  width: var(--spinner-size, 16px);
+  height: var(--spinner-size, 16px);
+  flex: none;
+  border: var(--spinner-width, 2px) solid color-mix(in srgb, currentColor 28%, transparent);
+  border-top-color: currentColor;
+  border-radius: 999px;
+  animation: spinner-rotate 0.8s linear infinite;
+  @media (prefers-reduced-motion: reduce) {
+    animation-duration: 2.4s;
+  }
+}
+
+/* Activity dot pulse: a soft ring that breathes around the dot. */
+@utility activity-pulse {
+  animation: activity-pulse 1.6s ease-in-out infinite;
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
+}
+
+@keyframes spinner-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes activity-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 16%, transparent);
+    opacity: 0.72;
+  }
+  50% {
+    box-shadow: 0 0 0 5px color-mix(in srgb, currentColor 0%, transparent);
+    opacity: 1;
+  }
+}

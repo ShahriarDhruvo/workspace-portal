@@ -1,0 +1,17 @@
+// Qwen Code system settings for every workspace (system scope: users cannot override these).
+// Upload your own with:  sudo bash deploy/qwen-config.sh install settings.json
+// Any Qwen Code setting may go here. The portal always forces, on top of this file:
+//   - the "search" MCP server (private web search through the portal) and, when WORKSPACE_BROWSER is
+//     true, the "browser" MCP server (headless Chromium inside the workspace);
+//   - auto-update, usage statistics, telemetry and model-catalog refresh off;
+//   - "web_fetch" denied, built-in web search providers removed (the workspace has no internet);
+//   - OpenAI-compatible auth through the portal.
+{
+  "$version": 4,
+  "general": {
+    "enableAutoUpdate": false
+  },
+  "permissions": {
+    "deny": ["web_fetch"]
+  }
+}

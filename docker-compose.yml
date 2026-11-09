@@ -1,0 +1,60 @@
+# Workspace Portal: the web app and the gateway. The per-user workspace containers are not listed
+# here. The gateway creates and removes them on demand from the image built from workspace-image/,
+# on an internal network it creates itself (no route anywhere except the gateway).
+name: workspace-portal
+
+x-common: &common
+  restart: unless-stopped
+  env_file: .env
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+
+services:
+  web:
+    <<: *common
+    build: { context: ., dockerfile: web/Dockerfile }
+    image: workspace-portal/web:latest
+    network_mode: host
+    # A dedicated service account that owns nothing but the database directory.
+    user: "10001:10001"
+    environment:
+      HOSTNAME: ${WEB_BIND:-0.0.0.0}
+      PORT: ${WEB_PORT:-3000}
+    volumes:
+      - ${PORTAL_DATA_DIR:-/srv/workspace-portal}/db:${PORTAL_DATA_DIR:-/srv/workspace-portal}/db
+    depends_on:
+      gateway: { condition: service_healthy }
+    mem_limit: 512m
+    pids_limit: 256
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:'+process.env.PORT+'/api/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  gateway:
+    <<: *common
+    build: { context: ., dockerfile: gateway/Dockerfile }
+    image: workspace-portal/gateway:latest
+    network_mode: host
+    # Root inside its container with only the file capabilities it needs: every workspace runs as
+    # its own UID, and the gateway creates and owns-over each user's directories. It drives the
+    # Docker socket, which SELinux denies to confined containers.
+    user: "0:0"
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    security_opt: ["no-new-privileges:true", "label=disable"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${PORTAL_DATA_DIR:-/srv/workspace-portal}:${PORTAL_DATA_DIR:-/srv/workspace-portal}
+    mem_limit: 512m
+    pids_limit: 256
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:'+(process.env.CONTROL_PORT||4002)+'/control/health',{headers:{authorization:'Bearer '+process.env.GATEWAY_CONTROL_SECRET}}).then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

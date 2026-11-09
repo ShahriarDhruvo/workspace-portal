@@ -1,0 +1,19 @@
+{
+  "name": "workspace-portal",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Multi-user portal that gives each user their own DeepSeek Harness (dsh) workspace container.",
+  "workspaces": [
+    "packages/*",
+    "web",
+    "gateway"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "npm run build -w @portal/gateway && npm run build -w @portal/web",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present"
+  }
+}

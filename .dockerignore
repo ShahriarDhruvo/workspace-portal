@@ -1,0 +1,16 @@
+# Build context for web/Dockerfile and gateway/Dockerfile (both build from the repo root).
+**/node_modules
+**/.next
+**/dist
+**/out
+**/coverage
+**/*.tsbuildinfo
+.git
+
+# Local secrets and data
+**/.env
+**/.env.*
+!**/.env.example
+**/*.sqlite
+**/*.sqlite-wal
+**/*.sqlite-shm
