@@ -63,6 +63,7 @@ export const dshDriver: AgentDriver = {
   kind: "dsh",
   name: AGENT_NAMES.dsh,
   description: "DeepSeek Harness (dsh): chat, files, terminal and a headless browser.",
+  release: { packageName: "@deepseek-ai/dsh", versionKey: "DSH_VERSION", cli: "dsh" },
   port: DSH_PORT,
   credentialEnv: "DSH_COOKIE_SECRET",
   settingsMount: "/etc/workspace-portal/dsh",

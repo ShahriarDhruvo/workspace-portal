@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { requireAdmin } from "@/lib/session";
 import { BackLink } from "@/components/admin/back-link";
 import { NewUser } from "@/components/admin/new-user-form";
-import { PageHeading } from "@/components/ui/card";
+import { PageHeading } from "@/components/layout/page-heading";
 
 export const metadata: Metadata = { title: "New user" };
 

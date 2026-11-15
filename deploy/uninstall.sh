@@ -23,6 +23,8 @@ log "stopping the stack"
 docker compose down --remove-orphans 2>/dev/null || true
 log "removing workspace containers and the workspace network"
 docker ps -aq --filter label=workspace-portal.workspace=1 | xargs -r docker rm -f >/dev/null
+# A version check the gateway ran on a new agent image, if the gateway died during it.
+docker ps -aq --filter label=workspace-portal.verify | xargs -r docker rm -f >/dev/null
 docker network rm "$(env_get WORKSPACE_NETWORK)" >/dev/null 2>&1 || true
 
 log "removing the firewall"
@@ -48,6 +50,8 @@ fi
 
 log "removing images"
 docker image ls --format '{{.Repository}}:{{.Tag}}' | grep '^workspace-portal/' | xargs -r docker image rm >/dev/null 2>&1 || true
+# Old agent builds a rebuild left without a tag (workspace-image/Dockerfile labels them).
+docker image ls -q --filter dangling=true --filter label=workspace-portal.agent | xargs -r docker image rm >/dev/null 2>&1 || true
 
 if command -v semanage >/dev/null; then semanage fcontext -d "${DATA_DIR}(/.*)?" 2>/dev/null || true; fi
 

@@ -29,6 +29,8 @@ export interface WorkspaceInfo {
    * workspace never started.
    */
   agent: AgentKind | null;
+  /** The agent version of the starting or running container's image; null when stopped or unknown. */
+  agentVersion: string | null;
   /** The agent answered its health check. */
   ready: boolean;
   startedAt: number | null;
@@ -64,6 +66,100 @@ export interface HostStats {
   llm: { inFlight: number; queued: number; maxConcurrency: number };
 }
 
+/** One of a package's release channels (npm dist-tags) the admin may update an agent to. */
+export interface ReleaseChannel {
+  /** "latest", then next, preview, beta, rc, alpha, nightly when the package has them. */
+  tag: string;
+  version: string;
+}
+
+/** A workspace image of one agent version that Docker has. */
+export interface InstalledImage {
+  version: string;
+  /** e.g. workspace-portal/workspace:dsh-0.2.2-rc.1 */
+  image: string;
+  sizeBytes: number;
+  /** Epoch ms. */
+  createdAt: number;
+  /** New workspaces start from it. */
+  current: boolean;
+  /** Starting or running workspace containers using it. */
+  inUse: number;
+}
+
+/** GET /control/agents/versions → agents[]: one enabled agent's versions, images and release channels. */
+export interface AgentVersionInfo {
+  id: AgentKind;
+  name: string;
+  /** "@qwen-code/qwen-code" | "@deepseek-ai/dsh" */
+  packageName: string;
+  /** New workspaces start with this version. */
+  current: string;
+  /** From .env: what a fresh install builds. */
+  defaultVersion: string;
+  /** dist-tags.latest; null when unknown. */
+  latest: string | null;
+  /** latest is newer than current (semver precedence, prereleases included). */
+  updateAvailable: boolean;
+  /** "latest" first; [] when unknown. */
+  channels: ReleaseChannel[];
+  /** This agent's workspace images, newest version first. */
+  installed: InstalledImage[];
+  /** Starting and running workspaces by image version (null: unknown), newest first. */
+  running: Array<{ version: string | null; count: number }>;
+}
+
+/**
+ * An agent update's phases: building → verifying → succeeded, or failed / cancelled from either (the current
+ * version then stays as it was).
+ */
+export type UpdatePhase = "building" | "verifying" | "succeeded" | "failed" | "cancelled";
+
+/** POST /control/agents/:agent/update, and GET /control/agents/versions → job. */
+export interface AgentUpdateJob {
+  id: string;
+  agent: AgentKind;
+  /** The current version when the job started. */
+  fromVersion: string;
+  /** The version being installed (a requested channel is resolved before the job starts). */
+  version: string;
+  /** Built without the cache: fresh system packages and npm install. */
+  rebuild: boolean;
+  /** The version's image was on the server already and isn't built: the job only checks it and makes it current. */
+  reuse: boolean;
+  actorUserId: number | null;
+  phase: UpdatePhase;
+  /** The build step it is at, e.g. "[dsh 3/6] RUN npm install -g …"; null once finished. */
+  step: string | null;
+  /** The last 200 lines of build output. */
+  log: string[];
+  startedAt: number;
+  finishedAt: number | null;
+  error: string | null;
+}
+
+/** GET /control/agents/versions[?refresh=1]. */
+export interface AgentVersionsOverview {
+  /** The enabled agents, in display order. */
+  agents: AgentVersionInfo[];
+  /** The running job, else the last finished one since the gateway started. */
+  job: AgentUpdateJob | null;
+  /** The last npm registry check failed: channels and latest are unknown or stale. */
+  registryError: string | null;
+  /** Epoch ms of the last successful registry check. */
+  checkedAt: number | null;
+}
+
+/** Body of POST /control/agents/:agent/update. */
+export interface AgentUpdateRequest {
+  /** An exact version (0.27.4, 0.2.2-rc.3) or one of the agent's release channels (latest, next, …). */
+  version: string;
+  /** Build without the cache. */
+  rebuild?: boolean;
+  /** The admin who asked, for the gateway's audit entries. */
+  actorUserId?: number;
+}
+
 /** Error body used by the gateway and by the portal's JSON routes. */
 export interface ApiError {
   error: string;
@@ -78,6 +174,12 @@ export interface WorkspaceStatusResponse extends WorkspaceInfo {
   actingAs: boolean;
   /** The agents enabled on this install, in display order: what the page offers when nothing runs. */
   agents: AgentInfo[];
+}
+
+/** GET (and POST, refreshing) /api/admin/agents. `versions` is null when the gateway could not provide it. */
+export interface AdminAgents {
+  versions: AgentVersionsOverview | null;
+  error: ApiError | null;
 }
 
 /** GET /api/admin/overview. Either part is null when the gateway could not provide it. */

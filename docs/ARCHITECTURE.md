@@ -8,7 +8,7 @@ something here turns out to be wrong, fix this file in the same change.
 ```
 Browser ──▶ :3000            web (Next.js)       sign-in, change password, admin, /workspace (top bar + iframe)
 Browser ──▶ :3100+N          gateway agent port  user N's workspace: session check → HTTP/WebSocket proxy to wp-ws-N
-                             gateway 127.0.0.1:4002   control API, called by web only
+                             gateway 127.0.0.1:4002   control API, called by web and the deploy scripts
                              gateway 172.29.0.1:4001  service API (LLM proxy + search MCP), called by workspaces only
                                     │ Docker API (/var/run/docker.sock)
               ┌─────────────────────┼─────────────────────┐
@@ -45,9 +45,9 @@ scripts read `.env` through `deploy/lib.sh` (`env_get`), falling back to `.env.e
 | `PORTAL_DATA_DIR` | `/srv/workspace-portal` | both | Host path; mounted at the same path inside the containers |
 | `WEB_BIND` / `WEB_PORT` | `0.0.0.0` / `3000` | web | Portal UI |
 | `AGENT_BIND` / `AGENT_PORT_BASE` / `AGENT_PORT_COUNT` | `0.0.0.0` / `3100` / `200` | gateway, web | User N (1 ≤ N < count) is served on `base + N`. Web builds the iframe URL from it |
-| `CONTROL_PORT` | `4002` | both | Gateway control API on 127.0.0.1 |
+| `CONTROL_PORT` | `4002` | both, deploy scripts | Gateway control API on 127.0.0.1. The deploy scripts ask it whether a console update runs (`console_update_running` in `deploy/lib.sh`) |
 | `SERVICE_PORT` | `4001` | gateway, firewall | Service API on `WORKSPACE_GATEWAY_IP` |
-| `GATEWAY_CONTROL_SECRET` | random | both | Bearer token of the control API; also the HMAC key of workspace browser tokens |
+| `GATEWAY_CONTROL_SECRET` | random | both, deploy scripts | Bearer token of the control API; also the HMAC key of workspace browser tokens |
 | `SESSION_COOKIE_SECURE`, `SESSION_TTL_HOURS` | `false`, `168` | web | Cookie `Secure` flag; sliding session lifetime |
 | `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `ADMIN_*_NAME` | | web | Seeds the single admin on first start if no admin exists, with `must_change_password` set |
 | `LLM_UPSTREAM_URL` | `http://127.0.0.1:8080` | gateway | OpenAI-compatible server root; the proxy appends `/v1/...` |
@@ -56,7 +56,8 @@ scripts read `.env` through `deploy/lib.sh` (`env_get`), falling back to `.env.e
 | `SEARXNG_URL`, `SEARXNG_AUTHORIZATION`, `SEARXNG_TIMEOUT_SECONDS` | `http://127.0.0.1:8888`, empty, `20` | gateway | SearXNG backend of the search MCP |
 | `SEARCH_MAX_CONCURRENT_PER_USER` | `2` | gateway | Concurrent searches per workspace |
 | `WORKSPACE_AGENTS` | `qwen,dsh` | gateway, deploy scripts | The agents users choose from when their workspace starts (`qwen` Qwen Code, `dsh` DeepSeek Harness), in display order. With one, it starts without asking |
-| `QWEN_CODE_VERSION` / `DSH_VERSION` | `0.27.0` / `0.2.2-rc.1` | gateway, deploy scripts | Select the per-user images `workspace-portal/workspace:qwen-<version>` and `:dsh-<version>`, built from the `qwen` and `dsh` targets of `workspace-image/Dockerfile` |
+| `QWEN_CODE_VERSION` / `DSH_VERSION` | `0.27.0` / `0.2.2-rc.1` | gateway, deploy scripts | The agents' default versions, what a fresh install builds. The current version (the admin's choice, in `config/agent-versions.env`; see Agent versions and updates) selects the per-user image `workspace-portal/workspace:qwen-<version>` / `:dsh-<version>`, built from the `qwen` / `dsh` target of `workspace-image/Dockerfile` |
+| `WORKSPACE_IMAGE_CONTEXT` | `/app/workspace-image` | gateway | Build context of the agent updates: the project's `workspace-image/`, which `docker-compose.yml` mounts read-only there, so edits apply to the next console build. Not passed by `docker-compose.yml`: by default the gateway finds `workspace-image/` next to its code, in the container and in a development checkout alike. Set it only for another layout |
 | `WORKSPACE_NETWORK` / `_SUBNET` / `_GATEWAY_IP` / `_IP_RANGE` / `_BRIDGE` | `workspace-portal-ws` / `172.29.0.0/16` / `172.29.0.1` / `172.29.128.0/17` / `br-wportal` | gateway, firewall | The gateway creates the network at startup |
 | `WORKSPACE_UID_BASE` | `200000` | gateway | User N's workspace runs as uid/gid `base + N` |
 | `WORKSPACE_MEMORY` / `_CPUS` / `_PIDS` / `_SHM` / `_TMP` | `3g` / `4` / `1024` / `1g` / `1g` | gateway | Per-container limits; `_TMP` sizes the tmpfs `/tmp` |
@@ -75,7 +76,10 @@ Config validation: the agent port range must end below 65536, and `WEB_PORT`, `C
 ```
 PORTAL_DATA_DIR/                      root 0755
   db/portal.sqlite (+ -wal, -shm)     10001 (web); the gateway hands files it creates to the dir's owner
-  config/qwen/                        root 0700 (files 0600): the admin's settings.json, system-defaults.json
+  config/                             root 0700
+    qwen/                             root 0700 (files 0600): the admin's settings.json, system-defaults.json
+    agent-versions.env                root 0600: the current agent versions (QWEN_CODE_VERSION=0.27.4); written
+                                        by the gateway after an update and by deploy/update-image.sh
   users/<id>/                         root 0711
     home/                             200000+id 0700  → /home/user, shared by both agents:
                                         ~/.qwen (Qwen Code: chats, memory, user settings),
@@ -100,8 +104,11 @@ first start). A container started before agents existed has no agent label and c
 
 Ownership:
 * web writes `users`, `sessions`, `login_attempts`, and `audit_log` (user and admin actions).
-* gateway writes `workspaces`, `llm_usage`, and `audit_log` (`workspace_started`, `workspace_stopped`,
-  `workspace_error`). The audit `actorUserId` is the one given to `/stop`; otherwise it is null.
+* gateway writes `workspaces`, `llm_usage`, and `audit_log` (`workspace_started` with `{ agent, version }`,
+  `workspace_stopped`, `workspace_error`, `agent_updated` with `{ agent, from, to, rebuild }`,
+  `agent_update_failed` with `{ agent, version, error }`, error "Cancelled" for a cancellation). The audit
+  `actorUserId` is the one given to `/stop` or `/update`; otherwise it is null. Web writes
+  `agent_image_removed` (`{ agent, version }`) after the gateway removed an image.
 * gateway only reads `users` and `sessions` (`loadSessionContext`, `countSessionsUsingWorkspace`).
 
 ## Sessions and cookies
@@ -169,7 +176,11 @@ Errors: `{ "error": "<code>", "message": "<human text>" }` with a 4xx/5xx status
 ```
 GET  /control/health                         → { ok: true }
 GET  /control/stats                          → HostStats
-GET  /control/agents                         → { agents: AgentInfo[] }   (the enabled agents, in WORKSPACE_AGENTS order)
+GET  /control/agents                         → { agents: AgentInfo[] }   (the enabled agents, in WORKSPACE_AGENTS order; version = the current one)
+GET  /control/agents/versions[?refresh=1]    → AgentVersionsOverview   (refresh=1 asks the npm registry again)
+POST /control/agents/:agent/update           → AgentUpdateJob  body { version: string, rebuild?: boolean, actorUserId?: number }; see Agent versions and updates
+POST /control/agents/update/cancel           → { cancelled: boolean }  (false: no job, or too late to cancel)
+DELETE /control/agents/:agent/images/:version → { ok: true }
 GET  /control/workspaces                     → { workspaces: WorkspaceInfo[] }   (every user that has a row)
 GET  /control/workspaces/:userId             → WorkspaceInfo (status "stopped" if no row)
 POST /control/workspaces/:userId/start       → WorkspaceInfo   body { agent?: AgentKind } (or none); see below
@@ -194,14 +205,23 @@ Start returns as soon as the container is created and started (`status: "startin
 The agent boots in the background (up to 90 s). The caller polls `GET /control/workspaces/:userId` until
 it sees `status: "running"` with `ready: true`, or `status: "error"` with `lastError`.
 
+Agent update errors: 400 `unknown_agent`, `agent_unavailable` (not in `WORKSPACE_AGENTS`), `invalid_version`
+(not a version, or not one of the agent's release channels), `invalid_actor`, `bad_request`; 404
+`version_not_found` (not published on npm); 409 `update_running` (one job at a time, for all agents, and the
+next one only once the last has cleaned up); 502 `registry_unreachable` (also a registry that stops answering
+mid-body). Image removal errors: 400 `unknown_agent`, `invalid_version`; 404 `not_found`; 409
+`image_current` (the current version's image), `image_in_use` (a container uses it), `update_running` (a job
+is updating that agent).
+
 Other error codes:
 * 400: `invalid_user_id`, `invalid_reason`, `invalid_actor`, `invalid_json`, `bad_request`, `agent_required`,
-  `unknown_agent`, `agent_unavailable`.
-* 404: `user_not_found`, `not_found`.
+  `unknown_agent`, `agent_unavailable`, `invalid_version`.
+* 404: `user_not_found`, `not_found`, `version_not_found`.
 * 405: `method_not_allowed`.
 * 401: `unauthorized`.
-* 409: `capacity`, `deleting`, `agent_mismatch`.
+* 409: `capacity`, `deleting`, `agent_mismatch`, `update_running`, `image_current`, `image_in_use`.
 * 500: `start_failed`, `stop_failed`, `internal`.
+* 502: `registry_unreachable`.
 
 ```ts
 type AgentKind = "qwen" | "dsh";   // @portal/db AGENT_KINDS; display names in AGENT_NAMES
@@ -210,6 +230,7 @@ type WorkspaceInfo = {
   userId: number;
   status: "stopped" | "starting" | "running" | "stopping" | "error";
   agent: AgentKind | null;     // the agent of the container; when stopped, the one it ran last; null if never started
+  agentVersion: string | null; // the agent version of the starting/running container's image; null when stopped or unknown
   ready: boolean;              // the agent answered its readiness probe (see "Agents")
   startedAt: number | null;
   lastActivityAt: number | null;
@@ -228,7 +249,109 @@ type HostStats = {
   memTotalBytes: number; memAvailableBytes: number; loadAvg: [number, number, number]; cpus: number;
   llm: { inFlight: number; queued: number; maxConcurrency: number };
 };
+type AgentVersionsOverview = {
+  agents: AgentVersionInfo[];      // the enabled agents, WORKSPACE_AGENTS order
+  job: AgentUpdateJob | null;      // the running job, else the last finished one since the gateway started
+  registryError: string | null;    // the last registry query failed (channels/latest unknown or stale)
+  checkedAt: number | null;        // epoch ms of the last successful registry query
+};
+type AgentVersionInfo = {
+  id: AgentKind; name: string;
+  packageName: string;             // "@qwen-code/qwen-code" | "@deepseek-ai/dsh"
+  current: string;                 // new workspaces start with this version
+  defaultVersion: string;          // from .env
+  latest: string | null;           // dist-tags.latest; null when unknown
+  updateAvailable: boolean;        // latest is newer than current (semver precedence, prereleases included)
+  channels: Array<{ tag: string; version: string }>;  // latest, next, preview, beta, rc, alpha, nightly (when present); [] when unknown
+  installed: InstalledImage[];     // this agent's workspace images in Docker, newest version first
+  running: Array<{ version: string | null; count: number }>;  // starting/running workspaces by image version
+};
+type InstalledImage = { version: string; image: string; sizeBytes: number; createdAt: number; current: boolean; inUse: number };
+type AgentUpdateJob = {
+  id: string; agent: AgentKind;
+  fromVersion: string;             // the current version when the job started
+  version: string;                 // the target version (a channel is resolved when the request arrives)
+  rebuild: boolean;
+  reuse: boolean;                  // uses the image already on the server: no build, only the check (starts in "verifying")
+  actorUserId: number | null;
+  phase: "building" | "verifying" | "succeeded" | "failed" | "cancelled";
+  step: string | null;             // the current build step, e.g. "[dsh 3/6] RUN npm install -g ..."
+  log: string[];                   // the last 200 lines of build output
+  startedAt: number; finishedAt: number | null; error: string | null;
+};
 ```
+
+## Agent versions and updates
+
+Each agent has a **default version** (`QWEN_CODE_VERSION` / `DSH_VERSION` in `.env`, what a fresh install
+builds; the gateway never changes it) and a **current version**, what new workspaces of that agent start
+with: `PORTAL_DATA_DIR/config/agent-versions.env` (KEY=VALUE lines with the `.env` keys), else the default.
+`agent-versions.ts` reads the file at boot, keeps it in memory and is the only source of the current
+version and image for the gateway; it writes the file (temp file + rename, mode 0600) after a successful
+update. `deploy/update-image.sh` writes it too (`agent_version_set` in `deploy/lib.sh`) and then restarts the
+gateway; `deploy/lib.sh agent_version` reads it (then `.env`, then `.env.example`), so `install.sh`,
+`verify-isolation.sh` and `update-image.sh` act on the current version. An invalid value counts as missing.
+Both writers re-read the file and change only their own agent's line (other lines stay as they are), so
+neither undoes what the other just wrote; `update-image.sh` also refuses to save a version or restart the
+gateway while a console job runs (it asks the control API right before each), and `install.sh` refuses to
+start while one runs.
+
+**Releases** (`npm-registry.ts`, `release-cache.ts`, `release-channels.ts`): the dist-tags of each agent's
+package (`AgentDriver.release.packageName`) from registry.npmjs.org, cached 10 minutes (`?refresh=1`
+bypasses the cache; a failed query is retried after a minute, and the last answer stays, marked by
+`registryError`). Only the channels `latest`, `next`, `preview`, `beta`, `rc`, `alpha`, `nightly` are offered;
+other dist-tags are ignored. Versions compare by semver precedence (`versions.ts`).
+
+**An update** (`agent-updater.ts`, one job at a time for all agents):
+
+1. The request is checked before the job starts: a channel must be one of the agent's offered channels and
+   is resolved to its version (registry). If `workspace-portal/workspace:<agent>-<version>` exists and
+   `rebuild` is false, the job uses that image as it is: no registry check for an exact version, no build
+   (step 3 directly, the job starts in `verifying` with `reuse: true` and "Using the image already on this
+   server" in its log), so a rollback works without npm. Otherwise an exact version must be published (404 otherwise),
+   and the job clears leftovers of interrupted jobs before it builds (sweep, see Boot): in the job, so the
+   request answers at once.
+2. Build: the Docker Engine API with BuildKit (`version: "2"`; the legacy builder can't do `COPY --chmod`),
+   context `WORKSPACE_IMAGE_CONTEXT` streamed as a tar, `target: <agent>`, build argument
+   `<versionKey>=<version>`, `pull: true`, `nocache` when `rebuild`. With the cache a known version takes
+   seconds. The result is tagged `workspace-portal/workspace-build:<agent>-<version>` (staging), so a failed
+   rebuild of the current version never touches the image workspaces use. Progress arrives as BuildKit
+   status protobufs (`buildkit-status.ts`, `protobuf.ts`), rendered like `docker build --progress=plain`
+   (`build-progress.ts`) into `step` and `log`; a progress message that can't be decoded adds one warning
+   line and the build goes on. The build and the version check (step 3) have 30 minutes together; a cancel
+   or the time limit aborts the request, and closing the connection makes the engine cancel the build. The
+   build's BuildKit session (a hijacked `/session` connection with a gRPC server in the gateway) is opened by
+   the builder itself with dockerode's session code and closed however the build ends (dockerode's
+   `buildImage` closes it only when the stream ends normally).
+3. Verify: `<cli> --version` in a throwaway container of the staging image, or of the existing image
+   (no network, read-only root, no capabilities, uid 65534, 45 s), must report exactly that version.
+4. Promote (from here on the job can no longer be cancelled): a new build's staging image is tagged
+   `workspace-portal/workspace:<agent>-<version>`, the version becomes current and is saved, the job succeeds
+   and `agent_updated` is audited. Only then does a rebuild remove the build it replaced, best effort: that
+   build stays while a container uses it or a tag still names it, or if the gateway stops first, and a later
+   sweep removes it once it is untagged and unused.
+
+A failed or cancelled job audits `agent_update_failed`, then removes its staging tag (an existing image it
+only checked stays), and leaves the current version and its image as they were. Until that removal is done,
+a new request gets 409 `update_running` ("The last update is still cleaning up"). Running workspaces keep the
+image they started with; every new start uses the current version. The job is kept in memory: the overview
+shows the running one, else the last finished one since the gateway started. A gateway shutdown abandons a
+running job and records it at once as failed, "The gateway restarted during the update." (audited before the
+process exits); the next start sweeps its staging image. A job already promoting has recorded its outcome
+before it removes the build a rebuild replaced, so a shutdown then loses nothing.
+
+**Images**: `GET /control/agents/versions` lists `workspace-portal/workspace:<agent>-*` with the number of
+starting or running workspaces on each version (`inUse`). `DELETE /control/agents/:agent/images/:version` refuses the current
+version's image (409 `image_current`), an image a container uses (Docker's 409, `image_in_use`), and any
+image of an agent while a job updates it.
+
+**Boot**: the gateway logs each agent's current and default version, and logs an error for each enabled
+agent whose current image is missing (its starts fail until it is built or the admin updates it). Before the
+control API listens it sweeps what interrupted jobs left behind, never forcing and keeping whatever is in
+use: containers labelled `workspace-portal.verify`, every `workspace-portal/workspace-build:*` tag (only
+those: an image that also has a workspace tag, as a gateway stopped mid-promote leaves it, keeps that), and
+untagged images labelled `workspace-portal.agent` (`workspace-image/Dockerfile` labels each agent stage: an
+old build whose tag a rebuild moved while a workspace still used it). It logs what it removed.
 
 ## Agent ports (AGENT_BIND:AGENT_PORT_BASE+1 … +COUNT-1)
 
@@ -383,7 +506,13 @@ own `~/.dsh/profiles/web/cordis.patch.yml` (where the UI saves settings), so nei
 the UI, which shows those plugins read-only.
 
 * **Lockdown** (static, in the image: `workspace-image/dsh/lockdown.patch.yml` →
-  `/usr/local/share/workspace-portal/dsh/lockdown.patch.yml`). Version-specific; check it on every dsh upgrade.
+  `/usr/local/share/workspace-portal/dsh/lockdown.patch.yml`). Top-level rows only, by id. dsh merely warns
+  about a row whose id doesn't exist, so the image build composes the profile with the lockdown
+  (`workspace-image/dsh/check-lockdown.sh`, `dsh --dump-config`) and fails on any such warning: a dsh update
+  that renames or removes a row fails instead of shipping a weaker lockdown, and the current image stays.
+  Rows marked `# optional` (plugins some supported versions no longer have) may be missing. The check adds
+  a canary row with an id that exists nowhere and fails unless dsh reports it as it expects ("dsh's patch
+  warnings changed"), so a dsh that rewords its warnings can't make every lockdown pass.
   * Off (they need the internet or the host): the DeepSeek account and LLM routes, the built-in web and
     web-search tools, `web_fetch`, the plugin manager and market, feedback upload, open-in-app, the sidebar
     browser. Telemetry is off in the image (`DSH_TELEMETRY_DISABLED=1`).
@@ -394,7 +523,13 @@ the UI, which shows those plugins read-only.
     `/workspace`, `/tmp`, `/dev/shm` and the home caches (`~/.cache`, `~/.local`, `~/.npm`); anything
     else (notably `~/.dsh`, `~/.agents` and shell start-up files, which run unconfined later) needs an
     approval (`approval.policy: ask`). The UI's terminal is the person and is not confined.
-  * The presets that need the disabled tools are off, and `preset-standard` is restated without them.
+  * All four agent presets (standard, ptc, minimal, cordis) stay available. Their plugin rows can't be
+    patched one by one (a patch replaces a preset's whole config), so the image build adapts dsh's shipped
+    preset files in place (`workspace-image/dsh/adapt-presets.mjs` on `dsh-web-app/presets/*.patch.yml`):
+    the `tool-web` and plugin-manager/market tool rows get `disabled: true` (an existing value is replaced where
+    it stands, keeping its comment), the rest stays byte-for-byte as shipped, including `!!js` expressions
+    that resolve relative to the file. The build fails if the presets
+    are missing or a listed row stays enabled.
 * **Portal patch** (rendered per start: `users/<id>/system/dsh/portal.patch.yml` →
   `/etc/workspace-portal/dsh/`). JSON (valid YAML) under a `#` comment, so admin-supplied names and ids stay
   quoted strings and can never become YAML tags (dsh evaluates `!!js`).
@@ -416,7 +551,8 @@ the UI, which shows those plugins read-only.
 
 * Container `wp-ws-<id>`, with labels `workspace-portal.workspace=1`, `workspace-portal.user-id=<id>` and
   `workspace-portal.agent=<qwen|dsh>`, runs as `User <200000+id>:<200000+id>` from
-  `workspace-portal/workspace:<agent>-<version>`. One per user, whichever agent; the container spec
+  `workspace-portal/workspace:<agent>-<version>`, the agent's current version when it started (the manager
+  resolves the image at each start; `agentVersion` in WorkspaceInfo). One per user, whichever agent; the container spec
   (`container-spec.ts`) is the same for both apart from the image, the env and the settings mount.
 * Mounts, per user only:
   * `users/<id>/home → /home/user` and `users/<id>/workspace → /workspace` (read-write);
@@ -445,13 +581,16 @@ the UI, which shows those plugins read-only.
 * Stop: `stop -t 10`, then remove. Data stays in the bind mounts. If Docker fails to remove it, the
   container is kept as a leftover (its id stays in the row): reconcile retries the removal, and it is never
   adopted again. The same holds for the cleanup after a failed start and for rows found `stopping` at boot.
-* Every Docker API call has a 60 s timeout.
+* Every Docker API call has a 60 s timeout, except an agent update's image build (30 minutes, see Agent
+  versions and updates).
 * Gateway restart: workspace containers keep running. The next gateway adopts them (it reads the agent from
-  the label and the credential back from the container's env) when it starts and every 5 min. Orphans are removed. A container IP claimed by a
+  the label, the agent version from the image tag (null if the tag has moved since), and the credential back
+  from the container's env) when it starts and every 5 min. Orphans are removed. A container IP claimed by a
   newer workspace is taken from the old entry, whose container is then checked.
 * At boot the gateway exits unless the Docker Engine is 25.0.5 or newer (CVE-2024-29018: older engines
-  forward DNS queries from internal networks). It renders every enabled agent's settings and checks that its
-  image exists, logging what is wrong (starts of that agent then fail with the message).
+  forward DNS queries from internal networks). It logs the agents' current versions, renders every enabled
+  agent's settings and checks that the image of its current version exists, logging what is wrong (starts
+  of that agent then fail with the message).
 
 ### Busy and idle
 
@@ -510,7 +649,17 @@ For each running workspace, it computes a verdict, re-checks the agent state bef
 | `/admin` | admin | Users table, host stats, workspace status (Working / Idle / Stopped, stop pending), its agent ("last: …" when stopped) and actions |
 | `/admin/users/new`, `/admin/users/[id]` | admin | Create / edit (names, active, reset password, delete); the user page shows the workspace's agent |
 | `/admin/users/[id]/workspace` | admin | Red banner "Viewing <name>'s workspace · Exit" + iframe on that user's port; the agent chooser when that workspace is stopped |
+| `/admin/agents` | admin | Each enabled agent: current version against the latest release and its release channels, which versions running workspaces use, the images on the server (use, rebuild, remove). Update, roll back or rebuild behind a confirmation; the running job's step and build log live, with Cancel; the last outcome until dismissed (per browser). See Agent versions and updates |
 | `/admin/audit` | admin | Audit log |
+
+The admin pages read the gateway on the server and then poll admin-only JSON routes for live data:
+`GET /api/admin/overview` (the dashboard) and `GET /api/admin/agents` (`loadAdminAgents`: the gateway's
+`AgentVersionsOverview` or its error). "Check for updates" is `POST /api/admin/agents`, which asks the gateway with
+`refresh=1` (the npm registry again, not the cache); a POST so that it gets the same-origin check of the
+state-changing routes, and a workspace page the admin has open can't make the server query npm in a loop.
+The Agents page polls every 2 s while a job builds or verifies, else every 30 s, and at once after each action.
+Its actions are server actions (`web/lib/actions/agents.ts`) that pass the admin as `actorUserId`; removing an
+image audits `agent_image_removed` in the web app (the gateway audits the updates).
 
 **Ending a session** always has two halves (`endSessionsInBackground` in `web/lib/gateway.ts`): deleting the
 row stops new requests, and after the response the web app calls `disconnect` for each deleted session (its

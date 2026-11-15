@@ -3,7 +3,8 @@
 // containers, waits for the agent to come up, tracks activity and whether the agent is working, stops
 // idle workspaces, enforces the running cap, and reconciles with what Docker actually runs.
 // A workspace runs one agent at a time (Qwen Code or DeepSeek Harness, chosen at start); what
-// differs between agents is behind their drivers (agents/).
+// differs between agents is behind their drivers (agents/). Each start uses the agent's current
+// version, which AgentVersions (agent-versions.ts) knows; a running container keeps its image.
 // The decisions themselves (busy, idle, what to stop or evict) are pure functions in policy.ts; the
 // files a container mounts are prepared by workspace-files.ts.
 //
@@ -20,10 +21,12 @@ import {
   type Workspace,
   type WorkspaceStatus,
 } from "@portal/db";
+import type { AgentVersions } from "./agent-versions.ts";
 import { AgentConfigError, driverFor, type AgentDriver, type AgentEndpoint } from "./agents/index.ts";
 import type { Config } from "./config.ts";
 import { closeEndedSessions, type ConnectionRegistry } from "./connections.ts";
 import { containerName } from "./container-spec.ts";
+import { parseWorkspaceImage } from "./image-names.ts";
 import type { LlmQueue } from "./llm-queue.ts";
 import { errorMessage, type Logger } from "./log.ts";
 import {
@@ -46,6 +49,8 @@ export interface WorkspaceInfo {
   status: WorkspaceStatus;
   /** The agent of the starting or running container; when stopped, the one used last; null if never started. */
   agent: AgentKind | null;
+  /** The agent version of the starting or running container's image; null when stopped or unknown. */
+  agentVersion: string | null;
   /** The agent answered its readiness probe and can take prompts. */
   ready: boolean;
   startedAt: number | null;
@@ -155,6 +160,8 @@ export interface WorkspaceManagerOptions {
   config: Config;
   db: PortalDb;
   runtime: ContainerRuntime;
+  /** Which version (and image) of an agent a start uses. */
+  versions: Pick<AgentVersions, "selection">;
   llm: LlmQueue;
   connections: ConnectionRegistry;
   log: Logger;
@@ -182,6 +189,8 @@ interface Entry {
   leftoverContainerId: string | null;
   /** The agent of the current container, or of the last one; null if it never ran one. */
   kind: AgentKind | null;
+  /** The agent version of the current container's image; null without one, or when unknown. */
+  version: string | null;
   ip: string | null;
   port: number | null;
   /** The credential of this container's agent (driver.credentialEnv). */
@@ -230,6 +239,7 @@ const NO_CONTAINER: Partial<Entry> = {
   ready: false,
   readiness: null,
   containerId: null,
+  version: null,
   ip: null,
   port: null,
   credential: null,
@@ -245,6 +255,7 @@ export class WorkspaceManager {
   readonly #config: Config;
   readonly #db: PortalDb;
   readonly #runtime: ContainerRuntime;
+  readonly #versions: Pick<AgentVersions, "selection">;
   readonly #llm: LlmQueue;
   readonly #connections: ConnectionRegistry;
   readonly #log: Logger;
@@ -260,6 +271,7 @@ export class WorkspaceManager {
     this.#config = options.config;
     this.#db = options.db;
     this.#runtime = options.runtime;
+    this.#versions = options.versions;
     this.#llm = options.llm;
     this.#connections = options.connections;
     this.#log = options.log;
@@ -334,6 +346,7 @@ export class WorkspaceManager {
         userId,
         status: "stopped",
         agent: null,
+        agentVersion: null,
         ready: false,
         startedAt: null,
         lastActivityAt: null,
@@ -354,6 +367,7 @@ export class WorkspaceManager {
       userId,
       status: entry.status,
       agent: entry.kind,
+      agentVersion: active ? entry.version : null,
       ready: entry.ready,
       startedAt: entry.startedAt,
       lastActivityAt: entry.lastActivityAt,
@@ -521,15 +535,16 @@ export class WorkspaceManager {
       }
       await prepareWorkspaceFiles(this.#config, userId, agent);
       const credential = driver.generateCredential();
-      const container = await this.#runtime.startWorkspace(userId, { agent, credential });
+      const { version, image } = this.#versions.selection(agent);
+      const container = await this.#runtime.startWorkspace(userId, { agent, credential, image });
       // startWorkspace removed every earlier container of this user, a leftover included.
-      patch(entry, { containerId: container.id, ip: container.ip, port: container.port, credential, leftoverContainerId: null });
+      patch(entry, { containerId: container.id, ip: container.ip, port: container.port, credential, version, leftoverContainerId: null });
       // A stop that arrived meanwhile waits for this start and then removes the container.
       if (entry.status !== "starting") return this.info(userId);
       this.#claimIp(entry);
       this.#persist(entry);
-      this.#audit("workspace_started", userId, { agent });
-      this.#log.info("workspace container started", { userId, agent, containerId: container.id, ip: container.ip });
+      this.#audit("workspace_started", userId, { agent, version });
+      this.#log.info("workspace container started", { userId, agent, version, containerId: container.id, ip: container.ip });
       this.#watchReadiness(entry);
       return this.info(userId);
     } catch (error) {
@@ -929,10 +944,12 @@ export class WorkspaceManager {
     }
     if (entry.starting || entry.stopping || entry.deleting || isActive(entry)) return false;
     const now = this.#now();
+    const image = parseWorkspaceImage(container.image);
     patch(entry, {
       ...NO_CONTAINER,
       status: "starting",
       kind: container.agent,
+      version: image?.kind === container.agent ? image.version : null,
       containerId: container.id,
       ip: container.ip,
       port: container.port,
@@ -1036,6 +1053,7 @@ function entryFromRow(row: Workspace): Entry {
     containerId: row.containerId,
     leftoverContainerId: null,
     kind: row.agent,
+    version: null,
     ip: row.ip,
     port: null,
     credential: null,

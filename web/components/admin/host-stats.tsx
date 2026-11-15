@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
 import { formatBytes } from "@/lib/format";
 import type { HostStats as HostStatsData } from "@/lib/gateway-types";
+import { cn } from "@/lib/utils";
+import { Card } from "@/components/ui/card";
 
 // KPI row of stat tiles, styled like the Web Shell's Daemon Status metrics: transparent tiles with a 1px border,
 // an 11px uppercase label, a bold mono number and a muted hint. Ratios against a limit get a meter whose fill
@@ -27,21 +29,21 @@ function Meter({ value, max, label }: { value: number; max: number; label: strin
       aria-valuemin={0}
       aria-valuemax={max}
       aria-valuenow={value}
-      className="h-1.5 w-full overflow-hidden rounded-full bg-line/55"
+      className="h-1.5 w-full overflow-hidden rounded-full bg-border/55"
     >
-      <div className={`h-full min-w-0.75 rounded-full ${METER_FILL[severity(ratio)]}`} style={{ width: `${ratio * 100}%` }} />
+      <div className={cn("h-full min-w-0.75 rounded-full", METER_FILL[severity(ratio)])} style={{ width: `${ratio * 100}%` }} />
     </div>
   );
 }
 
 function Tile({ label, value, caption, meter }: { label: string; value: string; caption: string; meter?: ReactNode }) {
   return (
-    <div className="flex min-w-0 flex-col rounded-xl border border-line-soft px-3.5 py-3">
-      <div className="text-11 tracking-[0.04em] text-fg-muted uppercase">{label}</div>
+    <Card variant="outline" className="gap-0 px-3.5 py-3">
+      <div className="text-11 tracking-[0.04em] text-muted-foreground uppercase">{label}</div>
       <div className="mt-1.5 mb-0.5 truncate font-mono text-22 font-bold tabular-nums">{value}</div>
       {meter ? <div className="py-1.5">{meter}</div> : null}
-      <div className="text-12 text-fg-muted tabular-nums">{caption}</div>
-    </div>
+      <div className="text-12 text-muted-foreground tabular-nums">{caption}</div>
+    </Card>
   );
 }
 

@@ -5,6 +5,7 @@ import { AGENT_KINDS } from "@portal/db";
 import { driverFor } from "./agents/index.ts";
 import { qwenDriver } from "./agents/qwen.ts";
 import { containerName, workspaceContainerOptions, workspaceNetworkOptions } from "./container-spec.ts";
+import { workspaceImage } from "./image-names.ts";
 
 const config = loadConfig({
   GATEWAY_CONTROL_SECRET: "c".repeat(32),
@@ -37,10 +38,10 @@ const SANDBOX = {
 
 test("Qwen Code workspace containers follow the container spec", () => {
   assert.equal(containerName(42), "wp-ws-42");
-  assert.deepEqual(workspaceContainerOptions(config, 42, qwenDriver, "per-start-token"), {
+  assert.deepEqual(workspaceContainerOptions(config, 42, qwenDriver, { credential: "per-start-token", image: "workspace-portal/workspace:qwen-0.27.4" }), {
     name: "wp-ws-42",
     Hostname: "workspace",
-    Image: "workspace-portal/workspace:qwen-0.27.0",
+    Image: "workspace-portal/workspace:qwen-0.27.4",
     User: "300042:300042",
     WorkingDir: "/workspace",
     Labels: { "workspace-portal.workspace": "1", "workspace-portal.user-id": "42", "workspace-portal.agent": "qwen" },
@@ -68,11 +69,12 @@ test("Qwen Code workspace containers follow the container spec", () => {
 
 test("every agent gets the same sandbox: limits, no capabilities, read-only root, the internal network", () => {
   for (const kind of AGENT_KINDS) {
-    const options = workspaceContainerOptions(config, 5, driverFor(kind), "t");
+    const image = workspaceImage(kind, "1.2.3");
+    const options = workspaceContainerOptions(config, 5, driverFor(kind), { credential: "t", image });
     const { Binds, ...hostConfig } = options.HostConfig!;
     assert.deepEqual(hostConfig, SANDBOX, kind);
     assert.equal(options.User, "300005:300005", kind);
-    assert.equal(options.Image, config.workspace.images[kind].image, kind);
+    assert.equal(options.Image, image, `${kind}: the image the manager chose`);
     assert.equal(options.Labels!["workspace-portal.agent"], kind);
     assert.ok(Binds!.includes(`/srv/workspace-portal/users/5/system/${kind}:${driverFor(kind).settingsMount}:ro`), kind);
   }
@@ -81,7 +83,7 @@ test("every agent gets the same sandbox: limits, no capabilities, read-only root
 test("a workspace only mounts its own user's directories, and only home and workspace are writable", () => {
   for (const kind of AGENT_KINDS) {
     for (const userId of [1, 7, 199]) {
-      const binds = workspaceContainerOptions(config, userId, driverFor(kind), "t").HostConfig!.Binds!;
+      const binds = workspaceContainerOptions(config, userId, driverFor(kind), { credential: "t", image: "i" }).HostConfig!.Binds!;
       for (const bind of binds) {
         assert.ok(bind.startsWith(`/srv/workspace-portal/users/${userId}/`), bind);
         const writable = !bind.endsWith(":ro");
@@ -89,15 +91,15 @@ test("a workspace only mounts its own user's directories, and only home and work
       }
     }
   }
-  const a = workspaceContainerOptions(config, 1, qwenDriver, "t");
-  const b = workspaceContainerOptions(config, 2, qwenDriver, "t");
+  const a = workspaceContainerOptions(config, 1, qwenDriver, { credential: "t", image: "i" });
+  const b = workspaceContainerOptions(config, 2, qwenDriver, { credential: "t", image: "i" });
   assert.notEqual(a.User, b.User, "no two workspaces share a UID");
 });
 
 test("each start carries its own credential, readable back from the environment", () => {
   for (const kind of AGENT_KINDS) {
     const driver = driverFor(kind);
-    const env = workspaceContainerOptions(config, 3, driver, "second").Env!;
+    const env = workspaceContainerOptions(config, 3, driver, { credential: "second", image: "i" }).Env!;
     assert.equal(env.filter((entry) => entry.startsWith(`${driver.credentialEnv}=`)).length, 1, kind);
     assert.ok(env.includes(`${driver.credentialEnv}=second`), kind);
   }

@@ -2,18 +2,22 @@ import Link from "next/link";
 import { openMyWorkspace } from "@/lib/actions/admin";
 import { signOut } from "@/lib/actions/auth";
 import { Brand, UserChip } from "@/components/brand";
+import { SubmitButton } from "@/components/forms/submit-button";
 import { LogOutIcon, TerminalIcon } from "@/components/ui/icons";
-import { SubmitButton } from "@/components/ui/submit-button";
+import { Separator } from "@/components/ui/separator";
 import { AdminNav } from "./admin-nav";
 
-/** The admin console's 46px top bar, like the Web Shell's full-page header (same anatomy as the workspace bar). */
+/**
+ * The admin console's 46px top bar, like the Web Shell's full-page header (same anatomy as the workspace bar).
+ * On narrow screens icons stand in for the labels, and the gaps tighten, so everything fits on one line.
+ */
 export function AdminHeader({ name, initials }: { name: string; initials: string }) {
   return (
-    <header className="sticky top-0 z-10 flex h-11.5 shrink-0 items-center gap-3 border-b border-line bg-base px-5">
+    <header className="sticky top-0 z-10 flex h-11.5 shrink-0 items-center gap-3 border-b bg-background px-5 max-sm:gap-2 max-sm:px-4">
       <Link href="/admin" className="rounded-sm">
-        <Brand />
+        <Brand compact />
       </Link>
-      <span aria-hidden="true" className="h-4 border-l border-line" />
+      <Separator orientation="vertical" className="data-[orientation=vertical]:h-4" />
       <AdminNav />
       <div className="ml-auto flex min-w-0 items-center gap-2">
         {/* An action, not a link: a session viewing someone's workspace must leave it first, and this
@@ -26,7 +30,7 @@ export function AdminHeader({ name, initials }: { name: string; initials: string
         <UserChip name={name} initials={initials} />
         <form action={signOut}>
           <SubmitButton variant="outline" size="sm" icon={<LogOutIcon />}>
-            Sign out
+            <span className="max-sm:sr-only">Sign out</span>
           </SubmitButton>
         </form>
       </div>

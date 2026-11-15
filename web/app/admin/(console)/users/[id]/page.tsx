@@ -15,10 +15,13 @@ import { OpenWorkspaceForm } from "@/components/admin/open-workspace-form";
 import { ProfileForm } from "@/components/admin/profile-form";
 import { UserDialogButton } from "@/components/admin/user-dialogs";
 import { Avatar } from "@/components/brand";
+import { StatusDot } from "@/components/common/status-dot";
+import { CardRow } from "@/components/layout/card-row";
+import { Section } from "@/components/layout/section";
 import { LocalTime } from "@/components/local-time";
-import { buttonClass } from "@/components/ui/button";
-import { Card, CardRow, Section } from "@/components/ui/card";
-import { StatusDot, Tag } from "@/components/ui/tag";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 
 function loadUser(id: string) {
   const parsed = userIdSchema.safeParse(id);
@@ -58,26 +61,26 @@ export default async function UserPage({ params }: PageProps<"/admin/users/[id]"
             <Avatar initials={initials(user.firstName, user.lastName)} size="lg" />
             <div className="flex min-w-0 flex-col gap-1">
               <h1 className="truncate text-18 font-semibold">{name}</h1>
-              <div className="flex flex-wrap items-center gap-2 text-13 text-fg-muted">
+              <div className="flex flex-wrap items-center gap-2 text-13 text-muted-foreground">
                 <span className="font-mono text-12">{user.username}</span>
-                {user.role === "admin" ? <Tag tone="solid">Admin</Tag> : <Tag tone="outline">User</Tag>}
-                {user.active ? <Tag tone="success">Active</Tag> : <Tag tone="neutral">Disabled</Tag>}
-                {user.mustChangePassword ? <Tag tone="warning">Temporary password</Tag> : null}
+                {user.role === "admin" ? <Badge>Admin</Badge> : <Badge variant="outline">User</Badge>}
+                {user.active ? <Badge variant="success">Active</Badge> : <Badge variant="neutral">Disabled</Badge>}
+                {user.mustChangePassword ? <Badge variant="warning">Temporary password</Badge> : null}
               </div>
             </div>
           </div>
-          <OpenWorkspaceForm userId={user.id} variant="primary" size="md" />
+          <OpenWorkspaceForm userId={user.id} variant="default" size="default" />
         </div>
       </div>
 
       <Section title="Profile" description="Shown everywhere as first, middle and last name.">
-        <Card>
+        <Card variant="outline" className="gap-0 py-0">
           <ProfileForm userId={user.id} firstName={user.firstName} middleName={user.middleName} lastName={user.lastName} />
         </Card>
       </Section>
 
       <Section title="Workspace">
-        <Card>
+        <Card variant="outline" className="gap-0 py-0">
           <CardRow
             title={
               summary ? (
@@ -104,14 +107,14 @@ export default async function UserPage({ params }: PageProps<"/admin/users/[id]"
       </Section>
 
       <Section title="Account">
-        <Card>
+        <Card variant="outline" className="gap-0 py-0">
           {isSelf ? (
             <CardRow
               title="Password"
               action={
-                <Link href="/change-password" className={buttonClass("outline", "sm")}>
-                  Change password
-                </Link>
+                <Button asChild variant="outline" size="sm">
+                  <Link href="/change-password">Change password</Link>
+                </Button>
               }
             >
               This is the administrator account. It can&apos;t be deactivated or deleted.
@@ -152,7 +155,7 @@ export default async function UserPage({ params }: PageProps<"/admin/users/[id]"
             </>
           )}
         </Card>
-        <p className="px-0.5 text-12 text-fg-muted">
+        <p className="px-0.5 text-12 text-muted-foreground">
           Created <LocalTime at={user.createdAt} /> · Last sign-in{" "}
           {user.lastLoginAt ? <LocalTime at={user.lastLoginAt} /> : "never"}
         </p>

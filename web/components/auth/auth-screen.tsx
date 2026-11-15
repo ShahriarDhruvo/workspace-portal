@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
+import { cn } from "@/lib/utils";
 import { Brand } from "@/components/brand";
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 
 /**
  * Sign-in and password-change screen, laid out like the Web Shell's "Connect" card: a 448px card (#171717,
@@ -18,25 +20,26 @@ export function AuthScreen({
   footer?: ReactNode;
 }) {
   return (
-    <main className="flex min-h-dvh flex-col items-center justify-center gap-6 bg-base p-6">
+    <main className="flex min-h-dvh flex-col items-center justify-center gap-6 bg-background p-6">
       <Brand size="lg" />
-      <section
+      <Card
+        role="region"
         aria-labelledby="auth-title"
-        className="flex w-full max-w-md flex-col gap-5 overflow-hidden rounded-3xl border border-line bg-surface pt-4"
+        className={cn("w-full max-w-md gap-5 overflow-hidden rounded-3xl", footer && "pb-0")}
       >
-        <div className="flex flex-col gap-1 px-4 text-center">
-          <h1 id="auth-title" className="text-24 font-medium">
-            {title}
-          </h1>
-          {description ? <p className="text-14 text-fg-muted">{description}</p> : null}
-        </div>
-        <div className={footer ? "px-4" : "px-4 pb-4"}>{children}</div>
+        <CardHeader className="gap-1 text-center">
+          <CardTitle asChild className="text-24">
+            <h1 id="auth-title">{title}</h1>
+          </CardTitle>
+          {description ? <CardDescription>{description}</CardDescription> : null}
+        </CardHeader>
+        <CardContent>{children}</CardContent>
         {footer ? (
-          <div className="flex justify-center border-t border-line bg-raised/50 px-4 py-3 text-center text-12 text-fg-muted">
+          <CardFooter className="justify-center border-t bg-muted/50 py-3 text-center text-12 text-muted-foreground">
             {footer}
-          </div>
+          </CardFooter>
         ) : null}
-      </section>
+      </Card>
     </main>
   );
 }

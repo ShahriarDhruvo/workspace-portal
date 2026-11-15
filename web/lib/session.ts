@@ -73,7 +73,8 @@ export async function startSession(userId: number): Promise<void> {
 /**
  * Sliding expiry. Page renders cannot set cookies, so this runs in the polling Route Handlers
  * (/api/workspace/status every 2–10 s on the workspace page, /api/admin/overview every 5 s on the
- * dashboard). That keeps `expires_at` and the cookie's Max-Age moving together.
+ * dashboard, /api/admin/agents every 2–30 s on the Agents page). That keeps `expires_at` and the cookie's
+ * Max-Age moving together.
  */
 export async function renewSession(session: SessionContext): Promise<void> {
   const now = Date.now();

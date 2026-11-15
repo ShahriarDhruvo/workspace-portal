@@ -8,8 +8,8 @@ import { loadAdminOverview } from "@/lib/overview";
 import { requireAdmin } from "@/lib/session";
 import { toUserSummary } from "@/lib/user-summary";
 import { AdminDashboard } from "@/components/admin/dashboard";
-import { buttonClass } from "@/components/ui/button";
-import { PageHeading } from "@/components/ui/card";
+import { PageHeading } from "@/components/layout/page-heading";
+import { Button } from "@/components/ui/button";
 import { PlusIcon } from "@/components/ui/icons";
 
 export const metadata: Metadata = { title: "Users" };
@@ -27,10 +27,12 @@ export default async function AdminPage() {
       <PageHeading
         title="Dashboard"
         actions={
-          <Link href="/admin/users/new" className={buttonClass("primary")}>
-            <PlusIcon />
-            New user
-          </Link>
+          <Button asChild>
+            <Link href="/admin/users/new">
+              <PlusIcon />
+              New user
+            </Link>
+          </Button>
         }
       >
         Accounts, workspaces and host load.

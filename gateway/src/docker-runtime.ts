@@ -93,10 +93,10 @@ export class DockerRuntime implements ContainerRuntime {
     await this.removeContainer(containerName(userId));
     let container: Docker.Container;
     try {
-      container = await this.#docker.createContainer(workspaceContainerOptions(this.#config, userId, driver, options.credential));
+      container = await this.#docker.createContainer(workspaceContainerOptions(this.#config, userId, driver, options));
     } catch (error) {
-      if (statusCode(error) === 404 && /no such image/i.test(errorText(error))) {
-        throw new WorkspaceImageMissingError(this.#config.workspace.images[options.agent].image);
+      if (statusCode(error) === 404 && /no such image/i.test(engineMessage(error))) {
+        throw new WorkspaceImageMissingError(options.image);
       }
       throw error;
     }
@@ -154,6 +154,7 @@ export class DockerRuntime implements ContainerRuntime {
         running: row.State === "running",
         ip: row.NetworkSettings.Networks[network]?.IPAddress || null,
         port: agent === null ? null : driverFor(agent).port,
+        image: row.Image,
       };
     });
   }
@@ -252,15 +253,20 @@ export function cpuSeconds(stats: Docker.ContainerStats): number | null {
   return typeof total === "number" && Number.isFinite(total) && total >= 0 ? total / 1e9 : null;
 }
 
-function statusCode(error: unknown): number | undefined {
+/** The HTTP status of a failed Docker API call (dockerode puts it on the error). */
+export function statusCode(error: unknown): number | undefined {
   const code = (error as { statusCode?: unknown } | null)?.statusCode;
   return typeof code === "number" ? code : undefined;
 }
 
-function errorText(error: unknown): string {
+/**
+ * What a failed Docker API call went wrong with: the engine's own message (`json.message`) when it sent
+ * one, else the error's (dockerode puts the HTTP status in front of the engine's message there).
+ */
+export function engineMessage(error: unknown): string {
   const json = (error as { json?: { message?: unknown } } | null)?.json;
-  const message = typeof json?.message === "string" ? json.message : "";
-  return `${error instanceof Error ? error.message : String(error)} ${message}`;
+  if (typeof json?.message === "string" && json.message.trim() !== "") return json.message.trim();
+  return error instanceof Error ? error.message : String(error);
 }
 
 /** The agent label of a workspace container; containers from before agents had a label run Qwen Code. */

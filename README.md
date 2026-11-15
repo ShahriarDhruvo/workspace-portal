@@ -69,9 +69,9 @@ network and container items on a live install.
 - The agents' own internet features are off, and users can't turn them back on:
   - Qwen Code, pinned at system scope: auto-update, usage statistics, telemetry and the model catalogue
     refresh are off, `web_fetch` is denied, and the built-in web search providers are removed.
-  - DeepSeek Harness, by a lockdown patch in the image that applies after the user's own settings: no
-    DeepSeek account or DeepSeek model routes, no built-in web fetch or web search, no plugin manager or
-    market, no feedback upload, and telemetry off.
+  - DeepSeek Harness, by a lockdown patch in the image that applies after the user's own settings, and by
+    agent presets adapted in the image: no DeepSeek account or DeepSeek model routes, no built-in web fetch
+    or web search, no plugin manager or market, no feedback upload, and telemetry off.
 
   With them off, a running Qwen Code workspace made no outside DNS lookups in testing. In a DeepSeek
   Harness workspace the only ones came from the headless browser's Chromium asking for Google hosts; Docker's
@@ -148,8 +148,9 @@ The installer is idempotent; re-run it after pulling changes. It:
 2. creates `.env` from `.env.example` (mode 600), generating `GATEWAY_CONTROL_SECRET` and an `ADMIN_PASSWORD`;
 3. creates `PORTAL_DATA_DIR` (`/srv/workspace-portal`) with the ownership model above, plus the SELinux labels;
 4. installs the example Qwen Code settings into `PORTAL_DATA_DIR/config/qwen/` (never overwriting yours);
-5. builds a workspace image for each agent in `WORKSPACE_AGENTS` (`QWEN_CODE_VERSION`, `DSH_VERSION`; a few
-   minutes each the first time) and the web and gateway images;
+5. builds a workspace image for each agent in `WORKSPACE_AGENTS` at its current version (`QWEN_CODE_VERSION`,
+   `DSH_VERSION` until an admin picks another; a few minutes each the first time) and the web and gateway
+   images;
 6. installs and starts the workspace firewall unit, and opens ports 3000 and 3101–3299 to your LAN (and to
    Tailscale, if present) in firewalld or ufw;
 7. starts the stack with `docker compose up -d` and prints the URL.
@@ -276,7 +277,7 @@ address, so allow it there.
 ```sh
 WORKSPACE_AGENTS=qwen,dsh        # both (the default); qwen = Qwen Code, dsh = DeepSeek Harness
 # WORKSPACE_AGENTS=qwen          # only Qwen Code: workspaces start without asking
-QWEN_CODE_VERSION=0.27.0         # the version each agent's image contains
+QWEN_CODE_VERSION=0.27.0         # the default versions (see "Updating the workspace images")
 DSH_VERSION=0.2.2-rc.1
 ```
 
@@ -340,7 +341,9 @@ the user's own settings, so the UI shows those settings as read-only:
 
 - `workspace-image/dsh/lockdown.patch.yml`, built into the image: the internet features above off, the
   sandbox and approvals, one workspace (`/workspace`). To change it, edit the file and rebuild with
-  `sudo bash deploy/update-image.sh dsh --refresh`.
+  `sudo bash deploy/update-image.sh dsh --refresh`. The image build also switches off the web and plugin
+  manager tools inside dsh's own agent presets (`workspace-image/dsh/adapt-presets.mjs`), so all four
+  (Standard, PTC, Minimal, Cordis) work offline.
 - `portal.patch.yml`, rendered by the gateway at every start into `PORTAL_DATA_DIR/users/<id>/system/dsh/`:
   the models, the default model and the MCP servers.
 
@@ -350,18 +353,36 @@ Users keep their own sessions, settings and skills in `~/.dsh` and `~/.agents`.
 
 Each agent has its own image, built from `workspace-image/Dockerfile` (one target per agent, on a shared base
 with the tools and Chromium) and tagged `workspace-portal/workspace:<agent>-<version>`: `qwen-0.27.0`,
-`dsh-0.2.2-rc.1`. `QWEN_CODE_VERSION` and `DSH_VERSION` in `.env` select the version, and with it the image
-that agent's workspaces start from.
+`dsh-0.2.2-rc.1`. Each agent has a current version, and with it the image its workspaces start from: the one
+last chosen in the admin console or with `update-image.sh` (kept in `PORTAL_DATA_DIR/config/agent-versions.env`),
+else `QWEN_CODE_VERSION` and `DSH_VERSION` from `.env`, the defaults.
 
-**Change an agent's version** (on the server, in the project directory):
+**In the admin console** (Admin > Agents), each agent shows its current version, the latest release and its
+other release channels on npm (next, preview, nightly, ...), and its images on the server. Choose a version or a
+channel to update to: the gateway builds that image on the server, checks that it really contains that version
+(`qwen --version` or `dsh --version`, in a container without network) and makes it the current version. The
+build output shows live, and the update can be cancelled; a failed or cancelled update changes nothing. One
+update runs at a time. Choosing an older version rolls back: if its image is still on the server, it is checked
+and used as it is, without a build or npm; a rebuild without the cache picks up new Debian packages (Chromium,
+...). Running workspaces keep their image until they stop; every new start uses the new version. Images that are
+not current and that no container uses can be removed there too.
+
+The console builds from the project's `workspace-image/` directory (mounted read-only into the gateway), so an
+edit there applies to the next build in the console, as with `update-image.sh`. An image that is already on the
+server is only rebuilt when you choose rebuild. Unlike `update-image.sh`, the console doesn't run the isolation
+check (it needs root on the host): after an update in the console, run `sudo bash deploy/verify-isolation.sh` on
+the server.
+
+**From the command line** (on the server, in the project directory; also when the portal is down):
 
 ```sh
 sudo bash deploy/update-image.sh qwen 0.28.0     # Qwen Code
 sudo bash deploy/update-image.sh dsh 0.2.3       # DeepSeek Harness
 ```
 
-This builds the image for that version, checks that it really contains it, sets the version in `.env`,
-restarts the gateway and runs `deploy/verify-isolation.sh` against the new image. Running workspaces keep
+This builds the image for that version, checks that it really contains it, makes it the current version (in
+`PORTAL_DATA_DIR/config/agent-versions.env`, shared with the admin console; it refuses to run while the console
+runs an update, and checks again before it saves the version and before it restarts the gateway), restarts the gateway and runs `deploy/verify-isolation.sh` against the new image. Running workspaces keep
 the old image until they stop; every new start uses the new one. To move everyone now, stop the running
 workspaces in the admin console.
 
@@ -379,16 +400,19 @@ sudo bash deploy/update-image.sh dsh --refresh   # just one agent
 `apt-get install` line in the base stage, or `ARG PLAYWRIGHT_MCP_VERSION`), then run `update-image.sh
 --refresh`. Keep the images free of credentials.
 
-Remove old images when you no longer need them: `sudo docker image rm workspace-portal/workspace:qwen-0.27.0`.
+Remove old images when you no longer need them, in the admin console or with
+`sudo docker image rm workspace-portal/workspace:qwen-0.27.0`.
 
 Check the release notes before upgrading:
 - Qwen Code: the gateway relies on `qwen serve`'s token auth and `/health?deep=1`.
-- DeepSeek Harness: the gateway relies on its login cookie format, its `session/list`, `session/state` and
-  `job/list` API, and the plugin ids in `workspace-image/dsh/lockdown.patch.yml`, which restates one preset
-  of that version in full. Compare that preset with the new version's (`dsh-web-app/presets/standard.patch.yml`
-  in the package) and check the composed configuration with `dsh --profile web --patch … --dump-config`.
+- DeepSeek Harness: the gateway relies on its login cookie format and its `session/list`, `session/state`
+  and `job/list` API. The image build checks the rest: it fails, and the current version stays, if a row of
+  `workspace-image/dsh/lockdown.patch.yml` doesn't exist in the new version or its agent presets can't be
+  adapted. A row the new version simply dropped can be marked `# optional` in the lockdown. Plugins a new
+  version adds aren't covered until the lockdown lists them (the network isolation still applies).
 
-If one of these changes, the workspace start and `verify-isolation.sh` show it.
+If one of these changes, the workspace start and `verify-isolation.sh` show it (`update-image.sh` runs it; after
+an update in the admin console, run `sudo bash deploy/verify-isolation.sh` yourself).
 
 ## Using it
 
@@ -415,9 +439,10 @@ If one of these changes, the workspace start and `verify-isolation.sh` show it.
    - an approval prompt nobody answers doesn't keep the workspace up: Qwen Code declines it after
      `IDLE_TIMEOUT_MINUTES`; a DeepSeek Harness turn that only waits for an answer doesn't count as work;
    - after `MAX_BUSY_HOURS` (24) without anyone using the workspace, work no longer keeps it running.
-5. **Admin console:** see every workspace (running, working, idle time, memory, agent), and open, stop,
-   deactivate, reset or delete any user. Opening a user's workspace shows them an "Admin connected" notice and
-   is audit-logged. Opening a stopped one asks the admin which agent to start, preselecting the user's last.
+5. **Admin console:** see every workspace (running, working, idle time, memory, agent and its version), and
+   open, stop, deactivate, reset or delete any user. Opening a user's workspace shows them an "Admin connected"
+   notice and is audit-logged. Opening a stopped one asks the admin which agent to start, preselecting the
+   user's last. Admin > Agents updates, rolls back or rebuilds each agent (see "Updating the workspace images").
 6. When all `MAX_RUNNING_WORKSPACES` slots are taken, a new start replaces the workspace that has been idle
    longest (over 5 minutes, and never a working one). If there is none, the user sees "try again".
 
@@ -488,7 +513,7 @@ Layout:
 - `gateway/` holds the workspace manager, proxies, LLM queue and search MCP.
 - `packages/db/` is the SQLite schema shared by both.
 - `workspace-image/` builds the workspace images: one Dockerfile with a target per agent, the start scripts,
-  and DeepSeek Harness's lockdown patch.
+  and DeepSeek Harness's lockdown patch with its build-time preset adaptation and check.
 - `gateway/src/agents/` holds what differs per agent: one driver each (`qwen.ts`, `dsh.ts`) and their settings.
 - `qwen-config/` holds the example settings.
 - `deploy/` has the installer, firewall, config upload, image update, uninstaller and isolation check
@@ -507,7 +532,9 @@ Layout:
   UI yet.
 - DeepSeek Harness uses the model server's default sampling parameters (temperature, top-p, …), whatever
   `system-defaults.json` says, and offers only models with a context window of at least 82116 tokens.
-- DeepSeek Harness 0.2 is a preview release, and its lockdown patch is specific to the version in `.env`.
+- DeepSeek Harness 0.2 is a preview release. Its lockdown patch names dsh's plugins by id, so a version that
+  renames one fails the image build until the patch is updated (see [Updating the workspace
+  images](#updating-the-workspace-images)).
 
 ## License
 

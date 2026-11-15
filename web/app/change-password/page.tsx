@@ -4,8 +4,8 @@ import { signOut } from "@/lib/actions/auth";
 import { requireUser } from "@/lib/session";
 import { AuthScreen } from "@/components/auth/auth-screen";
 import { ChangePasswordForm } from "@/components/auth/change-password-form";
-import { buttonClass } from "@/components/ui/button";
-import { SubmitButton } from "@/components/ui/submit-button";
+import { SubmitButton } from "@/components/forms/submit-button";
+import { Button } from "@/components/ui/button";
 
 export const metadata: Metadata = { title: "Change password" };
 
@@ -28,13 +28,13 @@ export default async function ChangePasswordPage() {
             </SubmitButton>
           </form>
         ) : (
-          <Link href="/workspace" className={buttonClass("ghost", "sm")}>
-            Back to workspace
-          </Link>
+          <Button asChild variant="ghost" size="sm">
+            <Link href="/workspace">Back to workspace</Link>
+          </Button>
         )
       }
     >
-      <ChangePasswordForm username={user.username} />
+      <ChangePasswordForm username={user.username} temporary={forced} />
     </AuthScreen>
   );
 }

@@ -1,7 +1,8 @@
 // Input rules shared by the server actions, the admin seed and the forms.
 // Pure module (no server-only imports) so it can be unit tested with `node --test`.
 import { z } from "zod";
-import { NAME_MAX_LENGTH, PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, USERNAME_PATTERN } from "./limits.ts";
+import { AGENT_KINDS } from "@portal/db";
+import { isAgentVersion, NAME_MAX_LENGTH, PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, USERNAME_PATTERN } from "./limits.ts";
 
 // Letters from any script (with combining marks), spaces, hyphens, straight and curly apostrophes, periods.
 const NAME_PATTERN = /^[\p{L}\p{M} .'’-]+$/u;
@@ -101,6 +102,33 @@ export const changePasswordSchema = z
   });
 
 export const userIdSchema = z.coerce.number().int().positive();
+
+const agentKindSchema = z.enum(AGENT_KINDS, "Unknown agent.");
+
+/** Said for a missing or malformed version, empty included. */
+const AGENT_VERSION_ERROR = "Enter a version like 0.27.4.";
+
+/** The agent and version of one of its images. */
+export const agentImageSchema = z.object({
+  agent: agentKindSchema,
+  version: z
+    .string()
+    .trim()
+    .refine(isAgentVersion, AGENT_VERSION_ERROR),
+});
+
+/**
+ * An update: the exact version to install and the rebuild checkbox. Never a release channel, although the gateway
+ * takes one: it would resolve it again, possibly to a newer version than the one the admin saw and confirmed.
+ */
+export const agentUpdateSchema = z.object({
+  agent: agentKindSchema,
+  version: z
+    .string()
+    .trim()
+    .refine(isAgentVersion, AGENT_VERSION_ERROR),
+  rebuild: z.string().transform((value) => value === "on"),
+});
 
 /** The first message for each top-level field. */
 export function fieldErrors(error: z.ZodError): FieldErrors {

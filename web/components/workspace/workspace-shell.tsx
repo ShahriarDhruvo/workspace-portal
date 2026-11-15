@@ -10,12 +10,16 @@ import { agentFrameUrl, type AgentFrame } from "@/lib/agent-url";
 import { fetchJson, needsReauth } from "@/lib/fetch-json";
 import { stopReasonText } from "@/lib/format";
 import type { ApiError, StartRequest, WorkspaceStatusResponse } from "@/lib/gateway-types";
-import { Brand, PortalMark, UserChip } from "@/components/brand";
-import { buttonClass, ICON_BUTTON_CLASS } from "@/components/ui/button";
+import { Brand, UserChip } from "@/components/brand";
+import { StatusDot, type DotTone } from "@/components/common/status-dot";
+import { SubmitButton } from "@/components/forms/submit-button";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { CloseIcon, EyeIcon, KeyIcon, LogOutIcon, ShieldIcon, SwitchIcon, WarningIcon } from "@/components/ui/icons";
-import { SubmitButton } from "@/components/ui/submit-button";
-import { StatusDot, type DotTone } from "@/components/ui/tag";
+import { Separator } from "@/components/ui/separator";
 import { AgentChooser } from "./agent-chooser";
+import { BootScreen } from "./boot-screen";
+import { StateCard } from "./state-card";
 import { SwitchAgentDialog } from "./switch-agent-dialog";
 
 // The /workspace page body: a slim 46px top bar and the workspace's agent (Qwen Code or DeepSeek Harness) in
@@ -178,13 +182,13 @@ function pillOf(phase: Phase, pollFailed: boolean): { tone: DotTone; label: stri
   }
 }
 
-/** Status pill tones: the tone's text on a 14% tint, like the Web Shell's status badges. */
-const PILL_TONES: Record<DotTone, string> = {
-  success: "bg-success/14 text-success",
-  warning: "bg-warning/14 text-warning",
-  danger: "bg-danger/14 text-danger",
-  idle: "bg-fg-muted/14 text-fg-muted",
-};
+/** The status pill's badge tone for each dot tone (a stopped workspace reads neutral). */
+const PILL_VARIANTS = {
+  success: "success",
+  warning: "warning",
+  danger: "danger",
+  idle: "neutral",
+} as const satisfies Record<DotTone, string>;
 
 /** What a not-running workspace says, whether it then offers a button (one agent) or the agents to choose from. */
 function idleCopy(
@@ -235,6 +239,7 @@ export function WorkspaceShell({ viewer, target, frame, idleTimeoutMinutes, agen
   const [state, dispatch] = useReducer(reducer, INITIAL);
   const [pollRound, pollNow] = useReducer((n: number) => n + 1, 0);
   const [switchOpen, setSwitchOpen] = useState(false);
+  const switchButton = useRef<HTMLButtonElement>(null);
   const autoStarted = useRef(false);
   const delay = useRef(2_000);
 
@@ -340,7 +345,7 @@ export function WorkspaceShell({ viewer, target, frame, idleTimeoutMinutes, agen
           src={agentUrl}
           title={`${target.isViewer ? "Your" : `${target.name}'s`} workspace`}
           allow="clipboard-read; clipboard-write; fullscreen"
-          className="absolute inset-0 size-full border-0 bg-base"
+          className="absolute inset-0 size-full border-0 bg-background"
         />
       ) : frame === null ? (
         <StateCard title="This workspace can't be shown" warning>
@@ -400,56 +405,53 @@ export function WorkspaceShell({ viewer, target, frame, idleTimeoutMinutes, agen
   }
 
   return (
-    <div className="flex h-dvh flex-col overflow-hidden bg-base">
+    <div className="flex h-dvh flex-col overflow-hidden bg-background">
       {banner}
-      <header className="flex h-11.5 shrink-0 items-center gap-3 border-b border-line bg-base px-5">
-        <Brand />
-        <span aria-hidden="true" className="h-4 border-l border-line" />
-        <span
-          role="status"
-          aria-label={`Workspace status: ${pill.label}`}
-          className={`inline-flex h-6 items-center gap-1.5 rounded-full px-2.5 text-12 font-medium ${PILL_TONES[pill.tone]}`}
-        >
+      {/* On narrow screens icons stand in for the labels, and the gaps tighten, so the bar fits on one line. */}
+      <header className="flex h-11.5 shrink-0 items-center gap-3 border-b bg-background px-5 max-sm:gap-2 max-sm:px-4">
+        <Brand compact />
+        <Separator orientation="vertical" className="data-[orientation=vertical]:h-4" />
+        <Badge role="status" aria-label={`Workspace status: ${pill.label}`} variant={PILL_VARIANTS[pill.tone]} size="lg">
           <StatusDot tone={pill.tone} pulse={pill.label === "Starting" || pill.label === "Stopping"} />
           {pill.label}
-        </span>
+        </Badge>
         {runningAgent ? (
-          <span className="truncate text-13 font-medium text-fg max-sm:hidden">
+          <span className="truncate text-13 font-medium text-foreground max-sm:hidden">
             <span className="sr-only">Agent: </span>
             {agentNames[runningAgent]}
           </span>
         ) : null}
         {canSwitch ? (
-          <button type="button" className={buttonClass("ghost", "sm")} onClick={() => setSwitchOpen(true)}>
+          <Button ref={switchButton} type="button" variant="ghost" size="sm" onClick={() => setSwitchOpen(true)}>
             <SwitchIcon />
             <span className="max-sm:sr-only">Switch agent</span>
-          </button>
+          </Button>
         ) : null}
         {!viewer.isAdmin && (info?.connections.admin ?? 0) > 0 ? (
-          <span
-            role="status"
-            title="An administrator has your workspace open"
-            className="inline-flex h-6 items-center gap-1.5 rounded-full bg-warning/14 px-2.5 text-12 font-medium text-warning"
-          >
-            <EyeIcon size={14} />
-            Admin connected
-          </span>
+          <Badge role="status" title="An administrator has your workspace open" variant="warning" size="lg">
+            <EyeIcon />
+            <span className="max-sm:sr-only">Admin connected</span>
+          </Badge>
         ) : null}
         <div className="ml-auto flex min-w-0 items-center gap-2">
           {viewer.isAdmin ? (
-            <Link href="/admin" className={buttonClass("ghost", "sm")}>
-              <ShieldIcon />
-              Admin
-            </Link>
+            <Button asChild variant="ghost" size="sm">
+              <Link href="/admin">
+                <ShieldIcon />
+                <span className="max-sm:sr-only">Admin</span>
+              </Link>
+            </Button>
           ) : null}
           <UserChip name={viewer.name} initials={viewer.initials} />
-          <Link href="/change-password" className={buttonClass("ghost", "sm")} title="Change your password">
-            <KeyIcon />
-            Password
-          </Link>
+          <Button asChild variant="ghost" size="sm">
+            <Link href="/change-password" title="Change your password">
+              <KeyIcon />
+              <span className="max-sm:sr-only">Password</span>
+            </Link>
+          </Button>
           <form action={signOut}>
             <SubmitButton variant="outline" size="sm" icon={<LogOutIcon />}>
-              Sign out
+              <span className="max-sm:sr-only">Sign out</span>
             </SubmitButton>
           </form>
         </div>
@@ -457,18 +459,19 @@ export function WorkspaceShell({ viewer, target, frame, idleTimeoutMinutes, agen
       {state.notice ? (
         <div
           role="status"
-          className="flex min-h-9 shrink-0 items-center gap-2.5 border-b border-line bg-surface px-5 py-1 text-13 text-fg"
+          className="flex min-h-9 shrink-0 items-center gap-2.5 border-b bg-card px-5 py-1 text-13 text-foreground"
         >
           <WarningIcon className="shrink-0 text-attention" />
           <span className="min-w-0 flex-1">{state.notice}</span>
-          <button
+          <Button
             type="button"
-            className={ICON_BUTTON_CLASS}
+            variant="muted"
+            size="icon"
             aria-label="Dismiss"
             onClick={() => dispatch({ type: "noticeDismissed" })}
           >
             <CloseIcon />
-          </button>
+          </Button>
         </div>
       ) : null}
       <main className="relative min-h-0 flex-1">
@@ -478,51 +481,15 @@ export function WorkspaceShell({ viewer, target, frame, idleTimeoutMinutes, agen
           <div className="absolute inset-0 flex items-center justify-center overflow-y-auto p-6">{content}</div>
         )}
       </main>
-      {switchOpen && info ? (
-        <SwitchAgentDialog info={info} onConfirm={stopToSwitch} onClose={() => setSwitchOpen(false)} />
+      {info ? (
+        <SwitchAgentDialog
+          open={switchOpen}
+          onOpenChange={setSwitchOpen}
+          info={info}
+          onConfirm={stopToSwitch}
+          returnFocusTo={switchButton}
+        />
       ) : null}
     </div>
-  );
-}
-
-/** Boot screen: the portal mark over a Web Shell style loading line (a small ring spinner and muted text). */
-function BootScreen({ hint }: { hint: string }) {
-  return (
-    <div role="status" aria-live="polite" className="flex flex-col items-center gap-5">
-      <PortalMark size={36} />
-      <span className="flex items-center gap-2 text-13 text-fg-muted">
-        <span aria-hidden="true" className="spinner [--spinner-size:14px] [--spinner-width:1.5px]" />
-        {hint}
-      </span>
-    </div>
-  );
-}
-
-interface StateCardProps {
-  title: string;
-  children: ReactNode;
-  action?: { label: string; onClick: () => void };
-  warning?: boolean;
-}
-
-/** Card for the not-running states, shaped like a Web Shell alert dialog. */
-function StateCard({ title, children, action, warning = false }: StateCardProps) {
-  return (
-    <section role="alert" className="flex w-[min(420px,100%)] flex-col gap-4 rounded-xl border border-line bg-surface p-4">
-      <div className="flex flex-col gap-1.5">
-        <h2 className="flex items-center gap-2 text-16 leading-snug font-medium">
-          {warning ? <WarningIcon className="text-attention" /> : null}
-          {title}
-        </h2>
-        <p className="text-14 text-fg-muted">{children}</p>
-      </div>
-      {action ? (
-        <div className="flex justify-end">
-          <button type="button" className={buttonClass("primary", "sm", "min-w-16")} onClick={action.onClick}>
-            {action.label}
-          </button>
-        </div>
-      ) : null}
-    </section>
   );
 }

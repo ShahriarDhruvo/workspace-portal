@@ -1,9 +1,11 @@
 // The seam between the gateway and the agent harness a workspace runs (Qwen Code or DeepSeek
 // Harness). Everything else (the container, its network and limits, sessions, the proxy's access
 // checks, busy/idle rules) is the same for every agent; a driver supplies only what differs:
-//   * how the container is started: image, port, env, the read-only settings it mounts;
+//   * how the container is started: port, env, the read-only settings it mounts (the image comes from
+//     the agent's current version, agent-versions.ts);
 //   * how the gateway authenticates to the agent's web server, and which paths and sockets it has;
-//   * how the gateway learns that the agent is up and whether it is working.
+//   * how the gateway learns that the agent is up and whether it is working;
+//   * where its releases come from, so the admin can update it (release).
 import type { IncomingHttpHeaders } from "node:http";
 import type { AgentKind } from "@portal/db";
 import type { Config } from "../config.ts";
@@ -45,11 +47,25 @@ export interface AgentEndpoint {
  */
 export type BrowserAuth = "token" | "cookie";
 
+/**
+ * Where an agent's releases come from and how its workspace image is built and checked. deploy/lib.sh
+ * keeps its own copy of the key (agent_version_key) and the CLI (image_agent_version).
+ */
+export interface AgentRelease {
+  /** The npm package the image installs (and the registry is asked about). */
+  readonly packageName: string;
+  /** The .env key and Dockerfile build argument that hold the version, e.g. QWEN_CODE_VERSION. */
+  readonly versionKey: string;
+  /** The image's CLI that reports the installed version with `--version`. */
+  readonly cli: string;
+}
+
 export interface AgentDriver {
   readonly kind: AgentKind;
   /** Display name, e.g. "Qwen Code". */
   readonly name: string;
   readonly description: string;
+  readonly release: AgentRelease;
   /** TCP port of the agent's web server on the container's own address. */
   readonly port: number;
   /** Env var carrying the per-start credential; read back when adopting a running container. */

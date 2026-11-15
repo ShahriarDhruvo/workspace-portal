@@ -1,8 +1,18 @@
 import "server-only";
 import { after } from "next/server";
+import type { AgentKind } from "@portal/db";
 import { startOnOpen } from "./agent-choice";
 import { config } from "./config";
-import type { AgentInfo, ApiError, HostStats, StartRequest, WorkspaceInfo } from "./gateway-types";
+import type {
+  AgentInfo,
+  AgentUpdateJob,
+  AgentUpdateRequest,
+  AgentVersionsOverview,
+  ApiError,
+  HostStats,
+  StartRequest,
+  WorkspaceInfo,
+} from "./gateway-types";
 import type { DeletedSessions } from "./session-store";
 
 // Client for the gateway control API (docs/ARCHITECTURE.md, "Gateway control API").
@@ -12,6 +22,13 @@ const DEFAULT_TIMEOUT_MS = 5_000;
 const START_TIMEOUT_MS = 30_000;
 /** Stop, release and data deletion include `docker stop -t 10`. */
 const STOP_TIMEOUT_MS = 30_000;
+/**
+ * Calls that may wait on the npm registry, which the gateway gives 10 s: the versions overview (when its cache
+ * of release channels is stale or a refresh is asked for) and an update, which resolves the version first.
+ */
+const REGISTRY_TIMEOUT_MS = 15_000;
+/** Removing an image is Docker deleting its layers. */
+const IMAGE_REMOVE_TIMEOUT_MS = 30_000;
 
 export class GatewayError extends Error {
   readonly status: number;
@@ -102,6 +119,24 @@ export const gateway = {
     call<{ closed: number }>("POST", `/control/sessions/${encodeURIComponent(sessionId)}/disconnect`),
   deleteData: (userId: number) =>
     call<{ ok: true }>("DELETE", `/control/workspaces/${userId}/data`, { timeoutMs: STOP_TIMEOUT_MS }),
+  /** The enabled agents' versions, images and release channels, and the running or last update job. */
+  agentVersions: ({ refresh = false }: { refresh?: boolean } = {}) =>
+    call<AgentVersionsOverview>("GET", `/control/agents/versions${refresh ? "?refresh=1" : ""}`, {
+      timeoutMs: REGISTRY_TIMEOUT_MS,
+    }),
+  /**
+   * Starts building `request.version` of the agent and returns the job as it starts (one job at a time, for all
+   * agents: 409 `update_running`). The gateway audits the outcome, attributed to `actorUserId`.
+   */
+  updateAgent: (agent: AgentKind, request: AgentUpdateRequest) =>
+    call<AgentUpdateJob>("POST", `/control/agents/${agent}/update`, { body: request, timeoutMs: REGISTRY_TIMEOUT_MS }),
+  /** false: no job runs, or it is already making the new image current. */
+  cancelAgentUpdate: () => call<{ cancelled: boolean }>("POST", "/control/agents/update/cancel"),
+  /** Refused for the current version's image, one a container uses, and while that agent is being updated. */
+  removeAgentImage: (agent: AgentKind, version: string) =>
+    call<{ ok: true }>("DELETE", `/control/agents/${agent}/images/${encodeURIComponent(version)}`, {
+      timeoutMs: IMAGE_REMOVE_TIMEOUT_MS,
+    }),
 };
 
 // The one place that turns failures into words: toApiError for people (JSON routes, pages, dialogs),

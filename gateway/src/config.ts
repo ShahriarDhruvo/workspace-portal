@@ -2,23 +2,19 @@
 // Defaults match .env.example; docs/ARCHITECTURE.md documents every variable.
 import net from "node:net";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { AGENT_KINDS, isAgentKind, type AgentKind } from "@portal/db";
-
-/** The image of one agent, built by deploy/install.sh from workspace-image/ (target = the agent kind). */
-export interface AgentImage {
-  version: string;
-  image: string;
-}
-
-/** Workspace images are named after the agent and the version they contain (deploy/lib.sh does the same). */
-export function workspaceImage(kind: AgentKind, version: string): string {
-  return `workspace-portal/workspace:${kind}-${version}`;
-}
+import { isVersion } from "./versions.ts";
 
 export interface WorkspaceConfig {
   /** The agents users may choose from, in display order (WORKSPACE_AGENTS). */
   agents: readonly AgentKind[];
-  images: Readonly<Record<AgentKind, AgentImage>>;
+  /**
+   * Each agent's default version (QWEN_CODE_VERSION, DSH_VERSION; the keys are the drivers'
+   * release.versionKey): what a fresh install builds. The version new workspaces start with is the
+   * admin's current choice, which agent-versions.ts keeps, falling back to these.
+   */
+  defaultVersions: Readonly<Record<AgentKind, string>>;
   /** Docker *internal* network: workspaces can reach the gateway's bridge address and nothing else. */
   network: string;
   subnet: string;
@@ -57,6 +53,15 @@ export interface Config {
   qwenConfigDir: string;
   /** Admin-provided DeepSeek Harness patch (patch.yml), applied before the portal's own. */
   dshConfigDir: string;
+  /** The current version of each agent, where it differs from the default (agent-versions.ts). */
+  agentVersionsFile: string;
+  /**
+   * The workspace-image/ directory the gateway builds agent images from: the project's own, which
+   * docker-compose.yml mounts read-only at /app/workspace-image. The default finds it in the container
+   * and in a development checkout alike (DEFAULT_IMAGE_CONTEXT); WORKSPACE_IMAGE_CONTEXT overrides it
+   * for another layout.
+   */
+  imageContextDir: string;
   webPort: number;
   agentBind: string;
   /** User N's workspace is served on port agentPortBase + N (1 <= N < agentPortCount). */
@@ -99,6 +104,12 @@ export const MIB = 1024 * 1024;
 const MIN_UID_BASE = 100_000;
 
 const BYTE_UNITS: Record<string, number> = { "": 1, k: 1024, m: MIB, g: 1024 * MIB };
+/**
+ * workspace-image/ next to the gateway's code: /app/workspace-image in the gateway container (dist/main.js
+ * is /app/gateway/dist/main.js; docker-compose.yml mounts the project's workspace-image/ there), the
+ * repository's own in development (src/config.ts).
+ */
+const DEFAULT_IMAGE_CONTEXT = fileURLToPath(new URL("../../workspace-image", import.meta.url));
 
 /** Parses a Docker-style size such as `1536m`, `2g`, `512k` or `1048576` (binary units). */
 export function parseByteSize(text: string): number | null {
@@ -119,6 +130,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     dbFile: path.join(dataDir, "db", "portal.sqlite"),
     qwenConfigDir: path.join(dataDir, "config", "qwen"),
     dshConfigDir: path.join(dataDir, "config", "dsh"),
+    agentVersionsFile: path.join(dataDir, "config", "agent-versions.env"),
+    imageContextDir: read.absolutePath("WORKSPACE_IMAGE_CONTEXT", DEFAULT_IMAGE_CONTEXT),
     webPort: read.port("WEB_PORT", 3000),
     agentBind: read.ip("AGENT_BIND", "0.0.0.0"),
     agentPortBase: read.port("AGENT_PORT_BASE", 3100),
@@ -140,9 +153,9 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     },
     workspace: {
       agents: read.agentList("WORKSPACE_AGENTS", "qwen,dsh"),
-      images: {
-        qwen: agentImage("qwen", read.version("QWEN_CODE_VERSION", "0.27.0")),
-        dsh: agentImage("dsh", read.version("DSH_VERSION", "0.2.2-rc.1")),
+      defaultVersions: {
+        qwen: read.version("QWEN_CODE_VERSION", "0.27.0"),
+        dsh: read.version("DSH_VERSION", "0.2.2-rc.1"),
       },
       network: read.nonEmpty("WORKSPACE_NETWORK", "workspace-portal-ws"),
       subnet: read.cidr("WORKSPACE_SUBNET", "172.29.0.0/16"),
@@ -175,10 +188,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   }
   if (read.problems.length > 0) throw new ConfigError(read.problems);
   return config;
-}
-
-function agentImage(kind: AgentKind, version: string): AgentImage {
-  return { version, image: workspaceImage(kind, version) };
 }
 
 /** Typed accessors over the environment that collect problems instead of throwing at the first one. */
@@ -295,10 +304,10 @@ class EnvReader {
     return [...new Set(items.filter(isAgentKind))];
   }
 
-  /** An npm-style version, as used in image tags. */
+  /** An npm-style version, as used in image tags (versions.ts). */
   version(name: string, fallback: string): string {
     const value = this.nonEmpty(name, fallback);
-    if (!/^\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.]+)?$/.test(value)) {
+    if (!isVersion(value)) {
       this.problems.push(`${name} must be a version such as 0.27.0 (got "${value}")`);
       return fallback;
     }

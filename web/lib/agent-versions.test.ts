@@ -1,0 +1,261 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import {
+  ACTIVE_POLL_MS,
+  IDLE_POLL_MS,
+  agentActionError,
+  channelTags,
+  currentImageMissing,
+  defaultVersionNote,
+  formatElapsed,
+  isJobActive,
+  jobElapsedMs,
+  jobKind,
+  jobOutcome,
+  jobTitle,
+  mergeAgents,
+  pollDelay,
+  removeBlocker,
+  runningSummary,
+  updateBlocker,
+  updateWork,
+  versionStatus,
+} from "./agent-versions.ts";
+import type { AgentUpdateJob, AgentVersionInfo, AgentVersionsOverview } from "./gateway-types.ts";
+
+const qwen: AgentVersionInfo = {
+  id: "qwen",
+  name: "Qwen Code",
+  packageName: "@qwen-code/qwen-code",
+  current: "0.27.0",
+  defaultVersion: "0.27.0",
+  latest: "0.27.4",
+  updateAvailable: true,
+  channels: [
+    { tag: "latest", version: "0.27.4" },
+    { tag: "preview", version: "0.27.2-preview.0" },
+  ],
+  installed: [
+    { version: "0.27.0", image: "workspace-portal/workspace:qwen-0.27.0", sizeBytes: 1, createdAt: 1, current: true, inUse: 1 },
+    { version: "0.26.0", image: "workspace-portal/workspace:qwen-0.26.0", sizeBytes: 1, createdAt: 1, current: false, inUse: 0 },
+  ],
+  running: [{ version: "0.27.0", count: 1 }],
+};
+
+function job(overrides: Partial<AgentUpdateJob> = {}): AgentUpdateJob {
+  return {
+    id: "job-1",
+    agent: "dsh",
+    fromVersion: "0.2.2-rc.1",
+    version: "0.2.2-rc.3",
+    rebuild: false,
+    reuse: false,
+    actorUserId: 1,
+    phase: "building",
+    step: null,
+    log: [],
+    startedAt: 1_000_000,
+    finishedAt: null,
+    error: null,
+    ...overrides,
+  };
+}
+
+test("polling is quick only while a job builds or verifies", () => {
+  assert.equal(pollDelay(null), IDLE_POLL_MS);
+  assert.equal(pollDelay(job({ phase: "building" })), ACTIVE_POLL_MS);
+  assert.equal(pollDelay(job({ phase: "verifying" })), ACTIVE_POLL_MS);
+  for (const phase of ["succeeded", "failed", "cancelled"] as const) {
+    assert.equal(pollDelay(job({ phase })), IDLE_POLL_MS, phase);
+    assert.equal(isJobActive(job({ phase })), false, phase);
+  }
+});
+
+test("a poll without the gateway keeps the last versions on screen, with the error", () => {
+  const versions = { agents: [qwen], job: null, registryError: null, checkedAt: 5 } satisfies AgentVersionsOverview;
+  const down = { error: "unreachable", message: "The workspace service is not reachable." };
+  assert.deepEqual(mergeAgents({ versions, error: null }, { versions: null, error: down }), { versions, error: down });
+  const fresh = { ...versions, checkedAt: 6 };
+  assert.deepEqual(mergeAgents({ versions, error: down }, { versions: fresh, error: null }), { versions: fresh, error: null });
+});
+
+test("the version badge: update available, up to date, ahead of latest, or unknown", () => {
+  assert.deepEqual(versionStatus(qwen), { tone: "warning", label: "Update available: 0.27.4" });
+  assert.deepEqual(versionStatus({ current: "0.27.4", latest: "0.27.4", updateAvailable: false }), { tone: "success", label: "Up to date" });
+  assert.deepEqual(versionStatus({ current: "0.2.2-rc.3", latest: "0.2.2-rc.1", updateAvailable: false }), {
+    tone: "neutral",
+    label: "Latest: 0.2.2-rc.1",
+  });
+  assert.deepEqual(versionStatus({ current: "0.27.0", latest: null, updateAvailable: false }), { tone: "neutral", label: "Latest unknown" });
+});
+
+test("notes beside the current version: the .env default, channels, a missing image", () => {
+  assert.equal(defaultVersionNote(qwen), null);
+  assert.equal(defaultVersionNote({ current: "0.26.0", defaultVersion: "0.27.0" }), "The .env default is 0.27.0.");
+  assert.deepEqual(channelTags(qwen, "0.27.4"), ["latest"]);
+  assert.deepEqual(channelTags(qwen, "0.27.0"), []);
+  assert.equal(currentImageMissing(qwen), false);
+  assert.equal(currentImageMissing({ installed: qwen.installed.map((image) => ({ ...image, current: false })) }), true);
+});
+
+test("an image on the server is used as it is, unless built again from scratch", () => {
+  // 0.26.0 is on the server: rolling back to it is a switch, unless it is to be built again from scratch.
+  assert.equal(updateWork(qwen, "0.26.0", false), "switch");
+  assert.equal(updateWork(qwen, "0.26.0", true), "rebuild");
+  // The current version, image here: nothing to do, except building it again from scratch.
+  assert.equal(updateWork(qwen, "0.27.0", false), "none");
+  assert.equal(updateWork(qwen, "0.27.0", true), "rebuild");
+  // No image here: built first, the latest release or an older version alike, from scratch when asked (the
+  // dialog says so beside "build").
+  assert.equal(updateWork(qwen, "0.27.4", false), "build");
+  assert.equal(updateWork(qwen, "0.25.1", false), "build");
+  assert.equal(updateWork(qwen, "0.25.1", true), "build");
+  // The current version's image is missing: building it is the way back.
+  assert.equal(updateWork({ current: "0.27.0", installed: qwen.installed.slice(1) }, "0.27.0", false), "build");
+});
+
+test("running workspaces by version, in a sentence", () => {
+  const summary = (running: AgentVersionInfo["running"]) => runningSummary({ current: "0.27.4", running });
+  assert.equal(summary([]), null);
+  assert.equal(summary([{ version: "0.27.4", count: 1 }]), "1 workspace running.");
+  assert.equal(summary([{ version: "0.27.4", count: 2 }]), "2 workspaces running.");
+  assert.equal(summary([{ version: "0.27.0", count: 1 }]), "1 workspace still runs 0.27.0 until it restarts.");
+  assert.equal(summary([{ version: "0.27.0", count: 2 }]), "2 workspaces still run 0.27.0 until they restart.");
+  assert.equal(summary([{ version: null, count: 1 }]), "1 workspace running, on an unknown version.");
+  assert.equal(
+    summary([
+      { version: "0.27.4", count: 2 },
+      { version: "0.27.0", count: 1 },
+      { version: null, count: 1 },
+    ]),
+    "4 workspaces running: 2 on this version, 1 still on 0.27.0 until it restarts, 1 on an unknown version.",
+  );
+});
+
+test("one job at a time blocks every update; an offline gateway blocks everything", () => {
+  assert.equal(updateBlocker({ job: null, offline: false }), null);
+  assert.equal(updateBlocker({ job: job({ phase: "failed" }), offline: false }), null);
+  assert.equal(updateBlocker({ job: job(), offline: false }), "An update is running. Wait for it to finish, or cancel it.");
+  assert.equal(updateBlocker({ job: null, offline: true }), "The workspace service is unavailable right now.");
+});
+
+test("an image can't be removed while current, in use, or while its agent is being updated", () => {
+  const idle = { job: null, offline: false };
+  const [current, old] = qwen.installed as [AgentVersionInfo["installed"][number], AgentVersionInfo["installed"][number]];
+  assert.equal(removeBlocker(idle, qwen, old), null);
+  assert.equal(removeBlocker(idle, qwen, current), "New workspaces start from this image. Switch to another version first.");
+  assert.equal(
+    removeBlocker(idle, qwen, { ...old, inUse: 1 }),
+    "1 running workspace uses it. It can be removed once that workspace has stopped.",
+  );
+  assert.equal(removeBlocker(idle, qwen, { ...old, inUse: 3 }), "3 running workspaces use it. It can be removed once they have stopped.");
+  assert.equal(removeBlocker({ job: job({ agent: "dsh" }), offline: false }, qwen, old), null, "another agent's job");
+  assert.equal(removeBlocker({ job: job({ agent: "qwen" }), offline: false }, qwen, old), "Wait until the update of Qwen Code has finished.");
+  assert.equal(removeBlocker({ job: null, offline: true }, qwen, old), "The workspace service is unavailable right now.");
+});
+
+test("what a job does: a version change, or for the current version a rebuild, a build or a check", () => {
+  assert.equal(jobKind(job()), "update");
+  assert.equal(jobKind(job({ rebuild: true })), "update", "another version, from scratch");
+  assert.equal(jobKind(job({ fromVersion: "0.2.2-rc.1", version: "0.2.2-rc.1", rebuild: true })), "rebuild");
+  // The same version without rebuild: the gateway built it because its image was missing, or used the image it has.
+  assert.equal(jobKind(job({ fromVersion: "0.2.2-rc.1", version: "0.2.2-rc.1" })), "build");
+  assert.equal(jobKind(job({ fromVersion: "0.2.2-rc.1", version: "0.2.2-rc.1", reuse: true })), "check");
+  assert.equal(jobKind(job({ reuse: true })), "update", "a switch to an image on the server");
+});
+
+test("job titles by phase: a version change, a rebuild from scratch, a build of a missing image, a check", () => {
+  const name = "DeepSeek Harness";
+  assert.equal(jobTitle(job(), name), "Updating DeepSeek Harness 0.2.2-rc.1 → 0.2.2-rc.3");
+  assert.equal(jobTitle(job({ phase: "succeeded" }), name), "DeepSeek Harness updated to 0.2.2-rc.3");
+  assert.equal(jobTitle(job({ phase: "failed" }), name), "Update of DeepSeek Harness to 0.2.2-rc.3 failed");
+  assert.equal(jobTitle(job({ phase: "cancelled" }), name), "Update of DeepSeek Harness to 0.2.2-rc.3 cancelled");
+  // From scratch to another version: still a version change ("from scratch" is said beside it).
+  assert.equal(jobTitle(job({ rebuild: true }), name), "Updating DeepSeek Harness 0.2.2-rc.1 → 0.2.2-rc.3");
+  const rebuild = job({ fromVersion: "0.2.2-rc.1", version: "0.2.2-rc.1", rebuild: true });
+  assert.equal(jobTitle(rebuild, name), "Rebuilding DeepSeek Harness 0.2.2-rc.1");
+  assert.equal(jobTitle({ ...rebuild, phase: "succeeded" }, name), "DeepSeek Harness 0.2.2-rc.1 rebuilt");
+  assert.equal(jobTitle({ ...rebuild, phase: "failed" }, name), "Rebuild of DeepSeek Harness 0.2.2-rc.1 failed");
+  // The current version without rebuild is no rebuild: its missing image built with the cache, or a check.
+  const build = job({ fromVersion: "0.2.2-rc.1", version: "0.2.2-rc.1" });
+  assert.equal(jobTitle(build, name), "Building DeepSeek Harness 0.2.2-rc.1");
+  assert.equal(jobTitle({ ...build, phase: "succeeded" }, name), "DeepSeek Harness 0.2.2-rc.1 built");
+  assert.equal(jobTitle({ ...build, phase: "cancelled" }, name), "Build of DeepSeek Harness 0.2.2-rc.1 cancelled");
+  const check = job({ ...build, phase: "verifying", reuse: true });
+  assert.equal(jobTitle(check, name), "Checking DeepSeek Harness 0.2.2-rc.1");
+  assert.equal(jobTitle({ ...check, phase: "succeeded" }, name), "DeepSeek Harness 0.2.2-rc.1 checked");
+  assert.equal(jobTitle({ ...check, phase: "failed" }, name), "Check of DeepSeek Harness 0.2.2-rc.1 failed");
+});
+
+test("a finished job says what it means for new and running workspaces", () => {
+  const dsh = { name: "DeepSeek Harness", running: [] };
+  const succeeded = job({ phase: "succeeded" });
+  assert.equal(jobOutcome(succeeded, dsh), "New DeepSeek Harness workspaces start with 0.2.2-rc.3.");
+  assert.equal(
+    jobOutcome(succeeded, { ...dsh, running: [{ version: "0.2.2-rc.3", count: 1 }, { version: "0.2.2-rc.1", count: 2 }] }),
+    "New DeepSeek Harness workspaces start with 0.2.2-rc.3. 2 running workspaces keep their version until they restart.",
+  );
+  assert.equal(
+    jobOutcome(succeeded, { ...dsh, running: [{ version: "0.2.2-rc.1", count: 1 }] }),
+    "New DeepSeek Harness workspaces start with 0.2.2-rc.3. 1 running workspace keeps its version until it restarts.",
+  );
+  assert.equal(
+    jobOutcome(job({ phase: "succeeded", rebuild: true }), { ...dsh, running: [{ version: "0.2.2-rc.1", count: 1 }] }),
+    "New DeepSeek Harness workspaces start with 0.2.2-rc.3. 1 running workspace keeps its version until it restarts.",
+    "another version from scratch",
+  );
+  const rebuilt = job({ phase: "succeeded", fromVersion: "0.2.2-rc.1", version: "0.2.2-rc.1", rebuild: true });
+  assert.equal(
+    jobOutcome(rebuilt, { ...dsh, running: [{ version: "0.2.2-rc.1", count: 1 }] }),
+    "New DeepSeek Harness workspaces start from the rebuilt image. 1 running workspace keeps the previous build until it restarts.",
+  );
+  // A missing image built again: there was no previous build to keep.
+  const built = job({ phase: "succeeded", fromVersion: "0.2.2-rc.1", version: "0.2.2-rc.1" });
+  assert.equal(jobOutcome(built, dsh), "New DeepSeek Harness workspaces can start again, with 0.2.2-rc.1.");
+  assert.equal(
+    jobOutcome(built, { ...dsh, running: [{ version: "0.2.2-rc.1", count: 1 }] }),
+    "New DeepSeek Harness workspaces can start again, with 0.2.2-rc.1.",
+  );
+  const checked = { ...built, reuse: true };
+  assert.equal(
+    jobOutcome(checked, { ...dsh, running: [{ version: "0.2.2-rc.1", count: 1 }] }),
+    "Nothing changed: the image on this server reports 0.2.2-rc.1, and new workspaces still start with it.",
+  );
+  for (const phase of ["failed", "cancelled"] as const) {
+    assert.equal(jobOutcome(job({ phase }), dsh), "Nothing changed: new workspaces still start with 0.2.2-rc.1.");
+    assert.equal(jobOutcome({ ...rebuilt, phase }, dsh), "Nothing changed: new workspaces still start with 0.2.2-rc.1.");
+    assert.equal(jobOutcome({ ...built, phase }, dsh), "Nothing changed: the 0.2.2-rc.1 image is still missing, so new workspaces can't start.");
+  }
+});
+
+test("elapsed time as a stopwatch", () => {
+  assert.equal(formatElapsed(0), "0:00");
+  assert.equal(formatElapsed(7_400), "0:07");
+  assert.equal(formatElapsed(750_000), "12:30");
+  assert.equal(formatElapsed(3_723_000), "1:02:03");
+  assert.equal(formatElapsed(-5), "0:00");
+  assert.equal(jobElapsedMs(job({ startedAt: 1_000 }), 61_000), 60_000, "running: until now");
+  assert.equal(jobElapsedMs(job({ startedAt: 1_000, finishedAt: 31_000 }), 61_000), 30_000, "finished: until it ended");
+});
+
+test("gateway errors in words: version problems belong to the version field", () => {
+  const notPublished = { error: "version_not_found", message: "Qwen Code 9.9.9 is not published (@qwen-code/qwen-code)." };
+  assert.deepEqual(agentActionError("update", notPublished), { message: notPublished.message, field: "version" });
+  const channel = { error: "invalid_version", message: 'Qwen Code has no release channel "next" (it has: latest, preview).' };
+  assert.deepEqual(agentActionError("update", channel), { message: channel.message, field: "version" });
+  assert.deepEqual(agentActionError("update", { error: "registry_unreachable", message: "The npm registry is unreachable (fetch failed)." }), {
+    message: "The npm registry is unreachable (fetch failed). Nothing was started; try again in a minute.",
+  });
+  const running = { error: "update_running", message: "Qwen Code is being updated to 0.27.4. Wait for it to finish, or cancel it." };
+  assert.deepEqual(agentActionError("update", running), { message: running.message });
+  assert.match(agentActionError("update", { error: "timeout", message: "x" }).message, /may have started anyway/);
+  assert.deepEqual(agentActionError("remove", { error: "image_in_use", message: "workspace-portal/workspace:qwen-0.27.0 is in use…" }), {
+    message: "A workspace still uses this image. It can be removed once that workspace has stopped.",
+  });
+  assert.deepEqual(agentActionError("remove", { error: "not_found", message: "There is no image …" }), {
+    message: "This image is no longer on the server.",
+  });
+  assert.deepEqual(agentActionError("cancel", { error: "unreachable", message: "The workspace service is not reachable." }), {
+    message: "The workspace service is not reachable.",
+  });
+});

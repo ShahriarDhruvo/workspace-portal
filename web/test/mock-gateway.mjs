@@ -10,11 +10,27 @@
 //   MOCK_AGENTS=qwen,dsh node test/mock-gateway.mjs
 //
 // MOCK_AGENTS (default "qwen,dsh") lists the enabled agents in display order, like the gateway's WORKSPACE_AGENTS.
+//
+// Agent versions (docs/ARCHITECTURE.md, "Agent versions and updates"), with an in-memory npm registry and image
+// store: GET /control/agents/versions[?refresh=1], POST /control/agents/:agent/update (a version whose image is on
+// the server, the current one included, skips the registry and the build unless from scratch: it logs that it uses
+// that image and only the version check runs; any other is a simulated build, steps and log lines over
+// MOCK_BUILD_MS, default 20 s, then the version check; then the version is current), POST
+// /control/agents/update/cancel, DELETE /control/agents/:agent/images/:version. The
+// same refusals and error codes as the gateway, which writes the agent_updated / agent_update_failed audit entries
+// as the gateway does. It starts with Qwen Code 0.27.0 (latest is 0.27.4, and 0.26.0 is on the server too) and
+// DeepSeek Harness 0.2.2-rc.1 (latest; next is 0.2.2-rc.3). Workspaces report the version they started with.
+//
 // Test hooks (no auth): POST /__mock/workspaces/:id/stop?reason=idle,
 // POST /__mock/workspaces/:id/connections?admin=N&owner=N, POST /__mock/workspaces/:id/busy?on=1|0,
 // POST /__mock/workspaces/:id/error?message=… (a start that failed),
-// POST /__mock/config?maxRunning=N&startMs=N&stopMs=N&agents=qwen,dsh, GET /__mock/log (paths in `log`, and
-// `calls` with method, path and JSON body).
+// POST /__mock/config?maxRunning=N&startMs=N&stopMs=N&buildMs=N&agents=qwen,dsh, GET /__mock/log (paths in `log`,
+// and `calls` with method, path and JSON body).
+// Agent versions: POST /__mock/agents/reset (the starting versions and images, no job),
+// POST /__mock/agents/fail-next?message=… (the next job's build fails at its last step; without a message, as a
+// DeepSeek Harness lockdown that doesn't fit), POST /__mock/agents/drop-image?agent=dsh&version=0.2.2-rc.1 (an image
+// gone from Docker, e.g. the current one), POST /__mock/registry?down=1|0&known=0 (the npm registry unreachable;
+// known=0: it never answered, so channels and latest are unknown).
 import crypto from "node:crypto";
 import http from "node:http";
 import path from "node:path";
@@ -26,19 +42,23 @@ const agentPortBase = Number(env.AGENT_PORT_BASE || 3100);
 const agentPortCount = Number(env.AGENT_PORT_COUNT || 20);
 const secret = env.GATEWAY_CONTROL_SECRET || "";
 
-/** Every agent kind the gateway knows (GET /control/agents lists the enabled ones). */
+/** Every agent kind the gateway knows (GET /control/agents lists the enabled ones, with their current version). */
 const AGENTS = {
   qwen: {
     id: "qwen",
     name: "Qwen Code",
     description: "Qwen Code's Web Shell: chat, files, terminal and a headless browser.",
-    version: "0.27.0",
+    defaultVersion: "0.27.0",
+    packageName: "@qwen-code/qwen-code",
+    cli: "qwen",
   },
   dsh: {
     id: "dsh",
     name: "DeepSeek Harness",
     description: "DeepSeek Harness (dsh): chat, files, terminal and a headless browser.",
-    version: "0.2.2-rc.1",
+    defaultVersion: "0.2.2-rc.1",
+    packageName: "@deepseek-ai/dsh",
+    cli: "dsh",
   },
 };
 const isAgentKind = (value) => typeof value === "string" && Object.hasOwn(AGENTS, value);
@@ -59,6 +79,8 @@ const settings = {
   stopMs: Number(env.MOCK_STOP_MS || 0),
   idleTimeoutMinutes: Number(env.IDLE_TIMEOUT_MINUTES || 30),
   agents: agentList(env.MOCK_AGENTS || "qwen,dsh"),
+  /** How long an update's simulated image build takes (an update that uses an image on the server builds none). */
+  buildMs: Number(env.MOCK_BUILD_MS || 20_000),
 };
 const db = new Database(path.join(env.PORTAL_DATA_DIR || "/srv/workspace-portal", "db", "portal.sqlite"), {
   fileMustExist: true,
@@ -79,6 +101,7 @@ function info(userId) {
     userId,
     status: w?.status ?? "stopped",
     agent: w?.agent ?? null,
+    agentVersion: isActive(w) ? (w.agentVersion ?? null) : null,
     ready: Boolean(running && w.ready),
     startedAt: w?.startedAt ?? null,
     lastActivityAt: w?.lastActivityAt ?? null,
@@ -136,8 +159,14 @@ async function control(req, res, url) {
   if (parts[0] === "__mock") {
     log.push(`${req.method} ${url.pathname}${url.search}`);
     if (parts[1] === "log") return send(res, 200, { log, calls });
+    if (parts[1] === "agents") return send(res, 200, agentHook(parts[2], url.searchParams));
+    if (parts[1] === "registry") {
+      if (url.searchParams.has("down")) registry.setDown(url.searchParams.get("down") === "1");
+      if (url.searchParams.get("known") === "0") registry.forget();
+      return send(res, 200, registry.snapshot());
+    }
     if (parts[1] === "config") {
-      for (const key of ["maxRunning", "startMs", "stopMs"]) {
+      for (const key of ["maxRunning", "startMs", "stopMs", "buildMs"]) {
         if (url.searchParams.has(key)) settings[key] = Number(url.searchParams.get(key));
       }
       if (url.searchParams.has("agents")) settings.agents = agentList(url.searchParams.get("agents"));
@@ -168,7 +197,7 @@ async function control(req, res, url) {
   if (parts[0] !== "control") return send(res, 404, { error: "not_found", message: "Not found" });
 
   if (parts[1] === "health") return send(res, 200, { ok: true });
-  if (parts[1] === "agents") return send(res, 200, { agents: settings.agents.map((id) => AGENTS[id]) });
+  if (parts[1] === "agents") return agentRoutes(req, res, url, parts.slice(2));
   if (parts[1] === "stats") {
     const running = [...workspaces.values()].filter((w) => w.status === "running").length;
     return send(res, 200, {
@@ -247,6 +276,7 @@ async function control(req, res, url) {
         ...current,
         status: "starting",
         agent,
+        agentVersion: agentVersions.current[agent],
         ready: false,
         startedAt: now,
         lastActivityAt: now,
@@ -263,6 +293,496 @@ async function control(req, res, url) {
     return send(res, 200, info(id));
   }
   return send(res, 404, { error: "not_found", message: "Not found" });
+}
+
+// ---- Agent versions ------------------------------------------------------------------------------------------
+
+/** What the npm registry has: each package's dist-tags (experiment tags besides the channels) and its versions. */
+const RELEASES = {
+  qwen: {
+    distTags: { latest: "0.27.4", preview: "0.27.2-preview.0", nightly: "0.27.2-nightly.20261113.6f754be654", jobbench: "0.0.0-jobbench.3" },
+    published: ["0.25.0", "0.26.0", "0.27.0", "0.27.1", "0.27.2", "0.27.3", "0.27.4", "0.27.2-preview.0", "0.27.2-nightly.20261113.6f754be654"],
+  },
+  dsh: {
+    distTags: { latest: "0.2.2-rc.1", next: "0.2.2-rc.3" },
+    published: ["0.2.0", "0.2.1", "0.2.2-rc.1", "0.2.2-rc.2", "0.2.2-rc.3"],
+  },
+};
+const RELEASE_CHANNELS = ["latest", "next", "preview", "beta", "rc", "alpha", "nightly"];
+const isVersion = (value) => typeof value === "string" && value.length <= 100 && /^\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.]+)?$/.test(value);
+const isChannelName = (value) => /^[a-z][a-z0-9-]{0,63}$/.test(value);
+const releaseChannels = (tags) => RELEASE_CHANNELS.filter((tag) => isVersion(tags[tag])).map((tag) => ({ tag, version: tags[tag] }));
+const workspaceImage = (kind, version) => `workspace-portal/workspace:${kind}-${version}`;
+const GiB = 1024 ** 3;
+const DAY = 86_400_000;
+
+/** Semver precedence, prereleases included (a release sorts after its prereleases). */
+function compareVersions(a, b) {
+  const parse = (version) => {
+    const dash = version.indexOf("-");
+    return {
+      core: (dash < 0 ? version : version.slice(0, dash)).split(".").map(Number),
+      pre: dash < 0 ? [] : version.slice(dash + 1).split("."),
+    };
+  };
+  const x = parse(a);
+  const y = parse(b);
+  for (let i = 0; i < 3; i++) if (x.core[i] !== y.core[i]) return x.core[i] - y.core[i];
+  if (x.pre.length === 0 || y.pre.length === 0) return y.pre.length - x.pre.length;
+  for (let i = 0; i < Math.min(x.pre.length, y.pre.length); i++) {
+    const [p, q] = [x.pre[i], y.pre[i]];
+    if (p === q) continue;
+    const [pn, qn] = [/^\d+$/.test(p), /^\d+$/.test(q)];
+    if (pn && qn) return Number(p) - Number(q);
+    if (pn !== qn) return pn ? -1 : 1;
+    return p < q ? -1 : 1;
+  }
+  return x.pre.length - y.pre.length;
+}
+
+/** The npm registry as the gateway's release cache sees it: answers cached, an outage keeps the last answer. */
+const registry = {
+  down: false,
+  /** False until it answered once: channels and latest are unknown. */
+  known: true,
+  checkedAt: Date.now(),
+  error: null,
+  setDown(down) {
+    this.down = down;
+    this.error = down ? "The npm registry is unreachable (fetch failed)." : null;
+    if (!down) Object.assign(this, { known: true, checkedAt: Date.now() });
+  },
+  forget() {
+    Object.assign(this, { known: false, checkedAt: null });
+  },
+  /** GET /control/agents/versions: asks again every 10 minutes, or at once with ?refresh=1 (taking a moment). */
+  async check(refresh) {
+    const stale = !this.down && Date.now() - (this.checkedAt ?? 0) > 10 * 60_000;
+    if (!refresh && !stale) return;
+    await sleep(700);
+    if (this.down) this.error = "The npm registry is unreachable (fetch failed).";
+    else Object.assign(this, { known: true, checkedAt: Date.now(), error: null });
+  },
+  tags(kind) {
+    return this.known ? RELEASES[kind].distTags : undefined;
+  },
+  snapshot() {
+    return { down: this.down, known: this.known, checkedAt: this.checkedAt, error: this.error };
+  },
+};
+
+/** Versions, images and the update job: the gateway's AgentVersions, Docker's images and the AgentUpdater. */
+const agentVersions = {
+  /** The version new workspaces of each agent start with. */
+  current: {},
+  /** Docker's workspace images: "<kind>-<version>" → { kind, version, sizeBytes, createdAt }. */
+  images: new Map(),
+  /** The running job, else the last finished one. */
+  job: null,
+  /** An update request still being checked against the registry: it counts as running. */
+  pending: null,
+  /** The running job's simulated build. */
+  timers: [],
+  /** The next job fails at its last build step: { message } (null message: the default failure). */
+  failNext: null,
+};
+
+function addImage(kind, version, sizeBytes, createdAt) {
+  agentVersions.images.set(`${kind}-${version}`, { kind, version, sizeBytes, createdAt });
+}
+
+function resetAgentVersions() {
+  stopBuild();
+  const now = Date.now();
+  Object.assign(agentVersions, {
+    current: { qwen: AGENTS.qwen.defaultVersion, dsh: AGENTS.dsh.defaultVersion },
+    images: new Map(),
+    job: null,
+    pending: null,
+    failNext: null,
+  });
+  addImage("qwen", "0.27.0", 2.31 * GiB, now - 6 * DAY);
+  addImage("qwen", "0.26.0", 2.27 * GiB, now - 24 * DAY);
+  addImage("dsh", "0.2.2-rc.1", 2.64 * GiB, now - 3 * DAY);
+}
+resetAgentVersions();
+
+const jobActive = () => agentVersions.job?.phase === "building" || agentVersions.job?.phase === "verifying";
+const jobSnapshot = () => (agentVersions.job ? { ...agentVersions.job, log: [...agentVersions.job.log] } : null);
+
+function auditAgent(action, actorUserId, details) {
+  db.prepare("INSERT INTO audit_log (at, actor_user_id, action, details) VALUES (?, ?, ?, ?)").run(
+    Date.now(),
+    actorUserId,
+    action,
+    JSON.stringify(details),
+  );
+}
+
+function versionInfo(kind) {
+  const { name, packageName, defaultVersion } = AGENTS[kind];
+  const current = agentVersions.current[kind];
+  const tags = registry.tags(kind);
+  const latest = isVersion(tags?.latest) ? tags.latest : null;
+  const counts = new Map();
+  for (const w of workspaces.values()) {
+    if (w.agent === kind && isActive(w)) counts.set(w.agentVersion ?? null, (counts.get(w.agentVersion ?? null) ?? 0) + 1);
+  }
+  const installed = [...agentVersions.images.values()]
+    .filter((image) => image.kind === kind)
+    .sort((a, b) => compareVersions(b.version, a.version))
+    .map(({ version, sizeBytes, createdAt }) => ({
+      version,
+      image: workspaceImage(kind, version),
+      sizeBytes: Math.round(sizeBytes),
+      createdAt,
+      current: version === current,
+      inUse: counts.get(version) ?? 0,
+    }));
+  const running = [...counts]
+    .sort(([a], [b]) => (a === null ? 1 : b === null ? -1 : compareVersions(b, a)))
+    .map(([version, count]) => ({ version, count }));
+  return {
+    id: kind,
+    name,
+    packageName,
+    current,
+    defaultVersion,
+    latest,
+    updateAvailable: latest !== null && compareVersions(latest, current) > 0,
+    channels: tags ? releaseChannels(tags) : [],
+    installed,
+    running,
+  };
+}
+
+function versionsOverview() {
+  return {
+    agents: settings.agents.map(versionInfo),
+    job: jobSnapshot(),
+    registryError: registry.error,
+    checkedAt: registry.checkedAt,
+  };
+}
+
+/** The build steps of an agent's image, like `docker build --progress=plain` shows them: the base layers cached unless from scratch. */
+function buildSteps(kind, version, rebuild) {
+  const { packageName, cli } = AGENTS[kind];
+  const base = (name, lines) => ({ name, lines: rebuild ? lines : [], cached: !rebuild, weight: rebuild ? 3 : 0.1 });
+  const check =
+    kind === "dsh"
+      ? "RUN dsh --profile web --patch /usr/local/share/workspace-portal/dsh/lockdown.patch.yml --dump-config"
+      : `RUN ${cli} --version`;
+  return [
+    { name: "[internal] load build definition from Dockerfile", lines: ["transferring dockerfile: 7.40kB done"], weight: 0.3 },
+    { name: "[internal] load metadata for docker.io/library/node:24-bookworm-slim", lines: [], weight: 0.8 },
+    {
+      name: "[base 1/5] FROM docker.io/library/node:24-bookworm-slim@sha256:c0a93797ee78814ae6d32fcca2561fdbbe423149c3f5389aad32d86e9fd85bd4",
+      lines: [],
+      weight: 0.2,
+    },
+    base(
+      "[base 2/5] RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git jq less procps ripgrep tini unzip python3 python3-venv chromium fonts-liberation fonts-noto-core fonts-noto-color-emoji && rm -rf /var/lib/apt/lists/*",
+      [
+        "Get:1 http://deb.debian.org/debian bookworm InRelease [151 kB]",
+        "Get:2 http://deb.debian.org/debian bookworm-updates InRelease [55.4 kB]",
+        "Get:3 http://deb.debian.org/debian-security bookworm-security InRelease [48.0 kB]",
+        "Get:4 http://deb.debian.org/debian bookworm/main amd64 Packages [8792 kB]",
+        "Fetched 9246 kB in 2s (4512 kB/s)",
+        "Reading package lists...",
+        "The following NEW packages will be installed:",
+        "  chromium chromium-common fonts-liberation fonts-noto-color-emoji fonts-noto-core git jq less procps python3 ripgrep tini unzip",
+        "0 upgraded, 214 newly installed, 0 to remove and 0 not upgraded.",
+        "Need to get 187 MB of archives.",
+        "Get:58 http://deb.debian.org/debian-security bookworm-security/main amd64 chromium amd64 142.0.7444.162-1~deb12u1 [79.3 MB]",
+        "Setting up chromium (142.0.7444.162-1~deb12u1) ...",
+        "Processing triggers for libc-bin (2.36-9+deb12u13) ...",
+      ],
+    ),
+    base('[base 3/5] RUN npm install -g --no-fund --no-audit "@playwright/mcp@0.0.84" && npm cache clean --force', ["added 22 packages in 4s"]),
+    base("[base 4/5] RUN mkdir -p /home/user /workspace && (userdel --remove node 2>/dev/null || true)", []),
+    base("[base 5/5] WORKDIR /workspace", []),
+    { name: "[internal] load build context", lines: ["transferring context: 376B done"], weight: 0.2 },
+    {
+      name: `[${kind} 1/3] RUN npm install -g --no-fund --no-audit "${packageName}@${version}" && npm cache clean --force`,
+      lines: [
+        "npm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead",
+        "",
+        `added ${kind === "dsh" ? 671 : 412} packages in 21s`,
+        "npm warn using --force Recommended protections disabled.",
+      ],
+      weight: 6,
+    },
+    { name: `[${kind} 2/3] COPY --chmod=0755 start-${kind}.sh /usr/local/bin/start-${kind}`, lines: [], weight: 0.3 },
+    { name: `[${kind} 3/3] ${check}`, lines: [], weight: 1.5 },
+    {
+      name: "exporting to image",
+      lines: [
+        "exporting layers 3.2s done",
+        `writing image sha256:${crypto.createHash("sha256").update(`${kind}-${version}-${Date.now()}`).digest("hex")} done`,
+        `naming to docker.io/workspace-portal/workspace-build:${kind}-${version} done`,
+      ],
+      weight: 1,
+    },
+  ];
+}
+
+/** What a failing build shows at its last step, and the error the job ends with. */
+function failureOf(kind, version, message) {
+  if (message) return { lines: [message], error: message };
+  if (kind === "dsh") {
+    return {
+      lines: [
+        `lockdown.patch.yml does not fit dsh ${version} (exit 0):`,
+        'dsh: [/usr/local/share/workspace-portal/dsh/lockdown.patch.yml] patch: entry "account-controller" not found',
+      ],
+      error:
+        'process "/bin/sh -c dsh --profile web --patch /usr/local/share/workspace-portal/dsh/lockdown.patch.yml --dump-config" did not complete successfully: exit code: 1',
+    };
+  }
+  return {
+    lines: ["Error: Cannot find module '@qwen-code/qwen-code-core/dist/index.js'", "Node.js v24.11.1"],
+    error: 'process "/bin/sh -c qwen --version" did not complete successfully: exit code: 1',
+  };
+}
+
+function stopBuild() {
+  for (const timer of agentVersions.timers) clearTimeout(timer);
+  agentVersions.timers = [];
+}
+
+function finishJob(phase, error) {
+  stopBuild();
+  Object.assign(agentVersions.job, { phase, error, step: null, finishedAt: Date.now() });
+}
+
+/**
+ * A version whose image is here (the current one included), not from scratch: no registry query and no build, only
+ * the check (as the gateway).
+ */
+const reusesImage = (kind, version, rebuild) => !rebuild && agentVersions.images.has(`${kind}-${version}`);
+
+/**
+ * The version check, then the job's version is current: the whole job when it uses the image on the server
+ * (built: false, logged first as the gateway does), a build's last phase.
+ */
+function verifyAndPromote(job, at, { built }) {
+  const { agent: kind, version, rebuild, actorUserId } = job;
+  const { cli } = AGENTS[kind];
+  if (!built) job.log.push(`Using the image already on this server (${workspaceImage(kind, version)}).`);
+  Object.assign(job, { phase: "verifying", step: `${cli} --version` });
+  at(1450, () => {
+    job.log.push(`${cli} --version: ${version}`);
+    const previous = agentVersions.images.get(`${kind}-${version}`);
+    if (built) addImage(kind, version, previous?.sizeBytes ?? (kind === "dsh" ? 2.66 : 2.33) * GiB, Date.now());
+    agentVersions.current[kind] = version;
+    finishJob("succeeded", null);
+    auditAgent("agent_updated", actorUserId, { agent: kind, from: job.fromVersion, to: version, rebuild });
+  });
+}
+
+/** Plays the build: each step's header, its output spread over its share of the time, then DONE or CACHED. */
+function startJob(kind, version, rebuild, actorUserId) {
+  const job = {
+    id: crypto.randomUUID(),
+    agent: kind,
+    fromVersion: agentVersions.current[kind],
+    version,
+    rebuild,
+    reuse: reusesImage(kind, version, rebuild),
+    actorUserId,
+    phase: "building",
+    step: null,
+    log: [],
+    startedAt: Date.now(),
+    finishedAt: null,
+    error: null,
+  };
+  agentVersions.job = job;
+  const at = (ms, action) => agentVersions.timers.push(setTimeout(action, ms));
+  if (job.reuse) {
+    verifyAndPromote(job, at, { built: false });
+    return job;
+  }
+  const failure = agentVersions.failNext ? failureOf(kind, version, agentVersions.failNext.message) : null;
+  agentVersions.failNext = null;
+  const steps = buildSteps(kind, version, rebuild);
+  const failAt = failure ? steps.findIndex((step) => step.name.startsWith(`[${kind} 3/3]`)) : -1;
+  const total = settings.buildMs;
+  const weights = steps.reduce((sum, step) => sum + step.weight, 0);
+  /** The job keeps the last 200 lines, like the gateway's. */
+  const append = (line) => {
+    job.log.push(line);
+    if (job.log.length > 200) job.log.splice(0, job.log.length - 200);
+  };
+
+  let clock = 0;
+  for (const [index, step] of steps.entries()) {
+    const n = index + 1;
+    const duration = (total * step.weight) / weights;
+    const lines = index === failAt ? failure.lines : step.lines;
+    at(clock, () => {
+      job.step = step.name;
+      append(`#${n} ${step.name}`);
+    });
+    lines.forEach((line, i) => {
+      const offset = (duration * (i + 1)) / (lines.length + 1);
+      at(clock + offset, () => append(`#${n} ${(offset / 1000).toFixed(2)} ${line}`.trimEnd()));
+    });
+    clock += duration;
+    if (index === failAt) {
+      at(clock, () => {
+        append(`#${n} ERROR: ${failure.error}`);
+        finishJob("failed", failure.error);
+        auditAgent("agent_update_failed", actorUserId, { agent: kind, version, error: failure.error });
+      });
+      return job;
+    }
+    at(clock, () => append(step.cached ? `#${n} CACHED` : `#${n} DONE ${(duration / 1000).toFixed(1)}s`));
+  }
+  at(clock + 50, () => verifyAndPromote(job, at, { built: true }));
+  return job;
+}
+
+/** A channel resolved to its version, or an exact version the registry has; else the gateway's refusal. */
+async function resolveVersion(kind, requested) {
+  const { name, packageName } = AGENTS[kind];
+  const unreachable = { status: 502, error: "registry_unreachable", message: "The npm registry is unreachable (fetch failed)." };
+  if (isVersion(requested)) {
+    await sleep(300);
+    if (registry.down) return unreachable;
+    if (RELEASES[kind].published.includes(requested)) return { version: requested };
+    return { status: 404, error: "version_not_found", message: `${name} ${requested} is not published (${packageName}).` };
+  }
+  if (!isChannelName(requested)) {
+    return {
+      status: 400,
+      error: "invalid_version",
+      message: `"${requested}" is not a version (like 0.27.4) or a release channel (${RELEASE_CHANNELS.join(", ")}).`,
+    };
+  }
+  await sleep(300);
+  if (registry.down) return unreachable;
+  registry.known = true;
+  const channels = releaseChannels(RELEASES[kind].distTags);
+  const channel = channels.find((candidate) => candidate.tag === requested);
+  if (channel) return { version: channel.version };
+  const offered = channels.map((candidate) => candidate.tag).join(", ") || "none";
+  return { status: 400, error: "invalid_version", message: `${name} has no release channel "${requested}" (it has: ${offered}).` };
+}
+
+const unknownAgent = { status: 400, error: "unknown_agent", message: `agent must be one of ${Object.keys(AGENTS).map((kind) => `"${kind}"`).join(", ")}.` };
+
+/** POST /control/agents/:agent/update: refusals in the gateway's order, then the job as it starts. */
+async function startUpdate(kind, body) {
+  if (!isAgentKind(kind)) return unknownAgent;
+  if (body === null) return { status: 400, error: "bad_request", message: "The body must be a JSON object." };
+  const { version, rebuild, actorUserId } = body;
+  if (typeof version !== "string" || version.trim() === "" || version.length > 128) {
+    return { status: 400, error: "bad_request", message: "version must be a version (like 0.27.4) or a release channel (like latest)." };
+  }
+  if (rebuild !== undefined && rebuild !== null && typeof rebuild !== "boolean") {
+    return { status: 400, error: "bad_request", message: "rebuild must be true or false." };
+  }
+  if (actorUserId !== undefined && actorUserId !== null) {
+    if (!(Number.isSafeInteger(actorUserId) && actorUserId > 0)) return { status: 400, error: "invalid_actor", message: "actorUserId must be a positive integer." };
+    if (!db.prepare("SELECT id FROM users WHERE id = ?").get(actorUserId)) {
+      return { status: 400, error: "invalid_actor", message: `actorUserId ${actorUserId} is not a user.` };
+    }
+  }
+  if (!settings.agents.includes(kind)) return { status: 400, error: "agent_unavailable", message: `${AGENTS[kind].name} is not available on this portal.` };
+  if (agentVersions.pending || jobActive()) {
+    const job = jobActive() ? agentVersions.job : null;
+    const message = job
+      ? `${AGENTS[job.agent].name} is being updated to ${job.version}. Wait for it to finish, or cancel it.`
+      : "An agent update is already running. Wait for it to finish, or cancel it.";
+    return { status: 409, error: "update_running", message };
+  }
+  agentVersions.pending = kind;
+  try {
+    const requested = version.trim();
+    const resolved = reusesImage(kind, requested, rebuild === true) ? { version: requested } : await resolveVersion(kind, requested);
+    if (!resolved.version) return resolved;
+    startJob(kind, resolved.version, rebuild === true, actorUserId ?? null);
+    return { status: 200, body: jobSnapshot() };
+  } finally {
+    agentVersions.pending = null;
+  }
+}
+
+/** POST /control/agents/update/cancel: the build stops, and the job is cancelled a moment later. */
+function cancelUpdate() {
+  if (!jobActive()) return false;
+  const job = agentVersions.job;
+  stopBuild();
+  agentVersions.timers.push(
+    setTimeout(() => {
+      finishJob("cancelled", "Cancelled");
+      auditAgent("agent_update_failed", job.actorUserId, { agent: job.agent, version: job.version, error: "Cancelled" });
+    }, 800),
+  );
+  return true;
+}
+
+/** DELETE /control/agents/:agent/images/:version. */
+function removeImage(kind, version) {
+  if (!isAgentKind(kind)) return unknownAgent;
+  const { name } = AGENTS[kind];
+  if (!isVersion(version)) return { status: 400, error: "invalid_version", message: `"${version}" is not a version (like 0.27.4).` };
+  if (agentVersions.pending === kind || (jobActive() && agentVersions.job.agent === kind)) {
+    return { status: 409, error: "update_running", message: `An update of ${name} is running. Wait for it to finish, or cancel it.` };
+  }
+  if (agentVersions.current[kind] === version) {
+    return {
+      status: 409,
+      error: "image_current",
+      message: `${name} ${version} is the current version: new workspaces start from this image. Switch to another version first.`,
+    };
+  }
+  const image = workspaceImage(kind, version);
+  if (!agentVersions.images.has(`${kind}-${version}`)) return { status: 404, error: "not_found", message: `There is no image ${image}.` };
+  const inUse = [...workspaces.values()].some((w) => isActive(w) && w.agent === kind && w.agentVersion === version);
+  if (inUse) {
+    return { status: 409, error: "image_in_use", message: `${image} is in use by a workspace container. It can be removed once that workspace has stopped.` };
+  }
+  agentVersions.images.delete(`${kind}-${version}`);
+  return { status: 200, body: { ok: true } };
+}
+
+/** /control/agents and below. */
+async function agentRoutes(req, res, url, rest) {
+  const reply = (result) => (result.status === 200 ? send(res, 200, result.body) : send(res, result.status, { error: result.error, message: result.message }));
+  if (rest.length === 0 && req.method === "GET") {
+    return send(res, 200, { agents: settings.agents.map((id) => ({ ...pick(AGENTS[id], ["id", "name", "description"]), version: agentVersions.current[id] })) });
+  }
+  if (rest.length === 1 && rest[0] === "versions" && req.method === "GET") {
+    await registry.check(url.searchParams.get("refresh") === "1");
+    return send(res, 200, versionsOverview());
+  }
+  if (rest.length === 2 && rest[0] === "update" && rest[1] === "cancel" && req.method === "POST") {
+    calls.push({ method: req.method, path: url.pathname, body: null });
+    return send(res, 200, { cancelled: cancelUpdate() });
+  }
+  if (rest.length === 2 && rest[1] === "update" && req.method === "POST") {
+    const body = await readBody(req);
+    calls.push({ method: req.method, path: url.pathname, body });
+    return reply(await startUpdate(rest[0], body));
+  }
+  if (rest.length === 3 && rest[1] === "images" && req.method === "DELETE") {
+    calls.push({ method: req.method, path: url.pathname, body: null });
+    return reply(removeImage(rest[0], decodeURIComponent(rest[2])));
+  }
+  return send(res, 404, { error: "not_found", message: "Not found" });
+}
+
+const pick = (object, keys) => Object.fromEntries(keys.map((key) => [key, object[key]]));
+
+/** POST /__mock/agents/<hook>. */
+function agentHook(hook, params) {
+  if (hook === "reset") resetAgentVersions();
+  if (hook === "fail-next") agentVersions.failNext = { message: params.get("message") || null };
+  if (hook === "drop-image") agentVersions.images.delete(`${params.get("agent")}-${params.get("version")}`);
+  return { ...versionsOverview(), failNext: agentVersions.failNext };
 }
 
 http

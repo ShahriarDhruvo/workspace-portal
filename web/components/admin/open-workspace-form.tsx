@@ -1,7 +1,7 @@
+import type { ComponentProps } from "react";
 import { openWorkspace } from "@/lib/actions/admin";
-import type { ButtonSize, ButtonVariant } from "@/components/ui/button";
+import { SubmitButton } from "@/components/forms/submit-button";
 import { RightUpIcon } from "@/components/ui/icons";
-import { SubmitButton } from "@/components/ui/submit-button";
 
 /**
  * Points the admin's session at this user's workspace and goes there. For the admin's own row it leaves
@@ -15,9 +15,7 @@ export function OpenWorkspaceForm({
 }: {
   userId: number;
   label?: string;
-  variant?: ButtonVariant;
-  size?: ButtonSize;
-}) {
+} & Pick<ComponentProps<typeof SubmitButton>, "variant" | "size">) {
   return (
     <form action={openWorkspace}>
       <input type="hidden" name="userId" value={userId} />

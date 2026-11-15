@@ -3,14 +3,16 @@
 import Link from "next/link";
 import { useActionState, useState } from "react";
 import { createUser, type CreateUserState } from "@/lib/actions/admin";
-import { NAME_MAX_LENGTH, PASSWORD_MIN_LENGTH } from "@/lib/limits";
+import { PASSWORD_MIN_LENGTH } from "@/lib/limits";
 import { generateTemporaryPassword } from "@/lib/password-generator";
-import { buttonClass } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { SecretValue } from "@/components/ui/copy-button";
-import { Field } from "@/components/ui/field";
+import { SecretValue } from "@/components/common/secret-value";
+import { FormField } from "@/components/forms/form-field";
+import { SubmitButton } from "@/components/forms/submit-button";
+import { Button } from "@/components/ui/button";
+import { Card, CardDescription, CardTitle } from "@/components/ui/card";
+import { FieldGroup } from "@/components/ui/field";
 import { CheckIcon, RefreshIcon } from "@/components/ui/icons";
-import { SubmitButton } from "@/components/ui/submit-button";
+import { NameFields } from "./name-fields";
 
 const IDLE: CreateUserState = { status: "idle" };
 
@@ -26,29 +28,29 @@ function NewUserForm({ onAnother }: { onAnother: () => void }) {
 
   if (state.status === "created") {
     return (
-      <Card className="flex flex-col gap-4 p-4">
-        <div className="flex items-center gap-2 text-16 font-medium">
+      <Card variant="outline" className="px-4">
+        <CardTitle className="flex items-center gap-2">
           <span className="inline-flex size-6 items-center justify-center rounded-full bg-success/14 text-success">
             <CheckIcon />
           </span>
           User created
-        </div>
-        <p className="text-14 text-fg-muted">
-          <strong className="font-medium text-fg">{state.user.name}</strong> can now sign in as{" "}
-          <strong className="font-medium text-fg">{state.user.username}</strong> with this temporary password. It is
-          shown only once; they choose their own at first sign-in.
-        </p>
+        </CardTitle>
+        <CardDescription>
+          <strong className="font-medium text-foreground">{state.user.name}</strong> can now sign in as{" "}
+          <strong className="font-medium text-foreground">{state.user.username}</strong> with this temporary password. It
+          is shown only once; they choose their own at first sign-in.
+        </CardDescription>
         <SecretValue value={state.temporaryPassword} />
         <div className="flex flex-wrap justify-end gap-2">
-          <Link href="/admin" className={buttonClass("ghost")}>
-            Back to users
-          </Link>
-          <Link href={`/admin/users/${state.user.id}`} className={buttonClass("outline")}>
-            View user
-          </Link>
-          <button type="button" className={buttonClass("primary")} onClick={onAnother}>
+          <Button asChild variant="ghost">
+            <Link href="/admin">Back to users</Link>
+          </Button>
+          <Button asChild variant="outline">
+            <Link href={`/admin/users/${state.user.id}`}>View user</Link>
+          </Button>
+          <Button type="button" onClick={onAnother}>
             Create another
-          </button>
+          </Button>
         </div>
       </Card>
     );
@@ -57,76 +59,47 @@ function NewUserForm({ onAnother }: { onAnother: () => void }) {
   const errors = state.status === "invalid" ? state.fieldErrors : {};
   const values = state.status === "invalid" ? state.values : undefined;
   return (
-    <Card className="p-4">
-      <form action={action} className="flex flex-col gap-5">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <Field
-            label="First name"
-            name="firstName"
+    <Card variant="outline" className="px-4">
+      <form action={action} className="flex flex-col gap-6">
+        <FieldGroup>
+          <NameFields values={values} errors={errors} autoFocus />
+          <FormField
+            label="Username"
+            name="username"
+            placeholder="ada.lovelace"
             required
-            maxLength={NAME_MAX_LENGTH}
             autoComplete="off"
-            autoFocus
-            defaultValue={values?.firstName}
-            error={errors.firstName}
+            autoCapitalize="none"
+            spellCheck={false}
+            defaultValue={values?.username}
+            hint="3–32 characters: lowercase letters, digits, dots, hyphens or underscores."
+            error={errors.username}
           />
-          <Field
-            label="Middle name"
-            name="middleName"
-            optional
-            maxLength={NAME_MAX_LENGTH}
-            autoComplete="off"
-            defaultValue={values?.middleName}
-            error={errors.middleName}
-          />
-          <Field
-            label="Last name"
-            name="lastName"
+          <FormField
+            label="Temporary password"
+            name="password"
+            placeholder="Type or generate one"
             required
-            maxLength={NAME_MAX_LENGTH}
+            minLength={PASSWORD_MIN_LENGTH}
             autoComplete="off"
-            defaultValue={values?.lastName}
-            error={errors.lastName}
+            spellCheck={false}
+            mono
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            hint={`At least ${PASSWORD_MIN_LENGTH} characters. The user must change it at first sign-in.`}
+            error={errors.password}
+            addon={
+              <Button type="button" variant="outline" onClick={() => setPassword(generateTemporaryPassword())}>
+                <RefreshIcon />
+                Generate
+              </Button>
+            }
           />
-        </div>
-        <Field
-          label="Username"
-          name="username"
-          required
-          autoComplete="off"
-          autoCapitalize="none"
-          spellCheck={false}
-          defaultValue={values?.username}
-          hint="3–32 characters: lowercase letters, digits, dots, hyphens or underscores."
-          error={errors.username}
-        />
-        <Field
-          label="Temporary password"
-          name="password"
-          required
-          minLength={PASSWORD_MIN_LENGTH}
-          autoComplete="off"
-          spellCheck={false}
-          mono
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-          hint={`At least ${PASSWORD_MIN_LENGTH} characters. The user must change it at first sign-in.`}
-          error={errors.password}
-          addon={
-            <button
-              type="button"
-              className={buttonClass("outline", "md")}
-              onClick={() => setPassword(generateTemporaryPassword())}
-            >
-              <RefreshIcon />
-              Generate
-            </button>
-          }
-        />
-        <div className="flex justify-end gap-2 border-t border-line-faint pt-4">
-          <Link href="/admin" className={buttonClass("ghost")}>
-            Cancel
-          </Link>
+        </FieldGroup>
+        <div className="flex justify-end gap-2 border-t border-border-faint pt-4">
+          <Button asChild variant="ghost">
+            <Link href="/admin">Cancel</Link>
+          </Button>
           <SubmitButton pendingLabel="Creating…">Create user</SubmitButton>
         </div>
       </form>

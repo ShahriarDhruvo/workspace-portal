@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -14,7 +15,7 @@ export const viewport: Viewport = {
   colorScheme: "dark",
 };
 
-// Paints the dark canvas before any stylesheet loads, so there is never a white flash.
+// Paints the dark canvas (--canvas in app/theme.css) before any stylesheet loads, so there is never a white flash.
 const BOOT_STYLE = "html{background:#0d0d0d;color-scheme:dark}";
 
 export default function RootLayout({ children }: { children: ReactNode }) {
@@ -23,7 +24,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       <head>
         <style dangerouslySetInnerHTML={{ __html: BOOT_STYLE }} />
       </head>
-      <body>{children}</body>
+      <body>
+        <TooltipProvider>{children}</TooltipProvider>
+      </body>
     </html>
   );
 }

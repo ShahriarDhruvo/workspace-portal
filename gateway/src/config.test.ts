@@ -1,5 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { AGENT_KINDS } from "@portal/db";
+import { driverFor } from "./agents/index.ts";
 import { ConfigError, loadConfig, MIB, parseByteSize } from "./config.ts";
 
 const HOUR = 3_600_000;
@@ -34,6 +38,12 @@ test("defaults match .env.example", () => {
   assert.equal(config.dataDir, "/srv/workspace-portal");
   assert.equal(config.dbFile, "/srv/workspace-portal/db/portal.sqlite");
   assert.equal(config.qwenConfigDir, "/srv/workspace-portal/config/qwen");
+  assert.equal(config.agentVersionsFile, "/srv/workspace-portal/config/agent-versions.env");
+  assert.equal(
+    config.imageContextDir,
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../workspace-image"),
+    "workspace-image/ next to the gateway's code (/app/workspace-image in the container)",
+  );
   assert.deepEqual(
     [config.webPort, config.agentBind, config.agentPortBase, config.agentPortCount, config.controlPort, config.servicePort],
     [3000, "0.0.0.0", 3100, 200, 4002, 4001],
@@ -45,10 +55,7 @@ test("defaults match .env.example", () => {
   assert.deepEqual(config.search, { url: "http://127.0.0.1:8888", authorization: "", timeoutMs: 20_000, maxConcurrentPerUser: 2 });
   assert.deepEqual(config.workspace, {
     agents: ["qwen", "dsh"],
-    images: {
-      qwen: { version: "0.27.0", image: "workspace-portal/workspace:qwen-0.27.0" },
-      dsh: { version: "0.2.2-rc.1", image: "workspace-portal/workspace:dsh-0.2.2-rc.1" },
-    },
+    defaultVersions: { qwen: "0.27.0", dsh: "0.2.2-rc.1" },
     network: "workspace-portal-ws",
     subnet: "172.29.0.0/16",
     gatewayIp: "172.29.0.1",
@@ -135,11 +142,14 @@ test("models are not configured through the environment any more", () => {
   assert.equal("model" in config.llm, false, "system-defaults.json is the only source of models");
 });
 
-test("WORKSPACE_AGENTS and the agent versions select the agents and their images", () => {
+test("WORKSPACE_AGENTS selects the agents; the version variables set their default versions", () => {
   const config = loadConfig({ ...secrets, WORKSPACE_AGENTS: " DSH , qwen,dsh ", DSH_VERSION: "0.3.0", QWEN_CODE_VERSION: "0.28.1-beta.2" });
   assert.deepEqual(config.workspace.agents, ["dsh", "qwen"], "in the admin's order, without repeats");
-  assert.equal(config.workspace.images.dsh.image, "workspace-portal/workspace:dsh-0.3.0");
-  assert.equal(config.workspace.images.qwen.image, "workspace-portal/workspace:qwen-0.28.1-beta.2");
+  assert.deepEqual(config.workspace.defaultVersions, { dsh: "0.3.0", qwen: "0.28.1-beta.2" });
+  for (const kind of AGENT_KINDS) {
+    const { versionKey } = driverFor(kind).release;
+    assert.equal(loadConfig({ ...secrets, [versionKey]: "9.8.7" }).workspace.defaultVersions[kind], "9.8.7", `${kind}: the driver's versionKey is the env variable`);
+  }
   assert.deepEqual(loadConfig({ ...secrets, WORKSPACE_AGENTS: "qwen" }).workspace.agents, ["qwen"]);
 
   assert.deepEqual(problems({ ...secrets, WORKSPACE_AGENTS: "qwen,claude" }), [
@@ -148,6 +158,11 @@ test("WORKSPACE_AGENTS and the agent versions select the agents and their images
   assert.deepEqual(problems({ ...secrets, WORKSPACE_AGENTS: " , " }), ['WORKSPACE_AGENTS must list one or more of qwen, dsh, comma-separated (got ",")']);
   // An image tag is built from it: nothing but a version.
   assert.deepEqual(problems({ ...secrets, DSH_VERSION: "latest; rm -rf" }), ['DSH_VERSION must be a version such as 0.27.0 (got "latest; rm -rf")']);
+});
+
+test("WORKSPACE_IMAGE_CONTEXT moves the build context; it must be absolute", () => {
+  assert.equal(loadConfig({ ...secrets, WORKSPACE_IMAGE_CONTEXT: "/opt/portal/workspace-image/" }).imageContextDir, "/opt/portal/workspace-image");
+  assert.deepEqual(problems({ ...secrets, WORKSPACE_IMAGE_CONTEXT: "workspace-image" }), ['WORKSPACE_IMAGE_CONTEXT must be an absolute path (got "workspace-image")']);
 });
 
 test("SEARXNG_AUTHORIZATION must be one header value", () => {

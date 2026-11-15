@@ -2,10 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { AuditIcon, UsersIcon } from "@/components/ui/icons";
+import { AuditIcon, PackageIcon, UsersIcon } from "@/components/ui/icons";
+import { cn } from "@/lib/utils";
 
 const LINKS = [
   { href: "/admin", label: "Users", icon: <UsersIcon />, matches: (path: string) => path === "/admin" || path.startsWith("/admin/users") },
+  { href: "/admin/agents", label: "Agents", icon: <PackageIcon />, matches: (path: string) => path.startsWith("/admin/agents") },
   { href: "/admin/audit", label: "Audit log", icon: <AuditIcon />, matches: (path: string) => path.startsWith("/admin/audit") },
 ];
 
@@ -24,9 +26,10 @@ export function AdminNav() {
             key={link.href}
             href={link.href}
             aria-current={current ? "page" : undefined}
-            className={`-mb-px inline-flex items-center gap-1.5 border-b-2 px-3.5 text-13 font-medium transition-colors focus-visible:-outline-offset-2 ${
-              current ? "border-primary text-fg" : "border-transparent text-fg-muted hover:text-fg"
-            }`}
+            className={cn(
+              "-mb-px inline-flex items-center gap-1.5 border-b-2 px-3.5 text-13 font-medium transition-colors focus-visible:-outline-offset-2",
+              current ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground",
+            )}
           >
             <span className="sm:hidden">{link.icon}</span>
             <span className="max-sm:sr-only">{link.label}</span>

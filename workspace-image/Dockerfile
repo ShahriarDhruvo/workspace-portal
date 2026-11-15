@@ -1,4 +1,5 @@
-# Per-user workspace images, one target per agent (deploy/lib.sh builds them):
+# Per-user workspace images, one target per agent (deploy/lib.sh builds them, and so does the gateway for
+# updates from the admin console, gateway/src/docker-image-builder.ts):
 #   --target qwen   Qwen Code's Web Shell (`qwen serve`) on port 4170
 #   --target dsh    DeepSeek Harness's web UI (`dsh --profile web`) on port 3080
 # Both carry the same everyday dev tools and headless Chromium for the Playwright MCP browser tool,
@@ -68,6 +69,9 @@ ENV QWEN_CODE_SYSTEM_SETTINGS_PATH=/etc/workspace-portal/qwen/settings.json \
     QWEN_TELEMETRY_ENABLED=false \
     QWEN_STREAM_MAX_LIFETIME_MS=3600000
 EXPOSE 4170
+# The agent, for the gateway's cleanup: it finds old builds that lost their tag by it (docker-image-builder.ts
+# sweep). Late in the stage, so a change here doesn't invalidate the cached layers above.
+LABEL workspace-portal.agent="qwen"
 USER 65534:65534
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/start-qwen"]
 
@@ -75,14 +79,22 @@ ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/start-qwen"]
 FROM base AS dsh
 ARG DSH_VERSION=0.2.2-rc.1
 USER root
+# dsh's agent presets (dsh-web-app/presets/*.patch.yml) are adapted in place for a workspace without
+#   internet: dsh/adapt-presets.mjs disables their web-search and plugin-manager rows, which the
+#   lockdown's disabled plugins would otherwise break, and fails the build when a dsh version's presets
+#   no longer fit. Neither the script (bind-mounted) nor its pinned YAML parser (/tmp) stays in the image.
 # /etc/workspace-portal/dsh: mount point for the gateway-rendered portal.patch.yml.
-# /usr/local/share/workspace-portal/dsh/lockdown.patch.yml: the static, version-specific lockdown.
+# /usr/local/share/workspace-portal/dsh/lockdown.patch.yml: the static lockdown.
 # /usr/local/lib/workspace-portal/dsh-cwd: dsh's launch directory. dsh loads <cwd>/.env at start, so
 #   it is an empty, root-owned directory.
 # /usr/local/lib/workspace-portal/dsh-documents: the lockdown's workspace-controller documentsDirectory.
 #   dsh's first-use default workspace, <it>/deepseek-harness/default-workspace, is a root-owned
 #   symlink to /workspace, so the only workspace dsh creates is /workspace itself.
-RUN npm install -g --no-fund --no-audit "@deepseek-ai/dsh@${DSH_VERSION}" \
+RUN --mount=type=bind,source=dsh/adapt-presets.mjs,target=/mnt/adapt-presets.mjs \
+    npm install -g --no-fund --no-audit "@deepseek-ai/dsh@${DSH_VERSION}" \
+ && npm install --prefix /tmp/wp-tools --no-fund --no-audit yaml@2.9.1 \
+ && cp /mnt/adapt-presets.mjs /tmp/wp-tools/ \
+ && node /tmp/wp-tools/adapt-presets.mjs "$(npm root -g)/@deepseek-ai/dsh" \
  && npm cache clean --force \
  && rm -rf /root/.npm /tmp/* \
  && mkdir -p /etc/workspace-portal/dsh /usr/local/share/workspace-portal/dsh \
@@ -92,6 +104,10 @@ RUN npm install -g --no-fund --no-audit "@deepseek-ai/dsh@${DSH_VERSION}" \
  && find / -xdev -perm /6000 -type f -exec chmod a-s {} +
 COPY --chmod=0755 start-dsh.sh /usr/local/bin/start-dsh
 COPY --chmod=0644 dsh/lockdown.patch.yml /usr/local/share/workspace-portal/dsh/lockdown.patch.yml
+# The build fails if a lockdown row doesn't apply to this dsh version (dsh/check-lockdown.sh: dsh would
+# only warn and run with a weaker lockdown).
+RUN --mount=type=bind,source=dsh/check-lockdown.sh,target=/mnt/check-lockdown.sh \
+    sh /mnt/check-lockdown.sh /usr/local/share/workspace-portal/dsh/lockdown.patch.yml
 # DSH_HOME / DSH_AGENTS_HOME: dsh's state (settings, sessions) and skills, in the user's home.
 # NARB_DISABLE_NATIVE_CACHE: dsh's native-addon loader otherwise copies its .node files to $TMPDIR
 #   and loads them from there, which fails on the noexec /tmp ("failed to map segment"), and dsh
@@ -102,6 +118,8 @@ ENV DSH_HOME=/home/user/.dsh \
     DSH_TELEMETRY_MODE=DISABLED \
     NARB_DISABLE_NATIVE_CACHE=1
 EXPOSE 3080
+# The agent, for the gateway's cleanup (see the qwen stage).
+LABEL workspace-portal.agent="dsh"
 USER 65534:65534
 # start-dsh is the entrypoint itself and execs tini once it has stored and dropped the cookie
 # secret, so PID 1 (tini) never carries it in its environment.

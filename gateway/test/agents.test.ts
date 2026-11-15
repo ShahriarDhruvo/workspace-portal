@@ -51,7 +51,7 @@ test("a fresh workspace with two agents needs a choice; the choice is remembered
     assert.equal(g.runtime.startsFor(alice)[0]!.options.agent, "qwen");
     await g.waitReady(alice);
     assert.equal(g.workspaceRow(alice)?.agent, "qwen", "persisted");
-    assert.deepEqual(g.auditActions(alice).find((entry) => entry.action === "workspace_started")?.details, { agent: "qwen" });
+    assert.deepEqual(g.auditActions(alice).find((entry) => entry.action === "workspace_started")?.details, { agent: "qwen", version: "0.27.0" });
 
     await g.manager.stop(alice, "user");
     assert.equal(g.info(alice).agent, "qwen", "a stopped workspace still names the agent it ran last");
@@ -116,7 +116,7 @@ test("an agent that was disabled after its last run needs a new choice", () =>
     // A workspace that last ran dsh, on an install that now only offers Qwen Code (read at boot).
     g.db.insert(workspaces).values({ userId: alice, status: "stopped", agent: "dsh", updatedAt: Date.now() }).run();
     g.manager.shutdown();
-    const restarted = new WorkspaceManager({ config: g.config, db: g.db, runtime: g.runtime, llm: g.llmQueue, connections: g.connections, log: g.log, now: () => g.clock.now });
+    const restarted = new WorkspaceManager({ config: g.config, db: g.db, runtime: g.runtime, versions: g.versions, llm: g.llmQueue, connections: g.connections, log: g.log, now: () => g.clock.now });
     await restarted.init();
     g.useManager(restarted);
 
@@ -290,7 +290,10 @@ test("switching agents: stop Qwen Code, start DeepSeek Harness on the same files
     assert.equal(g.runtime.runningUsers().length, 1, "one container per user, whichever agent");
     assert.deepEqual(g.runtime.startsFor(alice).map((record) => record.options.agent), ["qwen", "dsh"]);
     assert.equal((await g.navigate(g.tokens.alice, alice)).status, 200);
-    assert.deepEqual(g.auditActions(alice).filter((entry) => entry.action === "workspace_started").map((entry) => entry.details), [{ agent: "qwen" }, { agent: "dsh" }]);
+    assert.deepEqual(g.auditActions(alice).filter((entry) => entry.action === "workspace_started").map((entry) => entry.details), [
+      { agent: "qwen", version: "0.27.0" },
+      { agent: "dsh", version: "0.2.2-rc.1" },
+    ]);
   }));
 
 test("after a gateway restart a running dsh container is adopted with its secret", () =>
@@ -299,7 +302,7 @@ test("after a gateway restart a running dsh container is adopted with its secret
     await g.startReady(alice, "dsh");
     const secret = g.runtime.dshFor(alice).secret;
     g.manager.shutdown();
-    const restarted = new WorkspaceManager({ config: g.config, db: g.db, runtime: g.runtime, llm: g.llmQueue, connections: g.connections, log: g.log, now: () => g.clock.now });
+    const restarted = new WorkspaceManager({ config: g.config, db: g.db, runtime: g.runtime, versions: g.versions, llm: g.llmQueue, connections: g.connections, log: g.log, now: () => g.clock.now });
     await restarted.init();
     g.useManager(restarted);
     await g.waitReady(alice);

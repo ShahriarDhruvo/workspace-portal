@@ -5,14 +5,19 @@
 import type http from "node:http";
 import { getDatabase, loadSessionContext } from "@portal/db";
 import { createAgentServerFactory } from "./agent-proxy.ts";
+import { AgentUpdater } from "./agent-updater.ts";
+import { AgentVersions } from "./agent-versions.ts";
 import { AgentConfigError, driverFor } from "./agents/index.ts";
 import { ConfigError, loadConfig, type Config } from "./config.ts";
 import { ConnectionRegistry } from "./connections.ts";
 import { createControlServer } from "./control-api.ts";
+import { DockerImageBuilder } from "./docker-image-builder.ts";
 import { DockerRuntime, isSupportedDockerVersion, MIN_DOCKER_VERSION_TEXT } from "./docker-runtime.ts";
 import { listen } from "./listen.ts";
 import { LlmQueue } from "./llm-queue.ts";
 import { createLogger, type Logger } from "./log.ts";
+import { createNpmRegistry } from "./npm-registry.ts";
+import { ReleaseCache } from "./release-cache.ts";
 import { createSearxngBackend } from "./search-mcp.ts";
 import { createServiceServer } from "./service-api.ts";
 import { SessionCache } from "./session-cache.ts";
@@ -37,6 +42,11 @@ async function main(log: Logger): Promise<void> {
     }
   }
   const db = getDatabase(config.dbFile);
+  // The version (and image) new workspaces of each agent start with: the admin's choice, else .env.
+  const versions = AgentVersions.fromConfig(config, log);
+  log.info("agent versions", {
+    agents: Object.fromEntries(config.workspace.agents.map((agent) => [agent, { current: versions.current(agent), default: versions.defaultVersion(agent) }])),
+  });
 
   const runtime = new DockerRuntime(config);
   const engine = await runtime.engineVersion();
@@ -52,11 +62,11 @@ async function main(log: Logger): Promise<void> {
     log.info(`${network} the workspace network`, { network: config.workspace.network, subnet: config.workspace.subnet, internal: true });
   }
   for (const agent of config.workspace.agents) {
-    const { image } = config.workspace.images[agent];
+    const { image } = versions.selection(agent);
     if (!(await runtime.imageAvailable(image))) {
       log.error(`${driverFor(agent).name} workspace image not found; its workspaces cannot start until it is built`, {
         image,
-        hint: "sudo bash deploy/install.sh",
+        hint: "update the agent in the admin console (Agents), or: sudo bash deploy/install.sh",
       });
     }
   }
@@ -64,16 +74,30 @@ async function main(log: Logger): Promise<void> {
   const llm = new LlmQueue(config.llm.maxConcurrency, config.llm.maxConcurrencyPerUser);
   const connections = new ConnectionRegistry();
   const sessions = new SessionCache((tokenHash) => loadSessionContext(db, tokenHash));
-  const manager = new WorkspaceManager({ config, db, runtime, llm, connections, log });
+  const manager = new WorkspaceManager({ config, db, runtime, versions, llm, connections, log });
   await manager.init();
   manager.startBackgroundTasks();
+  const registry = createNpmRegistry();
+  const updater = new AgentUpdater({
+    config,
+    versions,
+    builder: new DockerImageBuilder({ contextDir: config.imageContextDir }),
+    registry,
+    releases: new ReleaseCache({ registry }),
+    workspaces: () => manager.list(),
+    db,
+    log,
+  });
+  // Before the control API listens, so no job can start meanwhile: a gateway that stopped mid-update
+  // leaves its staging image (and maybe a version-check container) behind.
+  await updater.sweep();
 
   const search = createSearxngBackend({
     baseUrl: config.search.url,
     authorization: config.search.authorization,
     timeoutMs: config.search.timeoutMs,
   });
-  const control = createControlServer({ config, db, manager, llm, sessions, connections, log });
+  const control = createControlServer({ config, db, manager, versions, updater, llm, sessions, connections, log });
   const createAgentServer = createAgentServerFactory({ config, manager, sessions, connections, log });
   const service = createServiceServer({ config, db, manager, llm, log, search });
   const servers: http.Server[] = [control, service];
@@ -90,7 +114,7 @@ async function main(log: Logger): Promise<void> {
   log.info("gateway listening", {
     control: `127.0.0.1:${config.controlPort}`,
     workspaces: `${config.agentBind}:${firstPort}-${lastPort}`,
-    agents: config.workspace.agents.map((agent) => config.workspace.images[agent].image),
+    agents: config.workspace.agents.map((agent) => versions.selection(agent).image),
     maxRunning: config.maxRunning,
     idleTimeoutMinutes: config.idleTimeoutMs / 60_000,
   });
@@ -116,6 +140,8 @@ async function main(log: Logger): Promise<void> {
     }
     connections.closeAll(1001, "gateway restarting");
     manager.shutdown();
+    // Records a running update as failed now (audited before the database closes below).
+    updater.shutdown();
     setTimeout(() => {
       db.$client.close();
       process.exit(0);

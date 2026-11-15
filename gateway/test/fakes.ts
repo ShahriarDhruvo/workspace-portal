@@ -1,5 +1,5 @@
-// In-process stand-ins for Docker, the agents' web servers (Qwen Code's `qwen serve`, DeepSeek
-// Harness's `dsh web`) and the LLM server.
+// In-process stand-ins for Docker (containers and images), the agents' web servers (Qwen Code's
+// `qwen serve`, DeepSeek Harness's `dsh web`), the LLM server and the npm registry.
 import { createHash, createHmac } from "node:crypto";
 import fs from "node:fs";
 import http, { type IncomingMessage } from "node:http";
@@ -7,8 +7,22 @@ import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { WebSocketServer } from "ws";
 import type { AgentKind } from "@portal/db";
+import { driverFor } from "../src/agents/index.ts";
 import type { SettingsObject } from "../src/agents/qwen-settings.ts";
 import type { WorkspaceStartOptions } from "../src/container-spec.ts";
+import {
+  BuildError,
+  ImageInUseError,
+  ImageNotFoundError,
+  VerifyError,
+  type BuildObserver,
+  type BuildSpec,
+  type ImageBuilder,
+  type SweepResult,
+  type WorkspaceImageSummary,
+} from "../src/image-builder.ts";
+import { parseWorkspaceImage, STAGING_REPOSITORY, workspaceImage } from "../src/image-names.ts";
+import { RegistryError, type NpmRegistry } from "../src/npm-registry.ts";
 import { userPaths } from "../src/paths.ts";
 import type { ContainerRuntime, ContainerSample, ContainerState, ContainerSummary, StartedContainer } from "../src/runtime.ts";
 
@@ -398,6 +412,8 @@ interface FakeContainer {
   userId: number | null;
   /** The agent label. */
   agent: AgentKind;
+  /** The image it was created from. */
+  image: string;
   /** Address on the "workspace network"; null for orphans nobody serves. */
   ip: string | null;
   running: boolean;
@@ -482,7 +498,7 @@ export class FakeRuntime implements ContainerRuntime {
   /** A container the gateway does not know about (as if left behind by someone else). */
   addOrphan(userId: number | null): string {
     const id = `orphan-${++this.#seq}`;
-    this.containers.set(id, { id, userId, agent: "qwen", ip: null, running: true, exitCode: null, credential: null, server: null });
+    this.containers.set(id, { id, userId, agent: "qwen", image: workspaceImage("qwen", "0.27.0"), ip: null, running: true, exitCode: null, credential: null, server: null });
     return id;
   }
 
@@ -526,7 +542,7 @@ export class FakeRuntime implements ContainerRuntime {
     const server =
       options.agent === "qwen" ? await startFakeQwen(options.credential, serverOptions) : await startFakeDsh(options.credential, serverOptions);
     const id = `fake-${++this.#seq}`;
-    this.containers.set(id, { id, userId, agent: options.agent, ip, running: true, exitCode: null, credential: options.credential, server });
+    this.containers.set(id, { id, userId, agent: options.agent, image: options.image, ip, running: true, exitCode: null, credential: options.credential, server });
     const parsed = (name: string): SettingsObject | null => (options.agent === "qwen" ? (JSON.parse(files[name]!) as SettingsObject) : null);
     this.starts.push({ userId, containerId: id, options: { ...options }, files, settings: parsed("settings.json"), systemDefaults: parsed("system-defaults.json") });
     return { id, ip, port: server.port };
@@ -570,6 +586,7 @@ export class FakeRuntime implements ContainerRuntime {
       running: c.running,
       ip: c.ip,
       port: c.server?.port ?? 1,
+      image: c.image,
     }));
   }
 
@@ -581,6 +598,206 @@ export class FakeRuntime implements ContainerRuntime {
     const container = this.containers.get(id);
     if (!container?.running) return { running: false };
     return { running: true, memoryBytes: this.memoryBytes, cpuSeconds: this.cpuSeconds.get(container.userId ?? 0) ?? 0 };
+  }
+
+  /** Whether any container (running or not) was created from this image, as Docker would refuse to remove it. */
+  usesImage(image: string): boolean {
+    return [...this.containers.values()].some((c) => c.image === image);
+  }
+}
+
+// ------------------------------------------------------------------ image builds
+
+interface FakeImage {
+  id: string;
+  sizeBytes: number;
+  createdAt: number;
+}
+
+/** A promise that resolves once `open()` is called: for the fakes' gates (buildGate, verifyGate, …). */
+export function gate(): { promise: Promise<void>; open: () => void } {
+  let open!: () => void;
+  const promise = new Promise<void>((resolve) => (open = resolve));
+  return { promise, open };
+}
+
+/** Waits for `gate` unless `signal` aborts first (then rejects with its reason, like a real build). */
+function untilOpenOrAborted(gate: Promise<void>, signal: AbortSignal): Promise<void> {
+  signal.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const onAbort = (): void => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    gate.then(
+      () => {
+        signal.removeEventListener("abort", onAbort);
+        resolve();
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+/**
+ * Images by tag, and builds that report progress like BuildKit and tag what they built. Removal is
+ * refused for images a FakeRuntime container uses, as Docker refuses it.
+ */
+export class FakeImageBuilder implements ImageBuilder {
+  readonly images = new Map<string, FakeImage>();
+  readonly builds: Array<BuildSpec & { outcome: "running" | "built" | "failed" | "aborted" }> = [];
+  /** Images whose version was asked for. */
+  readonly verified: string[] = [];
+  /** While set, builds wait for it (or for their cancellation) after the first steps. */
+  buildGate: Promise<void> | null = null;
+  /** While set, version checks wait for it (or for their cancellation). */
+  verifyGate: Promise<void> | null = null;
+  /** While set, discards (`docker rmi` of a staging tag) wait for it. */
+  discardGate: Promise<void> | null = null;
+  /** Image ids removeUntagged removed: builds a rebuild replaced. */
+  readonly removedIds: string[] = [];
+  /** How often sweep ran. */
+  sweeps = 0;
+  /** The next build fails with this engine message. */
+  failNextBuild: string | null = null;
+  /** What the image's CLI reports; by default the version its build was for. */
+  reportVersion: ((image: string) => string | null) | null = null;
+  readonly #runtime: FakeRuntime;
+  readonly #builtVersions = new Map<string, string>();
+  #seq = 0;
+
+  constructor(runtime: FakeRuntime) {
+    this.#runtime = runtime;
+  }
+
+  /** An image that exists already (built by deploy/install.sh). */
+  install(kind: AgentKind, version: string): string {
+    const image = workspaceImage(kind, version);
+    this.images.set(image, { id: `sha256:installed-${++this.#seq}`, sizeBytes: 2_000_000_000, createdAt: 1_700_000_000_000 });
+    this.#builtVersions.set(image, version);
+    return image;
+  }
+
+  async build(spec: BuildSpec, observer: BuildObserver, signal: AbortSignal): Promise<void> {
+    const record = { ...spec, outcome: "running" as "running" | "built" | "failed" | "aborted" };
+    this.builds.push(record);
+    const { packageName } = driverFor(spec.kind).release;
+    const step = `[${spec.kind} 1/2] RUN npm install -g --no-fund --no-audit "${packageName}@${spec.version}"`;
+    observer.onStep("[internal] load remote build context");
+    observer.onLog(["#1 [internal] load remote build context", "#1 DONE 0.0s"]);
+    observer.onStep(step);
+    observer.onLog([`#2 ${step}`]);
+    try {
+      if (this.buildGate) await untilOpenOrAborted(this.buildGate, signal);
+      signal.throwIfAborted();
+    } catch (error) {
+      record.outcome = "aborted";
+      throw error;
+    }
+    if (this.failNextBuild !== null) {
+      const message = this.failNextBuild;
+      this.failNextBuild = null;
+      record.outcome = "failed";
+      observer.onLog([`#2 npm error notarget No matching version found for ${packageName}@${spec.version}.`, `#2 ERROR: ${message}`]);
+      throw new BuildError(message);
+    }
+    observer.onLog(["#2 added 14 packages in 7s", "#2 DONE 7.5s"]);
+    this.images.set(spec.image, { id: `sha256:built-${++this.#seq}`, sizeBytes: 2_100_000_000, createdAt: Date.now() });
+    this.#builtVersions.set(spec.image, spec.version);
+    record.outcome = "built";
+  }
+
+  async cliVersion(image: string, _cli: string, signal: AbortSignal): Promise<string | null> {
+    this.verified.push(image);
+    if (!this.images.has(image)) throw new VerifyError(`no such image ${image}`);
+    if (this.verifyGate) await untilOpenOrAborted(this.verifyGate, signal);
+    return this.reportVersion ? this.reportVersion(image) : (this.#builtVersions.get(image) ?? null);
+  }
+
+  async promote(staging: string, image: string): Promise<string | null> {
+    const built = this.images.get(staging);
+    if (!built) throw new Error(`no such image ${staging}`);
+    const before = this.images.get(image);
+    this.images.set(image, built);
+    this.#builtVersions.set(image, this.#builtVersions.get(staging)!);
+    await this.discard(staging);
+    return before !== undefined && before.id !== built.id ? before.id : null;
+  }
+
+  /** The fake keeps no untagged images: an id no tag names counts as removed. */
+  async removeUntagged(id: string): Promise<void> {
+    if ([...this.images.values()].some((info) => info.id === id)) return;
+    this.removedIds.push(id);
+  }
+
+  async discard(staging: string): Promise<void> {
+    if (this.discardGate) await this.discardGate;
+    this.images.delete(staging);
+    this.#builtVersions.delete(staging);
+  }
+
+  async exists(image: string): Promise<boolean> {
+    return this.images.has(image);
+  }
+
+  /** Removes staging tags no container uses (the fake has no version-check containers or untagged images). */
+  async sweep(): Promise<SweepResult> {
+    this.sweeps++;
+    const images = [...this.images.keys()].filter((image) => image.startsWith(`${STAGING_REPOSITORY}:`) && !this.#runtime.usesImage(image));
+    for (const image of images) {
+      this.images.delete(image);
+      this.#builtVersions.delete(image);
+    }
+    return { containers: [], images };
+  }
+
+  async list(): Promise<WorkspaceImageSummary[]> {
+    return [...this.images].flatMap(([image, info]) => {
+      const parsed = parseWorkspaceImage(image);
+      return parsed ? [{ image, ...parsed, ...info }] : [];
+    });
+  }
+
+  async remove(image: string): Promise<void> {
+    if (!this.images.has(image)) throw new ImageNotFoundError(image);
+    if (this.#runtime.usesImage(image)) throw new ImageInUseError(image);
+    this.images.delete(image);
+  }
+}
+
+// ------------------------------------------------------------------ npm registry
+
+/** The registry as the agents' packages look on it, with switches for outages and slow answers. */
+export class FakeRegistry implements NpmRegistry {
+  tags: Record<string, Record<string, string>> = {
+    "@qwen-code/qwen-code": {
+      jobbench: "0.20.2-jobbench-no-todo-write.0",
+      preview: "0.27.2-preview.0",
+      latest: "0.27.4",
+      nightly: "0.27.2-nightly.20261113.6f754be654",
+    },
+    "@deepseek-ai/dsh": { alpha: "0.2.2-alpha.3", latest: "0.2.2-rc.1", next: "0.2.2-rc.3" },
+  };
+  /** Published versions besides the ones a dist-tag names. */
+  readonly published = new Set(["@qwen-code/qwen-code@0.27.0", "@qwen-code/qwen-code@0.26.0", "@deepseek-ai/dsh@0.2.1"]);
+  down = false;
+  /** While set, answers wait for it. */
+  gate: Promise<void> | null = null;
+  readonly calls: string[] = [];
+
+  async distTags(packageName: string): Promise<Record<string, string>> {
+    this.calls.push(`dist-tags ${packageName}`);
+    await this.gate;
+    if (this.down) throw new RegistryError("The npm registry is unreachable (fetch failed).");
+    return { ...this.tags[packageName] };
+  }
+
+  async hasVersion(packageName: string, version: string): Promise<boolean> {
+    this.calls.push(`version ${packageName}@${version}`);
+    await this.gate;
+    if (this.down) throw new RegistryError("The npm registry is unreachable (fetch failed).");
+    return this.published.has(`${packageName}@${version}`) || Object.values(this.tags[packageName] ?? {}).includes(version);
   }
 }
 

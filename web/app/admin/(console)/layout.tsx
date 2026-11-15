@@ -9,7 +9,7 @@ import { ViewingBanner } from "@/components/workspace/viewing-banner";
 export default async function ConsoleLayout({ children }: { children: ReactNode }) {
   const { user, target, actingAs } = await requireAdmin();
   return (
-    <div className="min-h-dvh bg-base">
+    <div className="min-h-dvh bg-background">
       {actingAs ? (
         <ViewingBanner returnHref={`/admin/users/${target.id}/workspace`}>
           Your session is viewing {displayName(target)}&apos;s workspace

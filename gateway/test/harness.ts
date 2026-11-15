@@ -1,7 +1,7 @@
 // A whole gateway in one process for the integration tests: a real database, the real agent,
 // control and service servers (one agent server per workspace port), a FakeRuntime whose
-// "containers" are fake agent servers (`qwen serve`, `dsh web`), a fake LLM server, a stub search
-// backend and an injectable clock.
+// "containers" are fake agent servers (`qwen serve`, `dsh web`), the real agent updater with a fake
+// image builder and npm registry, a fake LLM server, a stub search backend and an injectable clock.
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -9,6 +9,7 @@ import path from "node:path";
 import { eq } from "drizzle-orm";
 import WebSocket from "ws";
 import {
+  AGENT_KINDS,
   agentBrowserToken,
   auditLog,
   generateSessionToken,
@@ -23,17 +24,20 @@ import {
 } from "@portal/db";
 import type { AgentDeps } from "../src/agent-access.ts";
 import { createAgentServerFactory } from "../src/agent-proxy.ts";
+import { AgentUpdater } from "../src/agent-updater.ts";
+import { AgentVersions } from "../src/agent-versions.ts";
 import { loadConfig, type Config } from "../src/config.ts";
 import { ConnectionRegistry } from "../src/connections.ts";
 import { createControlServer, type ControlDeps } from "../src/control-api.ts";
 import { BEARER_SUBPROTOCOL_PREFIX } from "../src/headers.ts";
 import { LlmQueue } from "../src/llm-queue.ts";
 import type { Logger } from "../src/log.ts";
+import { ReleaseCache } from "../src/release-cache.ts";
 import type { SearchBackend, SearchQuery } from "../src/search-mcp.ts";
 import { createServiceServer, type ServiceDeps } from "../src/service-api.ts";
 import { SessionCache } from "../src/session-cache.ts";
 import { WorkspaceManager, type WorkspaceInfo } from "../src/workspaces.ts";
-import { closeServer, FakeRuntime, listenLocal, LLM_KEY, startFakeLlm, type FakeUpstream } from "./fakes.ts";
+import { closeServer, FakeImageBuilder, FakeRegistry, FakeRuntime, listenLocal, LLM_KEY, startFakeLlm, type FakeUpstream } from "./fakes.ts";
 
 export const MIN = 60_000;
 export const CONTROL_SECRET = "control-secret-for-tests-0123456789";
@@ -130,6 +134,10 @@ export interface SocketOptions {
 export interface GatewayOptions {
   env?: NodeJS.ProcessEnv;
   readyAfterMs?: number;
+  /** Written to PORTAL_DATA_DIR/config/agent-versions.env before the gateway starts. */
+  agentVersionsFile?: string;
+  /** The agent updater's time limit for one job. */
+  buildTimeoutMs?: number;
 }
 
 export interface Gateway {
@@ -137,6 +145,11 @@ export interface Gateway {
   config: Config;
   db: PortalDb;
   runtime: FakeRuntime;
+  /** The current agent versions (what starts use). */
+  versions: AgentVersions;
+  builder: FakeImageBuilder;
+  registry: FakeRegistry;
+  updater: AgentUpdater;
   llmQueue: LlmQueue;
   connections: ConnectionRegistry;
   sessionCache: SessionCache;
@@ -247,14 +260,35 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
   };
   const runtime = new FakeRuntime(dataDir);
   runtime.readyAfterMs = options.readyAfterMs ?? 0;
+  if (options.agentVersionsFile !== undefined) {
+    fs.mkdirSync(path.dirname(config.agentVersionsFile), { recursive: true });
+    fs.writeFileSync(config.agentVersionsFile, options.agentVersionsFile);
+  }
+  const versions = AgentVersions.fromConfig(config, log);
+  const builder = new FakeImageBuilder(runtime);
+  // deploy/install.sh built the current version of each agent.
+  for (const kind of AGENT_KINDS) builder.install(kind, versions.current(kind));
+  const registry = new FakeRegistry();
   const llmQueue = new LlmQueue(config.llm.maxConcurrency, config.llm.maxConcurrencyPerUser);
   const connections = new ConnectionRegistry(() => clock.now);
   const sessionCache = new SessionCache((hash) => loadSessionContext(db, hash));
-  let manager = new WorkspaceManager({ config, db, runtime, llm: llmQueue, connections, log, now: () => clock.now });
+  let manager = new WorkspaceManager({ config, db, runtime, versions, llm: llmQueue, connections, log, now: () => clock.now });
   await manager.init();
+  const updater = new AgentUpdater({
+    config,
+    versions,
+    builder,
+    registry,
+    releases: new ReleaseCache({ registry, now: () => clock.now }),
+    workspaces: () => manager.list(),
+    db,
+    log,
+    now: () => clock.now,
+    buildTimeoutMs: options.buildTimeoutMs,
+  });
 
   const agentDeps: AgentDeps = { config, manager, sessions: sessionCache, connections, log };
-  const controlDeps: ControlDeps = { config, db, manager, llm: llmQueue, sessions: sessionCache, connections, log };
+  const controlDeps: ControlDeps = { config, db, manager, versions, updater, llm: llmQueue, sessions: sessionCache, connections, log };
   const serviceDeps: ServiceDeps = { config, db, manager, llm: llmQueue, log, search, resolveCaller: () => caller.userId };
   const createAgentServer = createAgentServerFactory(agentDeps);
   const control = createControlServer(controlDeps);
@@ -276,6 +310,10 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
     config,
     db,
     runtime,
+    versions,
+    builder,
+    registry,
+    updater,
     llmQueue,
     connections,
     sessionCache,
@@ -382,6 +420,8 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
     },
     async close() {
       for (const socket of sockets) socket.terminate();
+      updater.shutdown();
+      await updater.settled();
       manager.shutdown();
       await Promise.all(Object.values(ids).map((userId) => manager.stop(userId, "test_end")));
       for (const id of [...runtime.containers.keys()]) await runtime.removeContainer(id);

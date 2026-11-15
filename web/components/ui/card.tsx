@@ -1,45 +1,70 @@
-import type { ReactNode } from "react";
+import * as React from "react";
+import { cva, type VariantProps } from "class-variance-authority";
+import { Slot } from "radix-ui";
+import { cn } from "@/lib/utils";
 
-// Web Shell status card (transparent, 1px border at 74%, 10px radius), uppercase section labels and
-// settings-style rows with 50% separators.
+// shadcn/ui Card. "default" is the solid #171717 panel with a 1px border (state cards, the agent chooser, the
+// auth card); "outline" the Web Shell's transparent status card with its border at 74% (settings sections,
+// stat tiles, forms). 10px radius, no shadow (shadows barely show on near-black), 16px padding.
 
-export function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <div className={`min-w-0 rounded-xl border border-line-soft ${className}`}>{children}</div>;
+const cardVariants = cva("flex min-w-0 flex-col gap-4 rounded-xl border py-4 text-card-foreground", {
+  variants: {
+    variant: {
+      default: "bg-card",
+      outline: "border-border-soft",
+    },
+  },
+  defaultVariants: {
+    variant: "default",
+  },
+});
+
+function Card({ className, variant, ...props }: React.ComponentProps<"div"> & VariantProps<typeof cardVariants>) {
+  return <div data-slot="card" className={cn(cardVariants({ variant }), className)} {...props} />;
 }
 
-export function Section({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
+function CardHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
-    <section className="flex flex-col gap-2">
-      <div className="flex flex-col gap-0.5">
-        <h2 className="label-caps">{title}</h2>
-        {description ? <p className="text-12 text-fg-muted">{description}</p> : null}
-      </div>
-      {children}
-    </section>
+    <div
+      data-slot="card-header"
+      className={cn(
+        "@container/card-header grid auto-rows-min grid-rows-[auto_auto] items-start gap-1.5 px-4 has-data-[slot=card-action]:grid-cols-[1fr_auto]",
+        className,
+      )}
+      {...props}
+    />
   );
 }
 
-/** A settings row: label and explanation on the left, controls on the right. */
-export function CardRow({ title, children, action }: { title: ReactNode; children?: ReactNode; action?: ReactNode }) {
+/**
+ * The card's title; `asChild` makes it a heading of the right level (e.g. `<CardTitle asChild><h2>`). Classes go on
+ * CardTitle, where cn() resolves them against its own; Slot would only append the heading's (text-24 beside text-16).
+ */
+function CardTitle({ className, asChild = false, ...props }: React.ComponentProps<"div"> & { asChild?: boolean }) {
+  const Comp = asChild ? Slot.Root : "div";
+  return <Comp data-slot="card-title" className={cn("text-16 leading-snug font-medium", className)} {...props} />;
+}
+
+function CardDescription({ className, ...props }: React.ComponentProps<"div">) {
+  return <div data-slot="card-description" className={cn("text-14 text-muted-foreground", className)} {...props} />;
+}
+
+function CardAction({ className, ...props }: React.ComponentProps<"div">) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 border-b border-line-faint px-3.5 py-3 last:border-b-0">
-      <div className="flex min-w-0 flex-1 basis-64 flex-col gap-0.5">
-        <div className="text-14 font-medium">{title}</div>
-        {children ? <div className="text-13 text-fg-muted">{children}</div> : null}
-      </div>
-      {action ? <div className="flex shrink-0 items-center gap-2">{action}</div> : null}
-    </div>
+    <div
+      data-slot="card-action"
+      className={cn("col-start-2 row-span-2 row-start-1 self-start justify-self-end", className)}
+      {...props}
+    />
   );
 }
 
-export function PageHeading({ title, children, actions }: { title: string; children?: ReactNode; actions?: ReactNode }) {
-  return (
-    <div className="flex flex-wrap items-end justify-between gap-4">
-      <div className="flex min-w-0 flex-col gap-1">
-        <h1 className="text-18 font-semibold">{title}</h1>
-        {children ? <div className="text-13 text-fg-muted">{children}</div> : null}
-      </div>
-      {actions ? <div className="flex items-center gap-2">{actions}</div> : null}
-    </div>
-  );
+function CardContent({ className, ...props }: React.ComponentProps<"div">) {
+  return <div data-slot="card-content" className={cn("px-4", className)} {...props} />;
 }
+
+function CardFooter({ className, ...props }: React.ComponentProps<"div">) {
+  return <div data-slot="card-footer" className={cn("flex items-center px-4", className)} {...props} />;
+}
+
+export { Card, CardHeader, CardFooter, CardTitle, CardAction, CardDescription, CardContent };

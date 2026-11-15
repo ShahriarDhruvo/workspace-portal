@@ -9,8 +9,9 @@
 //     nothing on the host is mounted that another workspace also sees;
 //   * an *internal* network with inter-container traffic disabled: the only address it can reach
 //     is the gateway's service port (model + web search). No internet, no LAN, no other workspace.
-// All of this is the same whichever agent the workspace runs; the driver adds only its image,
-// port, environment and settings.
+// All of this is the same whichever agent the workspace runs; the driver adds only its port,
+// environment and settings, and the image is the agent's current version (WorkspaceManager asks
+// agent-versions.ts at every start).
 import type Docker from "dockerode";
 import type { AgentKind } from "@portal/db";
 import { LLM_KEY_ENV, type AgentDriver } from "./agents/index.ts";
@@ -35,16 +36,23 @@ export interface WorkspaceStartOptions {
   agent: AgentKind;
   /** The agent's credential (driver.credentialEnv); new for every start. */
   credential: string;
+  /** The image of the agent's current version (workspace-portal/workspace:<agent>-<version>). */
+  image: string;
 }
 
-export function workspaceContainerOptions(config: Config, userId: number, driver: AgentDriver, credential: string): Docker.ContainerCreateOptions {
+export function workspaceContainerOptions(
+  config: Config,
+  userId: number,
+  driver: AgentDriver,
+  { credential, image }: Pick<WorkspaceStartOptions, "credential" | "image">,
+): Docker.ContainerCreateOptions {
   const ws = config.workspace;
   const paths = userPaths(config.dataDir, userId);
   const owner = workspaceOwner(ws.uidBase, userId);
   return {
     name: containerName(userId),
     Hostname: "workspace",
-    Image: ws.images[driver.kind].image,
+    Image: image,
     User: `${owner.uid}:${owner.gid}`,
     WorkingDir: "/workspace",
     Labels: { [WORKSPACE_LABEL]: "1", [USER_ID_LABEL]: String(userId), [AGENT_LABEL]: driver.kind },

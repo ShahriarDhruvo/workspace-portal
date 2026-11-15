@@ -549,8 +549,10 @@ test("control API: health, stats, workspaces, errors", async () => {
   assert.equal(typeof info.idleSeconds, "number");
   assert.deepEqual(pick(info, ["busy", "busyReason", "stopPending"]), { busy: false, busyReason: null, stopPending: false });
   assert.equal(info.agent, "qwen");
+  assert.equal(info.agentVersion, "0.27.0", "the default version: nothing was updated");
   assert.deepEqual(Object.keys(info).sort(), [
     "agent",
+    "agentVersion",
     "busy",
     "busyReason",
     "connections",
@@ -949,16 +951,16 @@ test("the stats refresh notices a crash without any request", async () => {
 
 test("a failed start shows the error page, and Try again starts it", async () => {
   const { alice } = g.ids;
-  g.runtime.failNextStart = new WorkspaceImageMissingError(g.config.workspace.images.qwen.image);
+  g.runtime.failNextStart = new WorkspaceImageMissingError(g.versions.selection("qwen").image);
   await g.navigate(g.tokens.alice, alice);
   await waitFor(() => g.info(alice).status === "error", "the start to fail");
-  assert.equal(g.info(alice).lastError, `workspace image ${g.config.workspace.images.qwen.image} not found`);
-  assert.deepEqual(g.auditActions(alice).at(-1)?.details, { error: `workspace image ${g.config.workspace.images.qwen.image} not found` });
+  assert.equal(g.info(alice).lastError, `workspace image ${g.versions.selection("qwen").image} not found`);
+  assert.deepEqual(g.auditActions(alice).at(-1)?.details, { error: `workspace image ${g.versions.selection("qwen").image} not found` });
 
   const page = await g.navigate(g.tokens.alice, alice);
   assert.equal(page.status, 503);
   assert.ok(page.body.includes("<h1>Your workspace couldn&#39;t start</h1>"));
-  assert.ok(page.body.includes(`<pre>workspace image ${g.config.workspace.images.qwen.image} not found</pre>`));
+  assert.ok(page.body.includes(`<pre>workspace image ${g.versions.selection("qwen").image} not found</pre>`));
   assert.equal(g.info(alice).status, "error", "the error page does not retry by itself");
   const socket = await upgrade(g.tokens.alice, alice);
   assert.deepEqual([socket.status, errorCode(socket)], [503, "workspace_error"]);
@@ -1273,7 +1275,7 @@ test("a container whose stop failed is never taken over again; reconcile removes
     assert.ok(logged(gw, "could not remove a workspace container left behind by a failed stop"));
 
     gw.manager.shutdown();
-    const fresh = new WorkspaceManager({ config: gw.config, db: gw.db, runtime: gw.runtime, llm: gw.llmQueue, connections: gw.connections, log: gw.log, now: () => gw.clock.now });
+    const fresh = new WorkspaceManager({ config: gw.config, db: gw.db, runtime: gw.runtime, versions: gw.versions, llm: gw.llmQueue, connections: gw.connections, log: gw.log, now: () => gw.clock.now });
     await fresh.init();
     gw.useManager(fresh);
     assert.equal(fresh.info(alice).status, "error", "a restarted gateway does not adopt it either");
@@ -1484,6 +1486,7 @@ test("after a gateway restart, running containers are adopted with their token a
       config: gw.config,
       db: gw.db,
       runtime: gw.runtime,
+      versions: gw.versions,
       llm: gw.llmQueue,
       connections: gw.connections,
       log: gw.log,

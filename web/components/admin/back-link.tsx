@@ -7,7 +7,7 @@ export function BackLink({ href, children }: { href: string; children: ReactNode
   return (
     <Link
       href={href}
-      className="-ml-1.5 inline-flex h-7 w-fit items-center gap-1 rounded-lg pr-2 pl-1 text-13 text-fg-muted transition-colors hover:bg-pressed hover:text-fg"
+      className="-ml-1.5 inline-flex h-7 w-fit items-center gap-1 rounded-lg pr-2 pl-1 text-13 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
     >
       <BackIcon />
       {children}

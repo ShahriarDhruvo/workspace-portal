@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  agentImageSchema,
+  agentUpdateSchema,
   changePasswordSchema,
   fieldErrors,
   formText,
@@ -79,4 +81,39 @@ test("formText reads strings and maps missing fields to empty strings", () => {
   data.set("firstName", "Ada");
   data.set("file", new Blob(["x"]));
   assert.deepEqual(formText(data, ["firstName", "middleName", "file"]), { firstName: "Ada", middleName: "", file: "" });
+});
+
+test("agent updates take an exact version, never a release channel, and the rebuild checkbox", () => {
+  assert.deepEqual(agentUpdateSchema.parse({ agent: "qwen", version: " 0.27.4 ", rebuild: "" }), {
+    agent: "qwen",
+    version: "0.27.4",
+    rebuild: false,
+  });
+  assert.deepEqual(agentUpdateSchema.parse({ agent: "dsh", version: "0.2.2-rc.3", rebuild: "on" }), {
+    agent: "dsh",
+    version: "0.2.2-rc.3",
+    rebuild: true,
+  });
+  // A channel would be resolved again by the gateway, maybe to a newer version than the one confirmed.
+  const channel = agentUpdateSchema.safeParse({ agent: "dsh", version: "next", rebuild: "" });
+  assert.equal(channel.success, false);
+  assert.deepEqual(fieldErrors(channel.error!), { version: "Enter a version like 0.27.4." });
+  // Every bad version, an empty one included, gets the same message.
+  for (const version of ["", "  ", "0.27", "v0.27.4", "0.27.4 && reboot", "latest", `0.27.4-${"a".repeat(100)}`]) {
+    const parsed = agentUpdateSchema.safeParse({ agent: "qwen", version, rebuild: "" });
+    assert.equal(parsed.success, false, JSON.stringify(version));
+    assert.deepEqual(fieldErrors(parsed.error!), { version: "Enter a version like 0.27.4." }, JSON.stringify(version));
+  }
+  const unknown = agentUpdateSchema.safeParse({ agent: "claude", version: "0.27.4", rebuild: "" });
+  assert.equal(unknown.success, false);
+  assert.deepEqual(fieldErrors(unknown.error!), { agent: "Unknown agent." });
+});
+
+test("agent images are named by exact versions only", () => {
+  assert.deepEqual(agentImageSchema.parse({ agent: "qwen", version: "0.26.0" }), { agent: "qwen", version: "0.26.0" });
+  for (const version of ["", "latest", "0.26.0;rm", "../0.26.0", `0.26.0-${"a".repeat(100)}`]) {
+    const parsed = agentImageSchema.safeParse({ agent: "qwen", version });
+    assert.equal(parsed.success, false, version);
+    assert.deepEqual(fieldErrors(parsed.error!), { version: "Enter a version like 0.27.4." }, version);
+  }
 });

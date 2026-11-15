@@ -43,7 +43,7 @@ env_set() { # key value
 # ---------------------------------------------------------------- agents and their images
 # The agents users can choose (WORKSPACE_AGENTS) and the versions their images contain. Images are
 # named workspace-portal/workspace:<agent>-<version>, as the gateway names them
-# (gateway/src/config.ts workspaceImage); one multi-target Dockerfile builds them all.
+# (gateway/src/image-names.ts); one multi-target Dockerfile builds them all.
 AGENTS=(qwen dsh)
 
 agent_name() { # agent
@@ -63,7 +63,59 @@ agent_version_key() { # agent
   esac
 }
 
-agent_version() { env_get "$(agent_version_key "$1")"; } # agent
+# The agent versions new workspaces start with, as chosen in the admin console or with
+# update-image.sh: KEY=VALUE lines with the .env keys (QWEN_CODE_VERSION=0.28.0). The gateway reads
+# it at boot and writes it after an update; a missing file or key means .env's version (the default).
+agent_versions_file() { printf '%s/config/agent-versions.env' "$(env_get PORTAL_DATA_DIR)"; }
+
+# An agent's current version: from the versions file, else .env, else .env.example. (An invalid
+# value in the versions file is ignored, as the gateway ignores it.)
+agent_version() { # agent
+  local key version
+  key=$(agent_version_key "$1")
+  if version=$(env_value "$(agent_versions_file)" "$key") && valid_version "$version"; then
+    printf '%s' "$version"
+  else
+    env_get "$key"
+  fi
+}
+
+# Makes VERSION the agent's current version. Replaces the versions file atomically (a temporary
+# file in the same directory, then a rename) and keeps its other lines; root-owned, mode 0600, in
+# the root-only config directory, as the gateway writes it. The gateway reads it at boot only:
+# restart it afterwards.
+agent_version_set() { # agent version
+  local key file dir tmp
+  key=$(agent_version_key "$1")
+  valid_version "$2" || die "\"$2\" is not a $(agent_name "$1") version (like 0.28.0)"
+  file=$(agent_versions_file)
+  dir=$(dirname "$file")
+  [[ -d $dir ]] || install -d -m 0700 -o root -g root "$dir"
+  tmp=$(mktemp "$dir/.agent-versions.env.XXXXXX")
+  {
+    if [[ -f $file ]]; then
+      grep -vE "^$key=" "$file" || true
+    else
+      printf '%s\n' "# The agent versions new workspaces start with (the admin console and deploy/update-image.sh write" \
+        "# this file). A missing key means the default from .env."
+    fi
+    printf '%s=%s\n' "$key" "$2"
+  } >"$tmp" && chmod 0600 "$tmp" && chown root:root "$tmp" && mv -f "$tmp" "$file" || {
+    rm -f "$tmp"
+    die "could not write $file"
+  }
+}
+
+# True while the admin console builds an agent update (the gateway's control API reports a job in its
+# building or verifying phase). A gateway that doesn't answer runs no update. The secret goes to curl
+# on stdin (-H @-), not on its command line, which every user on the host can read.
+console_update_running() {
+  local secret
+  secret=$(env_get GATEWAY_CONTROL_SECRET)
+  curl -fsS --max-time 20 -H @- "http://127.0.0.1:$(env_get CONTROL_PORT)/control/agents/versions" \
+    <<<"Authorization: Bearer $secret" 2>/dev/null |
+    grep -Eq '"phase": *"(building|verifying)"'
+}
 
 # Sets ENABLED_AGENTS to the agents WORKSPACE_AGENTS enables, and dies on an unknown one. (Run in
 # the script's own shell, not in $(...), so that dying stops the script.)
@@ -78,7 +130,12 @@ load_enabled_agents() {
   [[ ${#ENABLED_AGENTS[@]} -gt 0 ]] || die "WORKSPACE_AGENTS is empty: list one or more of ${AGENTS[*]}"
 }
 
-valid_version() { [[ $1 =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$ ]]; } # version
+# An agent version as the gateway accepts one (gateway/src/versions.ts isVersion): ASCII only (the C
+# locale, so the ranges can't match other scripts' digits or letters), at most 100 characters.
+valid_version() { # version
+  local LC_ALL=C
+  [[ ${#1} -le 100 && $1 =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$ ]]
+}
 
 workspace_image() { # agent [version]
   printf 'workspace-portal/workspace:%s-%s' "$1" "${2:-$(agent_version "$1")}"

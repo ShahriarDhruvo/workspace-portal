@@ -104,7 +104,10 @@ export type AuditAction =
   | "admin_exited_workspace"
   | "workspace_started"
   | "workspace_stopped"
-  | "workspace_error";
+  | "workspace_error"
+  | "agent_updated"
+  | "agent_update_failed"
+  | "agent_image_removed";
 
 export function writeAudit(
   db: PortalDb,

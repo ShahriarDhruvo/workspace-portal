@@ -5,9 +5,10 @@ import { auditLog, displayName, users } from "@portal/db";
 import { auditActionLabel, auditActorFallback, auditDetailsSubject, formatAuditDetails } from "@/lib/audit";
 import { getDb } from "@/lib/db";
 import { requireAdmin } from "@/lib/session";
+import { cn } from "@/lib/utils";
+import { PageHeading } from "@/components/layout/page-heading";
 import { LocalTime } from "@/components/local-time";
-import { PageHeading } from "@/components/ui/card";
-import { TABLE_CLASS, TABLE_SHELL_CLASS, TD_CLASS, TH_CLASS, TR_CLASS } from "@/components/ui/table";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 export const metadata: Metadata = { title: "Audit log" };
 
@@ -33,54 +34,57 @@ export default async function AuditPage() {
     .limit(LIMIT)
     .all();
 
-  const cell = `${TD_CLASS} align-top`;
   return (
     <>
       <PageHeading title="Audit log">The latest {LIMIT} entries, newest first.</PageHeading>
-      <div className={TABLE_SHELL_CLASS}>
-        <table className={TABLE_CLASS}>
-          <thead>
-            <tr>
-              {["Time", "Actor", "Action", "Target", "Details"].map((heading) => (
-                <th key={heading} scope="col" className={TH_CLASS}>
-                  {heading}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {entries.length === 0 ? (
-              <tr>
-                <td colSpan={5} className="px-3.5 py-10 text-center text-fg-muted">
-                  Nothing has been recorded yet.
-                </td>
-              </tr>
-            ) : null}
-            {entries.map((entry) => {
-              const subject = entry.target ? displayName(entry.target) : auditDetailsSubject(entry.details);
-              return (
-                <tr key={entry.id} className={TR_CLASS}>
-                  <td className={`${cell} whitespace-nowrap text-fg-muted tabular-nums`}>
-                    <LocalTime at={entry.at} />
-                  </td>
-                  <td className={`${cell} whitespace-nowrap`}>
-                    {entry.actor ? displayName(entry.actor) : <span className="text-fg-muted">{auditActorFallback(entry.action)}</span>}
-                  </td>
-                  <td className={`${cell} whitespace-nowrap font-medium`}>{auditActionLabel(entry.action, entry.actor !== null)}</td>
-                  <td className={`${cell} whitespace-nowrap`}>
-                    {subject ? (
-                      <span className={entry.target ? "" : "text-fg-muted"}>{subject}</span>
-                    ) : (
-                      <span className="text-fg-muted">—</span>
-                    )}
-                  </td>
-                  <td className={`${cell} text-fg-muted`}>{formatAuditDetails(entry.details)}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+      <Table className="min-w-[880px]">
+        <TableHeader>
+          <TableRow>
+            {["Time", "Actor", "Action", "Target", "Details"].map((heading) => (
+              <TableHead key={heading} scope="col">
+                {heading}
+              </TableHead>
+            ))}
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {entries.length === 0 ? (
+            <TableRow className="hover:bg-transparent">
+              <TableCell colSpan={5} className="py-10 text-center text-muted-foreground">
+                Nothing has been recorded yet.
+              </TableCell>
+            </TableRow>
+          ) : null}
+          {entries.map((entry) => {
+            const subject = entry.target ? displayName(entry.target) : auditDetailsSubject(entry.details);
+            return (
+              <TableRow key={entry.id}>
+                <TableCell className="align-top whitespace-nowrap text-muted-foreground tabular-nums">
+                  <LocalTime at={entry.at} />
+                </TableCell>
+                <TableCell className="align-top whitespace-nowrap">
+                  {entry.actor ? (
+                    displayName(entry.actor)
+                  ) : (
+                    <span className="text-muted-foreground">{auditActorFallback(entry.action)}</span>
+                  )}
+                </TableCell>
+                <TableCell className="align-top font-medium whitespace-nowrap">
+                  {auditActionLabel(entry.action, entry.actor !== null)}
+                </TableCell>
+                <TableCell className="align-top whitespace-nowrap">
+                  {subject ? (
+                    <span className={cn(!entry.target && "text-muted-foreground")}>{subject}</span>
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                </TableCell>
+                <TableCell className="align-top text-muted-foreground">{formatAuditDetails(entry.details)}</TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
     </>
   );
 }

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Workspace Portal installer. Run on the server, as root, from the project directory:
 #   sudo bash deploy/install.sh
-# Idempotent: re-running rebuilds the images (same versions as in .env) and restarts the stack,
-# keeping .env, the Qwen Code settings and all data.
+# Idempotent: re-running rebuilds the images (the agents' current versions: the ones chosen in the
+# admin console or with update-image.sh, else those in .env) and restarts the stack, keeping .env,
+# the Qwen Code settings and all data.
 set -euo pipefail
 # shellcheck source=deploy/lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -10,6 +11,10 @@ cd "$ROOT"
 OWNER=${SUDO_USER:-root}
 
 require_root
+# Not while the admin console runs an agent update: the image rebuild below would race it, and `docker
+# compose up` (which recreates a changed gateway) would abandon it. A gateway that isn't running (a first
+# install) answers nothing, so this passes.
+console_update_running && die "the admin console is updating an agent right now (Admin > Agents): wait for it to finish, or cancel it there; then run this again"
 command -v docker >/dev/null || die "docker is not installed"
 docker compose version >/dev/null 2>&1 || die "the docker compose plugin is not installed"
 command -v nft >/dev/null || die "nftables (the nft command) is not installed: dnf install nftables / apt install nftables"
@@ -56,7 +61,7 @@ done
 PORTAL_DATA_DIR=$(env_get PORTAL_DATA_DIR)
 load_enabled_agents
 for agent in "${ENABLED_AGENTS[@]}"; do
-  valid_version "$(agent_version "$agent")" || die "$(agent_version_key "$agent") in .env is not a version (like 0.27.0)"
+  valid_version "$(env_get "$(agent_version_key "$agent")")" || die "$(agent_version_key "$agent") in .env is not a version (like 0.27.0)"
 done
 WEB_PORT=$(web_port)
 AGENT_PORTS=$(agent_port_range)

@@ -12,6 +12,7 @@ import { userIdSchema } from "@/lib/validation";
 import { AdminHeader } from "@/components/admin/admin-header";
 import { BackLink } from "@/components/admin/back-link";
 import { OpenWorkspaceForm } from "@/components/admin/open-workspace-form";
+import { Card, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { ViewingBanner } from "@/components/workspace/viewing-banner";
 import { WorkspaceShell } from "@/components/workspace/workspace-shell";
 
@@ -38,7 +39,7 @@ export default async function ViewWorkspacePage({ params }: PageProps<"/admin/us
         viewer={{ name: viewerName, initials: viewerInitials }}
         back={{ href: "/admin", label: "Users" }}
         title={`Your session is viewing ${displayName(session.target)}'s workspace`}
-        open={<OpenWorkspaceForm userId={user.id} label="Open my workspace" variant="primary" size="md" />}
+        open={<OpenWorkspaceForm userId={user.id} label="Open my workspace" variant="default" size="default" />}
       >
         Opening your own workspace leaves theirs, which is recorded in the audit log.
       </OpenPanel>
@@ -51,7 +52,7 @@ export default async function ViewWorkspacePage({ params }: PageProps<"/admin/us
         viewer={{ name: viewerName, initials: viewerInitials }}
         back={{ href: `/admin/users/${user.id}`, label: name }}
         title={`You are not viewing ${name}'s workspace`}
-        open={<OpenWorkspaceForm userId={user.id} variant="primary" size="md" />}
+        open={<OpenWorkspaceForm userId={user.id} variant="default" size="default" />}
       >
         Opening it points your session at their workspace, starts it if needed, and is recorded in the audit log.{" "}
         {user.firstName} sees an &ldquo;Admin connected&rdquo; notice while you are in it.
@@ -80,17 +81,19 @@ function OpenPanel(props: {
   children: ReactNode;
 }) {
   return (
-    <div className="min-h-dvh bg-base">
+    <div className="min-h-dvh bg-background">
       <AdminHeader name={props.viewer.name} initials={props.viewer.initials} />
       <main className="mx-auto flex w-full max-w-[560px] flex-col gap-4 px-5 py-6 sm:px-6">
         <BackLink href={props.back.href}>{props.back.label}</BackLink>
-        <section className="flex flex-col gap-4 rounded-xl border border-line bg-surface p-4">
-          <div className="flex flex-col gap-1.5">
-            <h1 className="text-16 leading-snug font-medium">{props.title}</h1>
-            <p className="text-14 text-fg-muted">{props.children}</p>
-          </div>
-          <div className="flex justify-end">{props.open}</div>
-        </section>
+        <Card>
+          <CardHeader>
+            <CardTitle asChild>
+              <h1>{props.title}</h1>
+            </CardTitle>
+            <CardDescription>{props.children}</CardDescription>
+          </CardHeader>
+          <CardFooter className="justify-end">{props.open}</CardFooter>
+        </Card>
       </main>
     </div>
   );

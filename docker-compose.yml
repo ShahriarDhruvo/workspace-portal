@@ -84,8 +84,10 @@ services:
       SEARXNG_AUTHORIZATION: ${SEARXNG_AUTHORIZATION:-}
       SEARXNG_TIMEOUT_SECONDS: ${SEARXNG_TIMEOUT_SECONDS:-}
       SEARCH_MAX_CONCURRENT_PER_USER: ${SEARCH_MAX_CONCURRENT_PER_USER:-}
-      # The agents users choose from, and the versions their images contain: the gateway starts
-      # workspace-portal/workspace:<agent>-<version> (deploy/lib.sh workspace_image names them the same way).
+      # The agents users choose from, and their default versions: the gateway starts
+      # workspace-portal/workspace:<agent>-<version> (deploy/lib.sh workspace_image names them the same way)
+      # for the current version, which the admin console (Admin > Agents) or deploy/update-image.sh may have
+      # changed since (PORTAL_DATA_DIR/config/agent-versions.env).
       WORKSPACE_AGENTS: ${WORKSPACE_AGENTS:-}
       QWEN_CODE_VERSION: ${QWEN_CODE_VERSION:-}
       DSH_VERSION: ${DSH_VERSION:-}
@@ -108,6 +110,10 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${PORTAL_DATA_DIR:-/srv/workspace-portal}:${PORTAL_DATA_DIR:-/srv/workspace-portal}
+      # The build context of agent updates in the admin console: the project's own workspace-image/,
+      # read-only, so the console builds what deploy/update-image.sh builds and an edit there applies to
+      # the next build. (label=disable above lets the gateway read it without relabelling the project.)
+      - ./workspace-image:/app/workspace-image:ro
     mem_limit: 512m
     pids_limit: 256
     healthcheck:

@@ -1,16 +1,27 @@
 // The portal's icons: lucide-react (as in the Web Shell), 16px with a thin 1.5 stroke, in currentColor.
-// Import icons from here rather than from lucide-react so size, stroke and aria-hidden stay consistent.
+// Import icons from here rather than from lucide-react so size, stroke and aria-hidden stay consistent, also
+// inside the shadcn/ui primitives (dialog close, checkbox check, select chevrons, spinner). Icons are
+// decorative (aria-hidden) unless given an aria-label.
 import {
   ArrowRightLeft,
   ArrowUpRight,
   Check,
+  ChevronDown,
   ChevronLeft,
+  ChevronRight,
+  ChevronUp,
+  Circle,
   CircleAlert,
+  CircleCheck,
+  CircleSlash,
+  CircleX,
   Copy,
   Ellipsis,
   Eye,
   KeyRound,
+  LoaderCircle,
   LogOut,
+  Package,
   Plus,
   RefreshCw,
   ScrollText,
@@ -31,7 +42,10 @@ export type IconProps = LucideProps;
 
 function icon(Glyph: LucideIcon, name: string) {
   function Icon({ size = 16, strokeWidth = 1.5, ...props }: IconProps) {
-    return <Glyph size={size} strokeWidth={strokeWidth} aria-hidden="true" focusable="false" {...props} />;
+    const decorative = props["aria-label"] === undefined;
+    return (
+      <Glyph size={size} strokeWidth={strokeWidth} aria-hidden={decorative || undefined} focusable="false" {...props} />
+    );
   }
   Icon.displayName = name;
   return Icon;
@@ -41,6 +55,11 @@ export const PlusIcon = icon(Plus, "PlusIcon");
 export const EllipsisIcon = icon(Ellipsis, "EllipsisIcon");
 export const CloseIcon = icon(X, "CloseIcon");
 export const CheckIcon = icon(Check, "CheckIcon");
+export const CircleIcon = icon(Circle, "CircleIcon");
+export const ChevronDownIcon = icon(ChevronDown, "ChevronDownIcon");
+export const ChevronUpIcon = icon(ChevronUp, "ChevronUpIcon");
+export const ChevronRightIcon = icon(ChevronRight, "ChevronRightIcon");
+export const LoaderIcon = icon(LoaderCircle, "LoaderIcon");
 export const CopyIcon = icon(Copy, "CopyIcon");
 export const EditIcon = icon(SquarePen, "EditIcon");
 export const TrashIcon = icon(Trash2, "TrashIcon");
@@ -59,3 +78,7 @@ export const UserCheckIcon = icon(UserCheck, "UserCheckIcon");
 export const UserXIcon = icon(UserX, "UserXIcon");
 export const EyeIcon = icon(Eye, "EyeIcon");
 export const SwitchIcon = icon(ArrowRightLeft, "SwitchIcon");
+export const PackageIcon = icon(Package, "PackageIcon");
+export const SuccessIcon = icon(CircleCheck, "SuccessIcon");
+export const FailedIcon = icon(CircleX, "FailedIcon");
+export const CancelledIcon = icon(CircleSlash, "CancelledIcon");

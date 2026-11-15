@@ -57,6 +57,7 @@ const running: WorkspaceInfo = {
   userId: 2,
   status: "running",
   agent: "qwen",
+  agentVersion: "0.27.0",
   ready: true,
   startedAt: 1,
   lastActivityAt: 1,

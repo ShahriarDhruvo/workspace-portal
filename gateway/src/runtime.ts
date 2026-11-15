@@ -21,6 +21,12 @@ export interface ContainerSummary {
   ip: string | null;
   /** The agent's port; null when the agent is unknown. */
   port: number | null;
+  /**
+   * The image as the container was created from it (`workspace-portal/workspace:<agent>-<version>`;
+   * image-names.ts parseWorkspaceImage reads the version back), or an image id when that tag has
+   * moved on since.
+   */
+  image: string;
 }
 
 export type ContainerState =

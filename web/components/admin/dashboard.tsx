@@ -2,21 +2,31 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AgentKind } from "@portal/db";
 import { fetchJson } from "@/lib/fetch-json";
 import { agentLabel, summarizeWorkspace } from "@/lib/format";
 import type { AdminOverview, WorkspaceInfo } from "@/lib/gateway-types";
 import type { UserSummary } from "@/lib/user-summary";
+import { cn } from "@/lib/utils";
 import { Avatar } from "@/components/brand";
+import { StatusDot } from "@/components/common/status-dot";
 import { LocalTime } from "@/components/local-time";
-import { EditIcon, KeyIcon, StopIcon, TrashIcon, UserCheckIcon, UserXIcon } from "@/components/ui/icons";
-import { Menu, MenuItem, MenuLink, MenuSeparator } from "@/components/ui/menu";
-import { TABLE_CLASS, TABLE_SHELL_CLASS, TD_CLASS, TH_CLASS, TR_CLASS } from "@/components/ui/table";
-import { StatusDot, Tag } from "@/components/ui/tag";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { EditIcon, EllipsisIcon, KeyIcon, StopIcon, TrashIcon, UserCheckIcon, UserXIcon } from "@/components/ui/icons";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { HostStats } from "./host-stats";
 import { OpenWorkspaceForm } from "./open-workspace-form";
-import { UserDialog, type UserDialogKind } from "./user-dialogs";
+import { ServiceIssue } from "./service-issue";
+import { UserDialog, type DialogUser, type UserDialogKind } from "./user-dialogs";
 
 const REFRESH_MS = 5_000;
 
@@ -53,15 +63,7 @@ export function AdminDashboard({ users, initialOverview, currentAdminId, idleTim
 
   return (
     <div className="flex flex-col gap-6">
-      {overview.error ? (
-        <section role="alert" aria-label="Issues" className="rounded-xl border border-line-soft px-3.5 py-2.5">
-          <h2 className="label-caps mb-2">Issues</h2>
-          <p className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
-            <Tag tone="warning">Warning</Tag>
-            <span>Workspace service unavailable: {overview.error.message} Workspace status may be out of date.</span>
-          </p>
-        </section>
-      ) : null}
+      {overview.error ? <ServiceIssue message={overview.error.message}>Workspace status may be out of date.</ServiceIssue> : null}
       <section aria-labelledby="host-heading" className="flex flex-col gap-2">
         <h2 id="host-heading" className="label-caps">
           Host
@@ -72,34 +74,32 @@ export function AdminDashboard({ users, initialOverview, currentAdminId, idleTim
         <h2 id="users-heading" className="label-caps">
           Users <span className="tabular-nums">({users.length})</span>
         </h2>
-        <div className={TABLE_SHELL_CLASS}>
-          <table className={TABLE_CLASS}>
-            <thead>
-              <tr>
-                {["Name", "Username", "Role", "Account", "Workspace", "Agent", "Last sign-in"].map((heading) => (
-                  <th key={heading} scope="col" className={TH_CLASS}>
-                    {heading}
-                  </th>
-                ))}
-                <th scope="col" className={TH_CLASS}>
-                  <span className="sr-only">Actions</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {users.map((user) => (
-                <UserRow
-                  key={user.id}
-                  user={user}
-                  isSelf={user.id === currentAdminId}
-                  workspace={overview.workspaces ? (workspaces.get(user.id) ?? null) : undefined}
-                  idleTimeoutMinutes={idleTimeoutMinutes}
-                  agentNames={agentNames}
-                />
+        <Table className="min-w-[880px]">
+          <TableHeader>
+            <TableRow>
+              {["Name", "Username", "Role", "Account", "Workspace", "Agent", "Last sign-in"].map((heading) => (
+                <TableHead key={heading} scope="col">
+                  {heading}
+                </TableHead>
               ))}
-            </tbody>
-          </table>
-        </div>
+              <TableHead scope="col">
+                <span className="sr-only">Actions</span>
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {users.map((user) => (
+              <UserRow
+                key={user.id}
+                user={user}
+                isSelf={user.id === currentAdminId}
+                workspace={overview.workspaces ? (workspaces.get(user.id) ?? null) : undefined}
+                idleTimeoutMinutes={idleTimeoutMinutes}
+                agentNames={agentNames}
+              />
+            ))}
+          </TableBody>
+        </Table>
       </section>
     </div>
   );
@@ -115,81 +115,116 @@ interface UserRowProps {
 }
 
 function UserRow({ user, isSelf, workspace, idleTimeoutMinutes, agentNames }: UserRowProps) {
-  const [dialog, setDialog] = useState<UserDialogKind | null>(null);
   const summary = workspace === undefined ? null : summarizeWorkspace(workspace, idleTimeoutMinutes);
   const running = workspace?.status === "running" || workspace?.status === "starting";
   const agent = workspace ? agentLabel(workspace, agentNames) : null;
-  const cell = TD_CLASS;
 
   return (
-    <tr className={TR_CLASS}>
-      <td className={cell}>
-        <Link href={`/admin/users/${user.id}`} className="flex min-w-0 items-center gap-2 rounded-sm font-medium text-fg">
+    <TableRow>
+      <TableCell>
+        <Link href={`/admin/users/${user.id}`} className="flex min-w-0 items-center gap-2 rounded-sm font-medium text-foreground">
           <Avatar initials={user.initials} />
           <span className="truncate">{user.name}</span>
-          {isSelf ? <Tag tone="outline">You</Tag> : null}
+          {isSelf ? <Badge variant="outline">You</Badge> : null}
         </Link>
-      </td>
-      <td className={`${cell} text-fg-muted`}>{user.username}</td>
-      <td className={cell}>{user.role === "admin" ? <Tag tone="solid">Admin</Tag> : <Tag tone="outline">User</Tag>}</td>
-      <td className={cell}>
-        {user.active ? <Tag tone="success">Active</Tag> : <Tag tone="neutral">Disabled</Tag>}
-      </td>
-      <td className={`${cell} whitespace-nowrap`} title={summary?.title ?? undefined}>
+      </TableCell>
+      <TableCell className="text-muted-foreground">{user.username}</TableCell>
+      <TableCell>{user.role === "admin" ? <Badge>Admin</Badge> : <Badge variant="outline">User</Badge>}</TableCell>
+      <TableCell>{user.active ? <Badge variant="success">Active</Badge> : <Badge variant="neutral">Disabled</Badge>}</TableCell>
+      <TableCell className="whitespace-nowrap" title={summary?.title ?? undefined}>
         {summary ? (
           <span className="flex items-center gap-1.5">
             <StatusDot tone={summary.tone} pulse={summary.label === "Working"} />
-            <span className="text-fg">{summary.label}</span>
-            {summary.detail ? <span className="text-fg-muted">· {summary.detail}</span> : null}
+            <span className="text-foreground">{summary.label}</span>
+            {summary.detail ? <span className="text-muted-foreground">· {summary.detail}</span> : null}
           </span>
         ) : (
-          <span className="text-fg-muted">Unknown</span>
+          <span className="text-muted-foreground">Unknown</span>
         )}
-      </td>
-      <td className={`${cell} whitespace-nowrap ${running ? "text-fg" : "text-fg-muted"}`}>{agent ?? "—"}</td>
-      <td className={`${cell} whitespace-nowrap text-fg-muted`}>
-        {user.lastLoginAt ? <LocalTime at={user.lastLoginAt} relative /> : <span className="text-fg-muted">Never</span>}
-      </td>
-      <td className={`${cell} w-0`}>
+      </TableCell>
+      <TableCell className={cn("whitespace-nowrap", running ? "text-foreground" : "text-muted-foreground")}>
+        {agent ?? "—"}
+        {agent && workspace?.agentVersion ? (
+          <span className="ml-1.5 font-mono text-12 text-muted-foreground">{workspace.agentVersion}</span>
+        ) : null}
+      </TableCell>
+      <TableCell className="whitespace-nowrap text-muted-foreground">
+        {user.lastLoginAt ? <LocalTime at={user.lastLoginAt} relative /> : "Never"}
+      </TableCell>
+      <TableCell className="w-0">
         <div className="flex items-center justify-end gap-1">
           <OpenWorkspaceForm userId={user.id} label="Open" />
-          <Menu label={`Actions for ${user.name}`}>
-            <MenuItem icon={<StopIcon />} onSelect={() => setDialog("stop")} disabled={!running}>
-              Stop workspace
-            </MenuItem>
-            <MenuLink icon={<EditIcon />} href={`/admin/users/${user.id}`}>
-              Edit
-            </MenuLink>
-            {isSelf ? (
-              <MenuLink icon={<KeyIcon />} href="/change-password">
-                Change password
-              </MenuLink>
-            ) : (
-              <>
-                <MenuItem icon={<KeyIcon />} onSelect={() => setDialog("reset")}>
-                  Reset password…
-                </MenuItem>
-                {user.active ? (
-                  <MenuItem icon={<UserXIcon />} onSelect={() => setDialog("deactivate")}>
-                    Deactivate…
-                  </MenuItem>
-                ) : (
-                  <MenuItem icon={<UserCheckIcon />} onSelect={() => setDialog("activate")}>
-                    Activate…
-                  </MenuItem>
-                )}
-                <MenuSeparator />
-                <MenuItem icon={<TrashIcon />} tone="danger" onSelect={() => setDialog("delete")}>
-                  Delete…
-                </MenuItem>
-              </>
-            )}
-          </Menu>
+          <UserActions user={{ ...user, busy: workspace?.busy ?? false }} isSelf={isSelf} running={running} active={user.active} />
         </div>
-        {dialog ? (
-          <UserDialog kind={dialog} user={{ ...user, busy: workspace?.busy ?? false }} onClose={() => setDialog(null)} />
-        ) : null}
-      </td>
-    </tr>
+      </TableCell>
+    </TableRow>
+  );
+}
+
+/** The row's "…" menu and the confirmation dialog its items open; closing the dialog refocuses the "…" button. */
+function UserActions({ user, isSelf, running, active }: { user: DialogUser; isSelf: boolean; running: boolean; active: boolean }) {
+  const [dialog, setDialog] = useState<UserDialogKind>("stop");
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+
+  function openDialog(kind: UserDialogKind) {
+    setDialog(kind);
+    setDialogOpen(true);
+  }
+
+  return (
+    <>
+      <DropdownMenu modal={false}>
+        <DropdownMenuTrigger asChild>
+          <Button ref={triggerRef} type="button" variant="muted" size="icon" aria-label={`Actions for ${user.name}`}>
+            <EllipsisIcon />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem disabled={!running} onSelect={() => openDialog("stop")}>
+            <StopIcon />
+            Stop workspace
+          </DropdownMenuItem>
+          <DropdownMenuItem asChild>
+            <Link href={`/admin/users/${user.id}`}>
+              <EditIcon />
+              Edit
+            </Link>
+          </DropdownMenuItem>
+          {isSelf ? (
+            <DropdownMenuItem asChild>
+              <Link href="/change-password">
+                <KeyIcon />
+                Change password
+              </Link>
+            </DropdownMenuItem>
+          ) : (
+            <>
+              <DropdownMenuItem onSelect={() => openDialog("reset")}>
+                <KeyIcon />
+                Reset password…
+              </DropdownMenuItem>
+              {active ? (
+                <DropdownMenuItem onSelect={() => openDialog("deactivate")}>
+                  <UserXIcon />
+                  Deactivate…
+                </DropdownMenuItem>
+              ) : (
+                <DropdownMenuItem onSelect={() => openDialog("activate")}>
+                  <UserCheckIcon />
+                  Activate…
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem variant="destructive" onSelect={() => openDialog("delete")}>
+                <TrashIcon />
+                Delete…
+              </DropdownMenuItem>
+            </>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <UserDialog kind={dialog} user={user} open={dialogOpen} onOpenChange={setDialogOpen} returnFocusTo={triggerRef} />
+    </>
   );
 }

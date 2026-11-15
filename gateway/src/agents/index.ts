@@ -10,4 +10,12 @@ export function driverFor(kind: AgentKind): AgentDriver {
   return DRIVERS[kind];
 }
 
-export { AgentConfigError, LLM_KEY_ENV, serviceBaseUrl, type AgentDriver, type AgentEndpoint, type AgentStatus, type BrowserAuth } from "./driver.ts";
+export {
+  AgentConfigError,
+  LLM_KEY_ENV,
+  serviceBaseUrl,
+  type AgentDriver,
+  type AgentEndpoint,
+  type AgentStatus,
+  type BrowserAuth,
+} from "./driver.ts";

@@ -21,6 +21,17 @@ test("isSameOrigin accepts only an Origin naming this host and port", () => {
   );
 });
 
+test("isSameOrigin guards the Agents page's registry refresh against workspace pages the admin has open", () => {
+  const refresh = (headers: Record<string, string>, method = "POST") =>
+    isSameOrigin(new Request("http://portal.test:3000/api/admin/agents", { method, headers }));
+  // "Check for updates" on the Agents page.
+  assert.ok(refresh({ host: "portal.test:3000", origin: "http://portal.test:3000" }));
+  // A workspace iframe's port (another origin, the same site: the admin's SameSite=Lax cookie comes along).
+  assert.ok(!refresh({ host: "portal.test:3000", origin: "http://portal.test:3401" }));
+  // An <img> or link there sends a GET without Origin, just like a same-origin fetch: why the refresh is a POST.
+  assert.ok(!refresh({ host: "portal.test:3000" }, "GET"));
+});
+
 const user = { role: "user", mustChangePassword: false } as const;
 const admin = { role: "admin", mustChangePassword: false } as const;
 

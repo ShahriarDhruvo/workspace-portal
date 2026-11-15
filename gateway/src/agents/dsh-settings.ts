@@ -2,8 +2,10 @@
 // read-only at /etc/workspace-portal/dsh. It holds only what the gateway knows: the models (from Qwen
 // Code's system-defaults.json, see models.ts), all reached through the gateway, and the gateway's
 // search MCP server (plus the headless browser). Everything that locks dsh down (no DeepSeek account,
-// no web tools, no plugin installs, no telemetry, one workspace) is static and version-specific, so it
-// ships in the image (workspace-image/dsh/lockdown.patch.yml); start-dsh applies both, this one last.
+// no web tools, no plugin installs, no telemetry, one workspace) is static, so it ships in the image
+// (workspace-image/dsh/lockdown.patch.yml); start-dsh applies both, this one last. It is not tied to
+// one dsh version: the image build adapts dsh's presets in place and checks the lockdown against the
+// installed dsh (`dsh --dump-config`), so any version the admin console builds is locked down too.
 //
 // The file is JSON, which YAML 1.2 reads as it is: model names and ids come from the admin's file,
 // and as JSON strings they can never become YAML tags (dsh evaluates `!!js` tags as code).

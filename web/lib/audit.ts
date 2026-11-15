@@ -1,5 +1,5 @@
 // Human-readable audit log entries. Pure; unit tested.
-import type { AuditAction } from "@portal/db";
+import { AGENT_NAMES, isAgentKind, type AuditAction } from "@portal/db";
 
 const ACTION_LABELS: Record<AuditAction, string> = {
   login: "Signed in",
@@ -17,6 +17,9 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   workspace_started: "Workspace started",
   workspace_stopped: "Workspace stopped",
   workspace_error: "Workspace error",
+  agent_updated: "Agent updated",
+  agent_update_failed: "Agent update failed",
+  agent_image_removed: "Agent image removed",
 };
 
 function isKnownAction(action: string): action is AuditAction {
@@ -33,6 +36,12 @@ const DETAIL_LABELS: Record<string, string> = {
   middleName: "Middle name",
   lastName: "Last name",
   error: "Error",
+  // Agent updates (written by the gateway) and image removals: agent, from/to or version, rebuild.
+  agent: "Agent",
+  from: "From",
+  to: "To",
+  version: "Version",
+  rebuild: "From scratch",
 };
 
 function humanize(key: string): string {
@@ -48,12 +57,15 @@ export function auditActionLabel(action: string, hasActor: boolean): string {
 
 function formatValue(value: unknown): string {
   if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "boolean") return value ? "yes" : "no";
   if (typeof value === "object") {
     const change = value as { from?: unknown; to?: unknown };
     if ("from" in change || "to" in change) return `${formatValue(change.from)} → ${formatValue(change.to)}`;
     return JSON.stringify(value);
   }
-  return String(value).replace(/_/g, " ");
+  const text = String(value);
+  // Codes such as wrong_password read as words; free text (an error naming $DSH_VERSION) stays as written.
+  return /^[a-z]+(?:_[a-z]+)+$/.test(text) ? text.replace(/_/g, " ") : text;
 }
 
 /** Actions only a signed-in user performs on their own account; a missing actor means the user was deleted. */
@@ -64,6 +76,11 @@ const SELF_SERVICE_ACTIONS = new Set(["login", "logout", "password_changed"]);
 export function auditActorFallback(action: string): string {
   if (action === "login_failed") return "—";
   return SELF_SERVICE_ACTIONS.has(action) ? "Deleted user" : "System";
+}
+
+/** Agents by name ("Qwen Code", not "qwen"); everything else as formatValue has it. */
+function formatDetail(key: string, value: unknown): string {
+  return key === "agent" && isAgentKind(value) ? AGENT_NAMES[value] : formatValue(value);
 }
 
 /** Renders the JSON `details` column as "Key: value · Key: value". */
@@ -77,7 +94,7 @@ export function formatAuditDetails(details: string | null): string {
   }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return formatValue(parsed);
   return Object.entries(parsed as Record<string, unknown>)
-    .map(([key, value]) => `${DETAIL_LABELS[key] ?? humanize(key)}: ${formatValue(value)}`)
+    .map(([key, value]) => `${DETAIL_LABELS[key] ?? humanize(key)}: ${formatDetail(key, value)}`)
     .join(" · ");
 }
 

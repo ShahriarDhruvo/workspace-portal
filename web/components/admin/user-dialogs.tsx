@@ -1,19 +1,28 @@
 "use client";
 
-import { useActionState, useEffect, useEffectEvent, useState, type ReactNode } from "react";
+import { useActionState, useEffect, useEffectEvent, useRef, useState, type ReactNode, type RefObject } from "react";
+import { deleteUser, resetPassword, setUserActive, stopWorkspace, type ActionState } from "@/lib/actions/admin";
+import { returnFocus } from "@/lib/focus";
+import { SecretValue } from "@/components/common/secret-value";
+import { FormError } from "@/components/forms/form-error";
+import { FormField } from "@/components/forms/form-field";
+import { SubmitButton } from "@/components/forms/submit-button";
 import {
-  deleteUser,
-  resetPassword,
-  setUserActive,
-  stopWorkspace,
-  type ActionState,
-} from "@/lib/actions/admin";
-import { buttonClass } from "@/components/ui/button";
-import { SecretValue } from "@/components/ui/copy-button";
-import { Dialog, DialogFooter } from "@/components/ui/dialog";
-import { Field, FormError } from "@/components/ui/field";
-import { SubmitButton } from "@/components/ui/submit-button";
+  AlertDialog,
+  AlertDialogBody,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
 import { BusyWarning } from "@/components/workspace/busy-warning";
+
+// The admin's actions on one user (stop the workspace, reset the password, deactivate, activate, delete), each
+// as a confirmation dialog bound to its server action. A dialog closes itself once its action succeeds, except
+// a password reset, which shows the new temporary password once. Deleting asks for the username first.
 
 export type UserDialogKind = "stop" | "reset" | "deactivate" | "activate" | "delete";
 
@@ -25,201 +34,40 @@ export interface DialogUser {
   busy?: boolean;
 }
 
+const TITLES: Record<UserDialogKind, string> = {
+  stop: "Stop workspace",
+  reset: "Reset password",
+  deactivate: "Deactivate user",
+  activate: "Activate user",
+  delete: "Delete user",
+};
+
 const IDLE: ActionState = { status: "idle" };
 
-interface ActionDialogProps {
-  title: string;
+interface UserDialogProps {
+  kind: UserDialogKind;
   user: DialogUser;
-  action: (state: ActionState, formData: FormData) => Promise<ActionState>;
-  onClose: () => void;
-  confirmLabel: string;
-  pendingLabel: string;
-  danger?: boolean;
-  description: ReactNode;
-  /** Extra form controls (hidden inputs, the delete confirmation field). */
-  fields?: ReactNode;
-  /** Disables the confirm button (e.g. until the username is typed). */
-  blocked?: boolean;
-  /** Shown instead of the form once the action returns a temporary password. */
-  renderPassword?: (password: string) => ReactNode;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** Gets the focus back on close: the control that opened the dialog (it has no Trigger), or the menu's button. */
+  returnFocusTo?: RefObject<HTMLElement | null>;
 }
 
-/** Confirm dialog bound to one admin action. Closes itself on success unless there is a password to show. */
-function ActionDialog(props: ActionDialogProps) {
-  const { title, user, action, onClose, confirmLabel, pendingLabel, danger, description, fields, blocked } = props;
-  const [state, formAction] = useActionState(action, IDLE);
-  const closeAfterSuccess = useEffectEvent(onClose);
-  const password = state.status === "done" ? state.temporaryPassword : undefined;
-
-  useEffect(() => {
-    if (state.status === "done" && !state.temporaryPassword) closeAfterSuccess();
-  }, [state]);
-
+/** One admin action on one user, as a confirmation dialog. Controlled: the caller owns `open`. */
+export function UserDialog({ kind, user, open, onOpenChange, returnFocusTo }: UserDialogProps) {
   return (
-    <Dialog title={title} onClose={onClose}>
-      {password && props.renderPassword ? (
-        <>
-          {props.renderPassword(password)}
-          <DialogFooter>
-            <button type="button" className={buttonClass("primary", "sm", "min-w-16")} onClick={onClose}>
-              Done
-            </button>
-          </DialogFooter>
-        </>
-      ) : (
-        <form action={formAction} className="flex flex-col gap-4">
-          <input type="hidden" name="userId" value={user.id} />
-          <div className="text-14 text-fg-muted">{description}</div>
-          {fields}
-          {state.status === "error" ? <FormError>{state.message}</FormError> : null}
-          <DialogFooter>
-            <button type="button" className={buttonClass("outline", "sm")} onClick={onClose}>
-              Cancel
-            </button>
-            <SubmitButton variant={danger ? "danger" : "primary"} size="sm" className="min-w-16" pendingLabel={pendingLabel} disabled={blocked}>
-              {confirmLabel}
-            </SubmitButton>
-          </DialogFooter>
-        </form>
-      )}
-    </Dialog>
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
+      <AlertDialogContent onCloseAutoFocus={returnFocus(returnFocusTo)}>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{TITLES[kind]}</AlertDialogTitle>
+        </AlertDialogHeader>
+        <UserDialogBody kind={kind} user={user} onDone={() => onOpenChange(false)} />
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 
-function DeleteUserDialog({ user, name, onClose }: { user: DialogUser; name: ReactNode; onClose: () => void }) {
-  const [typed, setTyped] = useState("");
-  return (
-    <ActionDialog
-      title="Delete user"
-      user={user}
-      action={deleteUser}
-      onClose={onClose}
-      danger
-      confirmLabel="Delete user"
-      pendingLabel="Deleting…"
-      blocked={typed.trim().toLowerCase() !== user.username}
-      description={
-        <>
-          {user.busy ? (
-            <p className="mb-2">
-              <BusyWarning whose={<>{name}&apos;s</>} effect="Deleting the user ends it mid-way." />
-            </p>
-          ) : null}
-          <p>
-            This permanently deletes {name}&apos;s account and every file in their workspace. This can&apos;t be undone.
-          </p>
-        </>
-      }
-      fields={
-        <Field
-          label={`Type ${user.username} to confirm`}
-          name="confirmUsername"
-          autoComplete="off"
-          autoCapitalize="none"
-          spellCheck={false}
-          value={typed}
-          onChange={(event) => setTyped(event.target.value)}
-        />
-      }
-    />
-  );
-}
-
-/** One admin action on one user, as a confirm dialog. Mount to open; `onClose` should unmount it. */
-export function UserDialog({ kind, user, onClose }: { kind: UserDialogKind; user: DialogUser; onClose: () => void }) {
-  const name = <strong className="font-medium text-fg">{user.name}</strong>;
-  switch (kind) {
-    case "stop":
-      return (
-        <ActionDialog
-          title="Stop workspace"
-          user={user}
-          action={stopWorkspace}
-          onClose={onClose}
-          confirmLabel="Stop"
-          pendingLabel="Stopping…"
-          description={
-            user.busy ? (
-              <BusyWarning whose={<>{name}&apos;s</>} effect="Stopping ends it mid-way; files written so far are kept. Stop anyway?" />
-            ) : (
-              <>
-                Stop {name}&apos;s workspace now? Anything running in it ends; files are kept. It starts again the next
-                time it&apos;s opened.
-              </>
-            )
-          }
-        />
-      );
-    case "reset":
-      return (
-        <ActionDialog
-          title="Reset password"
-          user={user}
-          action={resetPassword}
-          onClose={onClose}
-          confirmLabel="Reset password"
-          pendingLabel="Resetting…"
-          description={
-            <>
-              {name} is signed out everywhere and gets a new temporary password, which they must change at their next
-              sign-in.
-            </>
-          }
-          renderPassword={(password) => (
-            <div className="flex flex-col gap-3">
-              <p className="text-14 text-fg-muted">
-                Give this temporary password to {name}. It is shown only once.
-              </p>
-              <SecretValue value={password} />
-            </div>
-          )}
-        />
-      );
-    case "deactivate":
-      return (
-        <ActionDialog
-          title="Deactivate user"
-          user={user}
-          action={setUserActive}
-          onClose={onClose}
-          danger
-          confirmLabel="Deactivate"
-          pendingLabel="Deactivating…"
-          fields={<input type="hidden" name="active" value="false" />}
-          description={
-            <>
-              {user.busy ? (
-                <p className="mb-2">
-                  <BusyWarning whose={<>{name}&apos;s</>} effect="Deactivating the account ends it mid-way." />
-                </p>
-              ) : null}
-              <p>
-                {name} is signed out everywhere, their workspace stops, and they can&apos;t sign in until you activate the
-                account again. Their files are kept.
-              </p>
-            </>
-          }
-        />
-      );
-    case "activate":
-      return (
-        <ActionDialog
-          title="Activate user"
-          user={user}
-          action={setUserActive}
-          onClose={onClose}
-          confirmLabel="Activate"
-          pendingLabel="Activating…"
-          fields={<input type="hidden" name="active" value="true" />}
-          description={<>{name} will be able to sign in again.</>}
-        />
-      );
-    case "delete":
-      return <DeleteUserDialog user={user} name={name} onClose={onClose} />;
-  }
-}
-
-/** A button that opens one of the user dialogs (used on the user detail page). */
+/** A button that opens one of the user dialogs (used on the user detail page); closing it refocuses the button. */
 export function UserDialogButton({
   kind,
   user,
@@ -232,12 +80,216 @@ export function UserDialogButton({
   danger?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const button = useRef<HTMLButtonElement>(null);
   return (
     <>
-      <button type="button" className={buttonClass(danger ? "danger-outline" : "outline", "sm")} onClick={() => setOpen(true)}>
+      <Button
+        ref={button}
+        type="button"
+        variant={danger ? "destructive-outline" : "outline"}
+        size="sm"
+        onClick={() => setOpen(true)}
+      >
         {children}
-      </button>
-      {open ? <UserDialog kind={kind} user={user} onClose={() => setOpen(false)} /> : null}
+      </Button>
+      <UserDialog kind={kind} user={user} open={open} onOpenChange={setOpen} returnFocusTo={button} />
     </>
+  );
+}
+
+/** The open dialog's body. It unmounts when the dialog closes, so each opening starts from a fresh form. */
+function UserDialogBody({ kind, user, onDone }: { kind: UserDialogKind; user: DialogUser; onDone: () => void }) {
+  const name = <strong className="font-medium text-foreground">{user.name}</strong>;
+  const whose = <>{name}&apos;s</>;
+  switch (kind) {
+    case "stop":
+      return (
+        <ActionForm
+          user={user}
+          action={stopWorkspace}
+          onDone={onDone}
+          confirmLabel="Stop"
+          pendingLabel="Stopping…"
+          description={
+            user.busy ? (
+              <p>
+                <BusyWarning whose={whose} effect="Stopping ends it mid-way; files written so far are kept. Stop anyway?" />
+              </p>
+            ) : (
+              <p>
+                Stop {whose} workspace now? Anything running in it ends; files are kept. It starts again the next time
+                it&apos;s opened.
+              </p>
+            )
+          }
+        />
+      );
+    case "reset":
+      return (
+        <ActionForm
+          user={user}
+          action={resetPassword}
+          onDone={onDone}
+          confirmLabel="Reset password"
+          pendingLabel="Resetting…"
+          description={
+            <p>
+              {name} is signed out everywhere and gets a new temporary password, which they must change at their next
+              sign-in.
+            </p>
+          }
+          renderPassword={(password) => (
+            <div className="flex flex-col gap-3">
+              <p className="text-14 text-muted-foreground">Give this temporary password to {name}. It is shown only once.</p>
+              <SecretValue value={password} />
+            </div>
+          )}
+        />
+      );
+    case "deactivate":
+      return (
+        <ActionForm
+          user={user}
+          action={setUserActive}
+          onDone={onDone}
+          danger
+          confirmLabel="Deactivate"
+          pendingLabel="Deactivating…"
+          fields={<input type="hidden" name="active" value="false" />}
+          description={
+            <>
+              {user.busy ? (
+                <p>
+                  <BusyWarning whose={whose} effect="Deactivating the account ends it mid-way." />
+                </p>
+              ) : null}
+              <p>
+                {name} is signed out everywhere, their workspace stops, and they can&apos;t sign in until you activate the
+                account again. Their files are kept.
+              </p>
+            </>
+          }
+        />
+      );
+    case "activate":
+      return (
+        <ActionForm
+          user={user}
+          action={setUserActive}
+          onDone={onDone}
+          confirmLabel="Activate"
+          pendingLabel="Activating…"
+          fields={<input type="hidden" name="active" value="true" />}
+          description={<p>{name} will be able to sign in again.</p>}
+        />
+      );
+    case "delete":
+      return <DeleteUserForm user={user} whose={whose} onDone={onDone} />;
+  }
+}
+
+/** Deleting can't be undone, so the button stays disabled until the username is typed. */
+function DeleteUserForm({ user, whose, onDone }: { user: DialogUser; whose: ReactNode; onDone: () => void }) {
+  const [typed, setTyped] = useState("");
+  return (
+    <ActionForm
+      user={user}
+      action={deleteUser}
+      onDone={onDone}
+      danger
+      confirmLabel="Delete user"
+      pendingLabel="Deleting…"
+      blocked={typed.trim().toLowerCase() !== user.username}
+      description={
+        <>
+          {user.busy ? (
+            <p>
+              <BusyWarning whose={whose} effect="Deleting the user ends it mid-way." />
+            </p>
+          ) : null}
+          <p>This permanently deletes {whose} account and every file in their workspace. This can&apos;t be undone.</p>
+        </>
+      }
+      fields={
+        <FormField
+          label={`Type ${user.username} to confirm`}
+          name="confirmUsername"
+          placeholder={user.username}
+          autoComplete="off"
+          autoCapitalize="none"
+          spellCheck={false}
+          value={typed}
+          onChange={(event) => setTyped(event.target.value)}
+        />
+      }
+    />
+  );
+}
+
+interface ActionFormProps {
+  user: DialogUser;
+  action: (state: ActionState, formData: FormData) => Promise<ActionState>;
+  /** Closes the dialog: after a success, or from Done once the password has been shown. */
+  onDone: () => void;
+  confirmLabel: string;
+  pendingLabel: string;
+  danger?: boolean;
+  /** What the action does, as one or more paragraphs (the dialog's accessible description). */
+  description: ReactNode;
+  /** Extra form controls (hidden inputs, the delete confirmation field). */
+  fields?: ReactNode;
+  /** Disables the confirm button (e.g. until the username is typed). */
+  blocked?: boolean;
+  /** Shown instead of the form once the action returns a temporary password. */
+  renderPassword?: (password: string) => ReactNode;
+}
+
+/** The confirmation form bound to one admin action: description, fields, error and the Cancel / confirm footer. */
+function ActionForm(props: ActionFormProps) {
+  const { user, action, onDone, confirmLabel, pendingLabel, danger, description, fields, blocked, renderPassword } = props;
+  const [state, formAction] = useActionState(action, IDLE);
+  const closeAfterSuccess = useEffectEvent(onDone);
+  const password = state.status === "done" ? state.temporaryPassword : undefined;
+
+  useEffect(() => {
+    if (state.status === "done" && !state.temporaryPassword) closeAfterSuccess();
+  }, [state]);
+
+  if (password && renderPassword) {
+    return (
+      <AlertDialogBody>
+        {renderPassword(password)}
+        <AlertDialogFooter>
+          <Button type="button" size="sm" className="min-w-16" autoFocus onClick={onDone}>
+            Done
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogBody>
+    );
+  }
+
+  return (
+    <form action={formAction}>
+      <AlertDialogBody>
+        <input type="hidden" name="userId" value={user.id} />
+        <AlertDialogDescription asChild>
+          <div className="flex flex-col gap-2">{description}</div>
+        </AlertDialogDescription>
+        {fields}
+        {state.status === "error" ? <FormError>{state.message}</FormError> : null}
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <SubmitButton
+            variant={danger ? "destructive" : "default"}
+            size="sm"
+            className="min-w-16"
+            pendingLabel={pendingLabel}
+            disabled={blocked}
+          >
+            {confirmLabel}
+          </SubmitButton>
+        </AlertDialogFooter>
+      </AlertDialogBody>
+    </form>
   );
 }
