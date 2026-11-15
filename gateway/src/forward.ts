@@ -18,6 +18,8 @@ export interface ForwardOptions {
   headers: HeaderMap;
   /** Fails the request with PayloadTooLargeError once more body bytes than this have arrived. */
   bodyLimit?: number;
+  /** Sees every chunk of the request body on its way upstream. It must not throw or keep the chunk from flowing. */
+  observeBody?: (chunk: Buffer) => void;
   responseHeaders: (upstream: IncomingMessage) => HeaderMap;
   /** Optional pass-through stream the response body flows through (e.g. a usage tap). */
   tap?: (upstream: IncomingMessage) => Transform | null;
@@ -85,6 +87,8 @@ export function forward(req: IncomingMessage, res: ServerResponse, options: Forw
     req.on("error", fail);
     const body: Readable = options.bodyLimit === undefined ? req : req.pipe(byteLimit(options.bodyLimit));
     if (body !== req) body.on("error", fail);
+    // Attached in the same tick as the pipe, so both see every chunk.
+    if (options.observeBody) body.on("data", options.observeBody);
     body.pipe(upstream);
   });
 }

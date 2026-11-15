@@ -17,6 +17,7 @@ import { listen } from "./listen.ts";
 import { LlmQueue } from "./llm-queue.ts";
 import { createLogger, type Logger } from "./log.ts";
 import { createNpmRegistry } from "./npm-registry.ts";
+import { createReaderBackend, withPageCache } from "./reader.ts";
 import { ReleaseCache } from "./release-cache.ts";
 import { createSearxngBackend } from "./search-mcp.ts";
 import { createServiceServer } from "./service-api.ts";
@@ -96,10 +97,18 @@ async function main(log: Logger): Promise<void> {
     baseUrl: config.search.url,
     authorization: config.search.authorization,
     timeoutMs: config.search.timeoutMs,
+    fallbackEngines: config.search.fallbackEngines,
+    fallbackBelow: config.search.fallbackBelow,
+    cacheMs: config.search.cacheMs,
+    onFallback: (use) => log.info("web search: fallback engines asked", { engines: config.search.fallbackEngines.join(","), ...use }),
   });
+  const reader =
+    config.reader.url === ""
+      ? null
+      : withPageCache(createReaderBackend({ baseUrl: config.reader.url, timeoutMs: config.reader.timeoutMs }), { ttlMs: config.reader.cacheMs });
   const control = createControlServer({ config, db, manager, versions, updater, llm, sessions, connections, log });
   const createAgentServer = createAgentServerFactory({ config, manager, sessions, connections, log });
-  const service = createServiceServer({ config, db, manager, llm, log, search });
+  const service = createServiceServer({ config, db, manager, llm, log, search, reader });
   const servers: http.Server[] = [control, service];
 
   await listen(control, { host: "127.0.0.1", port: config.controlPort });
@@ -122,7 +131,7 @@ async function main(log: Logger): Promise<void> {
   const bridge = config.workspace.gatewayIp;
   const onRetry = (): void => log.warn("workspace bridge address not up yet; retrying", { address: bridge });
   listen(service, { host: bridge, port: config.servicePort, waitForAddressMs: BRIDGE_WAIT_MS, onRetry }).then(
-    () => log.info("service API listening", { service: `${bridge}:${config.servicePort}`, llm: config.llm.upstreamUrl, search: config.search.url }),
+    () => log.info("service API listening", { service: `${bridge}:${config.servicePort}`, llm: config.llm.upstreamUrl, search: config.search.url, reader: config.reader.url || "off" }),
     (error: unknown) => {
       log.error("cannot listen on the workspace bridge", { address: bridge, error });
       process.exit(1);

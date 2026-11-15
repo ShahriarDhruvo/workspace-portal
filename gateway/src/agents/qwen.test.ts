@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { agentWorking, fetchQwenHealth, parseQwenHealth, qwenDriver, type QwenHealth } from "./qwen.ts";
+import { agentWorking, fetchQwenHealth, parseQwenHealth, parseQwenStarted, qwenDriver, type QwenHealth } from "./qwen.ts";
 
 /** A real `GET /health?deep=1` answer of `qwen serve`. */
 const REAL_HEALTH = {
@@ -100,30 +100,49 @@ test("the credential is a fresh 256-bit base64url token per start", () => {
   assert.notEqual(a, qwenDriver.generateCredential());
 });
 
-test("probeReady asks the deep health check with the container token and needs a live agent process", async () => {
+test("parseQwenStarted: only a first start that went through counts", () => {
+  const status = (preheat: unknown) => ({ v: 1, status: "ok", daemon: { pid: 8, startup: { listenerReadyAt: "2026-11-15T10:30:09.815Z", preheat } } });
+  assert.equal(parseQwenStarted(status({ status: "succeeded", durationMs: 1826 })), true);
+  for (const state of ["scheduled", "running", "failed", "not_scheduled", "external_bridge", "", 1, null]) {
+    assert.equal(parseQwenStarted(status({ status: state })), false, String(state));
+  }
+  for (const odd of [null, "succeeded", [], {}, { daemon: null }, { daemon: { startup: "succeeded" } }, status(null), status("succeeded")]) {
+    assert.equal(parseQwenStarted(odd), false, JSON.stringify(odd));
+  }
+});
+
+test("probeReady: a live agent process, or one the daemon has started before and put to sleep", async () => {
   const seen: Array<{ url: string | undefined; authorization: string | undefined }> = [];
   let channelAlive = false;
+  let preheat: string | null = "running";
   const server = http.createServer((req, res) => {
     seen.push({ url: req.url, authorization: req.headers.authorization });
     if (req.headers.authorization !== "Bearer tok") return void res.writeHead(401, { "content-type": "application/json" }).end('{"error":"Unauthorized"}');
-    if (req.url !== "/health?deep=1") return void res.writeHead(404).end();
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ status: "ok", activePrompts: 0, pendingPermissions: 0, activeWork: false, connectedClients: 0, channelAlive, idleSinceMs: null }));
+    if (req.url === "/health?deep=1") {
+      return void res.end(JSON.stringify({ status: "ok", activePrompts: 0, pendingPermissions: 0, activeWork: false, connectedClients: 0, channelAlive, idleSinceMs: null }));
+    }
+    if (req.url !== "/daemon/status" || preheat === null) return void res.end("not json");
+    // The real answer lists every capability: about 107 KB in Qwen Code 0.27.0.
+    res.end(JSON.stringify({ v: 1, status: "ok", daemon: { startup: { preheat: { status: preheat } } }, capabilities: "x".repeat(200 * 1024) }));
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address() as AddressInfo;
   const at = (credential: string) => ({ host: "127.0.0.1", port, credential });
-  assert.equal(await qwenDriver.probeReady(at("tok")), false, "up, but the agent process is not");
+  assert.equal(await qwenDriver.probeReady(at("tok")), false, "starting: the daemon answers, its agent process is not up yet");
+  preheat = "failed";
+  assert.equal(await qwenDriver.probeReady(at("tok")), false, "the agent process could not be started");
+  preheat = null;
+  assert.equal(await qwenDriver.probeReady(at("tok")), false, "an odd status answer");
+  preheat = "succeeded";
+  assert.equal(await qwenDriver.probeReady(at("tok")), true, "an unused workspace: started once, asleep now (what a restarted gateway finds)");
   channelAlive = true;
+  seen.length = 0;
   assert.equal(await qwenDriver.probeReady(at("tok")), true);
+  assert.deepEqual(seen, [{ url: "/health?deep=1", authorization: "Bearer tok" }], "a live agent process needs no second question");
   assert.equal(await qwenDriver.probeReady(at("wrong")), false, "a 401 is not ready");
   await new Promise<void>((resolve) => server.close(() => resolve()));
   assert.equal(await qwenDriver.probeReady(at("tok")), false, "connection refused");
-  assert.deepEqual(seen, [
-    { url: "/health?deep=1", authorization: "Bearer tok" },
-    { url: "/health?deep=1", authorization: "Bearer tok" },
-    { url: "/health?deep=1", authorization: "Bearer wrong" },
-  ]);
 });
 
 test("request headers: the container token only for requests the browser authorised; Host is the container", () => {

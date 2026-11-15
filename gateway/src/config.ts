@@ -40,7 +40,43 @@ export interface SearchConfig {
   authorization: string;
   timeoutMs: number;
   maxConcurrentPerUser: number;
+  /** Engines asked by name, once more, when a search returns fewer than fallbackBelow results. */
+  fallbackEngines: readonly string[];
+  fallbackBelow: number;
+  /** How long an answer is reused for the same search; 0 turns the cache off. */
+  cacheMs: number;
 }
+
+export type ReaderPolicy = "shown" | "any";
+
+/** The page reader behind the read_page tool (the reader container). */
+export interface ReaderConfig {
+  /** Base URL of the reader as the gateway reaches it; empty means no read_page tool. */
+  url: string;
+  timeoutMs: number;
+  /**
+   * "shown": a workspace may open URLs it was shown (search results, pages it read, its conversation)
+   * and anything on trustedHosts. "any": every public page.
+   */
+  policy: ReaderPolicy;
+  /** Sites that may be opened without having been shown; subdomains included. */
+  trustedHosts: readonly string[];
+  /** Characters of a page returned per read_page call. */
+  pageChars: number;
+  /** How long a page is kept for paging and repeat reads; 0 turns the cache off. */
+  cacheMs: number;
+  maxConcurrentPerUser: number;
+}
+
+/**
+ * Documentation and code sites any workspace may read without having been shown the URL. Only their
+ * operators see what is requested from them, so a request there cannot carry data to someone else.
+ */
+export const DEFAULT_TRUSTED_HOSTS =
+  "github.com,raw.githubusercontent.com,gitlab.com,stackoverflow.com,stackexchange.com,superuser.com,serverfault.com,askubuntu.com," +
+  "wikipedia.org,developer.mozilla.org,python.org,pypi.org,npmjs.com,nodejs.org,docs.rs,crates.io,rust-lang.org,go.dev," +
+  "kubernetes.io,docs.docker.com,learn.microsoft.com,archlinux.org,man7.org,kernel.org,fedoraproject.org,debian.org,ubuntu.com," +
+  "postgresql.org,sqlite.org,arxiv.org,huggingface.co";
 
 export interface Config {
   /** Host path of the portal data, mounted at the same path inside the gateway container. */
@@ -77,6 +113,7 @@ export interface Config {
     maxConcurrencyPerUser: number;
   };
   search: SearchConfig;
+  reader: ReaderConfig;
   workspace: WorkspaceConfig;
   maxRunning: number;
   idleTimeoutMs: number;
@@ -150,6 +187,20 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
       authorization: read.string("SEARXNG_AUTHORIZATION", ""),
       timeoutMs: read.int("SEARXNG_TIMEOUT_SECONDS", 20, 1) * 1000,
       maxConcurrentPerUser: read.int("SEARCH_MAX_CONCURRENT_PER_USER", 2, 1),
+      fallbackEngines: read.list("SEARCH_FALLBACK_ENGINES", "", /^[A-Za-z0-9][A-Za-z0-9 ._-]*$/, "SearXNG engine names"),
+      fallbackBelow: read.int("SEARCH_FALLBACK_BELOW", 3, 1),
+      cacheMs: read.int("SEARCH_CACHE_MINUTES", 15, 0) * 60_000,
+    },
+    reader: {
+      url: read.optionalHttpUrl("READER_URL"),
+      timeoutMs: read.int("READER_TIMEOUT_SECONDS", 60, 5) * 1000,
+      policy: read.oneOf("READER_URL_POLICY", "shown", ["shown", "any"] as const),
+      trustedHosts: read.list("READER_TRUSTED_HOSTS", DEFAULT_TRUSTED_HOSTS, /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i, "host names such as docs.python.org").map(
+        (host) => host.toLowerCase(),
+      ),
+      pageChars: read.int("READER_PAGE_CHARS", 20_000, 1000),
+      cacheMs: read.int("READER_CACHE_MINUTES", 15, 0) * 60_000,
+      maxConcurrentPerUser: read.int("READER_MAX_CONCURRENT_PER_USER", 2, 1),
     },
     workspace: {
       agents: read.agentList("WORKSPACE_AGENTS", "qwen,dsh"),
@@ -266,6 +317,33 @@ class EnvReader {
     const value = this.nonEmpty(name, fallback);
     if (!path.isAbsolute(value)) this.problems.push(`${name} must be an absolute path (got "${value}")`);
     return path.resolve(value);
+  }
+
+  /** An http(s) URL, or "" when the variable is not set or says "off". */
+  optionalHttpUrl(name: string): string {
+    const raw = this.nonEmpty(name, "").toLowerCase();
+    return raw === "" || raw === "off" ? "" : this.httpUrl(name, "");
+  }
+
+  /** One of a fixed set of words. */
+  oneOf<T extends string>(name: string, fallback: T, choices: readonly T[]): T {
+    const raw = this.nonEmpty(name, fallback).toLowerCase();
+    if ((choices as readonly string[]).includes(raw)) return raw as T;
+    this.problems.push(`${name} must be one of ${choices.join(", ")} (got "${raw}")`);
+    return fallback;
+  }
+
+  /** A comma-separated list without repeats. Not set or empty: the fallback; "none": an empty list. */
+  list(name: string, fallback: string, pattern: RegExp, what: string): string[] {
+    const raw = this.nonEmpty(name, fallback);
+    if (raw.toLowerCase() === "none") return [];
+    const items = raw.split(",").map((item) => item.trim()).filter((item) => item !== "");
+    const bad = items.filter((item) => !pattern.test(item));
+    if (bad.length > 0) {
+      this.problems.push(`${name} must be a comma-separated list of ${what} (got "${bad.join('", "')}")`);
+      return [];
+    }
+    return [...new Set(items)];
   }
 
   httpUrl(name: string, fallback: string): string {

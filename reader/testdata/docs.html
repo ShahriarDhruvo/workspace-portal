@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Importing modules — Example 3.2 documentation</title>
+<script>window.analytics = "SCRIPT-TEXT-MUST-NOT-APPEAR";</script>
+<style>.x { color: red } /* STYLE-TEXT-MUST-NOT-APPEAR */</style>
+</head>
+<body>
+<nav class="sidebar" role="navigation">
+  <ul>
+    <li><a href="/install.html">SIDEBAR-INSTALL-LINK</a></li>
+    <li><a href="/changelog.html">SIDEBAR-CHANGELOG-LINK</a></li>
+  </ul>
+</nav>
+<div class="document">
+<main role="main">
+<article>
+<section id="importing-modules">
+<h1>Importing modules<a class="headerlink" href="#importing-modules" title="Link to this heading">¶</a></h1>
+<p>The import system finds a module by name. It first looks at the cache described in
+<a class="reference internal" href="#module-cache"><span class="std std-ref">the module cache</span></a>, and then walks
+the search path. Details are in the <a class="reference external" href="../reference/import.html">language reference</a>.</p>
+<p>Importing is one of the first things a program does, so its cost adds to start-up time. The rest of this page
+explains where the time goes and how to look at it, with examples you can run in a terminal.</p>
+
+<section id="module-search-path">
+<h2>Module search path<a class="headerlink" href="#module-search-path" title="Link to this heading">¶</a></h2>
+<p>When a module named <code>spam</code> is imported, the interpreter searches a list of directories.
+This paragraph sits in a section whose id contains the word search and must be kept.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">sys</span>
+
+<span class="k">def</span> <span class="nf">show</span><span class="p">():</span>
+    <span class="k">for</span> <span class="n">entry</span> <span class="ow">in</span> <span class="n">sys</span><span class="o">.</span><span class="n">path</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="n">entry</span><span class="p">)</span>
+
+
+<span class="n">show</span><span class="p">()</span>
+</pre></div></div>
+<p>A makefile keeps its tabs:</p>
+<pre>build:
+	cc -O2 -o app main.c
+	strip app</pre>
+</section>
+
+<section id="module-cache">
+<h2>The module cache<a class="headerlink" href="#module-cache" title="Link to this heading">¶</a></h2>
+<p>Modules that were imported already are kept in a table, so a second import of the same name costs almost nothing.</p>
+<table class="docutils align-default">
+<thead><tr><th>Name</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>sys.modules</code></td><td>Modules already loaded</td></tr>
+<tr><td><code>sys.path</code></td><td>Where to look for new ones</td></tr>
+</tbody>
+</table>
+<ul>
+<li>Clearing the table forces a fresh import.</li>
+<li>Entries may be replaced while a program runs.</li>
+</ul>
+</section>
+</section>
+</article>
+</main>
+</div>
+<footer>
+<p>FOOTER-COPYRIGHT-LINE. Built with a documentation generator.</p>
+</footer>
+</body>
+</html>

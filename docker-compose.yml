@@ -1,10 +1,10 @@
-# Workspace Portal: the web app and the gateway. The per-user workspace containers are not listed
-# here. The gateway creates and removes them on demand from the image built from workspace-image/,
-# on an internal network it creates itself (no route anywhere except the gateway).
+# Workspace Portal: the web app, the gateway and the page reader. The per-user workspace containers
+# are not listed here. The gateway creates and removes them on demand from the image built from
+# workspace-image/, on an internal network it creates itself (no route anywhere except the gateway).
 #
 # Settings come from .env (docker compose reads it for the ${...} values below). Each service gets
-# only the variables it uses: the web app never sees the LLM or SearXNG credentials, and the
-# gateway never sees the admin password.
+# only the variables it uses: the web app never sees the LLM or SearXNG credentials, the gateway
+# never sees the admin password, and the reader sees no secret at all.
 name: workspace-portal
 
 x-common: &common
@@ -84,6 +84,16 @@ services:
       SEARXNG_AUTHORIZATION: ${SEARXNG_AUTHORIZATION:-}
       SEARXNG_TIMEOUT_SECONDS: ${SEARXNG_TIMEOUT_SECONDS:-}
       SEARCH_MAX_CONCURRENT_PER_USER: ${SEARCH_MAX_CONCURRENT_PER_USER:-}
+      SEARCH_FALLBACK_ENGINES: ${SEARCH_FALLBACK_ENGINES:-}
+      SEARCH_FALLBACK_BELOW: ${SEARCH_FALLBACK_BELOW:-}
+      SEARCH_CACHE_MINUTES: ${SEARCH_CACHE_MINUTES:-}
+      READER_URL: ${READER_URL:-http://127.0.0.1:${READER_PORT:-4003}}
+      READER_URL_POLICY: ${READER_URL_POLICY:-}
+      READER_TRUSTED_HOSTS: ${READER_TRUSTED_HOSTS:-}
+      READER_PAGE_CHARS: ${READER_PAGE_CHARS:-}
+      READER_CACHE_MINUTES: ${READER_CACHE_MINUTES:-}
+      READER_TIMEOUT_SECONDS: ${READER_TIMEOUT_SECONDS:-}
+      READER_MAX_CONCURRENT_PER_USER: ${READER_MAX_CONCURRENT_PER_USER:-}
       # The agents users choose from, and their default versions: the gateway starts
       # workspace-portal/workspace:<agent>-<version> (deploy/lib.sh workspace_image names them the same way)
       # for the current version, which the admin console (Admin > Agents) or deploy/update-image.sh may have
@@ -122,3 +132,49 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+
+  # The page reader behind the read_page tool. It connects to addresses an agent named and parses
+  # what comes back, so it gets nothing: no secrets, no volumes, no capabilities, a read-only root,
+  # an unprivileged user, and a network of its own from which deploy/firewall.sh lets it reach only
+  # public addresses on ports 80 and 443 (and its public DNS servers). Only the gateway talks to it,
+  # through a port published on the host's loopback interface.
+  reader:
+    <<: *common
+    build: { context: reader }
+    image: workspace-portal/reader:latest
+    user: "10002:10002"
+    read_only: true
+    tmpfs: ["/tmp:size=32m,noexec,nosuid,nodev"]
+    networks: [reader]
+    ports: ["127.0.0.1:${READER_PORT:-4003}:8080"]
+    dns: ["${READER_DNS_1:-1.1.1.1}", "${READER_DNS_2:-9.9.9.9}"]
+    environment:
+      READER_TIMEOUT_SECONDS: ${READER_FETCH_TIMEOUT_SECONDS:-}
+      READER_MAX_CONCURRENT: ${READER_MAX_CONCURRENT:-}
+      READER_MAX_DOWNLOAD_MB: ${READER_MAX_DOWNLOAD_MB:-}
+      READER_MAX_PDF_MB: ${READER_MAX_PDF_MB:-}
+      READER_MAX_PDF_PAGES: ${READER_MAX_PDF_PAGES:-}
+      READER_USER_AGENT: ${READER_USER_AGENT:-}
+    mem_limit: 512m
+    memswap_limit: 512m
+    cpus: 1.0
+    pids_limit: 64
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+networks:
+  # A bridge with a fixed name and subnet, because the firewall matches on both.
+  reader:
+    name: workspace-portal-reader
+    driver: bridge
+    enable_ipv6: false
+    driver_opts:
+      com.docker.network.bridge.name: ${READER_BRIDGE:-br-wreader}
+      com.docker.network.bridge.enable_icc: "false"
+    ipam:
+      config:
+        - subnet: ${READER_SUBNET:-172.30.250.0/28}

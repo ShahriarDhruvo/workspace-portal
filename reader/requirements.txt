@@ -1,0 +1,5 @@
+# PDF text for the page reader (pdfium behind a ctypes wrapper; no other dependency).
+# Both Linux wheels are listed, so the image builds on x86-64 and on arm64.
+pypdfium2==5.15.2 \
+    --hash=sha256:dc31aea5b0fb9fefc9b537a65f4113980b2c40798445736a7e6565bc85161e37 \
+    --hash=sha256:dd46e93c0c3a73f6cea8489baff6d77a5d0759dd53fbbce0aeb49c91830176fc

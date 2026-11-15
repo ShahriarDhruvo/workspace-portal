@@ -85,6 +85,8 @@ export interface RenderOptions {
   serviceBaseUrl: string;
   /** Offer the Playwright MCP browser. */
   browser: boolean;
+  /** The portal has a page reader, so its MCP server also offers read_page. Default: no. */
+  reader?: boolean;
 }
 
 export interface RenderedSettings {
@@ -101,7 +103,7 @@ export interface RenderedSettings {
  * an AgentConfigError.
  */
 export function renderQwenSettings(options: RenderOptions): RenderedSettings {
-  const { admin, serviceBaseUrl, browser } = options;
+  const { admin, serviceBaseUrl, browser, reader = false } = options;
 
   const defaults = mergeSettings({}, admin.systemDefaults);
   const openai = gatewayProviders(defaults.modelProviders, serviceBaseUrl);
@@ -144,9 +146,11 @@ export function renderQwenSettings(options: RenderOptions): RenderedSettings {
     httpUrl: `${serviceBaseUrl}/mcp/search`,
     timeout: 60_000,
     trust: true,
-    includeTools: ["web_search"],
+    includeTools: reader ? ["web_search", "read_page"] : ["web_search"],
     alwaysLoadTools: true,
-    description: "Private web search. The workspace has no direct internet access, so use this for anything on the web.",
+    description: reader
+      ? "Private web search and page reader. The workspace has no direct internet access, so use these for anything on the web."
+      : "Private web search. The workspace has no direct internet access, so use this for anything on the web.",
   };
   if (browser) {
     servers.browser = {
