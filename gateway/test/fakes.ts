@@ -123,6 +123,10 @@ export async function startFakeQwen(token: string, options: { readyAfterMs: numb
         idleSinceMs: health.idleSinceMs,
       });
     }
+    if (url === "/daemon/status" && status === null) {
+      // The first start of the agent process: under way, then done for good, whatever happens to the process later.
+      return json(res, 200, { v: 1, status: "ok", daemon: { startup: { preheat: { status: Date.now() >= readyAt ? "succeeded" : "running" } } } });
+    }
     const record = { method, url, headers: req.headers, status: status ?? 200 };
     requests.push(record);
     if (status !== null) {

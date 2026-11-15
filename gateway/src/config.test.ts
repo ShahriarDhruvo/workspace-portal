@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ConfigError, loadConfig, MIB, parseByteSize } from "./config.ts";
+import { ConfigError, DEFAULT_TRUSTED_HOSTS, loadConfig, MIB, parseByteSize } from "./config.ts";
 
 const HOUR = 3_600_000;
 const secrets = { GATEWAY_CONTROL_SECRET: "c".repeat(64) };
@@ -42,7 +42,26 @@ test("defaults match .env.example", () => {
   assert.equal(config.llm.upstreamUrl, "http://127.0.0.1:8080");
   assert.equal(config.llm.apiKey, "");
   assert.deepEqual(config.llm, { upstreamUrl: "http://127.0.0.1:8080", apiKey: "", maxConcurrency: 3, maxConcurrencyPerUser: 2 });
-  assert.deepEqual(config.search, { url: "http://127.0.0.1:8888", authorization: "", timeoutMs: 20_000, maxConcurrentPerUser: 2 });
+  assert.deepEqual(config.search, {
+    url: "http://127.0.0.1:8888",
+    authorization: "",
+    timeoutMs: 20_000,
+    maxConcurrentPerUser: 2,
+    fallbackEngines: [],
+    fallbackBelow: 3,
+    cacheMs: 15 * 60_000,
+  });
+  // Without READER_URL there is no page reader (.env.example sets it for the reader container).
+  assert.deepEqual(config.reader, {
+    url: "",
+    timeoutMs: 60_000,
+    policy: "shown",
+    trustedHosts: DEFAULT_TRUSTED_HOSTS.split(","),
+    pageChars: 20_000,
+    cacheMs: 15 * 60_000,
+    maxConcurrentPerUser: 2,
+  });
+  assert.ok(config.reader.trustedHosts.includes("github.com") && config.reader.trustedHosts.includes("docs.rs"));
   assert.deepEqual(config.workspace, {
     agents: ["qwen", "dsh"],
     images: {
@@ -79,6 +98,16 @@ test("values are parsed and normalised", () => {
     SEARXNG_AUTHORIZATION: " Basic dXNlcjpwYXNz ",
     SEARXNG_TIMEOUT_SECONDS: "5",
     SEARCH_MAX_CONCURRENT_PER_USER: "4",
+    SEARCH_FALLBACK_ENGINES: " duckduckgo, swisscows ,duckduckgo",
+    SEARCH_FALLBACK_BELOW: "5",
+    SEARCH_CACHE_MINUTES: "0",
+    READER_URL: "http://127.0.0.1:4003/",
+    READER_TIMEOUT_SECONDS: "30",
+    READER_URL_POLICY: "ANY",
+    READER_TRUSTED_HOSTS: "Docs.Example.com, example.org",
+    READER_PAGE_CHARS: "8000",
+    READER_CACHE_MINUTES: "5",
+    READER_MAX_CONCURRENT_PER_USER: "1",
     WORKSPACE_CPUS: "1.5",
     WORKSPACE_UID_BASE: "300000",
     WORKSPACE_TMP: "256m",
@@ -95,7 +124,22 @@ test("values are parsed and normalised", () => {
     authorization: "Basic dXNlcjpwYXNz",
     timeoutMs: 5_000,
     maxConcurrentPerUser: 4,
+    fallbackEngines: ["duckduckgo", "swisscows"],
+    fallbackBelow: 5,
+    cacheMs: 0,
   });
+  assert.deepEqual(config.reader, {
+    url: "http://127.0.0.1:4003",
+    timeoutMs: 30_000,
+    policy: "any",
+    trustedHosts: ["docs.example.com", "example.org"],
+    pageChars: 8000,
+    cacheMs: 5 * 60_000,
+    maxConcurrentPerUser: 1,
+  });
+  assert.deepEqual(loadConfig({ ...secrets, READER_TRUSTED_HOSTS: "none" }).reader.trustedHosts, [], "none: no site is open as a whole");
+  assert.equal(loadConfig({ ...secrets, READER_TRUSTED_HOSTS: "" }).reader.trustedHosts.length, DEFAULT_TRUSTED_HOSTS.split(",").length, "empty (as docker compose passes an unset value): the built-in list");
+  assert.equal(loadConfig({ ...secrets, READER_URL: "off" }).reader.url, "", "off: no page reader");
   assert.equal(config.workspace.nanoCpus, 1.5e9);
   assert.equal(config.workspace.uidBase, 300_000);
   assert.equal(config.workspace.tmpBytes, 256 * MIB);
@@ -113,6 +157,10 @@ test("every problem is reported at once", () => {
       LLM_MAX_CONCURRENCY: "0",
       PORTAL_DATA_DIR: "data",
       SEARXNG_URL: "ftp://search",
+      SEARCH_FALLBACK_ENGINES: "duckduckgo,bad&engine",
+      READER_URL: "reader:4003",
+      READER_URL_POLICY: "sometimes",
+      READER_TRUSTED_HOSTS: "github.com,https://docs.python.org/",
       WORKSPACE_UID_BASE: "1000",
       MAX_BUSY_HOURS: "-1",
     }),
@@ -123,6 +171,10 @@ test("every problem is reported at once", () => {
       "GATEWAY_CONTROL_SECRET must be at least 16 characters",
       'LLM_MAX_CONCURRENCY must be an integer >= 1 (got "0")',
       'SEARXNG_URL must be an http(s) URL (got "ftp://search")',
+      'SEARCH_FALLBACK_ENGINES must be a comma-separated list of SearXNG engine names (got "bad&engine")',
+      'READER_URL must be an http(s) URL (got "reader:4003")',
+      'READER_URL_POLICY must be one of shown, any (got "sometimes")',
+      'READER_TRUSTED_HOSTS must be a comma-separated list of host names such as docs.python.org (got "https://docs.python.org/")',
       'WORKSPACE_UID_BASE must be an integer >= 100000 (got "1000")',
       'MAX_BUSY_HOURS must be an integer >= 0 (got "-1")',
     ],

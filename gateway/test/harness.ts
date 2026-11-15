@@ -29,6 +29,7 @@ import { createControlServer, type ControlDeps } from "../src/control-api.ts";
 import { BEARER_SUBPROTOCOL_PREFIX } from "../src/headers.ts";
 import { LlmQueue } from "../src/llm-queue.ts";
 import type { Logger } from "../src/log.ts";
+import type { ReaderBackend } from "../src/reader.ts";
 import type { SearchBackend, SearchQuery } from "../src/search-mcp.ts";
 import { createServiceServer, type ServiceDeps } from "../src/service-api.ts";
 import { SessionCache } from "../src/session-cache.ts";
@@ -130,6 +131,10 @@ export interface SocketOptions {
 export interface GatewayOptions {
   env?: NodeJS.ProcessEnv;
   readyAfterMs?: number;
+  /** A page reader for the read_page tool (none by default, as without READER_URL). */
+  reader?: ReaderBackend;
+  /** The search backend; by default a stub that answers "results for <query>". */
+  search?: SearchBackend;
 }
 
 export interface Gateway {
@@ -240,9 +245,9 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
   const caller: Gateway["caller"] = { userId: null };
   const searches: SearchQuery[] = [];
   const search: SearchBackend = {
-    async search(query) {
+    async search(query, signal) {
       searches.push(query);
-      return `results for ${query.query}`;
+      return options.search ? options.search.search(query, signal) : `results for ${query.query}`;
     },
   };
   const runtime = new FakeRuntime(dataDir);
@@ -255,7 +260,7 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
 
   const agentDeps: AgentDeps = { config, manager, sessions: sessionCache, connections, log };
   const controlDeps: ControlDeps = { config, db, manager, llm: llmQueue, sessions: sessionCache, connections, log };
-  const serviceDeps: ServiceDeps = { config, db, manager, llm: llmQueue, log, search, resolveCaller: () => caller.userId };
+  const serviceDeps: ServiceDeps = { config, db, manager, llm: llmQueue, log, search, reader: options.reader, resolveCaller: () => caller.userId };
   const createAgentServer = createAgentServerFactory(agentDeps);
   const control = createControlServer(controlDeps);
   const service = createServiceServer(serviceDeps);

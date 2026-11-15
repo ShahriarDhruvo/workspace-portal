@@ -5,6 +5,8 @@ out/
 coverage/
 *.tsbuildinfo
 next-env.d.ts
+__pycache__/
+*.pyc
 
 # local data and secrets
 .env

@@ -1,0 +1,15 @@
+{
+  "name": "workspace-portal-reader",
+  "private": true,
+  "version": "1.0.0",
+  "description": "HTML to markdown step of the Workspace Portal page reader (see extract.mjs).",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "defuddle": "0.19.6",
+    "linkedom": "0.18.15"
+  }
+}

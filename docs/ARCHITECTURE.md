@@ -9,7 +9,8 @@ something here turns out to be wrong, fix this file in the same change.
 Browser ──▶ :3000            web (Next.js)       sign-in, change password, admin, /workspace (top bar + iframe)
 Browser ──▶ :3100+N          gateway agent port  user N's workspace: session check → HTTP/WebSocket proxy to wp-ws-N
                              gateway 127.0.0.1:4002   control API, called by web only
-                             gateway 172.29.0.1:4001  service API (LLM proxy + search MCP), called by workspaces only
+                             gateway 172.29.0.1:4001  service API (LLM proxy + search/read MCP), called by workspaces only
+                             reader  127.0.0.1:4003   page reader, called by the gateway only (network "workspace-portal-reader")
                                     │ Docker API (/var/run/docker.sock)
               ┌─────────────────────┼─────────────────────┐
            wp-ws-1               wp-ws-2        …       wp-ws-N      (one agent each: qwen serve :4170 or dsh :3080, uid 200000+N)
@@ -32,6 +33,14 @@ Browser ──▶ :3100+N          gateway agent port  user N's workspace: sessi
     start and lists the differences.
 * The LLM server and SearXNG are external; on the test server they are `127.0.0.1:8080` and `127.0.0.1:8888`.
   Only the gateway talks to them.
+* `reader` is the one container that connects to addresses an agent named (see Page reader below).
+  * It runs as uid 10002 with no capabilities, no volumes, a read-only root and no secrets, on the bridge
+    network `workspace-portal-reader` (`READER_SUBNET`, bridge `READER_BRIDGE`, ICC and IPv6 off), with its
+    port published on `127.0.0.1:READER_PORT` for the gateway.
+  * The host firewall gives it three chains in the same table. `reader_to_host` (input): only replies to
+    the gateway's connections. `reader_out` (forward): IPv4 only; DNS to `READER_DNS_1`/`READER_DNS_2`;
+    then a drop for every address in the set `not_public` (the IANA special-purpose ranges); then TCP 80
+    and 443; then drop. `reader_in` (forward): only replies.
 
 ## Ports and env
 
@@ -55,6 +64,18 @@ scripts read `.env` through `deploy/lib.sh` (`env_get`), falling back to `.env.e
 | `LLM_MAX_CONCURRENCY` / `LLM_MAX_CONCURRENCY_PER_USER` | `3` / `2` | gateway | LLM queue limits |
 | `SEARXNG_URL`, `SEARXNG_AUTHORIZATION`, `SEARXNG_TIMEOUT_SECONDS` | `http://127.0.0.1:8888`, empty, `20` | gateway | SearXNG backend of the search MCP |
 | `SEARCH_MAX_CONCURRENT_PER_USER` | `2` | gateway | Concurrent searches per workspace |
+| `SEARCH_FALLBACK_ENGINES` / `SEARCH_FALLBACK_BELOW` | empty / `3` | gateway | Engines asked by name, once, when a search returns fewer results than this |
+| `SEARCH_CACHE_MINUTES` | `15` | gateway | How long an answer with results is reused for the same search (0 = off) |
+| `READER_URL` | `http://127.0.0.1:READER_PORT` | gateway | The page reader; `off` removes the `read_page` tool |
+| `READER_URL_POLICY` | `shown` | gateway | `shown`: a workspace opens only URLs it was shown, plus trusted hosts. `any`: every public page |
+| `READER_TRUSTED_HOSTS` | `DEFAULT_TRUSTED_HOSTS` in `config.ts` | gateway | Sites open as a whole, subdomains included; `none` for no such site |
+| `READER_PAGE_CHARS` / `READER_CACHE_MINUTES` | `20000` / `15` | gateway | Characters of a page per call; how long a page is kept for paging and repeat reads |
+| `READER_TIMEOUT_SECONDS` / `READER_MAX_CONCURRENT_PER_USER` | `60` / `2` | gateway | How long the gateway waits for the reader; concurrent reads per workspace |
+| `READER_FETCH_TIMEOUT_SECONDS` / `READER_MAX_CONCURRENT` | `20` / `2` | reader | Seconds per download; pages handled at once (more wait their turn) |
+| `READER_MAX_DOWNLOAD_MB` / `READER_MAX_PDF_MB` / `READER_MAX_PDF_PAGES` | `5` / `15` / `60` | reader | Size limits, counted after decompression |
+| `READER_USER_AGENT` | `Mozilla/5.0 (compatible; WorkspacePortalReader/1.0)` | reader | What the reader calls itself |
+| `READER_PORT` / `READER_SUBNET` / `READER_BRIDGE` | `4003` / `172.30.250.0/28` / `br-wreader` | compose, firewall | The reader's loopback port and network |
+| `READER_DNS_1` / `READER_DNS_2` | `1.1.1.1` / `9.9.9.9` | compose, firewall | The reader's DNS servers; the only DNS the firewall lets it reach |
 | `WORKSPACE_AGENTS` | `qwen,dsh` | gateway, deploy scripts | The agents users choose from when their workspace starts (`qwen` Qwen Code, `dsh` DeepSeek Harness), in display order. With one, it starts without asking |
 | `QWEN_CODE_VERSION` / `DSH_VERSION` | `0.27.0` / `0.2.2-rc.1` | gateway, deploy scripts | Select the per-user images `workspace-portal/workspace:qwen-<version>` and `:dsh-<version>`, built from the `qwen` and `dsh` targets of `workspace-image/Dockerfile` |
 | `WORKSPACE_NETWORK` / `_SUBNET` / `_GATEWAY_IP` / `_IP_RANGE` / `_BRIDGE` | `workspace-portal-ws` / `172.29.0.0/16` / `172.29.0.1` / `172.29.128.0/17` / `br-wportal` | gateway, firewall | The gateway creates the network at startup |
@@ -314,9 +335,10 @@ they can't spoof an address.
 ```
 POST /llm/v1/chat/completions, /llm/v1/completions, /llm/v1/embeddings  → LLM_UPSTREAM_URL/v1/…  streaming pass-through
 GET  /llm/v1/models, /llm/v1/models/<id>                                → LLM_UPSTREAM_URL/v1/…
-POST /mcp/search                                                         → built-in MCP server (streamable HTTP, stateless)
+POST /mcp/search                                                         → built-in MCP server (streamable HTTP, stateless): web_search, read_page
 ```
 
+* One source address may have at most 128 connections open; further ones are closed at once.
 * Checks run in this order: an unknown caller gets 403; a path with `.`/`..` segments, backslashes, or
   percent-encoded `.`, `/` or `\` gets 400; then the allowlist above. Any other `/llm/v1/` path gets 404
   `{error: {message, type: "not_found"}}`, a listed path with the wrong method 405 `method_not_allowed`
@@ -331,13 +353,87 @@ POST /mcp/search                                                         → bui
   * Usage is counted per user per day in `llm_usage` (requests, plus tokens from `usage`). If the upstream
     is down: 502 with an OpenAI-shaped error (`llm_unreachable`).
 * **Search** (`search-mcp.ts`).
-  * MCP protocol versions are 2025-11-25 back to 2024-11-05. The server offers one tool, `web_search`
-    (`query`, `page`, `time_range`, `language`).
-  * Each call queries `SEARXNG_URL/search?format=json`, adding `SEARXNG_AUTHORIZATION`, with
+  * MCP protocol versions are 2025-11-25 back to 2024-11-05. The server offers `web_search`
+    (`query`, `page`, `time_range`, `language`) and, when there is a reader, `read_page` (`url`, `start`).
+    A request body is at most 64 KiB and a JSON-RPC batch at most 8 messages.
+  * Each search queries `SEARXNG_URL/search?format=json`, adding `SEARXNG_AUTHORIZATION`, with
     `SEARXNG_TIMEOUT_SECONDS` and a per-workspace concurrency limit.
-  * Results are text: up to 10 results, each with a title, URL and a snippet cut to 500 characters. No page
-    is ever fetched for the workspace.
+  * A search that returns fewer than `SEARCH_FALLBACK_BELOW` results is asked once more with
+    `engines=<SEARCH_FALLBACK_ENGINES>`, and the new results are appended. A failing second request leaves
+    the first answer. Each use is logged (`web search: fallback engines asked`, with the result counts
+    before and after).
+  * Results are text: up to 10 results, each with a title, URL and a snippet cut to 500 characters, then
+    SearXNG's spelling corrections if it has any. Its `suggestions` are left out: they are the engines'
+    autocompletions of the query. With no results, the text names the engines SearXNG reported as
+    unresponsive and says that rewording will not help; if all engines answered, it says so.
+  * An answer with results is kept for `SEARCH_CACHE_MINUTES` under (query in lower case, page, time range,
+    language), at most 256 entries.
   * A call counts as agent activity.
+* **Page reading** (`reader.ts`, `url-policy.ts`, the `read_page` half of `search-mcp.ts`).
+  * Access. `READER_URL_POLICY=shown`: the gateway keeps, per workspace and in memory, the URLs that
+    workspace was shown (`ShownUrls`): every URL in the text of its search results and of the pages it
+    read, and every URL in the non-assistant messages (and `prompt`) of its generation requests, collected
+    as the request body streams to the LLM server (bodies over 8 MB are not scanned). `read_page` is
+    allowed for a shown URL, and for any URL whose host is one of `READER_TRUSTED_HOSTS` or a subdomain of
+    one. Anything else is refused before the reader is asked.
+  * One spelling. Every URL is parsed and written out again (`canonicalUrl`: dot segments resolved, host
+    in ASCII, no fragment, at most 2000 characters) before anything else is done with it, and that string
+    is what is remembered, compared and sent to the reader. A requested URL matches a shown one when they
+    are equal, or differ only in the scheme or in one trailing slash; the reader is then asked for the
+    spelling that was shown. So nothing a model adds to a shown URL (`/secret/../page`, a fragment, another
+    spelling of the host) reaches the site.
+  * What does not count as shown: assistant messages, so a URL does not become shown by the model writing
+    it; and URLs in a search query, although the answer repeats the query (and a spelling correction may).
+    Tool output does count, so a model that prints a URL through a tool and opens it afterwards passes:
+    the rule stops the common injection, not a determined one. A model can also choose *which* of the URLs
+    it was shown to open.
+  * Bounds: 20,000 URLs and 2 million characters per workspace (oldest dropped), and the sets of at most
+    `max(16, 4 x MAX_RUNNING_WORKSPACES)` workspaces (the one unused for longest is dropped; its next LLM
+    request shows it its conversation again). Extracting URLs from text is linear in its length.
+  * Redirects. For a shown URL the reader follows redirects to any public address. For a URL that passed
+    only because its host is trusted, the gateway sends the trusted list along (`redirect_hosts`) and the
+    reader refuses a redirect that leaves the page's own host for a site outside that list.
+  * The gateway asks the reader with `POST READER_URL/read {"url", "redirect_hosts"?}` and keeps the
+    answer for `READER_CACHE_MINUTES` (at most 64 pages and 8 million characters, shared by all
+    workspaces, keyed by the URL and by whether the read was fenced; concurrent reads of one URL share a
+    download; a refusal that will repeat, such as a missing page, is kept for 2 minutes). An answer over
+    4 MiB is not accepted.
+  * A workspace's read slot (`READER_MAX_CONCURRENT_PER_USER`) is held until the download ends, not until
+    the workspace hangs up: a download that others may be waiting for is never cancelled.
+  * The answer to the model is a header (`Title:`, `URL:` after redirects, `Note:`), then
+    `READER_PAGE_CHARS` characters of the page from `start`, ending at a line break where one is near, then
+    either `[Characters a-b of N. To continue, call read_page with the same url and start=b.]` or an
+    end-of-page line.
+  * A call counts as agent activity.
+
+## Page reader (`reader/`)
+
+One request, one process: `reader.py` forks for every request, with a CPU limit, a heap limit and a kill
+timer on the process. `READER_MAX_CONCURRENT` of them work at a time, each holding a lock on a file in
+`/tmp` that the kernel releases when the process ends; up to 14 more wait at most 30 s for a place and are
+then answered `busy`. `/healthz` never waits. Answers are always HTTP 200 with
+`{"ok": true, url, kind, title, text, truncated, note}` or `{"ok": false, code, message}`, where `message`
+is written for the model.
+
+* What is fetched: `http`/`https`, ports 80 and 443, `GET`, no cookies, no credentials in the URL, a URL of
+  at most 2000 characters. Host names are IDNA-encoded and must look like public names: at least one dot,
+  no IPv6 literal, none of the local suffixes (`.local`, `.internal`, `.lan`, `.home.arpa`, …).
+* Where it connects: the name is resolved to IPv4 addresses only, every address must be public (Python's
+  `is_global`, plus the IANA special-purpose ranges), and the TCP connection goes to the address that was
+  checked; the name is used only for TLS and the `Host` header. A redirect (at most 5) is parsed, checked
+  and resolved like the first URL. A GitHub file view (`/blob/`) is read from `raw.githubusercontent.com`.
+* Limits: `READER_FETCH_TIMEOUT_SECONDS` for the whole download, however slowly a site sends (each read
+  takes what has arrived and waits no longer than the time left), `READER_MAX_DOWNLOAD_MB` after decompression
+  (gzip and deflate only), `READER_MAX_PDF_MB` and `READER_MAX_PDF_PAGES` for PDFs, 400,000 characters of
+  output.
+* Content. `Accept` asks for `text/markdown` first; markdown and other text are returned as they are.
+  HTML goes to `extract.mjs`, a Node process per page (25 s, 256 MB heap) that runs Defuddle with four
+  corrections for documentation pages (same-page cross-references, anchor ids, code blocks restored
+  verbatim with their language, the main heading). If it fails, or returns almost nothing from a page that
+  has text, the page's text is returned unfiltered with a note. PDFs are read with pdfium, page by page.
+  No JavaScript runs anywhere.
+* The image build runs the reader's tests (`test_reader.py`, `test_extract.py`); a build whose address
+  checks, converter or PDF reader fail does not produce an image.
 
 ## Agent settings rendering
 
@@ -365,7 +461,8 @@ is system-defaults < user < workspace < system.
     `telemetry.enabled` and `telemetry.logPrompts`, `model.catalogRefresh`.
   * `security.auth.enforcedType` and `selectedType` are set to `openai`. `permissions.deny` gains
     `web_fetch`. `tools.webSearch` is removed.
-  * `mcpServers.search` is set to `{httpUrl: <service>/mcp/search, includeTools: ["web_search"], trust: true}`.
+  * `mcpServers.search` is set to `{httpUrl: <service>/mcp/search, includeTools: ["web_search", "read_page"],
+    trust: true}` (`["web_search"]` without a reader).
   * With `WORKSPACE_BROWSER=true`, `mcpServers.browser` runs `playwright-mcp --headless --isolated
     --no-sandbox` with the image's Chromium and output in `/workspace/.browser`. Otherwise
     `mcpServers.browser` is removed.
@@ -437,6 +534,10 @@ the UI, which shows those plugins read-only.
   3. Poll the driver's readiness probe every 500 ms (90 s timeout) until it passes (`running`, `ready`):
      Qwen Code `GET /health?deep=1` answering 200 with `channelAlive`; dsh its `session/list` RPC
      answering `ok` (not just any answer: its port returns 404 everywhere for a moment while it starts).
+     `qwen serve` stops its agent process when no session is open and starts it again for the next one
+     (about 2 s), so an unused workspace reports `channelAlive: false`. When it does, the probe asks
+     `GET /daemon/status` and passes if `daemon.startup.preheat.status` is `succeeded`: the process has
+     run once. Without this, a restarted gateway would wait 90 s for an unused workspace and remove it.
 
   A failure or exit leads to `error` with `lastError` (including the last log lines), and the container
   is removed.

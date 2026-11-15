@@ -92,6 +92,7 @@ export const dshDriver: AgentDriver = {
       admin: loadAdminQwenConfig(config.qwenConfigDir),
       serviceBaseUrl: serviceBaseUrl(config),
       browser: config.workspace.browser,
+      reader: config.reader.url !== "",
     });
     const catalog = fitDshModels(portalModels(rendered));
     return { [DSH_PATCH_FILE]: renderDshPatch({ catalog, serviceBaseUrl: serviceBaseUrl(config), browser: config.workspace.browser }) };

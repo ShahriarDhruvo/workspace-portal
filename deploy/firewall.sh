@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Workspace Portal: host firewall for the workspace network (nftables).
+# Workspace Portal: host firewall for the workspace network and the page reader (nftables).
 #
 # The workspace network is a Docker *internal* network, so Docker already refuses to route anything
 # from it to the outside world. This adds the rest, in a table of its own (inet workspace_portal):
@@ -10,29 +10,59 @@
 #   * Nothing from or to the workspace network is forwarded, a second lock on the same door should
 #     the network ever lose its internal flag.
 #
+# The page reader (the reader container, on a bridge of its own) is the opposite case: it must reach
+# the internet, and must reach nothing else.
+#
+#   * To the host, it may only answer the gateway, which calls it through a loopback-published port.
+#   * It is forwarded only to public addresses, on TCP 80 and 443, and to its two DNS servers.
+#     Private, link-local, carrier-NAT and other reserved ranges are dropped, so a page cannot be
+#     fetched from the LAN, the LLM server or a cloud metadata address even if the reader's own
+#     checks (reader/reader.py) were wrong.
+#   * Nothing is forwarded to it.
+#
 # A drop in any nftables base chain is final, so rules other tools add elsewhere (Docker,
 # firewalld, Tailscale) cannot reopen what this table drops. Matching on both the bridge name and
 # the subnet keeps the rules effective even if one of them were wrong. The table is replaced in
 # one atomic transaction, so there is never a moment without rules.
 #
 # Usage: firewall.sh apply | remove | status        (needs root; idempotent)
-# Reads WORKSPACE_SUBNET, WORKSPACE_GATEWAY_IP, WORKSPACE_BRIDGE and SERVICE_PORT from the
-# environment; the systemd unit loads them from /etc/workspace-portal/firewall.env.
+# Reads WORKSPACE_SUBNET, WORKSPACE_GATEWAY_IP, WORKSPACE_BRIDGE, SERVICE_PORT, READER_SUBNET,
+# READER_BRIDGE, READER_DNS_1 and READER_DNS_2 from the environment; the systemd unit loads them
+# from /etc/workspace-portal/firewall.env.
 set -euo pipefail
 
 SUBNET=${WORKSPACE_SUBNET:-172.29.0.0/16}
 GW_IP=${WORKSPACE_GATEWAY_IP:-172.29.0.1}
 BRIDGE=${WORKSPACE_BRIDGE:-br-wportal}
 SERVICE_PORT=${SERVICE_PORT:-4001}
+READER_SUBNET=${READER_SUBNET:-172.30.250.0/28}
+READER_BRIDGE=${READER_BRIDGE:-br-wreader}
+READER_DNS_1=${READER_DNS_1:-1.1.1.1}
+READER_DNS_2=${READER_DNS_2:-9.9.9.9}
 TABLE="inet workspace_portal"
+# Everything that is not the public internet (the IANA special-purpose IPv4 ranges).
+NOT_PUBLIC="0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.0.0.0/24, 192.0.2.0/24, 192.88.99.0/24, 192.168.0.0/16, 198.18.0.0/15, 198.51.100.0/24, 203.0.113.0/24, 224.0.0.0/3"
 
 ruleset() {
   cat <<NFT
 table $TABLE {
+  set not_public {
+    type ipv4_addr
+    flags interval
+    elements = { $NOT_PUBLIC }
+  }
+
   chain input {
     type filter hook input priority filter - 10; policy accept;
     iifname "$BRIDGE" jump from_workspace
     iifname != "lo" ip saddr $SUBNET jump from_workspace
+    iifname "$READER_BRIDGE" jump reader_to_host
+    iifname != "lo" ip saddr $READER_SUBNET jump reader_to_host
+  }
+
+  chain reader_to_host {
+    ct state established,related accept
+    drop
   }
 
   chain from_workspace {
@@ -47,6 +77,24 @@ table $TABLE {
     oifname "$BRIDGE" drop
     ip saddr $SUBNET drop
     ip daddr $SUBNET drop
+    iifname "$READER_BRIDGE" jump reader_out
+    ip saddr $READER_SUBNET jump reader_out
+    oifname "$READER_BRIDGE" jump reader_in
+    ip daddr $READER_SUBNET jump reader_in
+  }
+
+  chain reader_out {
+    ct state established,related accept
+    meta nfproto != ipv4 drop
+    ip daddr { $READER_DNS_1, $READER_DNS_2 } meta l4proto { tcp, udp } th dport 53 accept
+    ip daddr @not_public drop
+    tcp dport { 80, 443 } accept
+    drop
+  }
+
+  chain reader_in {
+    ct state established,related accept
+    drop
   }
 }
 NFT
@@ -76,7 +124,7 @@ apply() {
   # "table … {}" makes the delete safe on the first run; all three steps are one transaction.
   { echo "table $TABLE {}"; echo "delete table $TABLE"; ruleset; } | nft -f -
   remove_legacy_iptables
-  echo "workspace-portal firewall applied (bridge $BRIDGE, subnet $SUBNET, allowed: $GW_IP tcp/$SERVICE_PORT)"
+  echo "workspace-portal firewall applied (bridge $BRIDGE, subnet $SUBNET, allowed: $GW_IP tcp/$SERVICE_PORT; reader bridge $READER_BRIDGE, subnet $READER_SUBNET, allowed: public tcp/80,443 and DNS at $READER_DNS_1, $READER_DNS_2)"
 }
 
 remove() {
