@@ -38,6 +38,21 @@ set_if_missing() { env_value "$ENV_FILE" "$1" >/dev/null || env_set "$1" "$2"; }
 set_if_missing GATEWAY_CONTROL_SECRET "$(openssl rand -hex 32)"
 set_if_missing ADMIN_PASSWORD "$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20)"
 set_if_missing HOSTD_PORTAL_TOKEN "$(openssl rand -hex 32)"
+# The containers run in UTC unless told otherwise, and the daily totals (Home's usage today, the energy per day
+# on Admin > Usage) begin at their midnight: give them the host's time zone.
+if ! env_value "$ENV_FILE" TZ >/dev/null; then
+  zone=$(timedatectl show -p Timezone --value 2>/dev/null || true)
+  if [[ -z $zone ]]; then
+    zone=$(readlink /etc/localtime 2>/dev/null || true)
+    zone=${zone##*/zoneinfo/}
+  fi
+  if [[ $zone =~ ^[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)*$ ]]; then
+    env_set TZ "$zone"
+    log "recorded the host's time zone in .env: TZ=${zone}"
+  else
+    warn "could not tell the host's time zone, so days begin at midnight UTC; set TZ in .env (e.g. America/New_York)"
+  fi
+fi
 
 # Settings from earlier versions: image tags are now derived from the agent versions, users choose
 # between the agents in WORKSPACE_AGENTS, and the models are defined in Qwen Code's
@@ -52,6 +67,9 @@ if ! env_value "$ENV_FILE" QWEN_CODE_VERSION >/dev/null; then
 fi
 set_if_missing DSH_VERSION "$(env_value .env.example DSH_VERSION)"
 set_if_missing WORKSPACE_AGENTS "$(env_value .env.example WORKSPACE_AGENTS)"
+# Since every user has a Private and an Online workspace: the portal-wide switch, written out so the admin
+# finds it in .env (the rest of the ONLINE_* settings keep their defaults until set).
+set_if_missing ONLINE_WORKSPACES "$(env_value .env.example ONLINE_WORKSPACES)"
 for key in WORKSPACE_IMAGE LLM_MODEL_ID LLM_MODEL_NAME LLM_CONTEXT_WINDOW LLM_MAX_TOKENS LLM_INPUT LLM_REASONING; do
   if grep -qE "^${key}=" "$ENV_FILE"; then
     sed -i "s|^${key}=|# no longer used: ${key}=|" "$ENV_FILE"
@@ -66,20 +84,70 @@ for agent in "${ENABLED_AGENTS[@]}"; do
 done
 WEB_PORT=$(web_port)
 AGENT_PORTS=$(agent_port_range)
+ONLINE_AGENT_PORTS=$(online_agent_port_range)
+case $(env_get ONLINE_WORKSPACES | tr '[:upper:]' '[:lower:]') in
+  true | on | yes | 1 | false | off | no | 0) ;;
+  *) die "ONLINE_WORKSPACES in .env must be on or off (got \"$(env_get ONLINE_WORKSPACES)\")" ;;
+esac
+# The gateway refuses these too, but only once the stack has been restarted: say so before anything changes.
+# A port names a user and a kind, and a UID owns one kind's files: the kinds may share neither.
+port_count=$(env_get AGENT_PORT_COUNT)
+private_base=$(env_get AGENT_PORT_BASE)
+online_base=$(online_agent_port_base)
+if ((private_base < online_base + port_count - 1 && online_base < private_base + port_count - 1)); then
+  die "the Private and Online workspace ports overlap (${AGENT_PORTS} and ${ONLINE_AGENT_PORTS}): set ONLINE_AGENT_PORT_BASE in .env to at least $((private_base + port_count - 1)), or leave it empty"
+fi
+# UIDs stay clear of system and human accounts, and below systemd's foreign UID range (2147352576: all users have
+# access to files owned there; past 2^31 some code takes UIDs for negative numbers), as in gateway/src/config.ts.
+for uid_key in WORKSPACE_UID_BASE ONLINE_UID_BASE; do
+  uid_base=$(env_get "$uid_key")
+  [[ $uid_base =~ ^[1-9][0-9]{0,9}$ ]] && ((uid_base >= 100000 && uid_base + port_count - 1 < 2147352576)) ||
+    die "$uid_key in .env must be a number of at least 100000, with $uid_key + AGENT_PORT_COUNT below 2147352576 (got \"${uid_base}\")"
+done
+private_uid_base=$(env_get WORKSPACE_UID_BASE)
+online_uid_base=$(env_get ONLINE_UID_BASE)
+if ((private_uid_base < online_uid_base + port_count - 1 && online_uid_base < private_uid_base + port_count - 1)); then
+  die "the Private and Online workspace UIDs overlap (WORKSPACE_UID_BASE ${private_uid_base}, ONLINE_UID_BASE ${online_uid_base}): the bases must be at least AGENT_PORT_COUNT (${port_count}) apart"
+fi
+for key in WORKSPACE_SUBNET ONLINE_SUBNET; do
+  [[ $(env_get "$key") =~ ^[0-9]+(\.[0-9]+){3}/[0-9]+$ ]] || die "$key in .env is not an IPv4 subnet (like 172.28.0.0/16)"
+done
+for key in WORKSPACE_GATEWAY_IP ONLINE_GATEWAY_IP; do
+  # These go into the firewall rules as they are.
+  [[ $(env_get "$key") =~ ^[0-9]+(\.[0-9]+){3}$ ]] || die "$key in .env is not an IPv4 address"
+done
+[[ $(env_get WORKSPACE_BRIDGE) != "$(env_get ONLINE_BRIDGE)" ]] || die "WORKSPACE_BRIDGE and ONLINE_BRIDGE in .env must differ"
+command -v python3 >/dev/null || die "python3 is not installed (the installer works out the firewall's address sets with it)"
+# What the Online workspaces, the reader and SearXNG may never reach, whatever its address, on top of every private
+# one (the firewall's `never` set, see never_reach in deploy/lib.sh): this host's networks and router, the servers
+# the portal talks to, FIREWALL_NEVER_REACH.
+NEVER_REACH=$(never_reach) || die "FIREWALL_NEVER_REACH in .env must list IPv4 addresses or CIDRs (see above)"
+# The resolvers of the Online workspaces, the reader and SearXNG go into the firewall rules as they are. The rules
+# drop every private address and `never` before they let DNS through, so another resolver would not answer (and
+# one on the LAN would be a way into it); the gateway refuses Online ones that are not public, too.
+for key in ONLINE_DNS_1 ONLINE_DNS_2 READER_DNS_1 READER_DNS_2 SEARXNG_DNS_1 SEARXNG_DNS_2; do
+  resolver=$(env_get "$key")
+  [[ $resolver =~ ^[0-9]+(\.[0-9]+){3}$ ]] || die "$key in .env is not an IPv4 address"
+  ipv4_public "$resolver" || die "$key in .env (${resolver}) is not a public address: the firewall lets what uses it reach no private address, your router included. Use a public resolver, such as 1.1.1.1 or 9.9.9.9."
+  ipv4_outside "$resolver" "$NEVER_REACH" ||
+    die "$key in .env (${resolver}) is on this host's network or is a server the portal talks to (${NEVER_REACH}), which the firewall keeps the workspaces off. Use another public resolver, such as 1.1.1.1 or 9.9.9.9."
+done
 
 # ---------------------------------------------------------------- host checks
-# Workspace UIDs must not fall inside a range /etc/subuid or /etc/subgid hands to a host account:
-# that account could then read workspace files through a user namespace (podman unshare).
-uid_first=$(env_get WORKSPACE_UID_BASE)
-uid_last=$((uid_first + $(env_get AGENT_PORT_COUNT)))
-for file in /etc/subuid /etc/subgid; do
-  [[ -r $file ]] || continue
-  while IFS=: read -r name start size; do
-    [[ $start =~ ^[0-9]+$ && $size =~ ^[0-9]+$ ]] || continue
-    if ((start <= uid_last && start + size - 1 >= uid_first)); then
-      die "workspace UIDs ${uid_first}-${uid_last} overlap ${name}'s range in ${file} (${start}-$((start + size - 1))). Set WORKSPACE_UID_BASE in .env to a free range."
-    fi
-  done <"$file"
+# Workspace UIDs (both kinds') must not fall inside a range /etc/subuid or /etc/subgid hands to a host
+# account: that account could then read workspace files through a user namespace (podman unshare).
+for uid_key in WORKSPACE_UID_BASE ONLINE_UID_BASE; do
+  uid_first=$(env_get "$uid_key")
+  uid_last=$((uid_first + port_count))
+  for file in /etc/subuid /etc/subgid; do
+    [[ -r $file ]] || continue
+    while IFS=: read -r name start size; do
+      [[ $start =~ ^[0-9]+$ && $size =~ ^[0-9]+$ ]] || continue
+      if ((start <= uid_last && start + size - 1 >= uid_first)); then
+        die "workspace UIDs ${uid_first}-${uid_last} overlap ${name}'s range in ${file} (${start}-$((start + size - 1))). Set ${uid_key} in .env to a free range."
+      fi
+    done <"$file"
+  done
 done
 
 if command -v selinuxenabled >/dev/null && selinuxenabled &&
@@ -91,7 +159,9 @@ fi
 # ---------------------------------------------------------------- data dirs
 # Ownership is the access model:
 #   db/          the web app's service account (10001) only; the gateway reaches it as root.
-#   users/<id>/  created by the gateway, owned by that user's own UID (WORKSPACE_UID_BASE + id).
+#   users/<id>/  created by the gateway: private/ and online/, each kind's home and workspace owned by that
+#                kind's own UID (WORKSPACE_UID_BASE + id, ONLINE_UID_BASE + id). The gateway moves the files
+#                of an older install (users/<id>/home, workspace) into private/ while that user has no container.
 #   config/      root only; the Qwen Code settings an admin installs for every workspace.
 log "preparing ${PORTAL_DATA_DIR}"
 install -d -m 0755 -o root -g root "${PORTAL_DATA_DIR}"
@@ -140,11 +210,16 @@ install -m 0755 deploy/firewall.sh /usr/local/libexec/workspace-portal/firewall.
 {
   echo "# Generated by deploy/install.sh from ${ENV_FILE}"
   for key in WORKSPACE_SUBNET WORKSPACE_GATEWAY_IP WORKSPACE_BRIDGE SERVICE_PORT \
+    ONLINE_SUBNET ONLINE_GATEWAY_IP ONLINE_BRIDGE ONLINE_DNS_1 ONLINE_DNS_2 \
     READER_SUBNET READER_BRIDGE READER_DNS_1 READER_DNS_2 SEARXNG_SUBNET SEARXNG_BRIDGE SEARXNG_DNS_1 SEARXNG_DNS_2; do
     echo "${key}=$(env_get "$key")"
   done
+  # Worked out above (never_reach): addresses as they were at this run. Run the installer again when the LLM
+  # server or the LAN changes address.
+  echo "NEVER_REACH=${NEVER_REACH}"
 } >/etc/workspace-portal/firewall.env
 chmod 0644 /etc/workspace-portal/firewall.env
+log "the Online workspaces, the reader and SearXNG never reach, besides every private address: ${NEVER_REACH}"
 # Before docker.service, so the rules exist before any workspace starts; after nftables.service and
 # firewalld, which may load whole rulesets of their own at boot.
 cat >/etc/systemd/system/workspace-portal-firewall.service <<'UNIT'
@@ -162,12 +237,24 @@ ExecReload=/usr/local/libexec/workspace-portal/firewall.sh apply
 ExecStop=/usr/local/libexec/workspace-portal/firewall.sh remove
 
 [Install]
-WantedBy=multi-user.target docker.service
+WantedBy=multi-user.target
+UNIT
+# Docker requires it: when "apply" fails, Docker (and with it every container) stays down rather than running
+# workspaces without their fence. A drop-in rather than RequiredBy= in the unit above, so that disabling the unit
+# can't undo it. It also means a restart of the firewall unit restarts Docker (systemd stops Docker first, so no
+# container runs without the rules): to load changed rules, reload it, as below.
+install -d -m 0755 /etc/systemd/system/docker.service.d
+cat >/etc/systemd/system/docker.service.d/workspace-portal-firewall.conf <<'UNIT'
+# Workspace Portal (deploy/install.sh): Docker starts only once the workspace firewall is loaded.
+[Unit]
+Requires=workspace-portal-firewall.service
+After=workspace-portal-firewall.service
 UNIT
 systemctl daemon-reload
-systemctl enable workspace-portal-firewall.service >/dev/null
+# reenable: drops the docker.service.wants link earlier versions installed (the drop-in requires the unit now).
+systemctl reenable workspace-portal-firewall.service >/dev/null 2>&1
 # Reload when it is already running: "apply" swaps the rules atomically, while a restart would remove
-# them for a moment.
+# them for a moment (and restart Docker).
 systemctl reload-or-restart workspace-portal-firewall.service
 
 # Let the LAN (and Tailscale, when present) reach the portal and the workspace ports, when a host
@@ -188,12 +275,13 @@ elif command -v ufw >/dev/null && ufw status | grep -q "Status: active"; then
   for source in $sources; do
     ufw allow from "$source" to any port "${WEB_PORT}" proto tcp >/dev/null
     ufw allow from "$source" to any port "${AGENT_PORTS/-/:}" proto tcp >/dev/null
+    ufw allow from "$source" to any port "${ONLINE_AGENT_PORTS/-/:}" proto tcp >/dev/null
   done
 fi
 
 # ---------------------------------------------------------------- portal-hostd
-# This server's live readings for Admin > Overview (hostd/README.md); before the stack starts, so the
-# gateway finds it at once. It listens on loopback only. The token goes on stdin, not the command line.
+# This server's live readings and energy meter for Admin > Usage (hostd/README.md); before the stack starts,
+# so the gateway finds it at once. It listens on loopback only. The token goes on stdin, not the command line.
 HOSTD_PORTAL_URL=$(env_get HOSTD_PORTAL_URL)
 if [[ ${HOSTD_PORTAL_URL,,} == off ]]; then
   HOSTD_STATE="off (HOSTD_PORTAL_URL=off)"
@@ -266,13 +354,16 @@ if [[ $(env_get READER_URL | tr '[:upper:]' '[:lower:]') != off ]]; then
   READER_STATE="on (read_page)"
   answers "http://127.0.0.1:${READER_PORT}/healthz" || warn "the page reader is not answering; agents will see read_page fail. See: docker compose logs reader"
 fi
+ONLINE_STATE="off for everyone (ONLINE_WORKSPACES=off)"
+if online_enabled; then ONLINE_STATE="on (ONLINE_WORKSPACES; Admin > Users switches it off per user)"; fi
 
 cat <<DONE
 
   Workspace Portal is running.
 
     Portal:     http://$(host_ip || echo '<server-ip>'):${WEB_PORT}
-    Workspaces: ports ${AGENT_PORTS} (one per user)
+    Workspaces: Private ports ${AGENT_PORTS}, Online ports ${ONLINE_AGENT_PORTS} (one per user and kind)
+    Online:     ${ONLINE_STATE}
     Admin:      $(env_get ADMIN_USERNAME)   (first sign-in: grep ^ADMIN_PASSWORD ${ENV_FILE}; you choose a new one then)
 $(for agent in "${ENABLED_AGENTS[@]}"; do printf '    Agent:      %s %s\n' "$(agent_name "$agent")" "$(agent_version "$agent")"; done)
     Models:     ${PORTAL_DATA_DIR}/config/qwen (deploy/qwen-config.sh; used by every agent)

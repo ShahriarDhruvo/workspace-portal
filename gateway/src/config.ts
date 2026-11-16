@@ -3,8 +3,33 @@
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { AGENT_KINDS, isAgentKind, type AgentKind } from "@portal/db";
+import { AGENT_KINDS, isAgentKind, WORKSPACE_KINDS, type AgentKind, type WorkspaceKind } from "@portal/db";
 import { isVersion } from "./versions.ts";
+
+/**
+ * What one kind of workspace (Private, Online) has to itself: its Docker network, its UID range and its agent port
+ * range. Nothing here is shared with the other kind, so a user's two workspaces can't reach or read each other.
+ */
+export interface KindConfig {
+  kind: WorkspaceKind;
+  /**
+   * The kind's Docker network. Private: internal (no route off the host); its only reachable address is the
+   * gateway's service port. Online: a bridge with NAT to the internet; deploy/firewall.sh lets it reach public
+   * addresses (any TCP port, DNS to `dns`) and the gateway's service port, nothing else.
+   */
+  network: string;
+  subnet: string;
+  /** The host's address on the network: the service API listens here for this kind's containers. */
+  gatewayIp: string;
+  ipRange: string;
+  bridge: string;
+  /** User N's workspace of this kind runs as UID/GID uidBase + N, which owns that user's directories of this kind only. */
+  uidBase: number;
+  /** User N's workspace of this kind is served on port agentPortBase + N (1 <= N < agentPortCount). */
+  agentPortBase: number;
+  /** The DNS servers its containers use (Online; ONLINE_DNS_1/2). Empty for Private, whose internal network has none. */
+  dns: readonly string[];
+}
 
 export interface WorkspaceConfig {
   /** The agents users may choose from, in display order (WORKSPACE_AGENTS). */
@@ -15,14 +40,13 @@ export interface WorkspaceConfig {
    * admin's current choice, which agent-versions.ts keeps, falling back to these.
    */
   defaultVersions: Readonly<Record<AgentKind, string>>;
-  /** Docker *internal* network: workspaces can reach the gateway's bridge address and nothing else. */
-  network: string;
-  subnet: string;
-  gatewayIp: string;
-  ipRange: string;
-  bridge: string;
-  /** Workspace of user N runs as UID/GID uidBase + N, which owns that user's directories only. */
-  uidBase: number;
+  /** Each kind's network, UIDs and agent ports (Private: WORKSPACE_*, AGENT_PORT_BASE; Online: ONLINE_*). */
+  kinds: Record<WorkspaceKind, KindConfig>;
+  /**
+   * ONLINE_WORKSPACES: Online workspaces exist on this portal. Off: no online network, no online service listener,
+   * online starts are refused, and an Online container found running is stopped.
+   */
+  onlineEnabled: boolean;
   memoryBytes: number;
   nanoCpus: number;
   pidsLimit: number;
@@ -120,8 +144,7 @@ export interface Config {
   imageContextDir: string;
   webPort: number;
   agentBind: string;
-  /** User N's workspace is served on port agentPortBase + N (1 <= N < agentPortCount). */
-  agentPortBase: number;
+  /** Workspace ports per kind and user: workspace.kinds[kind].agentPortBase + N for 1 <= N < agentPortCount. */
   agentPortCount: number;
   controlPort: number;
   servicePort: number;
@@ -164,8 +187,39 @@ export const MIB = 1024 * 1024;
 /** The effort tiers Qwen Code knows (capabilities.reasoning.efforts); "none" turns thinking off. */
 const REASONING_EFFORTS: readonly string[] = ["none", "low", "medium", "high", "xhigh", "max"];
 
-/** Workspace UIDs stay clear of system and human accounts and below the 32-bit limit. */
+/** Workspace UIDs stay clear of system and human accounts, */
 const MIN_UID_BASE = 100_000;
+/**
+ * and below systemd's foreign UID range (0x7FFE0000: every user has access to files owned there), so also below 2^31,
+ * past which some code takes UIDs for negative numbers.
+ */
+const UID_LIMIT = 2_147_352_576;
+
+/**
+ * Everything that is not the public internet (the IANA special-purpose IPv4 ranges): the host firewall drops it for
+ * the Online workspaces, the reader and SearXNG (NOT_PUBLIC in deploy/firewall.sh; config.test.ts keeps the two equal).
+ */
+export const NOT_PUBLIC: readonly string[] = [
+  "0.0.0.0/8",
+  "10.0.0.0/8",
+  "100.64.0.0/10",
+  "127.0.0.0/8",
+  "169.254.0.0/16",
+  "172.16.0.0/12",
+  "192.0.0.0/24",
+  "192.0.2.0/24",
+  "192.88.99.0/24",
+  "192.168.0.0/16",
+  "198.18.0.0/15",
+  "198.51.100.0/24",
+  "203.0.113.0/24",
+  "224.0.0.0/3",
+];
+
+/** An IPv4 address outside NOT_PUBLIC: one the firewall lets the Online workspaces reach. */
+export function isPublicIpv4(address: string): boolean {
+  return net.isIPv4(address) && !NOT_PUBLIC.some((range) => cidrContains(parseCidr(range)!, address));
+}
 
 const BYTE_UNITS: Record<string, number> = { "": 1, k: 1024, m: MIB, g: 1024 * MIB };
 /**
@@ -188,6 +242,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   const read = new EnvReader(env);
 
   const dataDir = read.absolutePath("PORTAL_DATA_DIR", "/srv/workspace-portal");
+  const agentPortBase = read.port("AGENT_PORT_BASE", 3100);
+  const agentPortCount = read.int("AGENT_PORT_COUNT", 200, 2);
 
   const config: Config = {
     dataDir,
@@ -198,8 +254,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     imageContextDir: read.absolutePath("WORKSPACE_IMAGE_CONTEXT", DEFAULT_IMAGE_CONTEXT),
     webPort: read.port("WEB_PORT", 3000),
     agentBind: read.ip("AGENT_BIND", "0.0.0.0"),
-    agentPortBase: read.port("AGENT_PORT_BASE", 3100),
-    agentPortCount: read.int("AGENT_PORT_COUNT", 200, 2),
+    agentPortCount,
     controlPort: read.port("CONTROL_PORT", 4002),
     servicePort: read.port("SERVICE_PORT", 4001),
     controlSecret: read.secret("GATEWAY_CONTROL_SECRET"),
@@ -241,12 +296,32 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
         qwen: read.version("QWEN_CODE_VERSION", "0.27.0"),
         dsh: read.version("DSH_VERSION", "0.2.2-rc.1"),
       },
-      network: read.nonEmpty("WORKSPACE_NETWORK", "workspace-portal-ws"),
-      subnet: read.cidr("WORKSPACE_SUBNET", "172.29.0.0/16"),
-      gatewayIp: read.ipv4("WORKSPACE_GATEWAY_IP", "172.29.0.1"),
-      ipRange: read.cidr("WORKSPACE_IP_RANGE", "172.29.128.0/17"),
-      bridge: read.nonEmpty("WORKSPACE_BRIDGE", "br-wportal"),
-      uidBase: read.int("WORKSPACE_UID_BASE", 200_000, MIN_UID_BASE),
+      kinds: {
+        private: {
+          kind: "private",
+          network: read.nonEmpty("WORKSPACE_NETWORK", "workspace-portal-ws"),
+          subnet: read.cidr("WORKSPACE_SUBNET", "172.29.0.0/16"),
+          gatewayIp: read.ipv4("WORKSPACE_GATEWAY_IP", "172.29.0.1"),
+          ipRange: read.cidr("WORKSPACE_IP_RANGE", "172.29.128.0/17"),
+          bridge: read.nonEmpty("WORKSPACE_BRIDGE", "br-wportal"),
+          uidBase: read.int("WORKSPACE_UID_BASE", 200_000, MIN_UID_BASE),
+          agentPortBase,
+          dns: [],
+        },
+        online: {
+          kind: "online",
+          network: read.nonEmpty("ONLINE_NETWORK", "workspace-portal-online"),
+          subnet: read.cidr("ONLINE_SUBNET", "172.28.0.0/16"),
+          gatewayIp: read.ipv4("ONLINE_GATEWAY_IP", "172.28.0.1"),
+          ipRange: read.cidr("ONLINE_IP_RANGE", "172.28.128.0/17"),
+          bridge: read.nonEmpty("ONLINE_BRIDGE", "br-wonline"),
+          // Far from the Private one and from the ranges useradd gives out in /etc/subuid (100000 or 524288 upward).
+          uidBase: read.int("ONLINE_UID_BASE", 2_000_000_000, MIN_UID_BASE),
+          agentPortBase: read.port("ONLINE_AGENT_PORT_BASE", agentPortBase + agentPortCount),
+          dns: [read.ipv4("ONLINE_DNS_1", "1.1.1.1"), read.ipv4("ONLINE_DNS_2", "9.9.9.9")],
+        },
+      },
+      onlineEnabled: read.bool("ONLINE_WORKSPACES", true),
       memoryBytes: read.byteSize("WORKSPACE_MEMORY", "3g"),
       nanoCpus: Math.round(read.positiveNumber("WORKSPACE_CPUS", 4) * 1e9),
       pidsLimit: read.int("WORKSPACE_PIDS", 1024, 1),
@@ -272,15 +347,118 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   if (config.search.authorization.includes("\n") || config.search.authorization.includes("\r")) {
     read.problems.push("SEARXNG_AUTHORIZATION must be a single header value");
   }
-  if (config.agentPortBase + config.agentPortCount - 1 > 65535) {
-    read.problems.push(`AGENT_PORT_BASE + AGENT_PORT_COUNT must stay below 65536 (got ${config.agentPortBase} + ${config.agentPortCount})`);
-  }
-  const ports = [config.webPort, config.controlPort, config.servicePort];
-  if (ports.some((port) => port > config.agentPortBase && port < config.agentPortBase + config.agentPortCount)) {
-    read.problems.push("WEB_PORT, CONTROL_PORT and SERVICE_PORT must lie outside the workspace port range (AGENT_PORT_BASE + 1 … AGENT_PORT_BASE + AGENT_PORT_COUNT - 1)");
-  }
+  read.problems.push(...kindProblems(config));
   if (read.problems.length > 0) throw new ConfigError(read.problems);
   return config;
+}
+
+/** The .env names of each kind's settings, for the problems kindProblems reports. */
+const KIND_KEYS: Record<WorkspaceKind, { ports: string; uid: string; network: string; subnet: string; bridge: string; gateway: string; range: string }> = {
+  private: {
+    ports: "AGENT_PORT_BASE",
+    uid: "WORKSPACE_UID_BASE",
+    network: "WORKSPACE_NETWORK",
+    subnet: "WORKSPACE_SUBNET",
+    bridge: "WORKSPACE_BRIDGE",
+    gateway: "WORKSPACE_GATEWAY_IP",
+    range: "WORKSPACE_IP_RANGE",
+  },
+  online: {
+    ports: "ONLINE_AGENT_PORT_BASE",
+    uid: "ONLINE_UID_BASE",
+    network: "ONLINE_NETWORK",
+    subnet: "ONLINE_SUBNET",
+    bridge: "ONLINE_BRIDGE",
+    gateway: "ONLINE_GATEWAY_IP",
+    range: "ONLINE_IP_RANGE",
+  },
+};
+
+/**
+ * What would let the two kinds (or a kind and the portal's own ports) share something: overlapping port or UID
+ * ranges, the same network, bridge or addresses; and addresses that don't fit their subnet. Both kinds are checked
+ * even with ONLINE_WORKSPACES=off, so switching it on later can't break isolation.
+ */
+function kindProblems(config: Config): string[] {
+  const problems: string[] = [];
+  const count = config.agentPortCount;
+  const { private: priv, online } = config.workspace.kinds;
+  /** The ports, or UIDs, users 1 … count - 1 get from `base`. */
+  const span = (base: number): [number, number] => [base + 1, base + count - 1];
+  const overlaps = ([a1, a2]: [number, number], [b1, b2]: [number, number]): boolean => a1 <= b2 && b1 <= a2;
+
+  for (const kind of WORKSPACE_KINDS) {
+    const { agentPortBase, gatewayIp, ipRange, subnet, uidBase, dns } = config.workspace.kinds[kind];
+    const keys = KIND_KEYS[kind];
+    if (uidBase + count - 1 >= UID_LIMIT) {
+      problems.push(`${keys.uid} + AGENT_PORT_COUNT must stay below ${UID_LIMIT} (got ${uidBase} + ${count})`);
+    }
+    // The firewall drops every private address before it lets DNS through: a private resolver would not answer,
+    // and one on the LAN would be a door into it.
+    dns.forEach((address, index) => {
+      if (net.isIPv4(address) && !isPublicIpv4(address)) {
+        problems.push(`ONLINE_DNS_${index + 1} (${address}) must be a public resolver, such as 1.1.1.1 or 9.9.9.9: the Online workspaces may reach no private address`);
+      }
+    });
+    if (agentPortBase + count - 1 > 65535) {
+      problems.push(`${keys.ports} + AGENT_PORT_COUNT must stay below 65536 (got ${agentPortBase} + ${count})`);
+    }
+    const [first, last] = span(agentPortBase);
+    if ([config.webPort, config.controlPort, config.servicePort].some((port) => port >= first && port <= last)) {
+      problems.push(`WEB_PORT, CONTROL_PORT and SERVICE_PORT must lie outside the workspace port range (${keys.ports} + 1 … ${keys.ports} + AGENT_PORT_COUNT - 1: ${first}-${last})`);
+    }
+    const own = parseCidr(subnet);
+    if (own && !cidrContains(own, gatewayIp)) problems.push(`${keys.gateway} (${gatewayIp}) must lie inside ${keys.subnet} (${subnet})`);
+    const range = parseCidr(ipRange);
+    if (own && range && !(range.bits >= own.bits && cidrContains(own, ipRange.split("/")[0]!))) {
+      problems.push(`${keys.range} (${ipRange}) must lie inside ${keys.subnet} (${subnet})`);
+    }
+  }
+  if (overlaps(span(priv.agentPortBase), span(online.agentPortBase))) {
+    problems.push(
+      `the Private and Online workspace port ranges overlap (AGENT_PORT_BASE ${priv.agentPortBase}, ONLINE_AGENT_PORT_BASE ${online.agentPortBase}, AGENT_PORT_COUNT ${count}): each kind needs ports of its own`,
+    );
+  }
+  if (overlaps(span(priv.uidBase), span(online.uidBase))) {
+    problems.push(
+      `the Private and Online workspace UID ranges overlap (WORKSPACE_UID_BASE ${priv.uidBase}, ONLINE_UID_BASE ${online.uidBase}, AGENT_PORT_COUNT ${count}): the bases must be at least AGENT_PORT_COUNT apart`,
+    );
+  }
+  if (priv.network === online.network) problems.push(`WORKSPACE_NETWORK and ONLINE_NETWORK must differ (both "${priv.network}")`);
+  if (priv.bridge === online.bridge) problems.push(`WORKSPACE_BRIDGE and ONLINE_BRIDGE must differ (both "${priv.bridge}")`);
+  const [a, b] = [parseCidr(priv.subnet), parseCidr(online.subnet)];
+  if (a && b && cidrsOverlap(a, b)) problems.push(`WORKSPACE_SUBNET (${priv.subnet}) and ONLINE_SUBNET (${online.subnet}) must not overlap`);
+  return problems;
+}
+
+interface Cidr {
+  /** The network address as an unsigned 32-bit number. */
+  address: number;
+  bits: number;
+}
+
+function ipv4Number(address: string): number | null {
+  if (!net.isIPv4(address)) return null;
+  return address.split(".").reduce((value, part) => value * 256 + Number(part), 0);
+}
+
+/** An IPv4 CIDR, its address masked to the prefix; null when it doesn't parse (EnvReader.cidr reported it). */
+function parseCidr(text: string): Cidr | null {
+  const [address, bits] = text.split("/");
+  const value = ipv4Number(address ?? "");
+  const prefix = Number(bits);
+  if (value === null || !Number.isInteger(prefix) || prefix < 0 || prefix > 32) return null;
+  return { address: value - (value % 2 ** (32 - prefix)), bits: prefix };
+}
+
+function cidrContains(cidr: Cidr, address: string): boolean {
+  const value = ipv4Number(address);
+  return value !== null && Math.floor(value / 2 ** (32 - cidr.bits)) === Math.floor(cidr.address / 2 ** (32 - cidr.bits));
+}
+
+function cidrsOverlap(a: Cidr, b: Cidr): boolean {
+  const bits = Math.min(a.bits, b.bits);
+  return Math.floor(a.address / 2 ** (32 - bits)) === Math.floor(b.address / 2 ** (32 - bits));
 }
 
 /** Typed accessors over the environment that collect problems instead of throwing at the first one. */

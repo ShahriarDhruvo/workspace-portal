@@ -27,9 +27,13 @@ services:
     environment:
       HOSTNAME: ${WEB_BIND:-0.0.0.0}
       PORT: ${WEB_PORT:-3000}
+      # The host's time zone (deploy/install.sh records it in .env): "today" starts at local midnight.
+      TZ: ${TZ:-}
       PORTAL_DATA_DIR: ${PORTAL_DATA_DIR:-/srv/workspace-portal}
       AGENT_PORT_BASE: ${AGENT_PORT_BASE:-}
       AGENT_PORT_COUNT: ${AGENT_PORT_COUNT:-}
+      # Where the Online workspaces' frames point (empty: right after the Private ports, as in the gateway).
+      ONLINE_AGENT_PORT_BASE: ${ONLINE_AGENT_PORT_BASE:-}
       CONTROL_PORT: ${CONTROL_PORT:-}
       GATEWAY_CONTROL_SECRET: ${GATEWAY_CONTROL_SECRET:-}
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-}
@@ -70,6 +74,8 @@ services:
     tmpfs: ["/tmp:size=64m"]
     environment:
       PORTAL_DATA_DIR: ${PORTAL_DATA_DIR:-/srv/workspace-portal}
+      # Local days for the LLM usage and the energy meter's daily totals, as in the web app.
+      TZ: ${TZ:-}
       WEB_PORT: ${WEB_PORT:-}
       AGENT_BIND: ${AGENT_BIND:-}
       AGENT_PORT_BASE: ${AGENT_PORT_BASE:-}
@@ -115,6 +121,17 @@ services:
       WORKSPACE_IP_RANGE: ${WORKSPACE_IP_RANGE:-}
       WORKSPACE_BRIDGE: ${WORKSPACE_BRIDGE:-}
       WORKSPACE_UID_BASE: ${WORKSPACE_UID_BASE:-}
+      # Online workspaces: their own network, ports, UIDs and DNS; ONLINE_WORKSPACES=off turns them off.
+      ONLINE_WORKSPACES: ${ONLINE_WORKSPACES:-}
+      ONLINE_NETWORK: ${ONLINE_NETWORK:-}
+      ONLINE_SUBNET: ${ONLINE_SUBNET:-}
+      ONLINE_GATEWAY_IP: ${ONLINE_GATEWAY_IP:-}
+      ONLINE_IP_RANGE: ${ONLINE_IP_RANGE:-}
+      ONLINE_BRIDGE: ${ONLINE_BRIDGE:-}
+      ONLINE_UID_BASE: ${ONLINE_UID_BASE:-}
+      ONLINE_AGENT_PORT_BASE: ${ONLINE_AGENT_PORT_BASE:-}
+      ONLINE_DNS_1: ${ONLINE_DNS_1:-}
+      ONLINE_DNS_2: ${ONLINE_DNS_2:-}
       WORKSPACE_MEMORY: ${WORKSPACE_MEMORY:-}
       WORKSPACE_CPUS: ${WORKSPACE_CPUS:-}
       WORKSPACE_PIDS: ${WORKSPACE_PIDS:-}

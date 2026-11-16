@@ -10,12 +10,12 @@ export function UsageToday({ usage }: { usage: Usage }) {
     { label: "Tokens out", value: usage.completionTokens },
   ];
   return (
-    <Card size="sm">
+    <Card>
       <CardHeader>
         <CardTitle>
-          <h2 className="text-14">LLM usage today</h2>
+          <h2 className="text-16">LLM usage today</h2>
         </CardTitle>
-        <CardDescription>Your agent&apos;s requests to the local model since midnight.</CardDescription>
+        <CardDescription>Your agent&apos;s requests to the LLM since midnight.</CardDescription>
       </CardHeader>
       <CardContent>
         <dl className="grid grid-cols-3 gap-2">

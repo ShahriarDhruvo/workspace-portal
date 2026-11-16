@@ -7,7 +7,7 @@
 //   * how the gateway learns that the agent is up and whether it is working;
 //   * where its releases come from, so the admin can update it (release).
 import type { IncomingHttpHeaders } from "node:http";
-import type { AgentKind } from "@portal/db";
+import type { AgentKind, WorkspaceKind } from "@portal/db";
 import type { Config } from "../config.ts";
 import type { HeaderMap } from "../headers.ts";
 
@@ -25,9 +25,12 @@ export class AgentConfigError extends Error {
   }
 }
 
-/** The gateway's service API as a workspace reaches it: the only address it can reach (model + search). */
-export function serviceBaseUrl(config: Config): string {
-  return `http://${config.workspace.gatewayIp}:${config.servicePort}`;
+/**
+ * The gateway's service API (model + search) as a workspace of `kind` reaches it: the host's address on that kind's
+ * network, where the gateway answers only that kind's containers. A Private workspace can reach nothing else.
+ */
+export function serviceBaseUrl(config: Config, kind: WorkspaceKind): string {
+  return `http://${config.workspace.kinds[kind].gatewayIp}:${config.servicePort}`;
 }
 
 /** Where a running agent listens, and the per-start credential the gateway uses with it. */
@@ -88,10 +91,11 @@ export interface AgentDriver {
   /** The agent's own container environment, the credential included. */
   containerEnv(credential: string, config: Config): string[];
   /**
-   * The files of the settings directory (name → content), from the admin's settings with the
-   * portal's forced keys on top. Throws AgentConfigError when the admin's settings are unusable.
+   * The files of the settings directory (name → content) for a workspace of `kind`, from the admin's settings with
+   * the portal's forced keys on top (that kind's service address among them). Throws AgentConfigError when the
+   * admin's settings are unusable.
    */
-  renderSettings(config: Config): Record<string, string>;
+  renderSettings(config: Config, kind: WorkspaceKind): Record<string, string>;
   /**
    * Headers for a request forwarded to the agent, from the browser's. `authorised` is false only for
    * token agents when the browser presented no token (the page and its static assets).

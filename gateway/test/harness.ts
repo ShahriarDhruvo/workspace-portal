@@ -1,5 +1,5 @@
 // A whole gateway in one process for the integration tests: a real database, the real agent,
-// control and service servers (one agent server per workspace port), a FakeRuntime whose
+// control and service servers (one agent server per workspace port of each kind), a FakeRuntime whose
 // "containers" are fake agent servers (`qwen serve`, `dsh web`), the real agent updater with a fake
 // image builder and npm registry, a fake LLM server, a stub search backend and an injectable clock.
 import fs from "node:fs";
@@ -18,9 +18,11 @@ import {
   openDatabase,
   sessions,
   users,
+  WORKSPACE_KINDS,
   workspaces,
   type AgentKind,
   type PortalDb,
+  type WorkspaceKind,
 } from "@portal/db";
 import type { AgentDeps } from "../src/agent-access.ts";
 import { createAgentServerFactory } from "../src/agent-proxy.ts";
@@ -29,6 +31,7 @@ import { AgentVersions } from "../src/agent-versions.ts";
 import { loadConfig, type Config } from "../src/config.ts";
 import { ConnectionRegistry } from "../src/connections.ts";
 import { createControlServer, type ControlDeps } from "../src/control-api.ts";
+import type { FenceState } from "../src/fence.ts";
 import { BEARER_SUBPROTOCOL_PREFIX } from "../src/headers.ts";
 import { LlmQueue } from "../src/llm-queue.ts";
 import { LlmRequests } from "../src/llm-requests.ts";
@@ -60,7 +63,7 @@ import {
 
 export const MIN = 60_000;
 export const CONTROL_SECRET = "control-secret-for-tests-0123456789";
-/** Workspace ports base+1 … base+PORT_COUNT-1: users 1-9. */
+/** Workspace ports base+1 … base+PORT_COUNT-1 of each kind: users 1-9. */
 const PORT_COUNT = 10;
 /** The admin's system-defaults.json every test gateway starts with: models come only from there. */
 export const SYSTEM_DEFAULTS = { modelProviders: { openai: [{ id: "qwen3.8-flash-next", name: "Qwen3.8 Flash-Next" }] } };
@@ -80,8 +83,13 @@ export interface RequestOptions {
   path?: string;
   headers?: Record<string, string>;
   body?: string | Buffer;
-  /** Source address, e.g. a fake workspace container's 127.0.0.N. */
+  /** Source address, e.g. a fake workspace container's 127.0.0.N (Private) or 127.0.1.N (Online). */
   localAddress?: string;
+}
+
+/** Which of a user's workspaces a request goes to: its kind's port, token and origin (default Private). */
+export interface KindOption {
+  kind?: WorkspaceKind;
 }
 
 export function request(port: number, options: RequestOptions = {}): Promise<Reply> {
@@ -143,15 +151,25 @@ export function closed(socket: WebSocket): Promise<number> {
   return new Promise((resolve) => socket.once("close", (code) => resolve(code)));
 }
 
-export interface SocketOptions {
+export interface SocketOptions extends KindOption {
   path?: string;
   /** Subprotocols to offer; default `qwen-ws` plus the session's bearer subprotocol. */
   protocols?: string[];
   headers?: Record<string, string>;
 }
 
+/** The host firewall's fence as the manager sees it (fence.ts): what `state` says, "loaded" unless a test changes it. */
+export interface FakeFence {
+  state: FenceState;
+  /** How often the manager asked. */
+  checks: number;
+  check: () => Promise<FenceState>;
+}
+
 export interface GatewayOptions {
   env?: NodeJS.ProcessEnv;
+  /** The fence at gateway start; "loaded" by default. */
+  fence?: FenceState;
   readyAfterMs?: number;
   /** Written to PORTAL_DATA_DIR/config/agent-versions.env before the gateway starts. */
   agentVersionsFile?: string;
@@ -184,43 +202,49 @@ export interface Gateway {
   connections: ConnectionRegistry;
   sessionCache: SessionCache;
   manager: WorkspaceManager;
+  /** Pass `fence.check` to a manager a test makes itself. */
+  fence: FakeFence;
   clock: { now: number };
-  /** The user the service API attributes requests to (stands in for the source-address lookup). */
+  /** The user `ports.service` attributes requests to (stands in for the source-address lookup). */
   caller: { userId: number | null };
   /** Queries the stub search backend received. */
   searches: SearchQuery[];
   ids: Record<UserName, number>;
   /** One portal session (cookie token) per user. */
   tokens: Record<UserName, string>;
-  ports: { control: number; service: number };
+  /**
+   * `service`: a Private service listener that takes `caller` for the caller. `services`: one listener per kind
+   * that, like main.ts's, knows a caller only by the source address of a container of its own kind.
+   */
+  ports: { control: number; service: number; services: Record<WorkspaceKind, number> };
   llm: FakeUpstream;
   logs: string[];
   log: Logger;
   createAgentServer: () => http.Server;
 
-  agentPort(userId: number): number;
-  agentOrigin(userId: number): string;
+  agentPort(userId: number, kind?: WorkspaceKind): number;
+  agentOrigin(userId: number, kind?: WorkspaceKind): string;
   /** The token the browser of this session must present to this workspace. */
-  browserToken(sessionToken: string, userId: number): string;
+  browserToken(sessionToken: string, userId: number, kind?: WorkspaceKind): string;
   addSession(userId: number, actingAsUserId?: number | null): string;
   /** Points an admin session at another user's workspace (null: back to their own). */
   actAs(sessionToken: string, userId: number | null): void;
   /** Makes the agent, control and service servers use another manager (a "restarted" gateway). */
   useManager(manager: WorkspaceManager): void;
 
-  navigate(token: string | null, userId: number, pathname?: string, headers?: Record<string, string>): Promise<Reply>;
+  navigate(token: string | null, userId: number, pathname?: string, headers?: Record<string, string>, kind?: WorkspaceKind): Promise<Reply>;
   /**
    * fetch/XHR from the Web Shell. `bearer`: the browser token to send (default: this session's
    * token for this workspace); null sends no Authorization header.
    */
-  xhr(token: string | null, userId: number, options?: RequestOptions & { bearer?: string | null }): Promise<Reply>;
+  xhr(token: string | null, userId: number, options?: RequestOptions & KindOption & { bearer?: string | null }): Promise<Reply>;
   openSocket(token: string | null, userId: number, options?: SocketOptions): Promise<WsOutcome>;
   control(method: string, pathname: string, body?: unknown, secret?: string): Promise<Reply>;
 
   info(userId: number): WorkspaceInfo;
   waitReady(userId: number): Promise<WorkspaceInfo>;
-  /** Starts a workspace through the manager (default: the manager's choice) and waits until it is ready. */
-  startReady(userId: number, agent?: AgentKind): Promise<WorkspaceInfo>;
+  /** Starts a workspace through the manager (default: the manager's choice of agent, Private) and waits until it is ready. */
+  startReady(userId: number, agent?: AgentKind, kind?: WorkspaceKind): Promise<WorkspaceInfo>;
   auditActions(userId: number): Array<{ action: string; details: unknown; actorUserId: number | null }>;
   workspaceRow(userId: number): typeof workspaces.$inferSelect | undefined;
   errors(): string[];
@@ -303,7 +327,15 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
   const llmRequests = new LlmRequests({ now: () => clock.now });
   const connections = new ConnectionRegistry(() => clock.now);
   const sessionCache = new SessionCache((hash) => loadSessionContext(db, hash));
-  let manager = new WorkspaceManager({ config, db, runtime, versions, llm: llmQueue, connections, log, now: () => clock.now });
+  const fence: FakeFence = {
+    state: options.fence ?? "loaded",
+    checks: 0,
+    check: () => {
+      fence.checks++;
+      return Promise.resolve(fence.state);
+    },
+  };
+  let manager = new WorkspaceManager({ config, db, runtime, versions, llm: llmQueue, connections, log, fence: fence.check, now: () => clock.now });
   await manager.init();
   const updater = new AgentUpdater({
     config,
@@ -355,18 +387,23 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
 
   const agentDeps: AgentDeps = { config, manager, sessions: sessionCache, connections, log };
   const controlDeps: ControlDeps = { config, db, manager, versions, updater, engine, llm: llmQueue, live, sessions: sessionCache, connections, log };
-  const serviceDeps: ServiceDeps = { config, db, manager, llm: llmQueue, requests: llmRequests, log, search, reader: options.reader, resolveCaller: () => caller.userId };
+  const serviceBase = { config, db, manager, llm: llmQueue, requests: llmRequests, log, search, reader: options.reader };
+  const serviceDeps: ServiceDeps[] = [
+    { ...serviceBase, kind: "private", resolveCaller: () => caller.userId },
+    ...WORKSPACE_KINDS.map((kind): ServiceDeps => ({ ...serviceBase, kind })),
+  ];
   const createAgentServer = createAgentServerFactory(agentDeps);
   const control = createControlServer(controlDeps);
-  const service = createServiceServer(serviceDeps);
-  const servers: http.Server[] = [control, service];
-  const [controlPort, servicePort] = await Promise.all([listenLocal(control), listenLocal(service)]);
+  const services = serviceDeps.map(createServiceServer);
+  const servers: http.Server[] = [control, ...services];
+  const [controlPort, servicePort, privateServicePort, onlineServicePort] = await Promise.all([control, ...services].map((server) => listenLocal(server)));
   servers.push(...(await listenAgentPorts(config, createAgentServer)));
 
   const sockets: WebSocket[] = [];
-  const agentPort = (userId: number): number => config.agentPortBase + userId;
-  const agentOrigin = (userId: number): string => `http://127.0.0.1:${agentPort(userId)}`;
-  const browserToken = (sessionToken: string, userId: number): string => agentBrowserToken(CONTROL_SECRET, hashSessionToken(sessionToken), userId);
+  const agentPort = (userId: number, kind: WorkspaceKind = "private"): number => config.workspace.kinds[kind].agentPortBase + userId;
+  const agentOrigin = (userId: number, kind: WorkspaceKind = "private"): string => `http://127.0.0.1:${agentPort(userId, kind)}`;
+  const browserToken = (sessionToken: string, userId: number, kind: WorkspaceKind = "private"): string =>
+    agentBrowserToken(CONTROL_SECRET, hashSessionToken(sessionToken), userId, kind);
   const info = (userId: number): WorkspaceInfo => manager.info(userId);
   const waitReady = (userId: number): Promise<WorkspaceInfo> =>
     waitFor(() => (info(userId).status === "running" && info(userId).ready ? info(userId) : null), `workspace ${userId} ready`);
@@ -391,12 +428,13 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
     get manager() {
       return manager;
     },
+    fence,
     clock,
     caller,
     searches,
     ids,
     tokens,
-    ports: { control: controlPort!, service: servicePort! },
+    ports: { control: controlPort!, service: servicePort!, services: { private: privateServicePort!, online: onlineServicePort! } },
     llm,
     logs,
     log,
@@ -414,29 +452,31 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
       manager = next;
       agentDeps.manager = next;
       controlDeps.manager = next;
-      serviceDeps.manager = next;
+      for (const deps of serviceDeps) deps.manager = next;
     },
 
-    navigate(token, userId, pathname = "/", headers = {}) {
+    navigate(token, userId, pathname = "/", headers = {}, kind = "private") {
       const all: Record<string, string> = { "sec-fetch-mode": "navigate", "sec-fetch-dest": "iframe", "sec-fetch-site": "same-site", accept: "text/html", ...headers };
       if (token) all.cookie = cookie(token);
-      return request(agentPort(userId), { path: pathname, headers: all });
+      return request(agentPort(userId, kind), { path: pathname, headers: all });
     },
     xhr(token, userId, options = {}) {
-      const method = options.method ?? "GET";
+      const { kind = "private", bearer: given, ...rest } = options;
+      const method = rest.method ?? "GET";
       const headers: Record<string, string> = { "sec-fetch-mode": "cors", "sec-fetch-site": "same-origin", accept: "application/json" };
-      if (method !== "GET" && method !== "HEAD") headers.origin = agentOrigin(userId);
+      if (method !== "GET" && method !== "HEAD") headers.origin = agentOrigin(userId, kind);
       if (token) headers.cookie = cookie(token);
-      const bearer = options.bearer === undefined ? (token ? browserToken(token, userId) : null) : options.bearer;
+      const bearer = given === undefined ? (token ? browserToken(token, userId, kind) : null) : given;
       if (bearer !== null) headers.authorization = `Bearer ${bearer}`;
-      return request(agentPort(userId), { ...options, method, headers: { ...headers, ...options.headers } });
+      return request(agentPort(userId, kind), { ...rest, method, headers: { ...headers, ...rest.headers } });
     },
     openSocket(token, userId, socketOptions = {}) {
       return new Promise((resolve, reject) => {
-        const headers: Record<string, string> = { origin: agentOrigin(userId), ...socketOptions.headers };
+        const kind = socketOptions.kind ?? "private";
+        const headers: Record<string, string> = { origin: agentOrigin(userId, kind), ...socketOptions.headers };
         if (token) headers.cookie = cookie(token);
-        const protocols = socketOptions.protocols ?? ["qwen-ws", ...(token ? [bearerSubprotocol(browserToken(token, userId))] : [])];
-        const socket = new WebSocket(`ws://127.0.0.1:${agentPort(userId)}${socketOptions.path ?? "/terminal"}`, protocols, { headers });
+        const protocols = socketOptions.protocols ?? ["qwen-ws", ...(token ? [bearerSubprotocol(browserToken(token, userId, kind))] : [])];
+        const socket = new WebSocket(`ws://127.0.0.1:${agentPort(userId, kind)}${socketOptions.path ?? "/terminal"}`, protocols, { headers });
         const queued: Message[] = [];
         const waiting: Array<(message: Message) => void> = [];
         socket.on("message", (data, binary) => {
@@ -465,14 +505,16 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
     },
     control(method, pathname, body, secret = CONTROL_SECRET) {
       const headers: Record<string, string> = { authorization: `Bearer ${secret}` };
-      if (body !== undefined) headers["content-type"] = "application/json";
-      return request(controlPort!, { method, path: pathname, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+      const payload = body === undefined ? undefined : JSON.stringify(body);
+      // Node's client frames no body of a DELETE by itself; the web app's fetch sends the length.
+      if (payload !== undefined) Object.assign(headers, { "content-type": "application/json", "content-length": String(Buffer.byteLength(payload)) });
+      return request(controlPort!, { method, path: pathname, headers, body: payload });
     },
 
     info,
     waitReady,
-    async startReady(userId, agent) {
-      await manager.start(userId, agent);
+    async startReady(userId, agent, kind) {
+      await manager.start(userId, { ...(agent ? { agent } : {}), ...(kind ? { kind } : {}) });
       return waitReady(userId);
     },
     auditActions(userId) {
@@ -511,21 +553,25 @@ function randomBase(): number {
   return 20_000 + Math.floor(Math.random() * 10_000);
 }
 
-/** One agent server per workspace port, like main.ts; moves the range if a port is taken. */
+/** One agent server per workspace port of each kind, like main.ts; moves both ranges if a port is taken. */
 async function listenAgentPorts(config: Config, create: () => http.Server): Promise<http.Server[]> {
+  const { kinds } = config.workspace;
   for (let attempt = 0; ; attempt++) {
     const servers: http.Server[] = [];
     try {
-      for (let userId = 1; userId < config.agentPortCount; userId++) {
-        const server = create();
-        servers.push(server);
-        await listenLocal(server, config.agentPortBase + userId);
+      for (const kind of WORKSPACE_KINDS) {
+        for (let userId = 1; userId < config.agentPortCount; userId++) {
+          const server = create();
+          servers.push(server);
+          await listenLocal(server, kinds[kind].agentPortBase + userId);
+        }
       }
       return servers;
     } catch (error) {
       await Promise.all(servers.map(closeServer));
       if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE" || attempt >= 20) throw error;
-      config.agentPortBase = randomBase();
+      kinds.private.agentPortBase = randomBase();
+      kinds.online.agentPortBase = kinds.private.agentPortBase + config.agentPortCount;
     }
   }
 }

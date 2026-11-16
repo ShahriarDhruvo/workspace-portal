@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { users, workspaces } from "@portal/db";
 import { eq } from "drizzle-orm";
-import { json, MIN, startGateway, type Gateway, type GatewayOptions } from "./harness.ts";
+import { cookie, json, MIN, request, startGateway, type Gateway, type GatewayOptions } from "./harness.ts";
 import { driverFor } from "../src/agents/index.ts";
 import { WorkspaceManager, type WorkspaceInfo } from "../src/workspaces.ts";
 
@@ -41,12 +41,19 @@ test("a start without an agent runs the user's choice from Settings, else the fi
     assert.equal(g.runtime.startsFor(alice)[0]!.options.agent, "qwen");
     await g.waitReady(alice);
     assert.equal(g.workspaceRow(alice)?.agent, "qwen", "persisted");
-    assert.deepEqual(g.auditActions(alice).find((entry) => entry.action === "workspace_started")?.details, { agent: "qwen", version: "0.27.0" });
+    assert.deepEqual(g.auditActions(alice).find((entry) => entry.action === "workspace_started")?.details, { agent: "qwen", version: "0.27.0", kind: "private" });
 
-    // A saved choice wins, on the control API and on a page load of the agent port alike.
+    // A saved choice wins, on the control API and on the agent port's "Try again" alike (a page load starts nothing).
     g.db.update(users).set({ agent: "dsh" }).where(eq(users.id, bob)).run();
     const page = await g.navigate(g.tokens.bob, bob);
-    assert.ok(page.body.includes("Starting your workspace"), page.body);
+    assert.ok(page.body.includes("Your Private workspace is stopped"), page.body);
+    assert.equal(g.runtime.startsFor(bob).length, 0);
+    const retry = await request(g.agentPort(bob), {
+      method: "POST",
+      path: "/__portal/start",
+      headers: { cookie: cookie(g.tokens.bob), origin: g.agentOrigin(bob), "sec-fetch-site": "same-origin" },
+    });
+    assert.equal(retry.status, 303);
     await g.waitReady(bob);
     assert.equal(g.runtime.startsFor(bob)[0]!.options.agent, "dsh");
 
@@ -76,9 +83,9 @@ test("one agent at a time: asking for the other one while it runs is refused, th
 
     // While it is still starting, too.
     const { bob } = g.ids;
-    const attempt = g.manager.requestStart(bob, "qwen");
+    const attempt = g.manager.requestStart(bob, { agent: "qwen" });
     assert.ok(attempt.ok);
-    const during = g.manager.requestStart(bob, "dsh");
+    const during = g.manager.requestStart(bob, { agent: "dsh" });
     assert.equal(during.ok, false);
     assert.equal(!during.ok && during.error.name, "AgentMismatchError");
     await attempt.done;
@@ -111,7 +118,7 @@ test("a saved choice that is no longer enabled falls back to the first enabled a
     g.db.update(users).set({ agent: "dsh" }).where(eq(users.id, alice)).run();
     g.db.insert(workspaces).values({ userId: alice, status: "stopped", agent: "dsh", updatedAt: Date.now() }).run();
     g.manager.shutdown();
-    const restarted = new WorkspaceManager({ config: g.config, db: g.db, runtime: g.runtime, versions: g.versions, llm: g.llmQueue, connections: g.connections, log: g.log, now: () => g.clock.now });
+    const restarted = new WorkspaceManager({ config: g.config, db: g.db, runtime: g.runtime, versions: g.versions, llm: g.llmQueue, connections: g.connections, log: g.log, fence: g.fence.check, now: () => g.clock.now });
     await restarted.init();
     g.useManager(restarted);
 
@@ -150,7 +157,7 @@ test("a DeepSeek Harness workspace: its own image, credential and settings, the 
     // The patch: models from Qwen Code's system-defaults.json, all through the gateway, plus search.
     const patch = record!.files["portal.patch.yml"]!;
     const rows = JSON.parse(patch.replace(/^#.*\n/gm, "")) as Array<Record<string, any>>;
-    const service = `http://${g.config.workspace.gatewayIp}:${g.config.servicePort}`;
+    const service = `http://${g.config.workspace.kinds.private.gatewayIp}:${g.config.servicePort}`;
     const provider = rows.find((row) => row.id === "llm-pi-ai")!.config.providers.portal;
     assert.equal(provider.baseURL, `${service}/llm/v1`);
     assert.equal(provider.apiKeyEnv, "PORTAL_LLM_KEY");
@@ -237,7 +244,7 @@ test("dsh: only its own socket path, authorised by the session alone, with the m
 test("dsh: ready once its session API answers; a running turn or background job keeps the workspace up, an unanswered approval doesn't", () =>
   withGateway({ ...BOTH, readyAfterMs: 300 }, async (g) => {
     const { alice } = g.ids;
-    await g.manager.start(alice, "dsh");
+    await g.manager.start(alice, { agent: "dsh" });
     assert.equal(g.info(alice).ready, false);
     await g.waitReady(alice);
     const dsh = g.runtime.dshFor(alice);
@@ -288,8 +295,8 @@ test("switching agents: stop Qwen Code, start DeepSeek Harness on the same files
     assert.deepEqual(g.runtime.startsFor(alice).map((record) => record.options.agent), ["qwen", "dsh"]);
     assert.equal((await g.navigate(g.tokens.alice, alice)).status, 200);
     assert.deepEqual(g.auditActions(alice).filter((entry) => entry.action === "workspace_started").map((entry) => entry.details), [
-      { agent: "qwen", version: "0.27.0" },
-      { agent: "dsh", version: "0.2.2-rc.1" },
+      { agent: "qwen", version: "0.27.0", kind: "private" },
+      { agent: "dsh", version: "0.2.2-rc.1", kind: "private" },
     ]);
   }));
 
@@ -299,12 +306,12 @@ test("after a gateway restart a running dsh container is adopted with its secret
     await g.startReady(alice, "dsh");
     const secret = g.runtime.dshFor(alice).secret;
     g.manager.shutdown();
-    const restarted = new WorkspaceManager({ config: g.config, db: g.db, runtime: g.runtime, versions: g.versions, llm: g.llmQueue, connections: g.connections, log: g.log, now: () => g.clock.now });
+    const restarted = new WorkspaceManager({ config: g.config, db: g.db, runtime: g.runtime, versions: g.versions, llm: g.llmQueue, connections: g.connections, log: g.log, fence: g.fence.check, now: () => g.clock.now });
     await restarted.init();
     g.useManager(restarted);
     await g.waitReady(alice);
     assert.equal(g.runtime.startsFor(alice).length, 1, "adopted, not restarted");
-    assert.equal(restarted.upstream(alice)?.agent, "dsh");
-    assert.equal(restarted.upstream(alice)?.credential, secret);
+    assert.equal(restarted.upstream(alice, "private")?.agent, "dsh");
+    assert.equal(restarted.upstream(alice, "private")?.credential, secret);
     assert.equal((await g.navigate(g.tokens.alice, alice)).status, 200);
   }));

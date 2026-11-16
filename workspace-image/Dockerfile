@@ -63,6 +63,13 @@ RUN npm install -g --no-fund --no-audit "@qwen-code/qwen-code@${QWEN_CODE_VERSIO
  && rm -rf /root/.npm /tmp/* \
  && mkdir -p /etc/workspace-portal/qwen \
  && find / -xdev -perm /6000 -type f -exec chmod a-s {} +
+# The Web Shell is trimmed in place (qwen/trim-web-shell.mjs, bind-mounted, so it doesn't stay in the
+# image): its left rail keeps Home and the sidebar toggle (no Activity, Plugins, Channels, Channel events,
+# Live, Scheduled Tasks, PR watches, Goals or "More" menu), the chat header loses Mobile access, and new
+# sessions start with Plan mode on. Qwen Code has no setting for these. The script never fails the build:
+# what no longer fits a Qwen Code version stays as shipped, with a warning in the build log.
+RUN --mount=type=bind,source=qwen/trim-web-shell.mjs,target=/mnt/trim-web-shell.mjs \
+    node /mnt/trim-web-shell.mjs "$(npm root -g)/@qwen-code/qwen-code"
 COPY --chmod=0755 start-qwen.sh /usr/local/bin/start-qwen
 ENV QWEN_CODE_SYSTEM_SETTINGS_PATH=/etc/workspace-portal/qwen/settings.json \
     QWEN_CODE_SYSTEM_DEFAULTS_PATH=/etc/workspace-portal/qwen/system-defaults.json \

@@ -1,0 +1,293 @@
+"use client";
+
+import type { ReactNode } from "react";
+import { formatBytes } from "@/lib/format";
+import {
+  formatBandwidth,
+  formatBytesOf,
+  formatClock,
+  formatClockOrIdle,
+  formatNumber,
+  formatPercent,
+  formatRate,
+  formatTemp,
+  formatWatts,
+  memoryFree,
+  usedPercent,
+} from "@/lib/live-format";
+import type { HostLive, HostSample } from "@/lib/live-types";
+import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
+import { ArrowDownIcon, ArrowUpIcon, ChevronDownIcon } from "@/components/ui/icons";
+import { Progress } from "@/components/ui/progress";
+import { Skeleton } from "@/components/ui/skeleton";
+import { LiveChart } from "./live-chart";
+
+const TITLES = { llm: "LLM server", portal: "Portal server" } as const;
+
+const STATES: Record<HostLive["state"], ReactNode> = {
+  online: <Badge variant="success">Online</Badge>,
+  connecting: <Badge variant="secondary">Connecting</Badge>,
+  offline: <Badge variant="destructive">Can&apos;t reach</Badge>,
+  off: <Badge variant="secondary">Not set up</Badge>,
+};
+
+/**
+ * One server's readings from its portal-hostd, every 500 ms. Its power draw is the card's focal number (charted
+ * over the last minute); under it five metrics that each read at a glance: one figure, a bar where it is a share of
+ * a whole, at most two quiet facts. Everything else (clocks, temperatures, per-part power, swap, bandwidth, fans,
+ * the system) is one click away under Details, which works the same on touch screens. A reading the server can't
+ * give (an older portal-hostd has no network or disk) shows "—"; a server without portal-hostd says how to set it up.
+ */
+export function ServerCard({ host, history, now }: { host: HostLive; history: readonly HostSample[]; now: number }) {
+  const sample = host.state === "online" ? host.sample : null;
+  const info = host.info;
+  return (
+    <Card className="gap-0 py-0">
+      <CardHeader className="border-b px-4 py-3">
+        <CardTitle className="flex items-center gap-2">
+          <h2 className="text-16">{TITLES[host.role]}</h2>
+          {STATES[host.state]}
+          {sample?.throttling ? <Badge variant="warning">Throttling</Badge> : null}
+        </CardTitle>
+        <CardDescription className="truncate" title={info?.cpu.model}>
+          {info?.cpu.model ?? "portal-hostd"}
+        </CardDescription>
+        {sample ? (
+          <CardAction className="flex flex-col items-end gap-1">
+            <span className="text-24 leading-none font-semibold tabular-nums">
+              {formatNumber(sample.power.watts)}
+              {sample.power.watts === null ? null : <span className="ml-1 text-13 font-normal text-muted-foreground">W</span>}
+            </span>
+            <span className="text-12 text-muted-foreground">{info?.power ? "Power draw" : "Power: not measurable"}</span>
+          </CardAction>
+        ) : null}
+      </CardHeader>
+      {sample ? <Readings host={host} sample={sample} history={history} now={now} /> : <NoReadings host={host} />}
+    </Card>
+  );
+}
+
+function Readings({ host, sample, history, now }: { host: HostLive; sample: HostSample; history: readonly HostSample[]; now: number }) {
+  const { cpu, gpu, memory, net, disk } = sample;
+  const free = memoryFree(sample);
+  const diskUsed = disk?.totalBytes && disk.freeBytes !== null ? disk.totalBytes - disk.freeBytes : null;
+  const today = host.today;
+  return (
+    <Collapsible className="flex flex-1 flex-col">
+      <CardContent className="@container flex flex-1 flex-col gap-4 p-4">
+        {sample.power.watts !== null ? (
+          <LiveChart
+            points={history.map((point) => ({ t: point.t, value: point.power.watts }))}
+            label="Power, W"
+            color="var(--chart-1)"
+            now={now}
+            format={formatWatts}
+            className="h-24"
+          />
+        ) : null}
+        <div className="grid grid-cols-2 gap-3 @lg:grid-cols-3">
+          <Metric label="CPU" value={formatPercent(cpu.usage)} share={cpu.usage} />
+          <Metric label="GPU" value={formatPercent(gpu?.usage)} share={gpu?.usage ?? null} />
+          <Metric label="Memory" value={formatPercent(usedPercent(memory.usedBytes, memory.totalBytes))} share={usedPercent(memory.usedBytes, memory.totalBytes)}>
+            {formatBytes(free.bytes)} free
+          </Metric>
+          <Metric
+            label="Disk"
+            value={disk?.freeBytes == null ? "—" : formatBytes(disk.freeBytes)}
+            unit={disk?.freeBytes == null ? undefined : "free"}
+            share={usedPercent(diskUsed, disk?.totalBytes)}
+          >
+            <span>Read {formatRate(disk?.readBps)}</span>
+            <span>Write {formatRate(disk?.writeBps)}</span>
+          </Metric>
+          <section className="col-span-2 flex min-w-0 flex-col gap-2 rounded-lg bg-muted/40 p-3">
+            <h3 className="text-12 text-muted-foreground">Network</h3>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+              <Direction icon={<ArrowDownIcon aria-label="Download" />} rate={net?.rxBps} today={today?.rxBytes} />
+              <Direction icon={<ArrowUpIcon aria-label="Upload" />} rate={net?.txBps} today={today?.txBytes} />
+            </div>
+          </section>
+        </div>
+        <CollapsibleContent>
+          <Details host={host} sample={sample} />
+        </CollapsibleContent>
+      </CardContent>
+      <CardFooter className="p-0">
+        <CollapsibleTrigger asChild>
+          <Button variant="ghost" className="group/details h-10 w-full rounded-none text-muted-foreground">
+            Details
+            <ChevronDownIcon className="transition-transform group-data-[state=open]/details:rotate-180" />
+          </Button>
+        </CollapsibleTrigger>
+      </CardFooter>
+    </Collapsible>
+  );
+}
+
+/**
+ * One metric: its name, one figure (an optional quiet unit after it), a bar when the figure is a share of a whole
+ * (null draws an empty bar: unknown) and at most two quiet facts, side by side or, when narrow, one under the other.
+ */
+function Metric({ label, value, unit, share, children }: { label: string; value: string; unit?: string; share?: number | null; children?: ReactNode }) {
+  return (
+    <section className="flex min-w-0 flex-col gap-2 rounded-lg bg-muted/40 p-3">
+      <h3 className="text-12 text-muted-foreground">{label}</h3>
+      <p className="text-22 font-semibold tabular-nums">
+        {value}
+        {unit ? <span className="ml-1 text-13 font-normal text-muted-foreground">{unit}</span> : null}
+      </p>
+      {share !== undefined ? <Progress value={share ?? 0} aria-label={`${label} used`} /> : null}
+      {children ? <p className="flex flex-wrap gap-x-3 text-12 text-muted-foreground tabular-nums">{children}</p> : null}
+    </section>
+  );
+}
+
+/** Network one way: the rate now and the bytes since midnight. */
+function Direction({ icon, rate, today }: { icon: ReactNode; rate: number | null | undefined; today: number | undefined }) {
+  return (
+    <div className="flex min-w-0 flex-col gap-2">
+      <p className="flex items-center gap-1 text-22 font-semibold tabular-nums">
+        <span className="text-muted-foreground">{icon}</span>
+        {formatRate(rate)}
+      </p>
+      <p className="truncate text-12 text-muted-foreground tabular-nums">{today === undefined ? "—" : `${formatBytes(today)} today`}</p>
+    </div>
+  );
+}
+
+/** The readings behind the five metrics, grouped like them; the system's own facts take two columns. */
+function Details({ host, sample }: { host: HostLive; sample: HostSample }) {
+  const info = host.info;
+  const { cpu, gpu, memory, disk } = sample;
+  const free = memoryFree(sample);
+  const fans = sample.fans.filter((fan) => fan.rpm !== null && fan.rpm > 0);
+  const gpuMemory = memory.gpuBytes ?? gpu?.memUsedBytes ?? null;
+  return (
+    <div className="grid grid-cols-2 gap-x-6 gap-y-4 border-t pt-4 @lg:grid-cols-3">
+      <DetailGroup title="CPU">
+        <Reading label="Clock" value={formatClockOrIdle(cpu.mhz, cpu.usage)} />
+        <Reading label="Fastest core" value={formatClockOrIdle(cpu.mhzPeak, cpu.usage)} />
+        <Reading label="Up to" value={formatClock(info?.cpu.maxMhz)} />
+        <Reading label="Temperature" value={formatTemp(cpu.tempC)} />
+        <Reading label="Power" value={formatWatts(cpu.powerW)} />
+        {info ? <Reading label="Cores" value={`${info.cpu.cores} · ${info.cpu.threads} threads`} /> : null}
+      </DetailGroup>
+      <DetailGroup title="GPU">
+        <Reading label="Clock" value={formatClockOrIdle(gpu?.mhz, gpu?.usage)} />
+        <Reading label="Up to" value={formatClock(info?.gpu?.maxMhz)} />
+        <Reading label="Temperature" value={formatTemp(gpu?.tempC)} />
+        <Reading label="Power" value={formatWatts(gpu?.powerW)} />
+        <Reading label="Memory" value={gpuMemory === null ? "—" : formatBytes(gpuMemory)} />
+      </DetailGroup>
+      <DetailGroup title="Memory">
+        <Reading label="Used" value={formatBytesOf(memory.usedBytes, memory.totalBytes)} />
+        <Reading label="Free" value={`${formatBytes(free.bytes)} (${formatPercent(free.percent)})`} />
+        <Reading label="Swap" value={memory.swapTotalBytes > 0 ? formatBytesOf(memory.swapUsedBytes, memory.swapTotalBytes) : "—"} />
+        <Reading
+          label="Bandwidth"
+          value={memory.readBps === null && memory.writeBps === null ? "—" : formatBandwidth((memory.readBps ?? 0) + (memory.writeBps ?? 0))}
+        />
+      </DetailGroup>
+      <DetailGroup title="Disk">
+        <Reading
+          label="Used"
+          value={disk?.totalBytes && disk.freeBytes !== null ? formatBytesOf(disk.totalBytes - disk.freeBytes, disk.totalBytes) : "—"}
+        />
+        <Reading label="Disks" value={info?.disks?.devices.join(", ") || "—"} />
+      </DetailGroup>
+      <DetailGroup title="Network">
+        <Reading label="Interfaces" value={info?.network?.interfaces.join(", ") || "—"} />
+      </DetailGroup>
+      {fans.length > 0 ? (
+        <DetailGroup title="Fans">
+          {fans.map((fan) => (
+            <Reading key={fan.label} label={fan.label} value={`${formatNumber(fan.rpm)} rpm`} />
+          ))}
+        </DetailGroup>
+      ) : null}
+      {info ? (
+        <DetailGroup title="System" className="col-span-2">
+          <Reading label="Power sensor" value={info.power?.label ?? "—"} />
+          <Reading label="System" value={info.os} />
+          <Reading label="Kernel" value={info.kernel} />
+        </DetailGroup>
+      ) : null}
+    </div>
+  );
+}
+
+function DetailGroup({ title, className, children }: { title: string; className?: string; children: ReactNode }) {
+  return (
+    <section className={cn("flex min-w-0 flex-col gap-1.5", className)}>
+      <h3 className="text-12 font-medium">{title}</h3>
+      <dl className="flex flex-col gap-1 text-12">{children}</dl>
+    </section>
+  );
+}
+
+/** One row; each label takes only its own width, and a value too long for the row moves under it, right-aligned. */
+function Reading({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="ml-auto text-right tabular-nums wrap-anywhere">{value}</dd>
+    </div>
+  );
+}
+
+function NoReadings({ host }: { host: HostLive }) {
+  if (host.state === "connecting" || (host.state === "online" && host.sample === null)) {
+    return (
+      <CardContent className="@container flex flex-1 flex-col gap-4 p-4" aria-busy="true" aria-label="Waiting for readings">
+        <Skeleton className="h-24 rounded-lg" />
+        <div className="grid grid-cols-2 gap-3 @lg:grid-cols-3">
+          {[0, 1, 2, 3].map((key) => (
+            <Skeleton key={key} className="h-28 rounded-lg" />
+          ))}
+          <Skeleton className="col-span-2 h-28 rounded-lg" />
+        </div>
+      </CardContent>
+    );
+  }
+  return (
+    <CardContent className="flex flex-1 flex-col p-4">
+      {host.state === "offline" ? (
+        <Empty className="flex-1 border py-8">
+          <EmptyHeader>
+            <EmptyTitle className="text-14">Can&apos;t reach this server&apos;s portal-hostd</EmptyTitle>
+            <EmptyDescription>
+              <span className="block">Trying again by itself.</span>
+              {host.error ? <span className="block font-mono text-12 wrap-anywhere">{host.error}</span> : null}
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      ) : (
+        <Empty className="flex-1 border py-8">
+          <EmptyHeader>
+            <EmptyTitle className="text-14">No readings: portal-hostd isn&apos;t set up</EmptyTitle>
+            <EmptyDescription>
+              {host.role === "portal" ? (
+                <>
+                  Run <code className="font-mono text-12">sudo bash deploy/install.sh</code> in the portal&apos;s folder; it
+                  installs it.
+                </>
+              ) : (
+                <>
+                  On the LLM server run{" "}
+                  <code className="font-mono text-12 wrap-anywhere">sudo bash ~/workspace-portal/hostd/install.sh llm --portal PORTAL_IP</code>,
+                  put the two lines it prints into the portal&apos;s <code className="font-mono text-12">.env</code>, then run{" "}
+                  <code className="font-mono text-12">sudo docker compose up -d</code>.
+                </>
+              )}
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      )}
+    </CardContent>
+  );
+}

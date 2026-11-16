@@ -69,6 +69,18 @@ export function rejectsCrossSite(method: string, headers: IncomingHttpHeaders, u
   return upgrade || (method !== "GET" && method !== "HEAD");
 }
 
+/**
+ * Same-site requests come from another port of this host: the portal, or another workspace's origin (the user's
+ * Online one included). SameSite=Lax only holds between sites, so the browser sends the portal's session cookie
+ * along with them, an image or script a page there merely asks for included. All they may do is what the portal
+ * itself does: navigate its iframe (GET or HEAD). Anything else, WebSockets included, is refused.
+ */
+export function rejectsSameSite(method: string, headers: IncomingHttpHeaders, upgrade: boolean): boolean {
+  if (headers["sec-fetch-site"] !== "same-site") return false;
+  const frameNavigation = headers["sec-fetch-mode"] === "navigate" && headers["sec-fetch-dest"] === "iframe";
+  return upgrade || !frameNavigation || (method !== "GET" && method !== "HEAD");
+}
+
 // ------------------------------------------------------------------ workspace requests and responses
 
 /** Browser-supplied fields never passed to a workspace. `expect` is answered by the gateway itself. */

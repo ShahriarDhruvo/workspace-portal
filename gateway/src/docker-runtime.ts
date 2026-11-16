@@ -1,12 +1,14 @@
 // ContainerRuntime backed by the Docker Engine API (dockerode, /var/run/docker.sock or DOCKER_HOST).
 import Docker from "dockerode";
-import { isAgentKind, type AgentKind } from "@portal/db";
+import { isAgentKind, WORKSPACE_KINDS, type AgentKind, type WorkspaceKind } from "@portal/db";
 import { driverFor } from "./agents/index.ts";
-import type { Config, WorkspaceConfig } from "./config.ts";
+import type { Config, KindConfig } from "./config.ts";
 import { isVersion } from "./versions.ts";
 import {
   AGENT_LABEL,
+  containerKind,
   containerName,
+  KIND_LABEL,
   USER_ID_LABEL,
   VERSION_LABEL,
   WORKSPACE_LABEL,
@@ -53,30 +55,32 @@ export class DockerRuntime implements ContainerRuntime {
   }
 
   /**
-   * Creates the workspace network unless it exists. A network of that name that differs from the
-   * one the gateway creates (isolation options, bridge name, addresses) is replaced when nothing
-   * uses it, and refused otherwise: workspaces never start on a network that can reach the outside,
-   * and the host firewall, which matches on the bridge name, must see the bridge it expects.
+   * Creates a kind's workspace network unless it exists. A network of that name that differs from the one the
+   * gateway creates (isolation options, bridge name, addresses) is replaced when nothing uses it, and refused
+   * otherwise: workspaces never start on a network that differs from what deploy/firewall.sh fences (Private: one
+   * that can reach the outside; Online: one with inter-container traffic or IPv6), and the host firewall, which
+   * matches on the bridge name, must see the bridge it expects.
    */
-  async ensureNetwork(): Promise<"exists" | "created" | "replaced"> {
-    const name = this.#config.workspace.network;
+  async ensureNetwork(kind: WorkspaceKind): Promise<"exists" | "created" | "replaced"> {
+    const own = this.#config.workspace.kinds[kind];
+    const name = own.network;
     let existing: Docker.NetworkInspectInfo | null = null;
     try {
       existing = (await this.#docker.getNetwork(name).inspect()) as Docker.NetworkInspectInfo;
     } catch (error) {
       if (statusCode(error) !== 404) throw error;
     }
-    const mismatches = existing ? networkMismatches(existing, this.#config.workspace) : [];
+    const mismatches = existing ? networkMismatches(existing, own) : [];
     if (existing && mismatches.length === 0) return "exists";
     if (existing) {
       if (Object.keys(existing.Containers ?? {}).length > 0) {
         throw new Error(
-          `docker network ${name} is not the isolated workspace network (${mismatches.join("; ")}) and containers use it; stop them and remove the network`,
+          `docker network ${name} is not the ${kind} workspace network the gateway creates (${mismatches.join("; ")}) and containers use it; stop them and remove the network`,
         );
       }
       await this.#docker.getNetwork(name).remove();
     }
-    await this.#docker.createNetwork(workspaceNetworkOptions(this.#config.workspace));
+    await this.#docker.createNetwork(workspaceNetworkOptions(own));
     return existing ? "replaced" : "created";
   }
 
@@ -92,7 +96,8 @@ export class DockerRuntime implements ContainerRuntime {
 
   async startWorkspace(userId: number, options: WorkspaceStartOptions): Promise<StartedContainer> {
     const driver = driverFor(options.agent);
-    await this.removeContainer(containerName(userId));
+    // Whatever is left of either kind goes first: a user never has two containers.
+    for (const kind of WORKSPACE_KINDS) await this.removeContainer(containerName(userId, kind));
     let container: Docker.Container;
     try {
       container = await this.#docker.createContainer(workspaceContainerOptions(this.#config, userId, driver, options));
@@ -105,7 +110,7 @@ export class DockerRuntime implements ContainerRuntime {
     try {
       await container.start();
       const info = await container.inspect();
-      const network = this.#config.workspace.network;
+      const network = this.#config.workspace.kinds[options.kind].network;
       const ip = info.NetworkSettings.Networks[network]?.IPAddress;
       if (!ip) throw new Error(`workspace container has no address on network ${network}`);
       return { id: container.id, ip, port: driver.port };
@@ -144,17 +149,20 @@ export class DockerRuntime implements ContainerRuntime {
   }
 
   async list(): Promise<ContainerSummary[]> {
-    const network = this.#config.workspace.network;
     const rows = await this.#docker.listContainers({ all: true, filters: { label: [`${WORKSPACE_LABEL}=1`] } });
     return rows.map((row) => {
       const userId = Number(row.Labels[USER_ID_LABEL]);
       const agent = containerAgent(row.Labels[AGENT_LABEL]);
+      const kind = containerKind(row.Labels[KIND_LABEL]);
+      // Only the address on its own kind's network counts: that is where the gateway knows it from.
+      const network = kind === null ? null : this.#config.workspace.kinds[kind].network;
       return {
         id: row.Id,
         userId: Number.isSafeInteger(userId) && userId > 0 ? userId : null,
+        kind,
         agent,
         running: row.State === "running",
-        ip: row.NetworkSettings.Networks[network]?.IPAddress || null,
+        ip: (network !== null && row.NetworkSettings.Networks[network]?.IPAddress) || null,
         port: agent === null ? null : driverFor(agent).port,
         image: row.Image,
         version: isVersion(row.Labels[VERSION_LABEL] ?? "") ? row.Labels[VERSION_LABEL]! : null,
@@ -191,25 +199,30 @@ export class DockerRuntime implements ContainerRuntime {
   }
 }
 
-/** How an existing network differs from what workspaceNetworkOptions creates; empty when it matches. */
-function networkMismatches(network: Docker.NetworkInspectInfo, ws: WorkspaceConfig): string[] {
+/**
+ * How an existing network differs from what workspaceNetworkOptions creates for the kind, attribute by attribute;
+ * empty when it matches.
+ */
+export function networkMismatches(network: Docker.NetworkInspectInfo, own: KindConfig): string[] {
   const options = network.Options ?? {};
+  const online = own.kind === "online";
   const problems: string[] = [];
   const expect = (what: string, actual: unknown, expected: unknown): void => {
     if (actual !== expected) problems.push(`${what} is ${JSON.stringify(actual ?? null)}, expected ${JSON.stringify(expected)}`);
   };
-  expect("Internal", network.Internal, true);
+  expect("Driver", network.Driver, "bridge");
+  expect("Internal", network.Internal === true, !online);
   expect("EnableIPv6", network.EnableIPv6 === true, false);
-  expect("bridge name", options["com.docker.network.bridge.name"], ws.bridge);
+  expect("bridge name", options["com.docker.network.bridge.name"], own.bridge);
   expect("enable_icc", options["com.docker.network.bridge.enable_icc"], "false");
-  expect("enable_ip_masquerade", options["com.docker.network.bridge.enable_ip_masquerade"], "false");
+  expect("enable_ip_masquerade", options["com.docker.network.bridge.enable_ip_masquerade"], online ? "true" : "false");
   const pools = network.IPAM?.Config ?? [];
   if (pools.length !== 1) problems.push(`it has ${pools.length} IPAM pools, expected 1`);
   const pool = pools[0];
   if (pool) {
-    expect("Subnet", pool.Subnet, ws.subnet);
-    expect("Gateway", pool.Gateway, ws.gatewayIp);
-    expect("IPRange", pool.IPRange, ws.ipRange);
+    expect("Subnet", pool.Subnet, own.subnet);
+    expect("Gateway", pool.Gateway, own.gatewayIp);
+    expect("IPRange", pool.IPRange, own.ipRange);
   }
   return problems;
 }

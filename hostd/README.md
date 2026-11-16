@@ -1,11 +1,12 @@
 # portal-hostd
 
-A small per-server daemon written for the portal's gateway, using only the Python 3.11+ standard library. It has two jobs:
+A small per-server daemon written for the portal's gateway, using only the Python 3.11+ standard library. It has three jobs:
 
-1. Serve live hardware readings: CPU, GPU, memory, memory bandwidth, power and fans (both roles).
-2. On the LLM server only, update the engine container (the gufo rootless Podman quadlet) when the gateway asks.
+1. Serve live hardware readings: CPU, GPU, memory, memory bandwidth, power, fans, network and disks (both roles).
+2. Keep running totals of the energy used and the bytes moved, for the gateway's energy meter (both roles).
+3. On the LLM server only, update the engine container (the gufo rootless Podman quadlet) when the gateway asks.
 
-When nobody is watching it does no sampling and uses no CPU. With a stream open at 2 Hz it uses about 1 ms of CPU per sample.
+When nobody is watching it samples nothing; only the meter wakes, every 2 s, for one read of the power source and one of `/proc/net/dev`. Measured on a Ryzen AI 9 HX 370: 0.7 ms of CPU per tick with its `gpu_metrics` read (the kernel asks the SMU), 0.25 ms without a power source, so 0.01 to 0.04% of one core. With a stream open at 2 Hz it uses about 1.2 ms of CPU per sample.
 
 | File | What it is |
 |---|---|
@@ -72,6 +73,10 @@ All sources are opened once and kept open, then read with `pread`. There is no s
 | GPU memory | `mem_info_vram_used/total` (the BIOS carve-out) | null |
 | Memory bandwidth | `amd_df` perf PMU: DRAM channels 0/4/8/12, read and write beats × 256 B (needs CAP_PERFMON) | `uncore_imc` data_reads/data_writes × 64 B (needs CAP_PERFMON) |
 | Fans | `ec_su_axb35` EC driver: `/sys/class/ec_su_axb35/fanN/rpm` (+ `duty`), read every 3 s by a separate thread (each read is a slow EC transaction) | none on this host |
+| Network | `/proc/net/dev` bytes of the physical interfaces: those with `/sys/class/net/IF/device`, so not lo, bridges (docker0, br-*, virbr*), veth or tunnels (tun, WireGuard) | same |
+| Disk I/O | `/proc/diskstats` sectors × 512 of the whole disks: `/sys/block` entries with a `device` link, so no partitions, loop, zram, ram, dm or md | same |
+| Disk space | `statvfs` (`f_blocks`, `f_bavail` × `f_frsize`) of the local filesystems: `/proc/self/mounts` entries on a `/dev/` block device (not loop), one per device (btrfs subvolumes share theirs), and only those this process can see (a mount covered by a later one, like ProtectHome's empty tmpfs over `/home`, is left out). Measured at most every 5 s, in a thread of its own, so a hanging disk never holds up a sample | same |
+| Energy (meter) | the socket power above integrated every 2 s | its own RAPL perf group (package + DRAM), opened once and kept open: exact |
 
 Bandwidth and power were checked against a known 2 GiB single-thread memmove and against powercap/hwmon. The agreement was:
 
@@ -92,6 +97,7 @@ Bandwidth and power were checked against a known 2 GiB single-thread memmove and
   - Fedora 45, Pentium G4400T: portal role, `DynamicUser`
 
   In particular, ctypes `syscall(perf_event_open)` works under `MemoryDenyWriteExecute`, and `systemd-run --user` reaches the user manager through the read-only `/run/user/<uid>`.
+- **Network and disks need nothing more.** `/proc/net/dev`, `/proc/diskstats` and sysfs are readable under all of it, `statvfs` needs only the mount point, and `PrivateDevices` hides `/dev` but not the mount table. Checked in a user unit with `ProtectHome=yes`, `PrivateDevices`, `ProtectSystem=strict` and `MemoryMax=64M` (2026-11): `/home` stays out, the meter and the API add about 1 MB of RSS.
 - **Engine commands.** Every podman and systemctl call for the engine goes through the engine user's own systemd manager: `systemctl --user ...` and `systemd-run --user --wait --pipe --quiet --collect [--unit=portal-hostd-<job>] podman ...`. Under NoNewPrivileges the service cannot run rootless podman's newuidmap helpers itself, but processes started by the user manager are unconstrained.
 - **Start command.** `ExecStart` loads the file as a module rather than running it as a script, which saves about 4.5 MB of RSS. The installer precompiles it.
 
@@ -106,13 +112,13 @@ Every request needs `Authorization: Bearer <token>`, checked with `hmac.compare_
 
 | Method and path | Result |
 |---|---|
-| `GET /v1/info` | HostInfo: hostname, role, os, kernel, intervalMs, cpu, gpu, memory, sources, power label, engine |
-| `GET /v1/sample` | HostSample. The first call after idle has null rates. It keeps the sampler running for 5 s |
+| `GET /v1/info` | HostInfo: `hostd` (the API version, 2), hostname, role, os, kernel, intervalMs, cpu, gpu, memory, sources, power label, engine, `network: { interfaces }` and `disks: { devices, mounts }` (what `net` and `disk` count, as they are now) |
+| `GET /v1/sample` | HostSample, with `net: { rxBps, txBps }` and `disk: { readBps, writeBps, totalBytes, freeBytes }` (null without the source). The first call after idle has null rates. It keeps the sampler running for 5 s |
 | `GET /v1/stream` | SSE: `event: info`, then an `event: sample` every INTERVAL_MS. At most 4 streams (429 `too_many_streams`). A slow reader gets only the newest sample |
+| `GET /v1/meter` | `{ instance, startedAt, t, energyJ, rxBytes, txBytes }`: totals since this hostd started, as of the meter's last tick (`t`, every 2 s), kept whether or not anyone watches. `instance` is random per start, when the totals begin again at zero. `energyJ` is null without a power source; `rxBytes`/`txBytes` are null without a physical interface. A counter that goes back (a reset, an interface gone and back) and an interface that appears later count from zero |
 | `GET /v1/engine` | EngineStatus. The podman listing is cached for 5 s; state and ready are always fresh |
 | `POST /v1/engine/pull` `{"image": "<repo>@sha256:<64 hex>"}` | 202 EngineJob |
 | `POST /v1/engine/apply` `{"image": ..., "version": "X.Y.Z" or null}` | 202 EngineJob. The image must be local |
-| `POST /v1/engine/rollback` | 202 EngineJob. Applies the saved previous quadlet's image and verifies `/ready` only |
 | `POST /v1/engine/cancel` | `{"cancelled": bool}`. Only a running pull can be cancelled |
 | `DELETE /v1/engine/images/sha256:<hex>` | `{"ok": true}` |
 
@@ -122,11 +128,11 @@ Engine error codes:
 |---|---|
 | 404 | `no_engine` (no ENGINE_UNIT), `not_found` (DELETE of an unknown image) |
 | 400 | `invalid_image`, `wrong_repository`, `invalid_version` |
-| 409 | `not_pulled`, `no_previous` (also returned when the saved image is the current one), `job_running`, `image_current`, `rmi_failed` |
+| 409 | `not_pulled`, `job_running`, `image_current`, `rmi_failed` |
 | 500 | `quadlet_invalid` |
 | 503 | `podman_failed` |
 
-**Apply steps.** These are the same for apply and rollback; each becomes the job's `step`, and the log lines are prefixed `HH:MM:SS`:
+**Apply steps.** Each becomes the job's `step` (switching to an older version is an apply too), and the log lines are prefixed `HH:MM:SS`:
 
 1. Check that the image is local.
 2. Save the quadlet to `<state>/<stem>.container.prev`.

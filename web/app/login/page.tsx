@@ -20,7 +20,6 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
   return (
     <AuthScreen
       title="Sign in"
-      description="Use the account your administrator gave you."
       footer={agents.length > 0 ? <p>Workspaces run {names}</p> : undefined}
     >
       {working === "1" ? (

@@ -63,11 +63,10 @@ const update = { rebuild: false, actorUserId: ADMIN } as const;
 test("an update builds a staging image, checks it, tags it and makes it current", async () => {
   const t = setup();
   try {
-    const job = await t.updater.startUpdate({ ...update, agent: "qwen", version: "latest" });
+    const job = await t.updater.startUpdate({ ...update, agent: "qwen", version: "0.27.4" });
     assert.deepEqual(
       { ...job, log: [], step: null },
       { id: "job-1", agent: "qwen", fromVersion: "0.27.0", version: "0.27.4", rebuild: false, reuse: false, actorUserId: ADMIN, phase: "building", step: null, log: [], startedAt: 1_000_000, finishedAt: null, error: null },
-      "the channel is resolved before the job starts",
     );
     t.clock.now += 5_000;
     await t.updater.settled();
@@ -86,7 +85,7 @@ test("an update builds a staging image, checks it, tags it and makes it current"
     assert.equal(AgentVersions.fromConfig(t.config, { info() {}, warn() {}, error() {} }).current("qwen"), "0.27.4", "saved for the next gateway");
     assert.deepEqual(t.audits(), [{ action: "agent_updated", actorUserId: ADMIN, details: { agent: "qwen", from: "0.27.0", to: "0.27.4", rebuild: false } }]);
     assert.deepEqual(t.logs.at(-1), { level: "info", msg: "agent updated", fields: { agent: "qwen", from: "0.27.0", to: "0.27.4", rebuild: false, seconds: 5 } });
-    assert.deepEqual(t.registry.calls, ["dist-tags @qwen-code/qwen-code"]);
+    assert.deepEqual(t.registry.calls, ["version @qwen-code/qwen-code@0.27.4"], "a build needs the version published");
     assert.equal(t.builder.sweeps, 1, "leftovers of interrupted jobs are cleared before the build");
   } finally {
     t.cleanup();
@@ -104,20 +103,12 @@ test("a version whose image is on the server is used as it is: no registry, no b
     await t.updater.settled();
     const done = t.updater.job()!;
     assert.deepEqual([done.phase, done.error, done.log.at(-1)], ["succeeded", null, "qwen --version: 0.26.0"]);
-    assert.deepEqual([t.registry.calls, t.builder.builds, t.builder.sweeps], [[], [], 0], "a rollback works without the registry and builds nothing");
+    assert.deepEqual([t.registry.calls, t.builder.builds, t.builder.sweeps], [[], [], 0], "going back works without the registry and builds nothing");
     assert.deepEqual(t.builder.verified, [image], "the image itself is checked");
     assert.equal(t.builder.images.get(image), installed, "and stays as it was");
     assert.equal(t.versions.current("qwen"), "0.26.0");
     assert.deepEqual(t.audits(), [{ action: "agent_updated", actorUserId: ADMIN, details: { agent: "qwen", from: "0.27.0", to: "0.26.0", rebuild: false } }]);
 
-    // A channel is still resolved on the registry; its version's image is used if it is there.
-    t.registry.down = false;
-    t.builder.install("dsh", "0.2.2-rc.3");
-    await t.updater.startUpdate({ ...update, agent: "dsh", version: "next" });
-    await t.updater.settled();
-    assert.equal(t.updater.job()!.phase, "succeeded");
-    assert.deepEqual([t.registry.calls, t.builder.builds.length], [["dist-tags @deepseek-ai/dsh"], 0]);
-    assert.equal(t.versions.current("dsh"), "0.2.2-rc.3");
   } finally {
     t.cleanup();
   }
@@ -161,7 +152,7 @@ test("a job that builds clears leftovers first, in the job: the request doesn't 
     const answered = await Promise.race([starting, new Promise<null>((resolve) => setImmediate(() => resolve(null)))]);
     const meanwhile = {
       builds: t.builder.builds.length,
-      refused: await t.updater.startUpdate({ ...update, agent: "dsh", version: "next" }).then(() => false, (error: unknown) => error instanceof UpdateRunningError),
+      refused: await t.updater.startUpdate({ ...update, agent: "dsh", version: "0.2.2-rc.3" }).then(() => false, (error: unknown) => error instanceof UpdateRunningError),
     };
     sweeping.open();
     await starting;
@@ -176,7 +167,7 @@ test("a job that builds clears leftovers first, in the job: the request doesn't 
       cancelled = t.updater.cancel();
       return sweep();
     };
-    await t.updater.startUpdate({ ...update, agent: "dsh", version: "next" });
+    await t.updater.startUpdate({ ...update, agent: "dsh", version: "0.2.2-rc.3" });
     await t.updater.settled();
     assert.equal(cancelled, true, "the job exists and can be cancelled while it sweeps");
     assert.deepEqual([t.updater.job()!.phase, t.builder.builds.at(-1)!.outcome], ["cancelled", "aborted"]);
@@ -314,11 +305,8 @@ test("requests that can't be met are refused before anything starts", async () =
     await assert.rejects(refuse("9.9.9"), VersionNotFoundError);
     await assert.rejects(refuse("9.9.9"), { message: "Qwen Code 9.9.9 is not published (@qwen-code/qwen-code)." });
     await assert.rejects(refuse("0.27.4; rm -rf /"), InvalidVersionError);
-    await assert.rejects(refuse("Latest"), InvalidVersionError);
-    await assert.rejects(refuse("jobbench"), { name: "InvalidVersionError", message: 'Qwen Code has no release channel "jobbench" (it has: latest, preview, nightly).' });
-    await assert.rejects(refuse("next"), InvalidVersionError, "a channel Qwen Code doesn't have");
+    await assert.rejects(refuse("latest"), { name: "InvalidVersionError", message: '"latest" is not a version (like 0.27.4).' }, "no release channels: the page sends the version it shows");
     t.registry.down = true;
-    await assert.rejects(refuse("latest"), RegistryError);
     await assert.rejects(refuse("0.27.4"), RegistryError);
     assert.equal(t.builder.builds.length, 0);
     assert.equal(t.updater.job(), null);
@@ -333,20 +321,20 @@ test("one job at a time, for all agents, including while a request is still bein
   try {
     const slow = gate();
     t.registry.gate = slow.promise;
-    const first = t.updater.startUpdate({ ...update, agent: "qwen", version: "latest" });
-    await assert.rejects(t.updater.startUpdate({ ...update, agent: "dsh", version: "next" }), UpdateRunningError);
+    const first = t.updater.startUpdate({ ...update, agent: "qwen", version: "0.27.4" });
+    await assert.rejects(t.updater.startUpdate({ ...update, agent: "dsh", version: "0.2.2-rc.3" }), UpdateRunningError);
     const building = gate();
     t.builder.buildGate = building.promise;
     slow.open();
     t.registry.gate = null;
     await first;
-    await assert.rejects(t.updater.startUpdate({ ...update, agent: "dsh", version: "next" }), {
+    await assert.rejects(t.updater.startUpdate({ ...update, agent: "dsh", version: "0.2.2-rc.3" }), {
       name: "UpdateRunningError",
       message: "Qwen Code is being updated to 0.27.4. Wait for it to finish, or cancel it.",
     });
     building.open();
     await t.updater.settled();
-    const next = await t.updater.startUpdate({ ...update, agent: "dsh", version: "next" });
+    const next = await t.updater.startUpdate({ ...update, agent: "dsh", version: "0.2.2-rc.3" });
     assert.equal(next.version, "0.2.2-rc.3", "the next job may start once the first is done");
     await t.updater.settled();
   } finally {
@@ -426,7 +414,7 @@ test("an admin deleted while the job ran is no reason to lose its audit entry", 
   const t = setup();
   try {
     t.builder.buildGate = gate().promise;
-    await t.updater.startUpdate({ ...update, agent: "dsh", version: "next" });
+    await t.updater.startUpdate({ ...update, agent: "dsh", version: "0.2.2-rc.3" });
     t.db.$client.prepare("delete from users").run();
     t.updater.cancel();
     await t.updater.settled();
@@ -441,7 +429,7 @@ test("if the choice can't be saved, the job fails and the version stays", async 
   const t = setup();
   try {
     fs.mkdirSync(path.dirname(t.config.agentVersionsFile), { recursive: true, mode: 0o500 });
-    await t.updater.startUpdate({ ...update, agent: "dsh", version: "next" });
+    await t.updater.startUpdate({ ...update, agent: "dsh", version: "0.2.2-rc.3" });
     await t.updater.settled();
     assert.equal(t.updater.job()!.phase, "failed");
     assert.match(t.updater.job()!.error!, /EACCES/);
@@ -480,7 +468,7 @@ test("image removal: never the current one, not while that agent updates, not wh
   }
 });
 
-test("the overview combines versions, registry channels, images and running workspaces; an outage only adds registryError", async () => {
+test("the overview combines versions, registry releases, images and running workspaces; an outage only adds registryError", async () => {
   const t = setup({ agents: "dsh,qwen" });
   try {
     t.state.workspaces = [{ status: "running", agent: "qwen", agentVersion: "0.27.0" } as WorkspaceInfo];
@@ -488,7 +476,15 @@ test("the overview combines versions, registry channels, images and running work
     assert.deepEqual(overview.agents.map((a) => a.id), ["dsh", "qwen"], "WORKSPACE_AGENTS order");
     const qwen = overview.agents[1]!;
     assert.deepEqual([qwen.current, qwen.defaultVersion, qwen.latest, qwen.updateAvailable], ["0.27.0", "0.27.0", "0.27.4", true]);
-    assert.deepEqual(qwen.channels.map((c) => c.tag), ["latest", "preview", "nightly"]);
+    assert.deepEqual(
+      qwen.releases.map((r) => [r.version, r.latest]),
+      [
+        ["0.27.4", true],
+        ["0.27.0", false],
+        ["0.26.0", false],
+      ],
+      "the stable releases (no preview, nightly or experiment)",
+    );
     assert.deepEqual(qwen.installed.map((i) => [i.version, i.current, i.inUse]), [["0.27.0", true, 1]]);
     assert.deepEqual(qwen.running, [{ version: "0.27.0", count: 1 }]);
     assert.deepEqual([overview.job, overview.registryError, overview.checkedAt], [null, null, 1_000_000]);
@@ -497,10 +493,10 @@ test("the overview combines versions, registry channels, images and running work
     const down = await t.updater.overview({ refresh: true });
     assert.equal(down.registryError, "The npm registry is unreachable (fetch failed).");
     assert.equal(down.checkedAt, 1_000_000);
-    assert.deepEqual(down.agents[1]!.channels.map((c) => c.tag), ["latest", "preview", "nightly"], "the last answer, marked stale by the error");
+    assert.deepEqual(down.agents[1]!.releases.map((r) => r.version), ["0.27.4", "0.27.0", "0.26.0"], "the last answer, marked stale by the error");
 
     t.registry.down = false;
-    await t.updater.startUpdate({ ...update, agent: "dsh", version: "next" });
+    await t.updater.startUpdate({ ...update, agent: "dsh", version: "0.2.2-rc.3" });
     await t.updater.settled();
     const after = await t.updater.overview();
     assert.equal(after.job?.phase, "succeeded", "the last finished job");

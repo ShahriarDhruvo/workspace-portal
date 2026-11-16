@@ -11,7 +11,7 @@ import { and, eq } from "drizzle-orm";
 import WebSocket from "ws";
 import { hashSessionToken, llmUsage, sessions, workspaces } from "@portal/db";
 import { closeEndedSessions, PRESENCE_MS } from "../src/connections.ts";
-import { userPaths } from "../src/paths.ts";
+import { userPaths, userRoot } from "../src/paths.ts";
 import { AGENT_UNKNOWN_GRACE_MS } from "../src/policy.ts";
 import type { SettingsObject } from "../src/agents/qwen-settings.ts";
 import { WorkspaceImageMissingError } from "../src/runtime.ts";
@@ -162,24 +162,31 @@ test("a session only gets into the workspace on its own user's port", async () =
 
 // ------------------------------------------------------------------ start and proxy
 
-test("a page load from another site does not start a stopped workspace", async () => {
+test("a page load starts nothing: a stopped workspace's port links to the portal, where the kind is chosen", async () => {
   const { alice } = g.ids;
-  const page = await g.navigate(g.tokens.alice, alice, "/", { "sec-fetch-dest": "document", "sec-fetch-site": "cross-site" });
-  assert.equal(page.status, 503);
-  assert.ok(page.body.includes("Your workspace is stopped"));
-  assert.ok(page.body.includes('action="/__portal/start"'));
+  for (const kind of ["private", "online"] as const) {
+    for (const headers of [{}, { "sec-fetch-dest": "document", "sec-fetch-site": "cross-site" }] as Record<string, string>[]) {
+      const page = await g.navigate(g.tokens.alice, alice, "/", headers, kind);
+      assert.equal(page.status, 503);
+      assert.ok(page.body.includes(`<h1>Your ${kind === "private" ? "Private" : "Online"} workspace is stopped</h1>`), page.body);
+      assert.ok(page.body.includes(`href="//127.0.0.1:${g.config.webPort}/" target="_top"`));
+      assert.equal(page.body.includes('action="/__portal/start"'), false, "no start without choosing the kind in the portal");
+    }
+  }
   assert.equal(g.info(alice).status, "stopped", "nothing was started");
   assert.equal(g.runtime.runningUsers().length, 0);
 });
 
-test("a document navigation starts the workspace, shows the starting page, then proxies", async () => {
+test("a start from the portal: the agent port shows the starting page, then proxies", async () => {
   const { alice } = g.ids;
   aliceSecond = g.addSession(alice);
+  const started = await g.control("POST", `/control/workspaces/${alice}/start`, { kind: "private" });
+  assert.deepEqual(pick(json<WorkspaceInfo>(started), ["status", "kind", "online"]), { status: "starting", kind: "private", online: "allowed" });
   // Both of alice's browsers load the page at once.
   const pages = await Promise.all([g.navigate(g.tokens.alice, alice), g.navigate(aliceSecond, alice)]);
   for (const starting of pages) {
     assert.equal(starting.status, 503);
-    assert.ok(starting.body.includes("Starting your workspace…"));
+    assert.ok(starting.body.includes("Starting your Private workspace…"));
     assert.ok(starting.body.includes('<meta http-equiv="refresh" content="2">'));
     assert.ok(starting.body.includes('class="spinner"'));
     assert.equal(starting.headers["retry-after"], "2");
@@ -187,7 +194,10 @@ test("a document navigation starts the workspace, shows the starting page, then 
   assert.equal(g.info(alice).status, "starting");
 
   const again = await g.navigate(g.tokens.alice, alice);
-  assert.ok(again.body.includes("Starting your workspace…"), "a reload while starting shows the page again");
+  assert.ok(again.body.includes("Starting your Private workspace…"), "a reload while starting shows the page again");
+  const online = await g.navigate(g.tokens.alice, alice, "/", {}, "online");
+  assert.equal(online.status, 409);
+  assert.ok(online.body.includes("<h1>Your Private workspace is running, not this one</h1>"), "the Online port never reaches the Private container");
   const early = await g.xhr(g.tokens.alice, alice, { path: "/api/sessions" });
   assert.equal(early.status, 503);
   assert.equal(errorCode(early), "workspace_starting");
@@ -204,9 +214,12 @@ test("a document navigation starts the workspace, shows the starting page, then 
     g.auditActions(alice).map((entry) => entry.action),
     ["workspace_started"],
   );
-  const dirs = userPaths(g.dataDir, alice);
+  const dirs = userPaths(g.dataDir, alice, "private");
   const mode = (file: string): number => fs.statSync(file).mode & 0o777;
-  assert.deepEqual([dirs.root, dirs.home, dirs.workspace, dirs.system, dirs.agentSettings("qwen")].map(mode), [0o711, 0o700, 0o700, 0o755, 0o755]);
+  assert.deepEqual(
+    [userRoot(g.dataDir, alice), dirs.root, dirs.home, dirs.workspace, dirs.system, dirs.agentSettings("qwen")].map(mode),
+    [0o711, 0o711, 0o700, 0o700, 0o755, 0o755],
+  );
 
   const page = await g.navigate(g.tokens.alice, alice);
   assert.equal(page.status, 200);
@@ -551,6 +564,7 @@ test("control API: health, stats, workspaces, errors", async () => {
   assert.deepEqual(pick(info, ["busy", "busyReason", "stopPending"]), { busy: false, busyReason: null, stopPending: false });
   assert.equal(info.agent, "qwen");
   assert.equal(info.agentVersion, "0.27.0", "the default version: nothing was updated");
+  assert.deepEqual(pick(info, ["kind", "online"]), { kind: "private", online: "allowed" });
   assert.deepEqual(Object.keys(info).sort(), [
     "agent",
     "agentVersion",
@@ -558,10 +572,12 @@ test("control API: health, stats, workspaces, errors", async () => {
     "busyReason",
     "connections",
     "idleSeconds",
+    "kind",
     "lastActivityAt",
     "lastError",
     "llmInFlight",
     "memoryBytes",
+    "online",
     "ready",
     "startedAt",
     "status",
@@ -575,6 +591,7 @@ test("control API: health, stats, workspaces, errors", async () => {
 
   const never = json<WorkspaceInfo>(await g.control("GET", `/control/workspaces/${dave}`));
   assert.equal(never.status, "stopped");
+  assert.equal(never.kind, "private", "a user who never started one: Private");
   assert.equal(never.idleSeconds, null);
   assert.equal(never.memoryBytes, null);
   assert.equal(never.busy, false);
@@ -635,7 +652,7 @@ test("release stops the workspace only once no session uses it", async () => {
   assert.equal(await ownerClosed, 1001, "open agent sockets are closed when the workspace stops");
   assert.deepEqual(g.runtime.runningUsers(), []);
   assert.equal(g.workspaceRow(alice)?.status, "stopped");
-  assert.deepEqual(g.auditActions(alice).at(-1), { action: "workspace_stopped", details: { reason: "logout" }, actorUserId: null });
+  assert.deepEqual(g.auditActions(alice).at(-1), { action: "workspace_stopped", details: { reason: "logout", kind: "private" }, actorUserId: null });
 
   // The cached session must not let the signed-out browser restart the workspace.
   const page = await g.navigate(g.tokens.alice, alice);
@@ -650,7 +667,7 @@ test("stop records the acting admin in the audit log", async () => {
   const stopped = json<WorkspaceInfo>(await g.control("POST", `/control/workspaces/${dave}/stop`, { reason: "deactivated", actorUserId: admin }));
   assert.equal(stopped.status, "stopped");
   assert.equal(stopped.stopReason, "deactivated");
-  assert.deepEqual(g.auditActions(dave).at(-1), { action: "workspace_stopped", details: { reason: "deactivated" }, actorUserId: admin });
+  assert.deepEqual(g.auditActions(dave).at(-1), { action: "workspace_stopped", details: { reason: "deactivated", kind: "private" }, actorUserId: admin });
   const again = json<WorkspaceInfo>(await g.control("POST", `/control/workspaces/${dave}/stop`));
   assert.equal(again.stopReason, "deactivated", "stopping a stopped workspace changes nothing");
 });
@@ -668,8 +685,12 @@ test("start returns while Qwen Code boots; capacity 409 and eviction of an idle 
   const full = await g.control("POST", `/control/workspaces/${carol}/start`);
   assert.equal(full.status, 409);
   assert.equal(errorCode(full), "capacity");
-  const page = await g.navigate(g.tokens.carol, carol);
-  assert.equal(page.status, 503);
+  const page = await request(g.agentPort(carol), {
+    method: "POST",
+    path: "/__portal/start",
+    headers: { cookie: cookie(g.tokens.carol), origin: g.agentOrigin(carol), "sec-fetch-site": "same-origin" },
+  });
+  assert.equal(page.status, 503, "the agent port's Try again gets the same refusal");
   assert.ok(page.body.includes("All 2 workspace slots are in use"));
   assert.ok(page.body.includes('action="/__portal/start"'));
   assert.equal(g.info(carol).status, "stopped");
@@ -887,7 +908,7 @@ test("the LLM proxy only offers generation, embeddings and the model list", asyn
 });
 
 test("agent and service servers wait at most a minute for request headers, and never time out a request", () => {
-  const service = createServiceServer({ config: g.config, db: g.db, manager: g.manager, llm: g.llmQueue, requests: g.llmRequests, log: g.log, search: g.searches as never });
+  const service = createServiceServer({ kind: "private", config: g.config, db: g.db, manager: g.manager, llm: g.llmQueue, requests: g.llmRequests, log: g.log, search: g.searches as never });
   for (const server of [g.createAgentServer(), service]) {
     assert.equal(server.headersTimeout, 60_000, "a client that never finishes its headers is dropped (slowloris)");
     assert.equal(server.requestTimeout, 0, "uploads, event streams and generations take as long as they take");
@@ -930,7 +951,7 @@ test("the service API answers the search MCP itself, from the search backend", a
 
 // ------------------------------------------------------------------ failures and recovery
 
-test("a crashed container is noticed when the proxy can't reach it, and the next navigation restarts it", async () => {
+test("a crashed container is noticed when the proxy can't reach it; the next page load says so and starts nothing", async () => {
   const { alice } = g.ids;
   const startsBefore = g.runtime.startsFor(alice).length;
   await g.runtime.crash(alice, 137);
@@ -943,7 +964,9 @@ test("a crashed container is noticed when the proxy can't reach it, and the next
   assert.match(crashed.lastError!, /^the workspace container exited unexpectedly \(exit code 137\)\nfake qwen: last log line$/);
   assert.equal(g.auditActions(alice).at(-1)?.action, "workspace_error");
 
-  assert.ok((await g.navigate(g.tokens.alice, alice)).body.includes("Starting your workspace…"));
+  assert.ok((await g.navigate(g.tokens.alice, alice)).body.includes("Your Private workspace is stopped"));
+  assert.equal(g.runtime.startsFor(alice).length, startsBefore);
+  json(await g.control("POST", `/control/workspaces/${alice}/start`));
   await g.waitReady(alice);
   const starts = g.runtime.startsFor(alice);
   assert.equal(starts.length, startsBefore + 1);
@@ -964,10 +987,10 @@ test("the stats refresh notices a crash without any request", async () => {
 test("a failed start shows the error page, and Try again starts it", async () => {
   const { alice } = g.ids;
   g.runtime.failNextStart = new WorkspaceImageMissingError(g.versions.selection("qwen").image);
-  await g.navigate(g.tokens.alice, alice);
+  await g.control("POST", `/control/workspaces/${alice}/start`);
   await waitFor(() => g.info(alice).status === "error", "the start to fail");
   assert.equal(g.info(alice).lastError, `workspace image ${g.versions.selection("qwen").image} not found`);
-  assert.deepEqual(g.auditActions(alice).at(-1)?.details, { error: `workspace image ${g.versions.selection("qwen").image} not found` });
+  assert.deepEqual(g.auditActions(alice).at(-1)?.details, { error: `workspace image ${g.versions.selection("qwen").image} not found`, kind: "private" });
 
   const page = await g.navigate(g.tokens.alice, alice);
   assert.equal(page.status, 503);
@@ -1003,11 +1026,12 @@ test("a failed start shows the error page, and Try again starts it", async () =>
 
 test("deleting a user's data stops the workspace and removes its directories", async () => {
   const { alice } = g.ids;
-  const root = userPaths(g.dataDir, alice).root;
+  const root = userRoot(g.dataDir, alice);
+  const locked = path.join(userPaths(g.dataDir, alice, "private").workspace, "locked");
   assert.ok(fs.existsSync(root));
-  fs.mkdirSync(path.join(root, "workspace", "locked"), { recursive: true });
-  fs.writeFileSync(path.join(root, "workspace", "locked", "file"), "x");
-  fs.chmodSync(path.join(root, "workspace", "locked"), 0o500);
+  fs.mkdirSync(locked, { recursive: true });
+  fs.writeFileSync(path.join(locked, "file"), "x");
+  fs.chmodSync(locked, 0o500);
   assert.deepEqual(json(await g.control("DELETE", `/control/workspaces/${alice}/data`)), { ok: true });
   assert.equal(fs.existsSync(root), false);
   assert.equal(g.workspaceRow(alice), undefined);
@@ -1078,7 +1102,7 @@ test("a working agent keeps its workspace past the idle timeout; it stops once h
     await gw.manager.reap();
     assert.equal(gw.info(alice).status, "stopped");
     assert.equal(gw.info(alice).stopReason, "idle");
-    assert.deepEqual(gw.auditActions(alice).at(-1), { action: "workspace_stopped", details: { reason: "idle" }, actorUserId: null });
+    assert.deepEqual(gw.auditActions(alice).at(-1), { action: "workspace_stopped", details: { reason: "idle", kind: "private" }, actorUserId: null });
     assert.deepEqual(gw.runtime.runningUsers(), []);
   }));
 
@@ -1110,7 +1134,7 @@ test("signing out while the agent works leaves the workspace running until the w
     await gw.manager.refreshSamples();
     await gw.manager.reap();
     assert.deepEqual(pick(gw.info(alice), ["status", "stopReason", "stopPending"]), { status: "stopped", stopReason: "logout", stopPending: false });
-    assert.deepEqual(gw.auditActions(alice).at(-1), { action: "workspace_stopped", details: { reason: "logout" }, actorUserId: null });
+    assert.deepEqual(gw.auditActions(alice).at(-1), { action: "workspace_stopped", details: { reason: "logout", kind: "private" }, actorUserId: null });
 
     // Coming back before the work is done keeps the workspace.
     gw.tokens.alice = gw.addSession(alice);
@@ -1286,7 +1310,7 @@ test("a container whose stop failed is never taken over again; reconcile removes
       ready: false,
       lastError: "could not stop the workspace container: Docker did not answer",
     });
-    assert.equal(gw.manager.upstream(alice), null);
+    assert.equal(gw.manager.upstream(alice, "private"), null);
     assert.equal(gw.workspaceRow(alice)?.containerId, container, "remembered for a restarted gateway");
 
     await gw.manager.reconcile();
@@ -1295,7 +1319,7 @@ test("a container whose stop failed is never taken over again; reconcile removes
     assert.ok(logged(gw, "could not remove a workspace container left behind by a failed stop"));
 
     gw.manager.shutdown();
-    const fresh = new WorkspaceManager({ config: gw.config, db: gw.db, runtime: gw.runtime, versions: gw.versions, llm: gw.llmQueue, connections: gw.connections, log: gw.log, now: () => gw.clock.now });
+    const fresh = new WorkspaceManager({ config: gw.config, db: gw.db, runtime: gw.runtime, versions: gw.versions, llm: gw.llmQueue, connections: gw.connections, log: gw.log, fence: gw.fence.check, now: () => gw.clock.now });
     await fresh.init();
     gw.useManager(fresh);
     assert.equal(fresh.info(alice).status, "error", "a restarted gateway does not adopt it either");
@@ -1314,7 +1338,7 @@ test("while a user's data is being deleted no start gets through; a failed stop 
   withGateway({}, async (gw) => {
     const { alice } = gw.ids;
     await gw.startReady(alice);
-    const root = userPaths(gw.dataDir, alice).root;
+    const root = userRoot(gw.dataDir, alice);
 
     let finishStop!: () => void;
     gw.runtime.stopGate = new Promise<void>((resolve) => (finishStop = resolve));
@@ -1323,9 +1347,13 @@ test("while a user's data is being deleted no start gets through; a failed stop 
     const deleting = gw.manager.deleteData(alice);
     const refused = await gw.control("POST", `/control/workspaces/${alice}/start`);
     assert.deepEqual([refused.status, json(refused)], [409, { error: "deleting", message: "This workspace is being deleted." }]);
-    const page = await gw.navigate(gw.tokens.alice, alice);
-    assert.equal(page.status, 503);
-    assert.ok(page.body.includes("This workspace is being deleted."));
+    const retry = await request(gw.agentPort(alice), {
+      method: "POST",
+      path: "/__portal/start",
+      headers: { cookie: cookie(gw.tokens.alice), origin: gw.agentOrigin(alice), "sec-fetch-site": "same-origin" },
+    });
+    assert.equal(retry.status, 503);
+    assert.ok(retry.body.includes("This workspace is being deleted."), "nor from the agent port");
 
     gw.runtime.stopGate = null;
     finishStop();
@@ -1355,7 +1383,7 @@ test("the service API knows a workspace by its container's address, also once Do
   withGateway({}, async (gw) => {
     const { alice, bob } = gw.ids;
     // The real caller lookup (the shared harness server takes the caller from gw.caller instead).
-    const service = createServiceServer({ config: gw.config, db: gw.db, manager: gw.manager, llm: gw.llmQueue, requests: gw.llmRequests, log: gw.log, search: { search: async () => "" } });
+    const service = createServiceServer({ kind: "private", config: gw.config, db: gw.db, manager: gw.manager, llm: gw.llmQueue, requests: gw.llmRequests, log: gw.log, search: { search: async () => "" } });
     const port = await listenLocal(service);
     try {
       const requests = (userId: number): number => gw.db.select().from(llmUsage).where(eq(llmUsage.userId, userId)).get()?.requests ?? 0;
@@ -1602,6 +1630,7 @@ test("after a gateway restart, a Qwen workspace nobody is using is adopted, not 
       llm: gw.llmQueue,
       connections: gw.connections,
       log: gw.log,
+      fence: gw.fence.check,
       now: () => gw.clock.now,
     });
     await fresh.init();
@@ -1640,6 +1669,7 @@ test("after a gateway restart, running containers are adopted with their token a
       llm: gw.llmQueue,
       connections: gw.connections,
       log: gw.log,
+      fence: gw.fence.check,
       now: () => gw.clock.now,
     });
     await fresh.init();
@@ -1653,7 +1683,7 @@ test("after a gateway restart, running containers are adopted with their token a
     assert.equal(fresh.info(alice).lastActivityAt, gw.clock.now);
     await gw.waitReady(alice);
     assert.equal(gw.runtime.starts.length, starts, "nothing was started");
-    assert.deepEqual(fresh.upstream(alice), { agent: "qwen", host: aliceHost, port: alicePort, credential: aliceToken });
+    assert.deepEqual(fresh.upstream(alice, "private"), { agent: "qwen", kind: "private", host: aliceHost, port: alicePort, credential: aliceToken });
 
     const api = await gw.xhr(gw.tokens.alice, alice, { path: "/api/sessions" });
     assert.equal(api.status, 200, "the adopted workspace is proxied with the token it was started with");
@@ -1681,7 +1711,7 @@ test("invalid admin Qwen Code settings fail the start with a clear message", () 
     assert.equal(error, "start_failed");
     assert.match(message, new RegExp(`^the Qwen Code settings file ${escapeRegExp(file)} is not valid JSON: `));
     assert.deepEqual(pick(gw.info(alice), ["status", "lastError"]), { status: "error", lastError: message });
-    assert.deepEqual(gw.auditActions(alice).at(-1), { action: "workspace_error", details: { error: message }, actorUserId: null });
+    assert.deepEqual(gw.auditActions(alice).at(-1), { action: "workspace_error", details: { error: message, kind: "private" }, actorUserId: null });
     assert.equal(gw.runtime.starts.length, 0, "no container was created");
 
     const page = await gw.navigate(gw.tokens.alice, alice);
@@ -1727,13 +1757,13 @@ test("every start renders the workspace's Qwen Code settings, passwd and group",
     );
     await gw.startReady(alice);
 
-    const paths = userPaths(gw.dataDir, alice);
+    const paths = userPaths(gw.dataDir, alice, "private");
     const read = (file: string): string => fs.readFileSync(file, "utf8");
     const settingsFile = path.join(paths.agentSettings("qwen"), "settings.json");
     const defaultsFile = path.join(paths.agentSettings("qwen"), "system-defaults.json");
     const settings = JSON.parse(read(settingsFile)) as Record<string, Record<string, unknown>>;
     const defaults = JSON.parse(read(defaultsFile)) as SettingsObject;
-    const service = `http://${gw.config.workspace.gatewayIp}:${gw.config.servicePort}`;
+    const service = `http://${gw.config.workspace.kinds.private.gatewayIp}:${gw.config.servicePort}`;
     assert.equal(service, "http://172.29.0.1:4001");
 
     assert.deepEqual(settings.ui, { theme: "Dracula" }, "the admin's settings are kept");
@@ -1750,14 +1780,14 @@ test("every start renders the workspace's Qwen Code settings, passwd and group",
     assert.equal(read(defaultsFile).includes("sk-secret"), false, "no API key reaches a workspace");
     assert.deepEqual(gw.runtime.startsFor(alice)[0]!.settings, settings, "rendered before the container started");
 
-    const uid = gw.config.workspace.uidBase + alice;
+    const uid = gw.config.workspace.kinds.private.uidBase + alice;
     assert.equal(read(paths.passwd).split("\n").find((line) => line.startsWith("user:")), `user:x:${uid}:${uid}:Workspace user:/home/user:/bin/bash`);
     assert.equal(read(paths.group).split("\n").find((line) => line.startsWith("user:")), `user:x:${uid}:`);
     for (const file of [settingsFile, defaultsFile, paths.passwd, paths.group]) assert.equal(fs.statSync(file).mode & 0o777, 0o644, file);
 
     await gw.startReady(bob);
-    const bobUid = gw.config.workspace.uidBase + bob;
-    assert.ok(read(userPaths(gw.dataDir, bob).passwd).includes(`user:x:${bobUid}:${bobUid}:`), "each workspace has its own UID");
+    const bobUid = gw.config.workspace.kinds.private.uidBase + bob;
+    assert.ok(read(userPaths(gw.dataDir, bob, "private").passwd).includes(`user:x:${bobUid}:${bobUid}:`), "each workspace has its own UID");
 
     // Changed admin settings apply at the next start.
     fs.writeFileSync(path.join(dir, "settings.json"), '{ "ui": { "theme": "GitHub" }, "telemetry": { "enabled": true } }');

@@ -7,6 +7,7 @@ import { getDb } from "../db";
 import { gateway, toApiError } from "../gateway";
 import { requireUser } from "../session";
 import { harnessSchema } from "../validation";
+import { restartKind } from "../workspace-stop";
 
 // The signed-in user's own settings (/settings). They are about the user's own account and workspace, also for
 // an administrator whose session is viewing someone else's.
@@ -38,15 +39,17 @@ export async function saveHarness(agent: string): Promise<SettingsResult> {
 }
 
 /**
- * "Restart now": stops the user's running workspace and starts it again, with the harness now saved. The page
- * warns first when the agent is working or the workspace is open elsewhere.
+ * "Restart now": stops the user's running workspace and starts the same kind (Private or Online) again, with the
+ * harness now saved. The page warns first when the agent is working or the workspace is open elsewhere. One that
+ * stopped since the page rendered stays stopped: the user starts it from Home, choosing its kind there.
  */
 export async function restartWorkspace(): Promise<SettingsResult> {
   const { user } = await requireUser();
   try {
-    const { status } = await gateway.getWorkspace(user.id);
-    if (status === "starting" || status === "running") await gateway.stop(user.id, "user", user.id);
-    await gateway.start(user.id);
+    const kind = restartKind(await gateway.getWorkspace(user.id));
+    if (!kind) return { ok: false, message: "Your workspace has stopped. Start it from Home." };
+    await gateway.stop(user.id, "user", user.id);
+    await gateway.start(user.id, kind);
   } catch (error) {
     return { ok: false, message: toApiError(error).message };
   } finally {

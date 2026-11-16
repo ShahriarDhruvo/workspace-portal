@@ -14,9 +14,9 @@ import { Spinner } from "@/components/ui/spinner";
 import { BuildLog } from "./build-log";
 
 // The one layout of the Updates page's cards (the LLM engine, Qwen Code, DeepSeek Harness), so each reads the same
-// way: the title and a status badge; the focal point, the current version large in mono, with the one primary
-// action beside it; the running job's panel inline under it; and the secondary details (versions, images, notes)
-// collapsed at the bottom.
+// way: the title, its source and a status badge; the focal point, the current version large in mono, with the one
+// primary action beside it; the running job's panel inline under it; and the Package images section folded at the
+// bottom.
 
 export type StatusVariant = "success" | "warning" | "info" | "secondary" | "destructive";
 
@@ -33,12 +33,12 @@ interface VersionCardProps {
   subtitle?: string | null;
   status: CardStatus;
   /** The focal point; omitted when there is no version to show (not set up, unreachable). */
-  version?: { label: string; value: string; note?: ReactNode };
-  /** The primary action (and at most one secondary), beside the version. */
+  version?: { label: string; value: string };
+  /** The primary action, beside the version. */
   actions?: ReactNode;
   /** Under the version: the job panel, notices, an empty state. */
   children?: ReactNode;
-  /** Collapsed details (VersionSection), at the bottom. */
+  /** Folded details (VersionSection), at the bottom. */
   sections?: ReactNode;
   /** Makes the title a focus target: for when the control that had the focus goes away (a dismissed outcome). */
   headingRef?: Ref<HTMLHeadingElement>;
@@ -81,7 +81,6 @@ export function VersionCard({ title, subtitle, status, version, actions, childre
                 <div className="flex min-w-0 flex-col gap-1">
                   <span className="text-12 text-muted-foreground">{version.label}</span>
                   <span className="font-mono text-24 leading-8 font-semibold break-all tabular-nums">{version.value}</span>
-                  {version.note ? <div className="text-13 text-muted-foreground">{version.note}</div> : null}
                 </div>
               ) : null}
               {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}

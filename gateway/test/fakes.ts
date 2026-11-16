@@ -6,7 +6,7 @@ import http, { type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { WebSocketServer } from "ws";
-import type { AgentKind } from "@portal/db";
+import type { AgentKind, WorkspaceKind } from "@portal/db";
 import { driverFor } from "../src/agents/index.ts";
 import type { SettingsObject } from "../src/agents/qwen-settings.ts";
 import type { WorkspaceStartOptions } from "../src/container-spec.ts";
@@ -25,7 +25,7 @@ import type { NotesClient, RegistryClient, ReleaseNotes } from "../src/engine-re
 import type { EngineHost } from "../src/engine-updater.ts";
 import { HostdError, type EngineJob, type EngineStatus } from "../src/hostd.ts";
 import { parseWorkspaceImage, STAGING_REPOSITORY, workspaceImage } from "../src/image-names.ts";
-import { RegistryError, type NpmRegistry } from "../src/npm-registry.ts";
+import { RegistryError, type NpmPackage, type NpmRegistry } from "../src/npm-registry.ts";
 import { userPaths } from "../src/paths.ts";
 import type { ContainerRuntime, ContainerSample, ContainerState, ContainerSummary, StartedContainer } from "../src/runtime.ts";
 
@@ -419,11 +419,13 @@ interface FakeContainer {
   userId: number | null;
   /** The agent label. */
   agent: AgentKind;
+  /** The kind label (none: Private); null for a label the gateway doesn't know. */
+  kind: WorkspaceKind | null;
   /** The image it was created from. */
   image: string;
   /** The version label (container-spec.ts VERSION_LABEL); null for a container from before it. */
   version: string | null;
-  /** Address on the "workspace network"; null for orphans nobody serves. */
+  /** Address on its kind's "network" (Private 127.0.0.N, Online 127.0.1.N); null for orphans nobody serves. */
   ip: string | null;
   running: boolean;
   exitCode: number | null;
@@ -468,6 +470,8 @@ export class FakeRuntime implements ContainerRuntime {
   failStops: Error | null = null;
   /** While set, stops wait for it: catches the gateway in the middle of a stop. */
   stopGate: Promise<void> | null = null;
+  /** When set, list() waits for it. */
+  listGate: Promise<void> | null = null;
   #seq = 0;
   readonly #dataDir: string;
 
@@ -505,16 +509,21 @@ export class FakeRuntime implements ContainerRuntime {
   }
 
   /** A container the gateway does not know about (as if left behind by someone else). */
-  addOrphan(userId: number | null): string {
+  addOrphan(userId: number | null, kind: WorkspaceKind | null = "private"): string {
     const id = `orphan-${++this.#seq}`;
-    this.containers.set(id, { id, userId, agent: "qwen", image: workspaceImage("qwen", "0.27.0"), version: "0.27.0", ip: null, running: true, exitCode: null, credential: null, server: null });
+    const image = workspaceImage("qwen", "0.27.0");
+    this.containers.set(id, { id, userId, agent: "qwen", kind, image, version: "0.27.0", ip: null, running: true, exitCode: null, credential: null, server: null });
     return id;
   }
 
-  /** The lowest address no running container has, as Docker's IPAM would pick. */
-  #freeIp(): string {
+  /**
+   * The lowest address no running container of the kind has, as Docker's IPAM would pick on that kind's network.
+   * The kinds' "subnets" differ, like the real ones (the config refuses overlapping ones).
+   */
+  #freeIp(kind: WorkspaceKind): string {
+    const prefix = kind === "online" ? "127.0.1." : "127.0.0.";
     const taken = new Set([...this.containers.values()].filter((c) => c.running).map((c) => c.ip));
-    for (let n = 2; n < 255; n++) if (!taken.has(`127.0.0.${n}`)) return `127.0.0.${n}`;
+    for (let n = 2; n < 255; n++) if (!taken.has(`${prefix}${n}`)) return `${prefix}${n}`;
     throw new Error("no free fake container address");
   }
 
@@ -535,7 +544,7 @@ export class FakeRuntime implements ContainerRuntime {
       throw error;
     }
     // Docker would bind-mount these; the gateway must have rendered them before the start.
-    const paths = userPaths(this.#dataDir, userId);
+    const paths = userPaths(this.#dataDir, userId, options.kind);
     const read = (file: string): string => {
       if (!fs.existsSync(file)) throw new Error(`the gateway did not render ${file} before starting the container`);
       return fs.readFileSync(file, "utf8");
@@ -546,13 +555,25 @@ export class FakeRuntime implements ContainerRuntime {
     read(paths.passwd);
     read(paths.group);
 
-    const ip = this.#freeIp();
+    const ip = this.#freeIp(options.kind);
     const serverOptions = { readyAfterMs: this.readyAfterMs, pingIntervalMs: this.pingIntervalMs, host: ip };
     const server =
       options.agent === "qwen" ? await startFakeQwen(options.credential, serverOptions) : await startFakeDsh(options.credential, serverOptions);
     const id = `fake-${++this.#seq}`;
     const version = parseWorkspaceImage(options.image)?.version ?? null;
-    this.containers.set(id, { id, userId, agent: options.agent, image: options.image, version, ip, running: true, exitCode: null, credential: options.credential, server });
+    this.containers.set(id, {
+      id,
+      userId,
+      agent: options.agent,
+      kind: options.kind,
+      image: options.image,
+      version,
+      ip,
+      running: true,
+      exitCode: null,
+      credential: options.credential,
+      server,
+    });
     const parsed = (name: string): SettingsObject | null => (options.agent === "qwen" ? (JSON.parse(files[name]!) as SettingsObject) : null);
     this.starts.push({ userId, containerId: id, options: { ...options }, files, settings: parsed("settings.json"), systemDefaults: parsed("system-defaults.json") });
     return { id, ip, port: server.port };
@@ -589,10 +610,12 @@ export class FakeRuntime implements ContainerRuntime {
   }
 
   async list(): Promise<ContainerSummary[]> {
+    await this.listGate;
     return [...this.containers.values()].map((c) => ({
       id: c.id,
       userId: c.userId,
       agent: c.agent,
+      kind: c.kind,
       running: c.running,
       ip: c.ip,
       port: c.server?.port ?? 1,
@@ -797,11 +820,15 @@ export class FakeRegistry implements NpmRegistry {
   gate: Promise<void> | null = null;
   readonly calls: string[] = [];
 
-  async distTags(packageName: string): Promise<Record<string, string>> {
-    this.calls.push(`dist-tags ${packageName}`);
+  /** The package's dist-tags and versions (no publish times, no repository); never a 304. */
+  async packument(packageName: string): Promise<{ etag: string | null; package: NpmPackage }> {
+    this.calls.push(`packument ${packageName}`);
     await this.gate;
     if (this.down) throw new RegistryError("The npm registry is unreachable (fetch failed).");
-    return { ...this.tags[packageName] };
+    const tags = this.tags[packageName] ?? {};
+    const others = [...this.published].filter((entry) => entry.startsWith(`${packageName}@`)).map((entry) => entry.slice(packageName.length + 1));
+    const versions = [...new Set([...Object.values(tags), ...others])].map((version) => ({ version, publishedAt: null, deprecated: false }));
+    return { etag: null, package: { distTags: { ...tags }, versions, githubRepo: null } };
   }
 
   async hasVersion(packageName: string, version: string): Promise<boolean> {
@@ -965,17 +992,6 @@ export class FakeEngineHost implements EngineHost {
         this.#job!.rolledBack = true;
         return error;
       }
-      this.previous = this.version;
-      this.version = target;
-      return null;
-    });
-  }
-
-  async rollback(): Promise<EngineJob> {
-    this.calls.push("rollback");
-    if (this.previous === null) throw new HostdError(409, "no_previous", "There is no previous image.");
-    const target = this.previous;
-    return this.#start("rollback", null, target, () => {
       this.previous = this.version;
       this.version = target;
       return null;

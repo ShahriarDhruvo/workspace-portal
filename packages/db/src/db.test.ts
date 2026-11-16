@@ -7,7 +7,7 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import { openDatabase, openForOwnershipChange, migrate } from "./db.ts";
 import { MIGRATIONS } from "./migrations.ts";
-import { users, sessions } from "./schema.ts";
+import { energyRates, hostDaily, users, sessions } from "./schema.ts";
 import { countSessionsUsingWorkspace, hashSessionToken, loadSessionContext, readCookie } from "./sessions.ts";
 import { usageDay } from "./usage-day.ts";
 
@@ -57,6 +57,32 @@ test("migration 2 keeps existing workspaces as Qwen Code and refuses unknown age
     { user_id: 2, agent: null },
   ]);
   assert.throws(() => client.exec("UPDATE workspaces SET agent = 'other' WHERE user_id = 1"), /CHECK/);
+});
+
+test("migration 5: existing workspaces are the Private kind and every user may use Online until barred", () => {
+  const client = new Database(":memory:");
+  for (const sql of MIGRATIONS.slice(0, 4)) client.exec(sql);
+  client.pragma("user_version = 4");
+  client.exec(`INSERT INTO users (username, first_name, last_name, password_hash, role, created_at, updated_at)
+               VALUES ('a', 'A', 'A', 'x', 'user', 0, 0)`);
+  client.exec(`INSERT INTO workspaces (user_id, status, started_at, updated_at) VALUES (1, 'stopped', 5, 0)`);
+  migrate(client);
+  assert.deepEqual(client.prepare("SELECT kind FROM workspaces").get(), { kind: "private" });
+  assert.deepEqual(client.prepare("SELECT online_allowed FROM users").get(), { online_allowed: 1 });
+  assert.throws(() => client.exec("UPDATE workspaces SET kind = 'public'"), /CHECK/);
+  assert.throws(() => client.exec("UPDATE users SET online_allowed = 2"), /CHECK/);
+});
+
+test("migration 4: one host_daily row per day and server, and the electricity price history", () => {
+  const db = tempDb();
+  db.insert(hostDaily).values({ day: "2026-11-16", role: "llm", energyWh: null, updatedAt: 1 }).run();
+  assert.throws(() => db.insert(hostDaily).values({ day: "2026-11-16", role: "llm", updatedAt: 2 }).run(), /UNIQUE/);
+  assert.throws(() => db.insert(hostDaily).values({ day: "2026-11-16", role: "other" as "llm", updatedAt: 2 }).run(), /CHECK/);
+  assert.throws(() => db.insert(hostDaily).values({ day: "16/11/2026", role: "portal", updatedAt: 2 }).run(), /CHECK/);
+  assert.deepEqual(db.select().from(hostDaily).all(), [{ day: "2026-11-16", role: "llm", energyWh: null, rxBytes: 0, txBytes: 0, updatedAt: 1 }]);
+  const rates = db.select().from(energyRates).orderBy(energyRates.effectiveFrom).all();
+  assert.ok(rates.length > 0 && rates.every((rate) => /^\d{4}-\d{2}-\d{2}$/.test(rate.effectiveFrom) && rate.centsPerKwh > 0));
+  assert.equal(rates.at(-1)?.centsPerKwh, 14.258);
 });
 
 test("only one admin can exist", () => {
@@ -126,12 +152,14 @@ test("agent ports map users to ports and back within the range", async () => {
 
 test("agent browser tokens are bound to the session and the workspace", async () => {
   const { agentBrowserToken, tokensEqual } = await import("./agent-origin.ts");
-  const token = agentBrowserToken("s".repeat(32), "session-a", 7);
+  const token = agentBrowserToken("s".repeat(32), "session-a", 7, "private");
   assert.match(token, /^[A-Za-z0-9_-]{43}$/);
-  assert.equal(token, agentBrowserToken("s".repeat(32), "session-a", 7));
-  assert.notEqual(token, agentBrowserToken("s".repeat(32), "session-b", 7));
-  assert.notEqual(token, agentBrowserToken("s".repeat(32), "session-a", 8));
-  assert.notEqual(token, agentBrowserToken("t".repeat(32), "session-a", 7));
+  assert.equal(token, agentBrowserToken("s".repeat(32), "session-a", 7, "private"));
+  assert.notEqual(token, agentBrowserToken("s".repeat(32), "session-b", 7, "private"));
+  assert.notEqual(token, agentBrowserToken("s".repeat(32), "session-a", 8, "private"));
+  assert.notEqual(token, agentBrowserToken("t".repeat(32), "session-a", 7, "private"));
+  // A user's two kinds are separate origins with separate tokens.
+  assert.notEqual(token, agentBrowserToken("s".repeat(32), "session-a", 7, "online"));
   assert.ok(tokensEqual(token, token));
   assert.ok(!tokensEqual(token, token.slice(1)));
 });

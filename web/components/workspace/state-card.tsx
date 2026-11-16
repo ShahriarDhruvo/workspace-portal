@@ -4,8 +4,9 @@ import { WarningIcon } from "@/components/ui/icons";
 
 interface StateCardProps {
   title: string;
-  children: ReactNode;
-  /** The card's buttons, the primary one last (right-aligned in the footer). */
+  /** What happened, when the title alone doesn't say it. */
+  children?: ReactNode;
+  /** The card's buttons, the primary one last (right-aligned in the footer, wrapping on a narrow phone). */
   actions?: ReactNode;
   /** Something went wrong: the title gets the attention icon and the text is announced. */
   warning?: boolean;
@@ -22,9 +23,9 @@ export function StateCard({ title, children, actions, warning = false }: StateCa
             {title}
           </h2>
         </CardTitle>
-        <CardDescription>{children}</CardDescription>
+        {children ? <CardDescription>{children}</CardDescription> : null}
       </CardHeader>
-      {actions ? <CardFooter className="justify-end gap-2">{actions}</CardFooter> : null}
+      {actions ? <CardFooter className="flex-wrap justify-end gap-2">{actions}</CardFooter> : null}
     </Card>
   );
 }

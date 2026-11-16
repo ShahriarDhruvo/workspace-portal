@@ -1,6 +1,6 @@
 // LLM engine updates: GET /control/engine and its job (docs/ARCHITECTURE.md, "LLM engine updates"). EngineStatus is
 // portal-hostd's GET /v1/engine (hostd/README.md).
-import type { ApiError } from "./gateway-types";
+import type { ApiError, ReleaseNotes } from "./gateway-types";
 
 export interface EngineImage {
   id: string;
@@ -10,7 +10,6 @@ export interface EngineImage {
   createdAt: number | null;
   sizeBytes: number | null;
   current: boolean;
-  previous: boolean;
 }
 
 export interface EngineStatus {
@@ -24,33 +23,29 @@ export interface EngineStatus {
   subState: string;
   ready: boolean;
   buildInfo: string | null;
-  previous: { image: string; digest: string | null; version: string | null } | null;
   images: EngineImage[];
 }
 
-export interface EngineReleaseNotes {
-  title: string;
-  url: string;
-  publishedAt: number | null;
-  body: string;
-  breaking: boolean;
-}
-
+/**
+ * One version in the engine's Package images table: the 5 newest releases up to the one `latest` points at, and the
+ * versions that run or have an image on the LLM server (with that image's digest).
+ */
 export interface EngineRelease {
   version: string;
   digest: string | null;
   latest: boolean;
-  notes: EngineReleaseNotes | null;
+  notes: ReleaseNotes | null;
 }
 
 export type EngineJobStage = "pulling" | "draining" | "restarting" | "succeeded" | "failed" | "cancelled";
 
 export interface EngineUpdateJob {
   id: string;
-  kind: "update" | "rollback";
   fromVersion: string | null;
   toVersion: string | null;
   image: string | null;
+  /** The LLM server had an image of that version: no download, it is used as it is. */
+  reuse: boolean;
   stage: EngineJobStage;
   step: string;
   log: string[];
@@ -72,11 +67,6 @@ export interface EngineOverview {
   releases: { repository: string; releases: EngineRelease[]; checkedAt: number | null; error: string | null } | null;
   job: EngineUpdateJob | null;
   drainMinutes: number;
-}
-
-/** A job that is still going. */
-export function engineJobActive(job: EngineUpdateJob | null): boolean {
-  return job !== null && job.finishedAt === null;
 }
 
 /** GET (and POST, refreshing) /api/admin/engine. `engine` is null when the gateway could not provide it. */

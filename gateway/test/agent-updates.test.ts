@@ -71,17 +71,17 @@ test("an update over the control API: the job, the new current version, and new 
         defaultVersion: "0.27.0",
         latest: "0.27.4",
         updateAvailable: true,
-        channels: [
-          { tag: "latest", version: "0.27.4" },
-          { tag: "preview", version: "0.27.2-preview.0" },
-          { tag: "nightly", version: "0.27.2-nightly.20261113.6f754be654" },
+        releases: [
+          { version: "0.27.4", publishedAt: null, latest: true, notes: null },
+          { version: "0.27.0", publishedAt: null, latest: false, notes: null },
+          { version: "0.26.0", publishedAt: null, latest: false, notes: null },
         ],
         installed: [["0.27.0", true, 1]],
         running: [{ version: "0.27.0", count: 1 }],
       },
     );
 
-    const started = await update(g, "qwen", { version: "latest", actorUserId: admin });
+    const started = await update(g, "qwen", { version: "0.27.4", actorUserId: admin });
     assert.equal(started.status, 200, started.body);
     const job = json<AgentUpdateJob>(started);
     assert.deepEqual([job.agent, job.fromVersion, job.version, job.rebuild, job.reuse, job.actorUserId, job.phase], ["qwen", "0.27.0", "0.27.4", false, false, admin, "building"]);
@@ -131,16 +131,16 @@ test("an update over the control API: the job, the new current version, and new 
 test("update requests that can't be met are refused with the documented errors", () =>
   withGateway({ env: { WORKSPACE_AGENTS: "qwen" } }, async (g) => {
     const cases: Array<[string, unknown, number, string]> = [
-      ["claude", { version: "latest" }, 400, "unknown_agent"],
-      ["dsh", { version: "latest" }, 400, "agent_unavailable"],
+      ["claude", { version: "0.27.4" }, 400, "unknown_agent"],
+      ["dsh", { version: "0.2.2-rc.1" }, 400, "agent_unavailable"],
       ["qwen", { version: "0.27.4 && reboot" }, 400, "invalid_version"],
-      ["qwen", { version: "next" }, 400, "invalid_version"],
-      ["qwen", { version: "latest", actorUserId: 0 }, 400, "invalid_actor"],
-      ["qwen", { version: "latest", actorUserId: "1" }, 400, "invalid_actor"],
-      ["qwen", { version: "latest", actorUserId: 9999 }, 400, "invalid_actor"],
+      ["qwen", { version: "latest" }, 400, "invalid_version"],
+      ["qwen", { version: "0.27.4", actorUserId: 0 }, 400, "invalid_actor"],
+      ["qwen", { version: "0.27.4", actorUserId: "1" }, 400, "invalid_actor"],
+      ["qwen", { version: "0.27.4", actorUserId: 9999 }, 400, "invalid_actor"],
       ["qwen", {}, 400, "bad_request"],
       ["qwen", { version: 27 }, 400, "bad_request"],
-      ["qwen", { version: "latest", rebuild: "yes" }, 400, "bad_request"],
+      ["qwen", { version: "0.27.4", rebuild: "yes" }, 400, "bad_request"],
       ["qwen", [], 400, "bad_request"],
       ["qwen", { version: "9.9.9" }, 404, "version_not_found"],
     ];
@@ -149,12 +149,12 @@ test("update requests that can't be met are refused with the documented errors",
     }
     assert.equal(g.builder.builds.length, 0);
 
+    await overview(g);
     g.registry.down = true;
-    assert.deepEqual(failure(await update(g, "qwen", { version: "latest" })), [502, "registry_unreachable"]);
     assert.deepEqual(failure(await update(g, "qwen", { version: "0.27.4" })), [502, "registry_unreachable"]);
     const outage = await overview(g, "?refresh=1");
     assert.equal(outage.registryError, "The npm registry is unreachable (fetch failed).");
-    assert.deepEqual(outage.agents.map((a) => [a.current, a.latest]), [["0.27.0", "0.27.4"]], "the last answer (from resolving a channel above), marked stale");
+    assert.deepEqual(outage.agents.map((a) => [a.current, a.latest]), [["0.27.0", "0.27.4"]], "the last answer, marked stale");
     assert.deepEqual(agentAudits(g), []);
     assert.equal((await g.control("GET", "/control/agents/versions", undefined, "wrong-secret")).status, 401);
     assert.equal((await g.control("POST", "/control/agents/update/cancel", undefined, "wrong-secret")).status, 401);
@@ -165,11 +165,11 @@ test("one job at a time; it can be cancelled, and a cancelled or failed job leav
     const { admin } = g.ids;
     const building = gate();
     g.builder.buildGate = building.promise;
-    const first = json<AgentUpdateJob>(await update(g, "dsh", { version: "next", rebuild: true, actorUserId: admin }));
+    const first = json<AgentUpdateJob>(await update(g, "dsh", { version: "0.2.2-rc.3", rebuild: true, actorUserId: admin }));
     assert.deepEqual([first.version, first.rebuild, first.phase], ["0.2.2-rc.3", true, "building"]);
     const step = await pollJob(g, (job) => job.step !== null, "the build step");
     assert.equal(step.step, '[dsh 1/2] RUN npm install -g --no-fund --no-audit "@deepseek-ai/dsh@0.2.2-rc.3"');
-    assert.deepEqual(failure(await update(g, "qwen", { version: "latest" })), [409, "update_running"], "for all agents");
+    assert.deepEqual(failure(await update(g, "qwen", { version: "0.27.4" })), [409, "update_running"], "for all agents");
     g.builder.install("dsh", "0.2.1");
     assert.deepEqual(failure(await removeImage(g, "dsh", "0.2.1")), [409, "update_running"], "not that agent's images meanwhile");
     assert.equal((await overview(g)).job?.phase, "building");
@@ -202,7 +202,7 @@ test("one job at a time; it can be cancelled, and a cancelled or failed job leav
 
     // With the job over, the next one may start.
     g.builder.reportVersion = null;
-    assert.equal((await update(g, "qwen", { version: "0.26.0" })).status, 200, "a rollback is an update too");
+    assert.equal((await update(g, "qwen", { version: "0.26.0" })).status, 200, "going back is an update too");
     assert.equal((await finished(g)).phase, "succeeded");
     assert.equal(g.versions.current("qwen"), "0.26.0");
   }));
@@ -270,6 +270,7 @@ test("the admin's choice survives a restart; adopted containers report the versi
       llm: g.llmQueue,
       connections: g.connections,
       log: g.log,
+      fence: g.fence.check,
       now: () => g.clock.now,
     });
     await fresh.init();

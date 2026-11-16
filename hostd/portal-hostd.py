@@ -6,7 +6,8 @@ Python 3.11+ standard library only. Configuration comes from the environment (sy
 EnvironmentFile=/etc/portal-hostd/hostd.conf); the bearer token from $CREDENTIALS_DIRECTORY/token
 (systemd LoadCredential) or $HOSTD_TOKEN_FILE. See README.md for the API and the data sources.
 
-Cost model: nothing is sampled while nobody watches (all threads block without timeouts). While a
+Cost model: nothing is sampled while nobody watches; the only thread that wakes then is the meter, every
+2 s, for one read of the power source and one of /proc/net/dev (the running totals of GET /v1/meter). While a
 stream is open, one shared sampler thread reads every source once per interval through file
 descriptors that stay open (os.pread), and perf counters are read as one group per PMU.
 """
@@ -34,7 +35,7 @@ import urllib.parse
 import urllib.request
 from collections import deque
 
-API_VERSION = 1
+API_VERSION = 2         # 2: network and disk readings, GET /v1/meter
 DEFAULT_PORT = 9180
 MAX_CONNECTIONS = 16
 MAX_STREAMS = 4
@@ -46,6 +47,9 @@ FAN_PERIOD = 3.0
 BUSY_PCT = 1.0          # a logical CPU counts as busy (for clock averages) above this usage
 PING_EVERY = 15.0
 STATUS_CACHE = 5.0
+METER_PERIOD = 2.0      # the always-on meter's tick
+SPACE_PERIOD = 5.0      # filesystem space is measured at most this often
+SECTOR = 512            # /proc/diskstats counts 512-byte sectors, whatever the disk's block size
 
 
 def log(msg):
@@ -213,6 +217,18 @@ def pmu_event(fs, pmu, name):
     except ValueError:
         scale = 1.0
     return spec.strip(), scale
+
+
+def rapl_events(fs, labels):
+    """The RAPL PMU's energy events among labels (pkg, ram, cores, gpu) -> [(label, spec, joules per count)]."""
+    evs = []
+    for label in labels:
+        try:
+            spec, scale = pmu_event(fs, 'power', 'energy-' + label)
+            evs.append((label, spec, scale))
+        except PerfUnavailable:
+            pass
+    return evs
 
 
 class PerfGroup:
@@ -404,6 +420,160 @@ class EcFans:
         return [{'label': label, 'rpm': None, 'duty': None} for label, _, _ in self.fans]
 
 
+# ---------------------------------------------------------------------------------- network and disks
+
+def counter_rates(prev, cur, dt, unit=1):
+    """Per-second increase of two counters summed over the names in both readings ({name: (a, b)}), times unit.
+    A counter that went back (a reset) adds nothing; neither does a name in only one reading."""
+    da = db = 0
+    for name, (a, b) in cur.items():
+        p = prev.get(name)
+        if p is not None:
+            da += max(0, a - p[0])
+            db += max(0, b - p[1])
+    return int(da * unit / dt), int(db * unit / dt)
+
+
+class NetCounters:
+    """Bytes received and sent per physical network interface, from /proc/net/dev. Physical: one with a device
+    behind it (/sys/class/net/IF/device), so not lo, bridges (docker0, br-*, virbr*), veth pairs or tunnels
+    (tun, WireGuard), whose traffic a physical interface carries too or never leaves the host."""
+
+    def __init__(self, fs):
+        self.fs = fs
+        self.src = Src(fs.p('/proc/net/dev'), 16384)
+        self._physical = {}   # name -> bool, for the names of the last reading (veths come and go)
+
+    def read(self):
+        """{name: (rx_bytes, tx_bytes)} of the physical interfaces, or None without /proc/net/dev or any of them."""
+        data = self.src.read()
+        if not data:
+            return None
+        seen, out = {}, {}
+        for line in data.decode('ascii', 'replace').splitlines()[2:]:
+            name, sep, rest = line.partition(':')
+            name, f = name.strip(), rest.split()
+            if not sep or len(f) < 9:
+                continue
+            phys = self._physical.get(name)
+            if phys is None:
+                phys = self.fs.exists(f'/sys/class/net/{name}/device')
+            seen[name] = phys
+            if phys:
+                try:
+                    out[name] = (int(f[0]), int(f[8]))
+                except ValueError:
+                    pass
+        self._physical = seen
+        return out or None
+
+
+class DiskCounters:
+    """Sectors read and written per whole disk, from /proc/diskstats. Whole disk: a /sys/block entry with a device
+    behind it, so no partitions, loop, zram, ram, device-mapper or md devices (the disks under those count
+    their I/O already)."""
+
+    def __init__(self, fs):
+        self.fs = fs
+        self.src = Src(fs.p('/proc/diskstats'), 16384)
+        self._whole = {}      # name -> bool, for the names of the last reading
+
+    def read(self):
+        """{name: (sectors_read, sectors_written)} of the whole disks, or None without /proc/diskstats or any."""
+        data = self.src.read()
+        if not data:
+            return None
+        seen, out = {}, {}
+        for line in data.decode('ascii', 'replace').splitlines():
+            f = line.split()
+            if len(f) < 10:
+                continue
+            name = f[2]
+            whole = self._whole.get(name)
+            if whole is None:
+                whole = self.fs.exists('/sys/block/' + name.replace('/', '!') + '/device')
+            seen[name] = whole
+            if whole:
+                try:
+                    out[name] = (int(f[5]), int(f[9]))
+                except ValueError:
+                    pass
+        self._whole = seen
+        return out or None
+
+
+def _unescape(field):
+    """A /proc/self/mounts field, whose spaces, tabs, newlines and backslashes are escaped as \\ooo."""
+    return re.sub(r'\\([0-7]{3})', lambda m: chr(int(m.group(1), 8)), field)
+
+
+def local_filesystems(mounts):
+    """(source, mount point) of the filesystems on local block devices in /proc/self/mounts text, one per source
+    (btrfs subvolumes and bind mounts share theirs), in mount order. Only what this process can measure counts:
+    a mount covered by a later one at or above its mount point is left out (ProtectHome=yes puts an empty tmpfs
+    over /home, and statvfs there measures that)."""
+    entries = []
+    for line in mounts.splitlines():
+        f = line.split()
+        if len(f) >= 2:
+            entries.append((_unescape(f[0]), _unescape(f[1])))
+    covered, found = set(), []
+    for source, point in reversed(entries):
+        p = point
+        while p not in covered and p != '/' and p:
+            p = os.path.dirname(p)
+        visible = p not in covered
+        covered.add(point)
+        if visible and source.startswith('/dev/') and not source.startswith(('/dev/loop', '/dev/zram', '/dev/ram')):
+            found.append((source, point))
+    seen, out = set(), []
+    for source, point in reversed(found):
+        if source not in seen:
+            seen.add(source)
+            out.append((source, point))
+    return out
+
+
+class FsSpace:
+    """Size and free space of the local filesystems together (statvfs: f_blocks and f_bavail, in f_frsize units).
+    statvfs on a failing disk can hang, so after the first measurement each refresh runs in a thread of its own,
+    at most every `period` seconds, and get() always answers at once with the last result."""
+
+    def __init__(self, fs, period=SPACE_PERIOD, statvfs=os.statvfs):
+        self.fs, self.period, self.statvfs = fs, period, statvfs
+        self.lock = threading.Lock()
+        self.value, self.mounts = None, []
+        self.running = False
+        self.started = time.monotonic()
+        self.refresh()
+
+    def get(self):
+        """(total_bytes, free_bytes), or None when no local filesystem could be measured."""
+        with self.lock:
+            if not self.running and time.monotonic() - self.started >= self.period:
+                self.running, self.started = True, time.monotonic()
+                threading.Thread(target=self.refresh, name='space', daemon=True).start()
+            return self.value
+
+    def refresh(self):
+        total = free = 0
+        mounts = []
+        try:
+            for _, point in local_filesystems(self.fs.text('/proc/self/mounts') or ''):
+                try:
+                    st = self.statvfs(self.fs.p(point))
+                except OSError:
+                    continue
+                total += st.f_blocks * st.f_frsize
+                free += st.f_bavail * st.f_frsize
+                mounts.append(point)
+        finally:
+            with self.lock:
+                self.value = (total, free) if mounts else None
+                self.mounts = mounts
+                self.running = False
+
+
 # ---------------------------------------------------------------------------------------------- host
 
 def r1(x):
@@ -435,6 +605,9 @@ class Host:
         self.cpu_temp = self._cpu_temp()
         self.gpu, self.gpu_name = self._gpu()
         self.fans = EcFans(fs)
+        self.net = NetCounters(fs)
+        self.disks = DiskCounters(fs)
+        self.space = FsSpace(fs)
         self.groups = {}       # name -> PerfGroup (defined; opened while the sampler runs)
         self._define_perf()
         self.perf_ok = self._probe_perf()
@@ -515,14 +688,7 @@ class Host:
         except PerfUnavailable:
             pass
         if self.gpu is None or self.gpu.kind != 'amdgpu':
-            evs = []
-            for label, name in (('pkg', 'energy-pkg'), ('ram', 'energy-ram'),
-                                ('cores', 'energy-cores'), ('gpu', 'energy-gpu')):
-                try:
-                    spec, scale = pmu_event(fs, 'power', name)
-                    evs.append((label, spec, scale))
-                except PerfUnavailable:
-                    pass
+            evs = rapl_events(fs, ('pkg', 'ram', 'cores', 'gpu'))
             if any(e[0] == 'pkg' for e in evs):
                 try:
                     self.groups['rapl'] = PerfGroup(fs, 'power', evs)
@@ -584,6 +750,20 @@ class Host:
             'sources': src,
             'power': {'label': power_label} if power_label else None,
             'engine': {'unit': self.engine_unit} if self.engine_unit else None,
+            **self.inventory(),
+        }
+
+    def inventory(self):
+        """What the samples' net and disk count: the physical interfaces, the whole disks and the mount points of
+        the local filesystems, as they are now (the static rest of info() is cached)."""
+        fs = self.fs
+        ifaces = [os.path.basename(d) for d in fs.glob('/sys/class/net/*') if fs.exists(d + '/device')]
+        disks = [os.path.basename(d).replace('!', '/') for d in fs.glob('/sys/block/*') if fs.exists(d + '/device')]
+        with self.space.lock:
+            mounts = list(self.space.mounts)
+        return {
+            'network': {'interfaces': ifaces} if ifaces else None,
+            'disks': {'devices': disks, 'mounts': mounts} if disks or mounts else None,
         }
 
     # -- readings
@@ -632,6 +812,9 @@ class Host:
             raw['rc6'] = g.rc6.int() if g.rc6 else None
         for name, grp in self.groups.items():
             raw['perf_' + name] = grp.read()
+        raw['net'] = self.net.read()
+        raw['disk'] = self.disks.read()
+        raw['space'] = self.space.get()
         return raw
 
     def compute(self, prev, cur, fans=None):
@@ -723,6 +906,21 @@ class Host:
             imc = rates('imc')
             read_bps, write_bps = (int(imc[0]), int(imc[1])) if imc else (None, None)
 
+        net = None
+        if cur.get('net') is not None:
+            rx = tx = None
+            if prev and prev.get('net') is not None and dt:
+                rx, tx = counter_rates(prev['net'], cur['net'], dt)
+            net = {'rxBps': rx, 'txBps': tx}
+        disk = None
+        io, space = cur.get('disk'), cur.get('space')
+        if io is not None or space is not None:
+            rd = wr = None
+            if io is not None and prev and prev.get('disk') is not None and dt:
+                rd, wr = counter_rates(prev['disk'], io, dt, SECTOR)
+            disk = {'readBps': rd, 'writeBps': wr,
+                    'totalBytes': space[0] if space else None, 'freeBytes': space[1] if space else None}
+
         mem = cur['mem']
         total = mem.get('MemTotal', 0) * 1024
         avail = mem.get('MemAvailable', 0) * 1024
@@ -740,6 +938,8 @@ class Host:
             'power': {'watts': watts, 'parts': parts},
             'fans': fans if fans is not None else self.fans.empty(),
             'throttling': throttling,
+            'net': net,
+            'disk': disk,
         }
 
 
@@ -876,6 +1076,96 @@ class Sampler:
                     if left <= 0:
                         break
                     self.cond.wait(left)
+
+
+# --------------------------------------------------------------------------------------------- meter
+
+class Meter:
+    """Running totals since this hostd started, kept whether or not anyone watches, for GET /v1/meter (the
+    gateway's energy meter reads it every 30 s): the energy behind the samples' power.watts, and the bytes
+    received and sent on the physical interfaces. One thread wakes every `period` seconds for one read of each.
+
+    Energy: on an AMD APU the socket power (gpu_metrics average_socket_power) integrated over time; on Intel the
+    RAPL package + DRAM counters, exact, in a perf group of the meter's own that stays open (the sampler's groups
+    open and close with its viewers). None without either. Bytes: the increase of each interface's counters;
+    counters that went back (a reset, or an interface gone and back) and interfaces that appear later began
+    again at zero."""
+
+    def __init__(self, host, period=METER_PERIOD):
+        self.instance = secrets.token_hex(8)
+        self.started_at = now_ms()
+        self.period = period
+        self.net = NetCounters(host.fs)
+        self.gpu_metrics = self.rapl = None
+        if host.gpu is not None and host.gpu.kind == 'amdgpu':
+            self.gpu_metrics = Src(host.fs.p(host.gpu.dev + '/gpu_metrics'), 1024)
+        elif 'rapl' in host.groups:   # the PMU opened when the Host probed it
+            try:
+                self.rapl = PerfGroup(host.fs, 'power', rapl_events(host.fs, ('pkg', 'ram')))
+            except PerfUnavailable:
+                pass
+        self.lock = threading.Lock()
+        self.energy = None
+        self.rx = self.tx = None
+        self.t = self.started_at
+        self._watts = self._mono = None
+        self._links = None            # {name: (rx, tx)}: every physical interface seen, at its last reading
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name='meter', daemon=True)
+
+    def start(self):
+        if self.rapl is not None and not self.rapl.open():
+            log('meter: cannot open the RAPL counters; energy is not measured')
+            self.rapl = None
+        if self.gpu_metrics is not None or self.rapl is not None:
+            self.energy = 0.0
+        self.tick()
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+        if self.rapl is not None:
+            self.rapl.close()
+
+    def _run(self):
+        while not self._stop.wait(self.period):
+            try:
+                self.tick()
+            except Exception as e:  # never let one bad reading stop the meter
+                log(f'meter: {type(e).__name__}: {e}')
+
+    def tick(self):
+        net = self.net.read()
+        mono = time.monotonic()
+        with self.lock:
+            if self.gpu_metrics is not None and self.energy is not None:
+                gm = decode_gpu_metrics(self.gpu_metrics.read())
+                mw = gm['average_socket_power'] if gm else None
+                if mw is not None:
+                    w = mw / 1000.0
+                    if self._watts is not None:     # trapezoid since the last good reading
+                        self.energy += (self._watts + w) / 2 * (mono - self._mono)
+                    self._watts, self._mono = w, mono
+            elif self.rapl is not None:
+                r = self.rapl.read()
+                if r is not None:
+                    self.energy = sum(c * f for c, f in zip(r[2], self.rapl.factors))
+            if net is not None:
+                if self._links is None:
+                    self.rx = self.tx = 0
+                else:
+                    for name, (rx, tx) in net.items():
+                        last = self._links.get(name, (0, 0))
+                        self.rx += rx - last[0] if rx >= last[0] else rx
+                        self.tx += tx - last[1] if tx >= last[1] else tx
+                self._links = {**(self._links or {}), **net}
+            self.t = now_ms()
+
+    def snapshot(self):
+        with self.lock:
+            return {'instance': self.instance, 'startedAt': self.started_at, 't': self.t,
+                    'energyJ': None if self.energy is None else round(self.energy, 3),
+                    'rxBytes': self.rx, 'txBytes': self.tx}
 
 
 # -------------------------------------------------------------------------------------------- engine
@@ -1272,21 +1562,6 @@ class Engine:
             raise ApiError(409, 'not_pulled', 'pull the image first')
         return self._start(Job('apply', image, version), lambda job: self._apply(job, image, version, True))
 
-    def start_rollback(self):
-        self._busy()
-        prev_text, prev_image = self._previous_image()
-        try:
-            _, current = self._current()
-        except StepError as e:
-            raise ApiError(500, 'quadlet_invalid', str(e))
-        if not prev_image or prev_image == current:
-            raise ApiError(409, 'no_previous', 'no saved previous engine image')
-        if not self.image_exists(prev_image):
-            raise ApiError(409, 'not_pulled', f'the previous image {prev_image} is no longer local')
-        version = doc_version(prev_text)
-        return self._start(Job('rollback', prev_image, version),
-                           lambda job: self._apply(job, prev_image, version, False))
-
     def _restart_and_verify(self, job, version, check_version):
         job.set_step('Reloading systemd')
         rc, _, err = self.runner.run(['systemctl', '--user', 'daemon-reload'], 120)
@@ -1509,11 +1784,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 ('GET', '/v1/info'): lambda: self.send_json(200, app.info()),
                 ('GET', '/v1/sample'): self.get_sample,
                 ('GET', '/v1/stream'): self.get_stream,
+                ('GET', '/v1/meter'): lambda: self.send_json(200, app.meter.snapshot()),
                 ('GET', '/v1/engine'): lambda: self.send_json(200, app.need_engine().status()),
                 ('POST', '/v1/engine/pull'): lambda: self.send_json(202, app.need_engine().start_pull(body.get('image'))),
                 ('POST', '/v1/engine/apply'): lambda: self.send_json(
                     202, app.need_engine().start_apply(body.get('image'), body.get('version'))),
-                ('POST', '/v1/engine/rollback'): lambda: self.send_json(202, app.need_engine().start_rollback()),
                 ('POST', '/v1/engine/cancel'): lambda: self.send_json(200, app.need_engine().cancel()),
             }
             fn = routes.get((method, path))
@@ -1611,8 +1886,8 @@ class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
 
 class App:
-    def __init__(self, host, sampler, token, engine=None):
-        self.host, self.sampler, self.engine = host, sampler, engine
+    def __init__(self, host, sampler, meter, token, engine=None):
+        self.host, self.sampler, self.meter, self.engine = host, sampler, meter, engine
         self.token = token.encode()
         self._info = None
 
@@ -1624,7 +1899,7 @@ class App:
     def info(self):
         if self._info is None:
             self._info = self.host.info()
-        return self._info
+        return {**self._info, **self.host.inventory()}
 
     def need_engine(self):
         if self.engine is None:
@@ -1695,7 +1970,7 @@ def build(cfg, token, runner=None):
     engine = None
     if cfg['engine_unit']:
         engine = Engine(cfg['engine_unit'], cfg['engine_quadlet'], cfg['engine_url'], cfg['state_dir'], runner)
-    return App(host, sampler, token, engine)
+    return App(host, sampler, Meter(host), token, engine)
 
 
 def main(argv):
@@ -1716,6 +1991,7 @@ def main(argv):
         log(f'portal-hostd: warning: quadlet {app.engine.quadlet} does not exist')
     server = Server((cfg['bind'], cfg['port']), app)
     app.sampler.start()
+    app.meter.start()
 
     def stop(signum, frame):
         raise KeyboardInterrupt
@@ -1725,7 +2001,7 @@ def main(argv):
     src = app.host.sources()
     log(f'portal-hostd: role={cfg["role"]} listening on {cfg["bind"]}:{cfg["port"]} interval={cfg["interval_ms"]}ms '
         f'perf={src["perf"]} bandwidth={src["bandwidth"]} power={src["power"]} gpuBusy={src["gpuBusy"]} '
-        f'engine={cfg["engine_unit"] or "-"}')
+        f'energy={"on" if app.meter.energy is not None else "off"} engine={cfg["engine_unit"] or "-"}')
     sd_notify('READY=1')
     try:
         server.serve_forever(poll_interval=None)  # blocks in select() without periodic wakeups
@@ -1734,6 +2010,7 @@ def main(argv):
     finally:
         sd_notify('STOPPING=1')
         app.sampler.stop()
+        app.meter.stop()
         app.host.close_perf()
         server.server_close()
     return 0

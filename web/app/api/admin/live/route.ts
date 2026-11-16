@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
 const RECHECK_MS = 30_000;
 
 /**
- * The admin's live view (Overview): the gateway's event stream (GET /control/live, docs/ARCHITECTURE.md "Live
+ * The admin's live view (Usage): the gateway's event stream (GET /control/live, docs/ARCHITECTURE.md "Live
  * view") passed through as it is. Ends when the browser leaves, the gateway closes or drops it, or the session
  * stops being an admin's.
  */

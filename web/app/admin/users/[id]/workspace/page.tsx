@@ -9,7 +9,8 @@ import { getDb } from "@/lib/db";
 import { initials } from "@/lib/format";
 import { requireAdmin } from "@/lib/session";
 import { userIdSchema } from "@/lib/validation";
-import { AdminHeader } from "@/components/admin/admin-header";
+import { AppHeader } from "@/components/layout/app-header";
+import { PageMain } from "@/components/layout/page-main";
 import { BackLink } from "@/components/admin/back-link";
 import { OpenWorkspaceForm } from "@/components/admin/open-workspace-form";
 import { Card, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
@@ -54,9 +55,7 @@ export default async function ViewWorkspacePage({ params }: PageProps<"/admin/us
         title={`You are not viewing ${name}'s workspace`}
         open={<OpenWorkspaceForm userId={user.id} variant="default" size="default" />}
       >
-        Opening it points your session at their workspace and is recorded in the audit log. A stopped workspace
-        stays stopped until you press Start, which launches {user.firstName}&apos;s harness. {user.firstName} sees an
-        &ldquo;Admin connected&rdquo; notice while you are in it.
+        The audit log records it, and {user.firstName} sees &ldquo;Admin connected&rdquo; while you are in it.
       </OpenPanel>
     );
   }
@@ -65,7 +64,7 @@ export default async function ViewWorkspacePage({ params }: PageProps<"/admin/us
     <WorkspaceShell
       viewer={{ name: viewerName, initials: viewerInitials, isAdmin: true }}
       target={{ id: user.id, name, isViewer: false }}
-      frame={workspaceFrame(session)}
+      frames={{ private: workspaceFrame(session, "private"), online: workspaceFrame(session, "online") }}
       idleTimeoutMinutes={config.idleTimeoutMinutes}
       agentNames={AGENT_NAMES}
       banner={<ViewingBanner>Viewing {name}&apos;s workspace</ViewingBanner>}
@@ -73,7 +72,7 @@ export default async function ViewWorkspacePage({ params }: PageProps<"/admin/us
   );
 }
 
-/** A page explaining what opening a workspace does, with the button that does it. */
+/** What opening a workspace means, in one line, with the button that does it. */
 function OpenPanel(props: {
   viewer: { name: string; initials: string };
   back: { href: string; label: string };
@@ -82,9 +81,9 @@ function OpenPanel(props: {
   children: ReactNode;
 }) {
   return (
-    <div className="min-h-dvh bg-background">
-      <AdminHeader name={props.viewer.name} initials={props.viewer.initials} />
-      <main className="mx-auto flex w-full max-w-[560px] flex-col gap-4 px-5 py-6 sm:px-6">
+    <div className="flex min-h-dvh flex-col bg-background">
+      <AppHeader viewer={{ ...props.viewer, isAdmin: true }} />
+      <PageMain width="sm" className="gap-4">
         <BackLink href={props.back.href}>{props.back.label}</BackLink>
         <Card>
           <CardHeader>
@@ -95,7 +94,7 @@ function OpenPanel(props: {
           </CardHeader>
           <CardFooter className="justify-end">{props.open}</CardFooter>
         </Card>
-      </main>
+      </PageMain>
     </div>
   );
 }

@@ -4,9 +4,10 @@ import { ThemeToggle } from "@/components/common/theme-toggle";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 
 /**
- * Sign-in and forced password-change screen, laid out like the Web Shell's "Connect" card: the brand over a
- * 400px card centred on the canvas, a centred title and description, the form, and a muted footer strip. The
- * theme switch sits in the corner, as in the top bars of the signed-in pages.
+ * The full-screen pages without the top bar (sign-in, the forced password change, page not found, an error), laid
+ * out like the Web Shell's "Connect" card: the brand over a 400px card centred both ways on the canvas, a centred
+ * title and description, the form or button, and a muted footer strip. The theme switch sits in the corner, as in
+ * the top bars of the signed-in pages.
  */
 export function AuthScreen({
   title,

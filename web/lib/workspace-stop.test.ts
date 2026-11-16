@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { stopNeedsConfirm, stopWarnings } from "./workspace-stop.ts";
+import { restartKind, stopNeedsConfirm, stopWarnings } from "./workspace-stop.ts";
 
 const quiet = { busy: false, connections: { owner: 0, admin: 0 } };
 
@@ -20,4 +20,12 @@ test("the workspace page's own session doesn't count as open elsewhere; on Home 
   assert.equal(stopWarnings(openOnce, true).openElsewhere, false, "the workspace page itself");
   assert.equal(stopWarnings(openOnce, false).openElsewhere, true, "Home: a workspace tab is open somewhere");
   assert.equal(stopWarnings({ ...quiet, connections: { owner: 2, admin: 0 } }, true).openElsewhere, true);
+});
+
+test("Restart now starts again only the kind that is starting or running; a stopped workspace stays stopped", () => {
+  assert.equal(restartKind({ status: "running", kind: "online" }), "online");
+  assert.equal(restartKind({ status: "starting", kind: "private" }), "private");
+  for (const status of ["stopped", "stopping", "error"] as const) {
+    assert.equal(restartKind({ status, kind: "online" }), null, `${status}: nothing to restart`);
+  }
 });

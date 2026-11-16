@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, use, useEffect, useState, useTransition, type ComponentProps, type ReactNode, type Ref } from "react";
+import { useEffect, useState, useTransition, type ReactNode, type Ref } from "react";
 import { signOut } from "@/lib/actions/auth";
 import { UserAvatar } from "@/components/brand";
 import { Button } from "@/components/ui/button";
@@ -16,21 +16,17 @@ import { LogOutIcon, MenuIcon } from "@/components/ui/icons";
 import { Spinner } from "@/components/ui/spinner";
 
 // A top bar's menu: a button at the right end of the bar that opens a DropdownMenu with who is signed in, the
-// bar's own items, then "Sign out". Home, Settings and the admin console show it (a three-line button) below
-// the width where their full row of links fits; the workspace bar always shows it (the user's avatar), as its
-// only way to the other pages.
-// The menu's content unmounts as soon as an item is chosen, so a form inside it would be gone before it
-// submits. An item that runs a server action (BarMenuAction) hands it to the menu instead, which stays
-// mounted: it runs the action and shows a spinner on its button until the action's redirect arrives.
-
-type ServerAction = () => Promise<void>;
-
-const RunAction = createContext<(action: ServerAction) => void>(() => {});
+// bar's own items, then "Sign out". The portal's pages show it (a three-line button) below the width where the
+// signed-in user and Sign out fit in the bar; the workspace bar always shows it (the user's avatar), as its only
+// way to the other pages.
+// The menu's content unmounts as soon as an item is chosen, so a form inside it would be gone before it submits.
+// Sign out runs its server action from the menu instead, which stays mounted, and shows a spinner on the menu's
+// button until the action's redirect arrives.
 
 interface BarMenuProps {
   viewer: { name: string; initials: string };
-  /** The bar's own items, between the signed-in user and "Sign out". */
-  children: ReactNode;
+  /** The bar's own items, between the signed-in user and "Sign out" (none: the menu only signs out). */
+  children?: ReactNode;
   /** "menu": a three-line button; "avatar": the user's initials. */
   trigger?: "menu" | "avatar";
   /** Where the button sits in the bar, and from which width it is hidden. */
@@ -53,46 +49,39 @@ export function BarMenu({ viewer, children, trigger = "menu", className, ref }: 
   }, [open]);
 
   return (
-    <RunAction value={(action) => startTransition(() => action())}>
-      <DropdownMenu open={open} onOpenChange={setOpen}>
-        <DropdownMenuTrigger asChild disabled={pending}>
-          <Button
-            ref={ref}
-            type="button"
-            variant="ghost"
-            size={trigger === "avatar" ? "icon" : "icon-sm"}
-            aria-label={trigger === "avatar" ? `Menu for ${viewer.name}` : "Menu"}
-            aria-busy={pending || undefined}
-            className={className}
-          >
-            {pending ? <Spinner aria-hidden="true" /> : trigger === "avatar" ? <UserAvatar initials={viewer.initials} /> : <MenuIcon />}
-          </Button>
-        </DropdownMenuTrigger>
-        {/* A fixed width, so a long name wraps rather than widening the menu past a phone's screen. */}
-        <DropdownMenuContent align="end" className="w-60">
-          <DropdownMenuLabel className="flex items-start gap-2 text-13 font-normal text-foreground">
-            <UserAvatar initials={viewer.initials} />
-            <span className="sr-only">Signed in as </span>
-            <span className="mt-0.5 min-w-0 wrap-anywhere">{viewer.name}</span>
-          </DropdownMenuLabel>
-          <DropdownMenuSeparator />
-          {children}
-          <DropdownMenuSeparator />
-          <BarMenuAction action={signOut}>
-            <LogOutIcon />
-            Sign out
-          </BarMenuAction>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </RunAction>
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger asChild disabled={pending}>
+        <Button
+          ref={ref}
+          type="button"
+          variant="ghost"
+          size={trigger === "avatar" ? "icon" : "icon-sm"}
+          aria-label={trigger === "avatar" ? `Menu for ${viewer.name}` : "Menu"}
+          aria-busy={pending || undefined}
+          className={className}
+        >
+          {pending ? <Spinner aria-hidden="true" /> : trigger === "avatar" ? <UserAvatar initials={viewer.initials} /> : <MenuIcon />}
+        </Button>
+      </DropdownMenuTrigger>
+      {/* A fixed width, so a long name wraps rather than widening the menu past a phone's screen. */}
+      <DropdownMenuContent align="end" className="w-60">
+        <DropdownMenuLabel className="flex items-start gap-2 text-13 font-normal text-foreground">
+          <UserAvatar initials={viewer.initials} />
+          <span className="sr-only">Signed in as </span>
+          <span className="mt-0.5 min-w-0 wrap-anywhere">{viewer.name}</span>
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {children ? (
+          <>
+            {children}
+            <DropdownMenuSeparator />
+          </>
+        ) : null}
+        <DropdownMenuItem onSelect={() => startTransition(() => signOut())}>
+          <LogOutIcon />
+          Sign out
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
-}
-
-/** A menu item for what the full bar does with a form and a submit button: it runs a server action. */
-export function BarMenuAction({
-  action,
-  ...props
-}: Omit<ComponentProps<typeof DropdownMenuItem>, "asChild" | "onSelect"> & { action: ServerAction }) {
-  const run = use(RunAction);
-  return <DropdownMenuItem onSelect={() => run(action)} {...props} />;
 }

@@ -10,13 +10,17 @@ const VARIANTS = {
   idle: "secondary",
 } as const satisfies Record<WorkspaceState["tone"], string>;
 
-/** The workspace's state as a pill with a status dot ("Running · working"), announced as a status. */
-export function StatusPill({ state }: { state: WorkspaceState }) {
+/**
+ * The workspace's state as a pill with a status dot ("Running · working"), announced as a status: in the
+ * workspace's top bar and in the top block of a user's page, where `title` adds the facts behind it as a tooltip.
+ * Its label is cut short with an ellipsis when a `className` lets it shrink (the workspace bar on a narrow phone).
+ */
+export function StatusPill({ state, title, className }: { state: WorkspaceState; title?: string; className?: string }) {
   const label = state.activity ? `${state.label} · ${state.activity}` : state.label;
   return (
-    <Badge role="status" aria-label={`Workspace: ${label}`} variant={VARIANTS[state.tone]}>
+    <Badge role="status" aria-label={`Workspace: ${label}`} title={title} variant={VARIANTS[state.tone]} className={className}>
       <StatusDot tone={state.tone} pulse={state.pulse} />
-      {label}
+      <span className="truncate">{label}</span>
     </Badge>
   );
 }

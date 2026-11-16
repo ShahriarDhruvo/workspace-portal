@@ -3,7 +3,7 @@
 import crypto from "node:crypto";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import { eq } from "drizzle-orm";
-import { AGENT_KINDS, isAgentKind, users, type AgentKind, type PortalDb } from "@portal/db";
+import { AGENT_KINDS, isAgentKind, isWorkspaceKind, users, WORKSPACE_KINDS, type AgentKind, type PortalDb, type WorkspaceKind } from "@portal/db";
 import {
   ImageCurrentError,
   InvalidVersionError,
@@ -36,8 +36,13 @@ import {
   AgentUnavailableError,
   CapacityError,
   DeletingError,
+  KindMismatchError,
+  NoWorkspacePortError,
+  OnlineDisabledError,
+  OnlineNotAllowedError,
   StartError,
   StopError,
+  WorkspaceRunningError,
   type WorkspaceManager,
 } from "./workspaces.ts";
 
@@ -161,15 +166,6 @@ const ROUTES: Route[] = [
       return engineCall(() => deps.engine.startUpdate({ version, actorUserId: actor }));
     },
   },
-  {
-    method: "POST",
-    pattern: /^\/control\/engine\/rollback$/,
-    handler: async (deps, req) => {
-      const actor = actorParam(objectBody(await readJsonBody(req, MAX_BODY_BYTES)).actorUserId);
-      if (actor !== null) requireUser(deps.db, actor, "actorUserId");
-      return engineCall(() => deps.engine.startRollback({ actorUserId: actor }));
-    },
-  },
   { method: "POST", pattern: /^\/control\/engine\/cancel$/, handler: async (deps) => ({ cancelled: await deps.engine.cancel() }) },
   { method: "POST", pattern: /^\/control\/engine\/restart-now$/, handler: (deps) => ({ ok: deps.engine.restartNow() }) },
   {
@@ -187,13 +183,17 @@ const ROUTES: Route[] = [
     pattern: /^\/control\/workspaces\/([^/]+)\/start$/,
     handler: async (deps, req, [id]) => {
       const userId = userIdParam(id);
-      const { agent } = startBody(await readJsonBody(req, MAX_BODY_BYTES));
+      const options = startBody(await readJsonBody(req, MAX_BODY_BYTES));
       requireUser(deps.db, userId, "userId");
       try {
-        return await deps.manager.start(userId, agent);
+        return await deps.manager.start(userId, options);
       } catch (error) {
         if (error instanceof AgentUnavailableError) throw new HttpError(400, "agent_unavailable", error.message);
         if (error instanceof AgentMismatchError) throw new HttpError(409, "agent_mismatch", error.message);
+        if (error instanceof KindMismatchError) throw new HttpError(409, "kind_mismatch", error.message);
+        if (error instanceof NoWorkspacePortError) throw new HttpError(409, "no_workspace_port", error.message);
+        if (error instanceof OnlineDisabledError) throw new HttpError(409, "online_disabled", error.message);
+        if (error instanceof OnlineNotAllowedError) throw new HttpError(403, "online_not_allowed", error.message);
         if (error instanceof CapacityError) throw new HttpError(409, "capacity", error.message);
         if (error instanceof DeletingError) throw new HttpError(409, "deleting", error.message);
         if (error instanceof StartError) throw new HttpError(500, "start_failed", error.message);
@@ -224,6 +224,26 @@ const ROUTES: Route[] = [
       const userId = userIdParam(id);
       deps.sessions.invalidateUser(userId);
       return deps.manager.release(userId);
+    },
+  },
+  {
+    // Admin's "Erase Private files…" / "Erase Online files…": that kind's home and workspace, left empty.
+    method: "DELETE",
+    pattern: /^\/control\/workspaces\/([^/]+)\/files$/,
+    handler: async (deps, req, [id]) => {
+      const userId = userIdParam(id);
+      const kind = kindParam(new URLSearchParams(splitTarget(req.url ?? "").search).get("kind") ?? undefined);
+      const actor = actorParam(objectBody(await readJsonBody(req, MAX_BODY_BYTES)).actorUserId);
+      requireUser(deps.db, userId, "userId");
+      if (actor !== null) requireUser(deps.db, actor, "actorUserId");
+      try {
+        await deps.manager.eraseFiles(userId, kind, actor);
+      } catch (error) {
+        if (error instanceof WorkspaceRunningError) throw new HttpError(409, "workspace_running", error.message);
+        if (error instanceof DeletingError) throw new HttpError(409, "deleting", error.message);
+        throw error;
+      }
+      return { ok: true };
     },
   },
   {
@@ -330,7 +350,7 @@ function agentParam(value: string | undefined): AgentKind {
 function updateBody(agent: AgentKind, body: unknown): UpdateRequest {
   const { version, rebuild, actorUserId } = objectBody(body);
   if (typeof version !== "string" || version.trim() === "" || version.length > 128) {
-    throw new HttpError(400, "bad_request", "version must be a version (like 0.27.4) or a release channel (like latest).");
+    throw new HttpError(400, "bad_request", "version must be a version, like 0.27.4.");
   }
   if (rebuild !== undefined && rebuild !== null && typeof rebuild !== "boolean") throw new HttpError(400, "bad_request", "rebuild must be true or false.");
   return { agent, version, rebuild: rebuild === true, actorUserId: actorParam(actorUserId) };
@@ -372,12 +392,28 @@ function objectBody(body: unknown): Record<string, unknown> {
   return body as Record<string, unknown>;
 }
 
-/** `{ agent?: AgentKind }`; without one the workspace's last agent starts. */
-function startBody(body: unknown): { agent: AgentKind | undefined } {
-  const { agent } = objectBody(body);
-  if (agent === undefined || agent === null) return { agent: undefined };
-  if (!isAgentKind(agent)) throw unknownAgent();
-  return { agent };
+function unknownKind(): HttpError {
+  return new HttpError(400, "unknown_kind", `kind must be one of ${WORKSPACE_KINDS.map((kind) => `"${kind}"`).join(", ")}.`);
+}
+
+/** A workspace kind (the `kind` query parameter); required. */
+function kindParam(value: string | undefined): WorkspaceKind {
+  if (!isWorkspaceKind(value)) throw unknownKind();
+  return value;
+}
+
+/**
+ * `{ agent?: AgentKind, kind?: WorkspaceKind }`. Without an agent the user's own (Settings) starts; without a kind the
+ * start attaches to whichever kind runs, else starts Private (see WorkspaceManager.requestStart).
+ */
+function startBody(body: unknown): { agent?: AgentKind; kind?: WorkspaceKind } {
+  const { agent, kind } = objectBody(body);
+  if (agent !== undefined && agent !== null && !isAgentKind(agent)) throw unknownAgent();
+  if (kind !== undefined && kind !== null && !isWorkspaceKind(kind)) throw unknownKind();
+  return {
+    ...(agent === undefined || agent === null ? {} : { agent }),
+    ...(kind === undefined || kind === null ? {} : { kind }),
+  };
 }
 
 /** `{ reason?: StopReason, actorUserId?: number }`; the reason defaults to "admin". */

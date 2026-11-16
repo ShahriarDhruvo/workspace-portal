@@ -1,37 +1,35 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { removeEngineImage, restartEngineNow, rollbackEngine, updateEngine } from "@/lib/actions/engine";
-import type { AdminEngine, EngineImage, EngineOverview, EngineRelease } from "@/lib/engine-types";
+import { removeEngineImage, restartEngineNow, updateEngine } from "@/lib/actions/engine";
+import type { AdminEngine, EngineImage, EngineOverview } from "@/lib/engine-types";
 import {
-  compareEngineVersions,
+  enginePackageRows,
   engineRemoveBlocker,
   engineStatusBadge,
   engineUpdateBlocker,
   engineUpdateTarget,
   isEngineJobActive,
-  newerEngineReleases,
+  type EnginePackageRow,
 } from "@/lib/engine-updates";
 import { formatBytes } from "@/lib/format";
 import { CopyButton } from "@/components/common/secret-value";
 import { GuardedButton } from "@/components/common/guarded-button";
+import { PackageImages, type PackageImageRow } from "@/components/admin/agents/package-images";
 import { useDismissedJob } from "@/components/admin/agents/use-dismissed-job";
-import { UnreachableAlert, VersionCard, VersionSection } from "@/components/admin/agents/version-card";
-import { LocalTime } from "@/components/local-time";
+import { UnreachableAlert, VersionCard } from "@/components/admin/agents/version-card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { WarningIcon } from "@/components/ui/icons";
 import { ConfirmActionDialog } from "./confirm-action-dialog";
 import { EngineJob } from "./engine-job";
-import { ReleaseNotes } from "./release-notes";
-import { ImagesTable, ReleasesTable } from "./engine-tables";
 
 const SETUP_COMMAND = "sudo bash ~/workspace-portal/hostd/install.sh llm --portal <portal IP>";
 
+/** install: the card's "Update to X.Y.Z…" (`update`), or a Package images row's Use… or Download…. */
 type EngineDialog =
-  | { kind: "install"; release: EngineRelease }
-  | { kind: "rollback"; version: string | null }
+  | { kind: "install"; row: EnginePackageRow; update: boolean }
   | { kind: "restart"; inFlight: number }
   | { kind: "remove"; image: EngineImage };
 
@@ -43,8 +41,8 @@ interface EngineCardProps {
 
 /**
  * The LLM engine on the Updates page, in the same layout as the agents' cards: what runs and its status, "Update to
- * X.Y.Z" when a newer release is out, rollback beside it, the job inline, and the releases, their notes and the
- * images on the LLM server collapsed below. Without portal-hostd on the LLM server it says how to set it up.
+ * X.Y.Z" when a newer release is out, the job inline, and the Package images below (each row's Use… for an image on
+ * the LLM server or Download… for one that isn't, newer or older, and Remove…). Without portal-hostd on the LLM server it says how to set it up.
  */
 export function EngineCard({ data, onChanged }: EngineCardProps) {
   const overview = data.engine;
@@ -109,107 +107,56 @@ export function EngineCard({ data, onChanged }: EngineCardProps) {
   const job = overview.job;
   const blocked = engineUpdateBlocker(overview, unreachable);
   const target = engineUpdateTarget(overview);
-  const targetRelease = overview.releases?.releases.find((release) => release.version === target) ?? null;
   const shownJob = job && (isEngineJobActive(job) || (dismissedJob !== undefined && dismissedJob !== job.id)) ? job : null;
-  const newer = newerEngineReleases(overview);
-  const noteReleases =
-    newer.length > 0 ? newer : (overview.releases?.releases ?? []).filter((release) => release.version === engine.version);
-  const onServer = new Set(engine.images.map((image) => image.digest).filter((digest): digest is string => digest !== null));
+  const packages = enginePackageRows(overview.releases?.releases ?? [], engine);
+  const targetRow = packages.find((row) => row.version === target) ?? null;
+  const rows = packages.map((row): PackageImageRow => {
+    const image = row.image;
+    return {
+      ...row,
+      current: row.running,
+      action: row.running
+        ? null
+        : {
+            label: image ? "Use…" : "Download…",
+            blockedReason: blocked,
+            onClick: (from) => show({ kind: "install", row, update: false }, from),
+          },
+      remove:
+        image && !image.current
+          ? {
+              label: "Remove…",
+              blockedReason: engineRemoveBlocker(overview, unreachable, image),
+              onClick: (from) => show({ kind: "remove", image }, from),
+            }
+          : null,
+    };
+  });
 
   return (
     <VersionCard
       title={title}
       subtitle={engine.repository}
       status={status}
-      version={{
-        label: "Running on the LLM server",
-        value: engine.version ?? "unknown",
-        note: (
-          <>
-            {engine.ready ? `${engine.unit} answers.` : `${engine.unit} is starting.`}{" "}
-            {overview.releases?.checkedAt ? (
-              <>
-                Releases checked <LocalTime at={overview.releases.checkedAt} relative />.
-              </>
-            ) : null}
-          </>
-        ),
-      }}
+      version={{ label: "Running on the LLM server", value: engine.version ?? "unknown" }}
       actions={
         // While a job runs its panel is the focus, and nothing else can start anyway.
-        job && isEngineJobActive(job) ? null : (
-          <>
-            {/* Rolling back reuses the previous image; once it's removed, Versions installs that version again. */}
-            {engine.previous && engine.images.some((image) => image.previous) ? (
-              <GuardedButton
-                variant="outline"
-                blockedReason={blocked}
-                onClick={(event) => show({ kind: "rollback", version: engine.previous?.version ?? null }, event.currentTarget)}
-              >
-                Roll back to {engine.previous.version ?? "the previous version"}…
-              </GuardedButton>
-            ) : null}
-            {targetRelease ? (
-              <GuardedButton
-                blockedReason={blocked}
-                onClick={(event) => show({ kind: "install", release: targetRelease }, event.currentTarget)}
-              >
-                Update to {targetRelease.version}…
-              </GuardedButton>
-            ) : null}
-          </>
-        )
+        targetRow && !(job && isEngineJobActive(job)) ? (
+          <GuardedButton blockedReason={blocked} onClick={(event) => show({ kind: "install", row: targetRow, update: true }, event.currentTarget)}>
+            Update to {targetRow.version}…
+          </GuardedButton>
+        ) : null
       }
       sections={
-        <>
-          <VersionSection
-            title="Release notes"
-            summary={
-              newer.length > 0 ? (
-                <span className="inline-flex flex-wrap items-center gap-1.5">
-                  {newer.length === 1 ? `${newer[0]?.version} is newer` : `${newer.length} newer versions`}
-                  {newer.some((release) => release.notes?.breaking) ? <Badge variant="destructive">Breaking changes</Badge> : null}
-                </span>
-              ) : (
-                "This version"
-              )
-            }
-          >
-            {noteReleases.length > 0 ? (
-              <div className="flex flex-col gap-5">
-                {noteReleases.map((release) => (
-                  <ReleaseNotes key={release.version} release={release} />
-                ))}
-              </div>
-            ) : (
-              <p className="text-13 text-muted-foreground">No release notes yet.</p>
-            )}
-          </VersionSection>
-          <VersionSection title="Versions" summary={`${overview.releases?.releases.length ?? 0} in the registry`}>
-            {overview.releases && overview.releases.releases.length > 0 ? (
-              <ReleasesTable
-                releases={overview.releases.releases}
-                current={engine.version}
-                onServer={onServer}
-                blockedReason={blocked}
-                onInstall={(release, from) => show({ kind: "install", release }, from)}
-              />
-            ) : (
-              <p className="text-13 text-muted-foreground">Unknown until the image registry answers.</p>
-            )}
-          </VersionSection>
-          <VersionSection
-            title="Images on the LLM server"
-            triggerRef={imagesTrigger}
-            summary={`${engine.images.length} ${engine.images.length === 1 ? "image" : "images"}`}
-          >
-            <ImagesTable
-              images={engine.images}
-              removeBlocker={(image) => engineRemoveBlocker(overview, unreachable, image)}
-              onRemove={(image, from) => show({ kind: "remove", image }, from)}
-            />
-          </VersionSection>
-        </>
+        <PackageImages
+          name="LLM engine"
+          rows={rows}
+          currentLabel="Running"
+          missingLabel="Download first"
+          where="the LLM server"
+          empty="Unknown until the image registry answers."
+          triggerRef={imagesTrigger}
+        />
       }
     >
       {unreachable ? (
@@ -274,47 +221,31 @@ function EngineDialogs({ dialog, overview, open, onOpenChange, onDone, opener }:
   const em = (text: string) => <span className="font-mono text-foreground">{text}</span>;
   switch (dialog.kind) {
     case "install": {
-      const { release } = dialog;
-      const newer = overview.engine?.version ? compareEngineVersions(release.version, overview.engine.version) > 0 : true;
-      const local = overview.engine?.images.some((image) => image.digest !== null && image.digest === release.digest);
+      const { row } = dialog;
+      // Said as the button that opened it said it.
+      const verb = row.image ? "Use" : "Download";
       return (
         <ConfirmActionDialog
           {...common}
-          title={`${newer ? "Update" : "Switch"} the LLM engine to ${release.version}`}
-          confirm={`${newer ? "Update" : "Switch"} to ${release.version}`}
+          title={dialog.update ? `Update the LLM engine to ${row.version}?` : `${verb} LLM engine ${row.version}?`}
+          confirm={dialog.update ? `Update to ${row.version}` : `${verb} ${row.version}`}
           pending="Starting…"
-          onConfirm={() => updateEngine(release.version)}
+          onConfirm={() => updateEngine(row.version)}
         >
-          {release.notes?.breaking ? (
+          {row.notes?.breaking ? (
             <span className="flex flex-col items-center gap-1.5 sm:items-start">
               <Badge variant="destructive">Breaking changes</Badge>
-              <span>Read its release notes on this card first: {em(release.version)} changes how the engine behaves.</span>
+              <span>Read its release notes first: {em(row.version)} changes how the engine behaves.</span>
             </span>
           ) : null}
           <p>
-            {local ? "Its image is on the LLM server already. " : "Its image downloads first, while the engine keeps serving. "}
-            {drain} with {em(release.version)}.
+            {row.image ? "Its image is on the LLM server already. " : "Its image downloads first, while the engine keeps serving. "}
+            {drain} with {em(row.version)}.
           </p>
           <p>If it doesn&apos;t start properly, the LLM server puts {em(current)} back by itself.</p>
         </ConfirmActionDialog>
       );
     }
-    case "rollback":
-      return (
-        <ConfirmActionDialog
-          {...common}
-          title={`Roll back the LLM engine to ${dialog.version ?? "the previous version"}`}
-          confirm="Roll back"
-          pending="Starting…"
-          onConfirm={rollbackEngine}
-        >
-          <p>
-            The engine goes back to {em(dialog.version ?? "the previous version")}, the version that ran before the last change. New LLM
-            requests wait in the portal&apos;s queue while the running ones finish (at most {overview.drainMinutes} minutes; nothing fails),
-            then it restarts.
-          </p>
-        </ConfirmActionDialog>
-      );
     case "restart":
       return (
         <ConfirmActionDialog
@@ -338,7 +269,7 @@ function EngineDialogs({ dialog, overview, open, onOpenChange, onDone, opener }:
       return (
         <ConfirmActionDialog
           {...common}
-          title="Remove engine image"
+          title="Remove engine image?"
           confirm="Remove"
           pending="Removing…"
           destructive
@@ -346,8 +277,7 @@ function EngineDialogs({ dialog, overview, open, onOpenChange, onDone, opener }:
         >
           <p>
             Remove the {em(image.version ?? "unknown")} image{image.sizeBytes ? ` (${formatBytes(image.sizeBytes)})` : ""} from the LLM
-            server? Installing that version again downloads it again
-            {image.previous ? "; rolling back needs it, so rollback isn't possible until another update" : ""}.
+            server? Using that version later downloads it again.
           </p>
         </ConfirmActionDialog>
       );

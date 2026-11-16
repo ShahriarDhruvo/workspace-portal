@@ -1,7 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { FakeEngineRegistry, FakeNotes } from "../test/fakes.ts";
-import { compareVersions, createNotesClient, createRegistryClient, EngineReleases, isStableVersion, splitRepository } from "./engine-releases.ts";
+import { compareVersions, createNotesClient, createRegistryClient, EngineReleases, isStableVersion, splitRepository, withLocalVersions } from "./engine-releases.ts";
+import { createGitHubReleases } from "./github-releases.ts";
+import type { Logger } from "./log.ts";
 
 test("splitRepository finds the registry host, Docker Hub by default", () => {
   assert.deepEqual(splitRepository("ghcr.io/gufo-org/toolboxes/gufo-runtime"), { registry: "ghcr.io", path: "gufo-org/toolboxes/gufo-runtime" });
@@ -59,17 +61,18 @@ test("the registry client refuses challenges it can't answer anonymously", async
   await assert.rejects(createRegistryClient(fetch).tags("registry.example/a"), /credentials the portal doesn't have/);
 });
 
-test("release notes: stable releases only, by version, cut when long, breaking changes flagged", async () => {
+test("release notes: stable releases only, by version, breaking changes flagged", async () => {
   const { fetch, calls } = fakeFetch({
-    "https://api.github.com/repos/gufo-org/gufo/releases?per_page=30": () =>
+    "https://api.github.com/repos/gufo-org/gufo/releases?per_page=100": () =>
       Response.json([
         { tag_name: "v0.34.0", name: "v0.34.0", html_url: "https://github.com/gufo-org/gufo/releases/tag/v0.34.0", published_at: "2026-11-11T22:36:39Z", body: "### ⚠ BREAKING CHANGES\n* audio", draft: false, prerelease: false },
         { tag_name: "v0.35.0-rc.1", body: "rc", draft: false, prerelease: true },
-        { tag_name: "v0.33.0", name: "", html_url: "javascript:alert(1)", published_at: null, body: "x".repeat(20_000) },
+        { tag_name: "v0.33.0", name: "", html_url: "https://github.com/gufo-org/gufo/releases/tag/v0.33.0", published_at: null, body: "### Breaking changes\n\nNone.\n\n### Features\n\n* x" },
+        { tag_name: "v0.32.1", body: "", prerelease: true },
         { tag_name: "nightly", body: "" },
       ]),
   });
-  const notes = await createNotesClient(fetch).notes("gufo-org/gufo");
+  const notes = await createNotesClient(createGitHubReleases(fetch)).notes("gufo-org/gufo");
   assert.deepEqual([...notes.keys()], ["0.34.0", "0.33.0"]);
   assert.deepEqual(notes.get("0.34.0"), {
     title: "v0.34.0",
@@ -78,11 +81,66 @@ test("release notes: stable releases only, by version, cut when long, breaking c
     body: "### ⚠ BREAKING CHANGES\n* audio",
     breaking: true,
   });
-  const long = notes.get("0.33.0")!;
-  assert.equal(long.title, "v0.33.0");
-  assert.equal(long.url, "https://github.com/gufo-org/gufo/releases", "only github.com links");
-  assert.ok(long.body.length < 12_100 && long.body.endsWith("…"));
+  assert.equal(notes.get("0.33.0")?.breaking, false, "a breaking-changes section that says none");
   assert.equal(calls[0]!.auth, null, "anonymous");
+});
+
+test("offered: the 5 newest releases up to the one latest points at, plus what runs and the images on the LLM server", async () => {
+  const registry = new FakeEngineRegistry();
+  registry.versions = ["0.28.0", "0.29.0", "0.30.0", "0.31.0", "0.32.0", "0.33.0", "0.34.0", "0.35.0"];
+  const latestIs = "0.34.0";
+  const digest = registry.digest.bind(registry);
+  registry.digest = async (repository, tag) => digest(repository, tag === "latest" ? latestIs : tag);
+  const releases = new EngineReleases({ registry, notes: new FakeNotes(), notesRepo: "gufo-org/gufo" });
+  const repo = "ghcr.io/gufo-org/toolboxes/gufo-runtime";
+  const list = await releases.list(repo, {}, [
+    { version: "0.28.0", digest: "sha256:local" },
+    { version: "0.31.0", digest: "sha256:other" },
+    { version: null, digest: "sha256:unlabelled" },
+  ]);
+  assert.deepEqual(
+    list.releases.map((release) => [release.version, release.latest, release.notes?.title ?? null]),
+    [
+      ["0.34.0", true, "v0.34.0"],
+      ["0.33.0", false, "v0.33.0"],
+      ["0.32.0", false, null],
+      ["0.31.0", false, null],
+      ["0.30.0", false, null],
+      ["0.28.0", false, null],
+    ],
+    "0.35.0 isn't latest yet; 0.28.0 is on the server",
+  );
+  assert.equal(list.releases.find((release) => release.version === "0.28.0")?.digest, "sha256:local", "an older image's own digest");
+  assert.notEqual(list.releases.find((release) => release.version === "0.31.0")?.digest, "sha256:other", "a listed version keeps the registry's");
+});
+
+test("withLocalVersions: notes for the local versions, newest first", () => {
+  const notes = new Map([["0.29.0", { title: "v0.29.0", url: "https://github.com/x/y/releases/tag/v0.29.0", publishedAt: 1, body: "", breaking: true }]]);
+  const merged = withLocalVersions([{ version: "0.34.0", digest: "sha256:a", latest: true, notes: null }], [{ version: "0.29.0", digest: "sha256:b" }, { version: "0.34.0", digest: "sha256:c" }], notes);
+  assert.deepEqual(merged, [
+    { version: "0.34.0", digest: "sha256:a", latest: true, notes: null },
+    { version: "0.29.0", digest: "sha256:b", latest: false, notes: notes.get("0.29.0") },
+  ]);
+});
+
+test("GitHub failing is no registry failure: the list stays fresh and error-free, with the last notes", async () => {
+  const clock = { now: 0 };
+  const registry = new FakeEngineRegistry();
+  const notes = new FakeNotes();
+  const warnings: string[] = [];
+  const log: Logger = { info() {}, warn: (message) => void warnings.push(message), error() {} };
+  const releases = new EngineReleases({ registry, notes, notesRepo: "gufo-org/gufo", now: () => clock.now, log });
+  const repo = "ghcr.io/gufo-org/toolboxes/gufo-runtime";
+  assert.equal((await releases.list(repo)).releases.find((release) => release.version === "0.34.0")?.notes?.breaking, true);
+  notes.notes = async () => {
+    throw new Error("GitHub answered 403 for gufo-org/gufo's releases");
+  };
+  clock.now += 11 * 60_000;
+  const list = await releases.list(repo);
+  assert.equal(list.error, null, "the card must not say the registry is unreachable");
+  assert.equal(list.checkedAt, clock.now);
+  assert.equal(list.releases.find((release) => release.version === "0.34.0")?.notes?.breaking, true, "last notes kept");
+  assert.equal(warnings.length, 1);
 });
 
 test("the release list is cached for 10 minutes; a failed check keeps the last list and retries after a minute", async () => {

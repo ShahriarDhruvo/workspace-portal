@@ -78,3 +78,13 @@ test("LLM engine updates, failures and image removals", () => {
     "Version: 0.31.0 · Digest: sha256:9a6e",
   );
 });
+
+test("workspace kinds and the Online permission read as words", () => {
+  assert.equal(auditActionLabel("workspace_files_erased", true), "Erased workspace files");
+  assert.equal(auditActionLabel("user_online_access_changed", true), "Changed Online access");
+  assert.equal(formatAuditDetails(JSON.stringify({ kind: "online", agent: "qwen" })), "Type: Online · Agent: Qwen Code");
+  assert.equal(formatAuditDetails(JSON.stringify({ kind: "private" })), "Type: Private");
+  assert.equal(formatAuditDetails(JSON.stringify({ kind: "rollback" })), "Type: rollback", "an older engine entry's kind as it is");
+  assert.equal(formatAuditDetails(JSON.stringify({ allowed: false })), "Allowed: no");
+  assert.equal(formatAuditDetails(JSON.stringify({ username: "bob", onlineAllowed: true })), "Username: bob · Online workspace: yes");
+});

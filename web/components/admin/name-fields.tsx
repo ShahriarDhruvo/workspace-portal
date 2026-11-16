@@ -4,29 +4,32 @@ import { FormField } from "@/components/forms/form-field";
 interface NameFieldsProps {
   values?: { firstName?: string; middleName?: string | null; lastName?: string };
   errors: Partial<Record<string, string>>;
-  /** Focus the first name on arrival (the new-user form). */
-  autoFocus?: boolean;
+  /**
+   * The new-user form: example names as placeholders, and the first name focused on arrival. An existing user's
+   * profile has neither (an example under a cleared field would read like their data).
+   */
+  newUser?: boolean;
 }
 
 /** First, middle (optional) and last name side by side (stacked on narrow screens), as on the new-user and profile forms. */
-export function NameFields({ values, errors, autoFocus }: NameFieldsProps) {
+export function NameFields({ values, errors, newUser = false }: NameFieldsProps) {
   return (
     <div className="grid grid-cols-1 gap-x-4 gap-y-5 sm:grid-cols-3">
       <FormField
         label="First name"
         name="firstName"
-        placeholder="Ada"
+        placeholder={newUser ? "Ada" : undefined}
         required
         maxLength={NAME_MAX_LENGTH}
         autoComplete="off"
-        autoFocus={autoFocus}
+        autoFocus={newUser}
         defaultValue={values?.firstName}
         error={errors.firstName}
       />
       <FormField
         label="Middle name"
         name="middleName"
-        placeholder="Augusta"
+        placeholder={newUser ? "Augusta" : undefined}
         optional
         maxLength={NAME_MAX_LENGTH}
         autoComplete="off"
@@ -36,7 +39,7 @@ export function NameFields({ values, errors, autoFocus }: NameFieldsProps) {
       <FormField
         label="Last name"
         name="lastName"
-        placeholder="Lovelace"
+        placeholder={newUser ? "Lovelace" : undefined}
         required
         maxLength={NAME_MAX_LENGTH}
         autoComplete="off"

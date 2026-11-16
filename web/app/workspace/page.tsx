@@ -17,7 +17,7 @@ export default async function WorkspacePage() {
     <WorkspaceShell
       viewer={{ name: displayName(user), initials: initials(user.firstName, user.lastName), isAdmin: user.role === "admin" }}
       target={{ id: target.id, name: targetName, isViewer: !actingAs }}
-      frame={workspaceFrame(session)}
+      frames={{ private: workspaceFrame(session, "private"), online: workspaceFrame(session, "online") }}
       idleTimeoutMinutes={config.idleTimeoutMinutes}
       agentNames={AGENT_NAMES}
       banner={actingAs ? <ViewingBanner>You are viewing {targetName}&apos;s workspace</ViewingBanner> : undefined}

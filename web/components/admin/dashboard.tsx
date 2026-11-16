@@ -6,15 +6,16 @@ import { useEffect, useRef, useState } from "react";
 import type { AgentKind } from "@portal/db";
 import { startingAgent } from "@/lib/agent-choice";
 import { fetchJson } from "@/lib/fetch-json";
-import { agentLabel, summarizeWorkspace } from "@/lib/format";
+import { agentLabel, formatVersion, summarizeWorkspace } from "@/lib/format";
 import type { AdminOverview, WorkspaceInfo } from "@/lib/gateway-types";
 import type { UserSummary } from "@/lib/user-summary";
+import { hasContainer } from "@/lib/workspace-kind";
 import { UserAvatar } from "@/components/brand";
 import { StatusDot } from "@/components/common/status-dot";
 import { LocalTime } from "@/components/local-time";
+import { DataTable, DataTableHead, DataTablePagination, usePagination } from "@/components/common/data-table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -23,7 +24,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { EditIcon, EllipsisIcon, KeyIcon, StopIcon, TrashIcon, UserCheckIcon, UserXIcon } from "@/components/ui/icons";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { TableBody, TableCell, TableHeader, TableRow } from "@/components/ui/table";
+import { KindBadge } from "@/components/workspace/kind-badge";
 import { OpenWorkspaceForm } from "./open-workspace-form";
 import { ServiceIssue } from "./service-issue";
 import { UserDialog, type DialogUser, type UserDialogKind } from "./user-dialogs";
@@ -41,7 +43,7 @@ interface DashboardProps {
   enabledAgents: ReadonlyArray<{ id: AgentKind }> | null;
 }
 
-/** The users table, with workspace state refreshed every 5 s. */
+/** The users table, 30 to a page, with workspace state (and the kind that runs) refreshed every 5 s. */
 export function UsersDashboard({ users, initialOverview, currentAdminId, idleTimeoutMinutes, agentNames, enabledAgents }: DashboardProps) {
   const router = useRouter();
   const [overview, setOverview] = useState(initialOverview);
@@ -62,46 +64,37 @@ export function UsersDashboard({ users, initialOverview, currentAdminId, idleTim
   }, [router]);
 
   const workspaces = new Map((overview.workspaces ?? []).map((info) => [info.userId, info]));
+  const { rows, pagination } = usePagination(users);
 
   return (
-    <div className="flex flex-col gap-6">
+    <>
       {overview.error ? <ServiceIssue message={overview.error.message}>Workspace status may be out of date.</ServiceIssue> : null}
-      <section aria-labelledby="users-heading" className="flex flex-col gap-2">
-        <h2 id="users-heading" className="label-caps">
-          Users <span className="tabular-nums">({users.length})</span>
-        </h2>
-        {/* The table scrolls sideways inside its card on narrow screens; the page itself never does. */}
-        <Card className="gap-0 py-0">
-          <Table className="[&_tr>*:first-child]:pl-4 [&_tr>*:last-child]:pr-4">
-            <TableHeader>
-              <TableRow>
-                {["Name", "Username", "Role", "Account", "Workspace", "Harness", "Last sign-in"].map((heading) => (
-                  <TableHead key={heading} scope="col" className="h-9 text-12 text-muted-foreground">
-                    {heading}
-                  </TableHead>
-                ))}
-                <TableHead scope="col">
-                  <span className="sr-only">Actions</span>
-                </TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {users.map((user) => (
-                <UserRow
-                  key={user.id}
-                  user={user}
-                  isSelf={user.id === currentAdminId}
-                  workspace={overview.workspaces ? (workspaces.get(user.id) ?? null) : undefined}
-                  idleTimeoutMinutes={idleTimeoutMinutes}
-                  agentNames={agentNames}
-                  nextAgent={enabledAgents ? startingAgent(user.agent, enabledAgents) : user.agent}
-                />
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
-      </section>
-    </div>
+      <DataTable footer={<DataTablePagination {...pagination} label="Users pages" />} tableProps={{ "aria-label": "Users" }}>
+        <TableHeader>
+          <TableRow>
+            {["Name", "Username", "Role", "Account", "Workspace", "Harness", "Last sign-in"].map((heading) => (
+              <DataTableHead key={heading}>{heading}</DataTableHead>
+            ))}
+            <DataTableHead>
+              <span className="sr-only">Actions</span>
+            </DataTableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.map((user) => (
+            <UserRow
+              key={user.id}
+              user={user}
+              isSelf={user.id === currentAdminId}
+              workspace={overview.workspaces ? (workspaces.get(user.id) ?? null) : undefined}
+              idleTimeoutMinutes={idleTimeoutMinutes}
+              agentNames={agentNames}
+              nextAgent={enabledAgents ? startingAgent(user.agent, enabledAgents) : user.agent}
+            />
+          ))}
+        </TableBody>
+      </DataTable>
+    </>
   );
 }
 
@@ -150,6 +143,7 @@ function UserRow({ user, isSelf, workspace, idleTimeoutMinutes, agentNames, next
             <span className="flex items-center gap-1.5 text-foreground">
               <StatusDot tone={summary.tone} pulse={summary.label === "Working"} />
               {summary.label}
+              {workspace && hasContainer(workspace.status) ? <KindBadge kind={workspace.kind} /> : null}
               {summary.detail ? <span className="text-muted-foreground">·</span> : null}
             </span>
             {summary.detail ? <span className="text-muted-foreground">{summary.detail}</span> : null}
@@ -165,7 +159,7 @@ function UserRow({ user, isSelf, workspace, idleTimeoutMinutes, agentNames, next
         <span className="flex items-baseline gap-x-1.5">
           <span>{agent ?? "—"}</span>
           {agent && running && workspace?.agentVersion ? (
-            <span className="font-mono text-12 text-muted-foreground">{workspace.agentVersion}</span>
+            <span className="font-mono text-12 text-muted-foreground">{formatVersion(workspace.agentVersion)}</span>
           ) : null}
         </span>
       </TableCell>
@@ -182,7 +176,11 @@ function UserRow({ user, isSelf, workspace, idleTimeoutMinutes, agentNames, next
   );
 }
 
-/** The row's "…" menu and the confirmation dialog its items open; closing the dialog refocuses the "…" button. */
+/**
+ * The row's "…" menu and the confirmation dialog its items open; closing the dialog refocuses the "…" button.
+ * The menu is as wide as its longest item (not the button's width, the radix-nova default) and opens under the
+ * button, its right edge on the button's, kept 8px inside the screen.
+ */
 function UserActions({ user, isSelf, running, active }: { user: DialogUser; isSelf: boolean; running: boolean; active: boolean }) {
   const [dialog, setDialog] = useState<UserDialogKind>("stop");
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -201,7 +199,7 @@ function UserActions({ user, isSelf, running, active }: { user: DialogUser; isSe
             <EllipsisIcon />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
+        <DropdownMenuContent align="end" collisionPadding={8} className="w-auto min-w-40">
           <DropdownMenuItem disabled={!running} onSelect={() => openDialog("stop")}>
             <StopIcon />
             Stop workspace…

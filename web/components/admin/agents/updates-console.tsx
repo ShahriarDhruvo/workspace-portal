@@ -25,8 +25,8 @@ interface UpdatesConsoleProps {
 
 /**
  * The Updates page: one card each for the LLM engine (on the LLM server) and the enabled agents (images on this
- * server), all in the same layout, each with its running or last job inline. Live: each part polls its own route,
- * every second while its job runs; "Check for updates" asks the registries again for both.
+ * server), all in the same layout (VersionCard, PackageImages), each with its running or last job inline. Live: each
+ * part polls its own route, every second while its job runs; "Check for updates" asks the registries again for both.
  */
 export function UpdatesConsole({ initialAgents, initialEngine, agentNames }: UpdatesConsoleProps) {
   const agents = useAgentVersions(initialAgents);
@@ -47,9 +47,7 @@ export function UpdatesConsole({ initialAgents, initialEngine, agentNames }: Upd
             onCheck={() => void Promise.all([agents.refresh(), engine.refresh()])}
           />
         }
-      >
-        The engine restarts once running requests finish. New workspaces get agent updates.
-      </PageHeading>
+      />
       <JobAnnouncer job={job} name={job ? agentNames[job.agent] : ""} />
       <div className="flex flex-col gap-4">
         <EngineCard data={engine.data} onChanged={engine.pollNow} />

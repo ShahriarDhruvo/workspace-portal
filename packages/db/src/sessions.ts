@@ -111,7 +111,10 @@ export type AuditAction =
   | "agent_preference_changed"
   | "engine_updated"
   | "engine_update_failed"
-  | "engine_image_removed";
+  | "engine_image_removed"
+  | "energy_rate_set"
+  | "workspace_files_erased"
+  | "user_online_access_changed";
 
 export function writeAudit(
   db: PortalDb,

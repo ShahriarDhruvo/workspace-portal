@@ -139,10 +139,10 @@ export const qwenDriver: AgentDriver = {
     ];
   },
 
-  renderSettings(config) {
+  renderSettings(config, kind) {
     const rendered = renderQwenSettings({
       admin: loadAdminQwenConfig(config.qwenConfigDir),
-      serviceBaseUrl: serviceBaseUrl(config),
+      serviceBaseUrl: serviceBaseUrl(config, kind),
       browser: config.workspace.browser,
       reader: config.reader.url !== "",
       defaultEffort: config.workspace.defaultEffort,

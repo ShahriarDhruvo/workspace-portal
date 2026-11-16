@@ -8,7 +8,7 @@ import { STATUS_CODES, type IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import WebSocket, { WebSocketServer, type RawData } from "ws";
 import { tokensEqual, type SessionContext } from "@portal/db";
-import { checkAgentAccess, INVALID_TOKEN, unavailableError, type AgentDeps } from "./agent-access.ts";
+import { checkAgentAccess, INVALID_TOKEN, otherKindError, unavailableError, type AgentDeps } from "./agent-access.ts";
 import { driverFor } from "./agents/index.ts";
 import { MIB } from "./config.ts";
 import { connectionRole } from "./connections.ts";
@@ -46,10 +46,14 @@ export function createWsRelay(deps: AgentDeps): UpgradeHandler {
     if (presented !== null && !tokensEqual(presented, access.browserToken)) {
       return rejectUpgrade(socket, 401, INVALID_TOKEN.code, INVALID_TOKEN.message);
     }
-    const upstream = deps.manager.upstream(access.userId);
+    // Only this port's kind: while the user's other kind runs, no socket here reaches it.
+    const upstream = deps.manager.upstream(access.userId, access.kind);
     if (!upstream) {
       // Like the HTTP side: never starts the workspace, so a reconnect loop can't wake it.
-      const { code, message, headers } = unavailableError(deps.manager.info(access.userId).status);
+      const info = deps.manager.info(access.userId);
+      const other = otherKindError(info, access.kind);
+      if (other) return rejectUpgrade(socket, 409, other.code, other.message);
+      const { code, message, headers } = unavailableError(info.kind === access.kind ? info.status : "stopped");
       return rejectUpgrade(socket, 503, code, message, headers);
     }
     const driver = driverFor(upstream.agent);

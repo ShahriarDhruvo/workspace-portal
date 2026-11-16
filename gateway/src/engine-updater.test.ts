@@ -81,7 +81,7 @@ test("an update downloads, drains the queue, restarts, then opens the queue agai
   const { updater, host, queue, audits, done, cleanup } = setup();
   const running = await queue.acquire(7);
   const job = await updater.startUpdate({ version: "0.34.0", actorUserId: null });
-  assert.deepEqual([job.kind, job.fromVersion, job.toVersion, job.image, job.cancellable], ["update", "0.31.0", "0.34.0", `${ENGINE_REPOSITORY}@${engineDigest("0.34.0")}`, true]);
+  assert.deepEqual([job.reuse, job.fromVersion, job.toVersion, job.image, job.cancellable], [false, "0.31.0", "0.34.0", `${ENGINE_REPOSITORY}@${engineDigest("0.34.0")}`, true]);
   await assert.rejects(updater.startUpdate({ version: "0.33.0", actorUserId: null }), EngineJobRunningError);
 
   // Draining: new requests wait, the running one may finish.
@@ -107,16 +107,15 @@ test("an update downloads, drains the queue, restarts, then opens the queue agai
   (await waiting)();
   assert.equal(granted, true, "the held request went through afterwards");
   assert.ok(finished!.log.some((line) => line === "pull done") && finished!.log.some((line) => line === "apply done"), "hostd's logs are part of the job's");
-  assert.deepEqual(audits(), [{ action: "engine_updated", details: { kind: "update", from: "0.31.0", to: "0.34.0" } }]);
+  assert.deepEqual(audits(), [{ action: "engine_updated", details: { from: "0.31.0", to: "0.34.0" } }]);
   cleanup();
 });
 
-test("a failed restart reports hostd's rollback; a rollback swaps back; refusals", async () => {
-  const { updater, host, queue, audits, done, cleanup } = setup();
+test("a failed restart reports hostd's rollback; an image on the LLM server is used without download or registry; refusals", async () => {
+  const { updater, host, registry, queue, audits, done, cleanup } = setup();
   await assert.rejects(updater.startUpdate({ version: "0.31.0", actorUserId: null }), (e) => e instanceof EngineRequestError && e.code === "already_current");
   await assert.rejects(updater.startUpdate({ version: "latest", actorUserId: null }), (e) => e instanceof EngineRequestError && e.code === "invalid_version");
   await assert.rejects(updater.startUpdate({ version: "0.99.0", actorUserId: null }), (e) => e instanceof EngineRequestError && e.code === "version_not_found");
-  await assert.rejects(updater.startRollback({ actorUserId: null }), (e) => e instanceof EngineRequestError && e.code === "no_previous");
 
   host.failApply = "the engine reports 0.31.0, not 0.33.0";
   await updater.startUpdate({ version: "0.33.0", actorUserId: null });
@@ -125,24 +124,25 @@ test("a failed restart reports hostd's rollback; a rollback swaps back; refusals
   assert.equal(host.version, "0.31.0");
   assert.equal(queue.paused, false, "the queue opens again after a failure too");
 
-  await updater.startUpdate({ version: "0.33.0", actorUserId: null });
+  // 0.33.0 was downloaded by the failed try, and 0.31.0 ran before: both switch without the registry or a download.
+  registry.failing = true;
+  host.calls.length = 0;
+  const again = await updater.startUpdate({ version: "0.33.0", actorUserId: null });
+  assert.deepEqual([again.reuse, again.stage], [true, "draining"]);
   await done();
   assert.equal(host.version, "0.33.0");
-  await updater.startRollback({ actorUserId: null });
-  const rolled = await done();
-  assert.deepEqual([rolled!.kind, rolled!.stage, rolled!.fromVersion, rolled!.toVersion], ["rollback", "succeeded", "0.33.0", "0.31.0"]);
+  const back = await updater.startUpdate({ version: "0.31.0", actorUserId: null });
+  const switched = await done();
+  assert.deepEqual([back.reuse, switched!.stage, switched!.fromVersion, switched!.toVersion], [true, "succeeded", "0.33.0", "0.31.0"]);
+  assert.ok(switched!.log.includes(`Using the image already on the LLM server (${ENGINE_REPOSITORY}@${engineDigest("0.31.0")}).`));
   assert.equal(host.version, "0.31.0");
-
-  // The previous image was removed since: refused before any drain.
-  host.local.delete(host.previous!);
-  await assert.rejects(updater.startRollback({ actorUserId: null }), (e) => e instanceof EngineRequestError && e.code === "not_pulled" && /0\.33\.0 image is no longer/.test(e.message));
-  assert.equal(queue.paused, false);
+  assert.deepEqual(host.calls, [`apply ${ENGINE_REPOSITORY}@${engineDigest("0.33.0")} 0.33.0`, `apply ${ENGINE_REPOSITORY}@${engineDigest("0.31.0")} 0.31.0`], "no pull");
   assert.deepEqual(
-    audits().map((a) => [a.action, a.details.kind, a.details.to, a.details.rolledBack ?? null]),
+    audits().map((a) => [a.action, a.details.from, a.details.to, a.details.rolledBack ?? null]),
     [
-      ["engine_update_failed", "update", "0.33.0", true],
-      ["engine_updated", "update", "0.33.0", null],
-      ["engine_updated", "rollback", "0.31.0", null],
+      ["engine_update_failed", "0.31.0", "0.33.0", true],
+      ["engine_updated", "0.31.0", "0.33.0", null],
+      ["engine_updated", "0.33.0", "0.31.0", null],
     ],
   );
   cleanup();

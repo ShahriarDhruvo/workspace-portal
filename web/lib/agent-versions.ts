@@ -1,12 +1,14 @@
-// What the Agents page (admin console) decides, kept out of its components: the version summaries, which actions
-// are allowed right now and why not, the job's labels and timings, how often to poll, and the gateway's errors in
-// plain words. Pure; unit tested. The gateway's view of versions: docs/ARCHITECTURE.md, "Agent versions and updates".
+// What the Updates page decides about the agents, kept out of its components: the status badge, the rows of the
+// Package images table and what each offers, which actions are allowed right now and why not, the job's labels and
+// timings, how often to poll, and the gateway's errors in plain words. Pure; unit tested. The gateway's view of
+// versions: docs/ARCHITECTURE.md, "Agent versions and updates".
 import type {
   AdminAgents,
   AgentUpdateJob,
   AgentVersionInfo,
   ApiError,
   InstalledImage,
+  ReleaseNotes,
   UpdatePhase,
 } from "./gateway-types.ts";
 
@@ -44,7 +46,7 @@ export function versionStatus(agent: Pick<AgentVersionInfo, "current" | "latest"
   if (agent.latest === null) return { tone: "neutral", label: "Latest unknown" };
   if (agent.updateAvailable) return { tone: "warning", label: `Update available: ${agent.latest}` };
   if (agent.latest === agent.current) return { tone: "success", label: "Up to date" };
-  // Ahead of latest (a version from the next channel, say), or not comparable: say what latest is.
+  // Ahead of latest (a prerelease the admin built), or not comparable: say what latest is.
   return { tone: "neutral", label: `Latest: ${agent.latest}` };
 }
 
@@ -66,67 +68,63 @@ export function agentStatus(
   return { label: status.label, variant: status.tone === "neutral" ? "secondary" : status.tone, pending: false };
 }
 
-/** Said when the admin console (or update-image.sh) moved the agent off the version .env names. */
-export function defaultVersionNote(agent: Pick<AgentVersionInfo, "current" | "defaultVersion">): string | null {
-  return agent.current === agent.defaultVersion ? null : `The .env default is ${agent.defaultVersion}.`;
-}
-
-/** The release channels a version is on ("latest", "next"…). */
-export function channelTags(agent: Pick<AgentVersionInfo, "channels">, version: string): string[] {
-  return agent.channels.filter((channel) => channel.version === version).map((channel) => channel.tag);
-}
-
-/**
- * Which versions the agent's running workspaces use, in a sentence: "2 workspaces running.", "1 workspace still
- * runs 0.27.0 until it restarts.", "3 workspaces running: 2 on this version, 1 still on 0.27.0 until it restarts."
- * null when none runs.
- */
-export function runningSummary(agent: Pick<AgentVersionInfo, "current" | "running">): string | null {
-  const groups = agent.running.filter((group) => group.count > 0);
-  const total = groups.reduce((sum, group) => sum + group.count, 0);
-  if (total === 0) return null;
-  const restarts = (count: number) => (count === 1 ? "until it restarts" : "until they restart");
-
-  if (groups.length === 1) {
-    const [{ version, count }] = groups as [(typeof groups)[number]];
-    if (version === agent.current) return `${plural(count, "workspace")} running.`;
-    if (version === null) return `${plural(count, "workspace")} running, on an unknown version.`;
-    return `${plural(count, "workspace")} still ${count === 1 ? "runs" : "run"} ${version} ${restarts(count)}.`;
-  }
-  const parts = groups.map(({ version, count }) => {
-    if (version === agent.current) return `${count} on this version`;
-    if (version === null) return `${count} on an unknown version`;
-    return `${count} still on ${version} ${restarts(count)}`;
-  });
-  return `${plural(total, "workspace")} running: ${parts.join(", ")}.`;
-}
-
 /** The current version has no image on the server: new workspaces of this agent can't start until it is built. */
 export function currentImageMissing(agent: Pick<AgentVersionInfo, "installed">): boolean {
   return !agent.installed.some((image) => image.current);
 }
 
 /**
- * What making `version` current takes on the gateway, which uses an image already on this server unless it is
- * to be built from scratch (gateway/src/agent-updater.ts):
+ * What making `version` current takes on the gateway, which uses an image already on this server unless asked to
+ * build it from scratch (gateway/src/agent-updater.ts):
  *   - "none": the current version, whose image is here: nothing would change.
  *   - "switch": another version whose image is on this server. Nothing is built and the npm registry isn't
  *     asked: the image is checked and becomes current, in seconds.
- *   - "rebuild": an image on this server built again from scratch, without the build cache.
- *   - "build": a version with no image here (the current one included, when its image is missing), from scratch
- *     too when `fromScratch` is set.
- * Every build takes minutes and loads the server's CPU; from scratch takes longer.
+ *   - "build": a version with no image here (the current one included, when its image is missing): minutes, and
+ *     the server's CPU meanwhile.
+ * The confirmations say it by what the gateway will do when they are shown: an image may have been built or removed
+ * since the button was drawn.
  */
-export type UpdateWork = "none" | "switch" | "rebuild" | "build";
+export type UpdateWork = "none" | "switch" | "build";
 
-export function updateWork(
-  agent: Pick<AgentVersionInfo, "current" | "installed">,
-  version: string,
-  fromScratch: boolean,
-): UpdateWork {
+export function updateWork(agent: Pick<AgentVersionInfo, "current" | "installed">, version: string): UpdateWork {
   if (!agent.installed.some((image) => image.version === version)) return "build";
-  if (fromScratch) return "rebuild";
   return version === agent.current ? "none" : "switch";
+}
+
+// ---- The Package images table --------------------------------------------------------------------------------
+
+/** One row of an agent's Package images table. */
+export interface AgentPackageRow {
+  version: string;
+  /** Epoch ms npm published it; null when unknown. */
+  publishedAt: number | null;
+  /** New workspaces start with it. */
+  current: boolean;
+  latest: boolean;
+  notes: ReleaseNotes | null;
+  /** Its image on this server; null: it is built first. */
+  image: InstalledImage | null;
+  /**
+   * The row's action: "use" its image (a switch, in seconds), "build" it (then it is current; for the current
+   * version, its missing image), or "rebuild" the current one from scratch.
+   */
+  action: "use" | "build" | "rebuild";
+}
+
+/** The gateway's releases (newest first: the newest stable ones, the current one, those with an image here) as rows. */
+export function agentPackageRows(agent: Pick<AgentVersionInfo, "current" | "releases" | "installed">): AgentPackageRow[] {
+  const images = new Map(agent.installed.map((image) => [image.version, image]));
+  return agent.releases.map(({ version, publishedAt, latest, notes }) => {
+    const image = images.get(version) ?? null;
+    const current = version === agent.current;
+    return { version, publishedAt, current, latest, notes, image, action: current ? (image ? "rebuild" : "build") : image ? "use" : "build" };
+  });
+}
+
+/** "6 versions · 2 on this server": the section's summary while it is folded. */
+export function packageSummary(rows: ReadonlyArray<{ image: unknown }>, where = "this server"): string {
+  const local = rows.filter((row) => row.image !== null).length;
+  return `${plural(rows.length, "version")} · ${local} on ${where}`;
 }
 
 // ---- What may run now ----------------------------------------------------------------------------------------
@@ -154,7 +152,7 @@ export function removeBlocker(
   image: Pick<InstalledImage, "current" | "inUse">,
 ): string | null {
   if (context.offline) return OFFLINE;
-  if (image.current) return "New workspaces start from this image. Switch to another version first.";
+  if (image.current) return "New workspaces start from this image. Use another version first.";
   if (image.inUse > 0) {
     return `${plural(image.inUse, "running workspace uses", "running workspaces use")} it. It can be removed once ${image.inUse === 1 ? "that workspace has" : "they have"} stopped.`;
   }
@@ -296,29 +294,20 @@ export function formatElapsed(ms: number): string {
 
 export type AgentAction = "update" | "cancel" | "remove";
 
-export interface AgentActionError {
-  message: string;
-  /** The problem is the version asked for: shown at the version field when there is one. */
-  field?: "version";
-}
-
 /** A failed action in words: the gateway's own message where it is clear (it names versions), else ours. */
-export function agentActionError(action: AgentAction, error: ApiError): AgentActionError {
+export function agentActionError(action: AgentAction, error: ApiError): string {
   switch (error.error) {
-    case "invalid_version":
-    case "version_not_found":
-      return action === "update" ? { message: error.message, field: "version" } : { message: error.message };
     case "registry_unreachable":
-      return { message: `${error.message} Nothing was started; try again in a minute.` };
+      return `${error.message} Nothing was started; try again in a minute.`;
     case "image_in_use":
-      return { message: "A workspace still uses this image. It can be removed once that workspace has stopped." };
+      return "A workspace still uses this image. It can be removed once that workspace has stopped.";
     case "not_found":
-      return { message: action === "remove" ? "This image is no longer on the server." : error.message };
+      return action === "remove" ? "This image is no longer on the server." : error.message;
     case "timeout":
       return action === "update"
-        ? { message: "The workspace service did not answer in time. The update may have started anyway: this page shows it if so." }
-        : { message: error.message };
+        ? "The workspace service did not answer in time. The update may have started anyway: this page shows it if so."
+        : error.message;
     default:
-      return { message: error.message };
+      return error.message;
   }
 }

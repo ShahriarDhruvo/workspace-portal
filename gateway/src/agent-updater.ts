@@ -1,9 +1,9 @@
-// Updates (or rolls back) the agent harnesses from the admin console: one job at a time, for all
+// Makes a version of an agent harness current from the admin console, newer or older: one job at a time, for all
 // agents (an image build is heavy work for the host).
 //
-//   validate → resolve a channel (latest, next, …) to a version
+//   validate the version
 //   → that version's image is on the server already and no rebuild was asked for: use it as it is
-//     (a rollback needs neither a build nor, for an exact version, the registry)
+//     (going back to an earlier version needs neither a build nor the registry)
 //   → otherwise: check the registry has it; then, in the job: clear leftovers of interrupted jobs →
 //     build the image (BuildKit's cache makes a known version a matter of seconds; `rebuild` builds
 //     without the cache)
@@ -29,7 +29,6 @@ import { stagingImage, workspaceImage } from "./image-names.ts";
 import { errorMessage, type Logger } from "./log.ts";
 import type { NpmRegistry } from "./npm-registry.ts";
 import type { ReleaseCache } from "./release-cache.ts";
-import { isChannelName, releaseChannels, RELEASE_CHANNELS } from "./release-channels.ts";
 import { CANCELLED, UpdateJob, type AgentUpdateJob } from "./update-job.ts";
 import { isVersion } from "./versions.ts";
 import { AgentUnavailableError, type WorkspaceInfo } from "./workspaces.ts";
@@ -50,7 +49,7 @@ export class UpdateRunningError extends Error {
   }
 }
 
-/** Not a version (like 0.27.4) and not one of the package's release channels. */
+/** Not a version (like 0.27.4). */
 export class InvalidVersionError extends Error {
   constructor(message: string) {
     super(message);
@@ -84,7 +83,7 @@ export class ImageCurrentError extends Error {
 
 export interface UpdateRequest {
   agent: AgentKind;
-  /** An exact version, or a release channel (resolved when the request arrives). */
+  /** An exact version. */
   version: string;
   rebuild: boolean;
   actorUserId: number | null;
@@ -141,7 +140,7 @@ export class AgentUpdater {
     this.#buildTimeoutMs = deps.buildTimeoutMs ?? BUILD_TIMEOUT_MS;
   }
 
-  /** The enabled agents' versions, images and channels, and the current or last job. */
+  /** The enabled agents' versions, releases and images, and the current or last job. */
   async overview(options: { refresh?: boolean } = {}): Promise<AgentVersionsOverview> {
     const kinds = this.#config.workspace.agents;
     const packages = kinds.map((kind) => driverFor(kind).release.packageName);
@@ -153,7 +152,7 @@ export class AgentUpdater {
           kind,
           current: this.#versions.current(kind),
           defaultVersion: this.#versions.defaultVersion(kind),
-          distTags: releases.tags.get(driverFor(kind).release.packageName),
+          releases: releases.packages.get(driverFor(kind).release.packageName),
           images,
           workspaces,
         }),
@@ -278,28 +277,15 @@ export class AgentUpdater {
   }
 
   /**
-   * The version to install (a channel resolved to its version) and whether to use its image on the
-   * server as it is: then nothing is built, and an exact version isn't checked against the registry
-   * either. Otherwise an exact version must be published.
+   * The version to install and whether to use its image on the server as it is: then nothing is built, and the
+   * registry isn't asked either. Otherwise the version must be published.
    */
-  async #plan(agent: AgentKind, requested: string, rebuild: boolean): Promise<{ version: string; reuse: boolean }> {
+  async #plan(agent: AgentKind, version: string, rebuild: boolean): Promise<{ version: string; reuse: boolean }> {
     const { name, release } = driverFor(agent);
-    const onServer = async (version: string): Promise<boolean> => !rebuild && (await this.#builder.exists(workspaceImage(agent, version)));
-    if (isVersion(requested)) {
-      if (await onServer(requested)) return { version: requested, reuse: true };
-      if (!(await this.#registry.hasVersion(release.packageName, requested))) throw new VersionNotFoundError(name, release.packageName, requested);
-      return { version: requested, reuse: false };
-    }
-    if (!isChannelName(requested)) {
-      throw new InvalidVersionError(`"${requested}" is not a version (like 0.27.4) or a release channel (${RELEASE_CHANNELS.join(", ")}).`);
-    }
-    const channels = releaseChannels(await this.#releases.fresh(release.packageName));
-    const channel = channels.find((candidate) => candidate.tag === requested);
-    if (!channel) {
-      const offered = channels.map((candidate) => candidate.tag).join(", ") || "none";
-      throw new InvalidVersionError(`${name} has no release channel "${requested}" (it has: ${offered}).`);
-    }
-    return { version: channel.version, reuse: await onServer(channel.version) };
+    if (!isVersion(version)) throw new InvalidVersionError(`"${version}" is not a version (like 0.27.4).`);
+    if (!rebuild && (await this.#builder.exists(workspaceImage(agent, version)))) return { version, reuse: true };
+    if (!(await this.#registry.hasVersion(release.packageName, version))) throw new VersionNotFoundError(name, release.packageName, version);
+    return { version, reuse: false };
   }
 
   /** A job that reuses an image checks and uses the image on the server instead of building one. */

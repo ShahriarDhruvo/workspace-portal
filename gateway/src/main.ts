@@ -1,9 +1,9 @@
-// Workspace Portal gateway: owns the per-user agent containers (Qwen Code or DeepSeek Harness),
-// proxies browsers to them (one port per user), and serves the only things workspaces can reach:
-// the LLM and web search.
+// Workspace Portal gateway: owns the per-user agent containers (Qwen Code or DeepSeek Harness; a Private and an
+// Online workspace per user, one running at a time), proxies browsers to them (one port per user and kind), and
+// serves the LLM and web search to them (one service listener per kind, on that kind's network).
 // See docs/ARCHITECTURE.md.
 import type http from "node:http";
-import { getDatabase, loadSessionContext } from "@portal/db";
+import { getDatabase, loadSessionContext, WORKSPACE_KINDS, type WorkspaceKind } from "@portal/db";
 import { createAgentServerFactory } from "./agent-proxy.ts";
 import { AgentUpdater } from "./agent-updater.ts";
 import { AgentVersions } from "./agent-versions.ts";
@@ -13,8 +13,11 @@ import { ConnectionRegistry } from "./connections.ts";
 import { createControlServer } from "./control-api.ts";
 import { DockerImageBuilder } from "./docker-image-builder.ts";
 import { DockerRuntime, isSupportedDockerVersion, MIN_DOCKER_VERSION_TEXT } from "./docker-runtime.ts";
+import { EnergyMeter } from "./energy-meter.ts";
+import { fenceCheck } from "./fence.ts";
 import { createNotesClient, createRegistryClient, EngineReleases } from "./engine-releases.ts";
 import { createEngineHost, EngineUpdater } from "./engine-updater.ts";
+import { createGitHubReleases } from "./github-releases.ts";
 import { HostMonitor } from "./host-monitor.ts";
 import { HostdClient } from "./hostd.ts";
 import { listen } from "./listen.ts";
@@ -42,7 +45,8 @@ async function main(log: Logger): Promise<void> {
   for (const agent of config.workspace.agents) {
     const driver = driverFor(agent);
     try {
-      driver.renderSettings(config);
+      // The kinds differ only in the service address, so one rendering finds every problem.
+      driver.renderSettings(config, "private");
     } catch (error) {
       // Not fatal: the portal keeps working, and starts of this agent report the same problem.
       if (!(error instanceof AgentConfigError)) throw error;
@@ -65,10 +69,14 @@ async function main(log: Logger): Promise<void> {
     );
     process.exit(1);
   }
-  const network = await runtime.ensureNetwork();
-  if (network !== "exists") {
-    log.info(`${network} the workspace network`, { network: config.workspace.network, subnet: config.workspace.subnet, internal: true });
+  // Online's network only while Online workspaces are on; one that exists from before stays as it is, unused.
+  const kinds: WorkspaceKind[] = WORKSPACE_KINDS.filter((kind) => kind === "private" || config.workspace.onlineEnabled);
+  for (const kind of kinds) {
+    const own = config.workspace.kinds[kind];
+    const network = await runtime.ensureNetwork(kind);
+    if (network !== "exists") log.info(`${network} the ${kind} workspace network`, { network: own.network, subnet: own.subnet, internal: kind === "private" });
   }
+  if (!config.workspace.onlineEnabled) log.info("Online workspaces are off (ONLINE_WORKSPACES=off): only Private workspaces start");
   for (const agent of config.workspace.agents) {
     const { image } = versions.selection(agent);
     if (!(await runtime.imageAvailable(image))) {
@@ -83,7 +91,9 @@ async function main(log: Logger): Promise<void> {
   const requests = new LlmRequests();
   const connections = new ConnectionRegistry();
   const sessions = new SessionCache((tokenHash) => loadSessionContext(db, tokenHash));
-  const manager = new WorkspaceManager({ config, db, runtime, versions, llm, connections, log });
+  // Online workspaces run only while the host firewall that fences them in answers (deploy/firewall.sh, fence.ts).
+  const fence = fenceCheck(config.servicePort);
+  const manager = new WorkspaceManager({ config, db, runtime, versions, llm, connections, log, fence });
   await manager.init();
   manager.startBackgroundTasks();
   const registry = createNpmRegistry();
@@ -92,7 +102,7 @@ async function main(log: Logger): Promise<void> {
     versions,
     builder: new DockerImageBuilder({ contextDir: config.imageContextDir }),
     registry,
-    releases: new ReleaseCache({ registry }),
+    releases: new ReleaseCache({ registry, github: createGitHubReleases(), log }),
     workspaces: () => manager.list(),
     db,
     log,
@@ -114,11 +124,21 @@ async function main(log: Logger): Promise<void> {
     names: (ids) => userNames(db, ids),
     log,
   });
-  const live = new LiveHub({ config, db, manager, llm: llmMonitor, hosts, log });
+  // Each server's energy and traffic per day (Admin > Usage): read all the time, not only while someone watches.
+  const energy = new EnergyMeter({
+    db,
+    sources: {
+      portal: config.hostd.portal.token === "" ? undefined : new HostdClient(config.hostd.portal),
+      llm: config.hostd.llm.token === "" ? undefined : new HostdClient(config.hostd.llm),
+    },
+    log,
+  });
+  energy.start();
+  const live = new LiveHub({ config, db, manager, llm: llmMonitor, hosts, energy, log });
   const engine = new EngineUpdater({
     config,
     host: config.hostd.llm.token === "" ? null : createEngineHost(new HostdClient(config.hostd.llm)),
-    releases: new EngineReleases({ registry: createRegistryClient(), notes: createNotesClient(), notesRepo: config.engine.releaseNotesRepo }),
+    releases: new EngineReleases({ registry: createRegistryClient(), notes: createNotesClient(), notesRepo: config.engine.releaseNotesRepo, log }),
     queue: llm,
     db,
     log,
@@ -143,35 +163,52 @@ async function main(log: Logger): Promise<void> {
       : withPageCache(createReaderBackend({ baseUrl: config.reader.url, timeoutMs: config.reader.timeoutMs }), { ttlMs: config.reader.cacheMs });
   const control = createControlServer({ config, db, manager, versions, updater, engine, llm, live, sessions, connections, log });
   const createAgentServer = createAgentServerFactory({ config, manager, sessions, connections, log });
-  const service = createServiceServer({ config, db, manager, llm, requests, log, search, reader });
-  const servers: http.Server[] = [control, service];
+  const servers: http.Server[] = [control];
 
   await listen(control, { host: "127.0.0.1", port: config.controlPort });
-  // One port per user: each workspace is its own browser origin.
-  const firstPort = config.agentPortBase + 1;
-  const lastPort = config.agentPortBase + config.agentPortCount - 1;
-  for (let port = firstPort; port <= lastPort; port++) {
-    const agent = createAgentServer();
-    await listen(agent, { host: config.agentBind, port });
-    servers.push(agent);
+  // One port per user and kind: each workspace, and each of a user's two kinds, is its own browser origin. Online's
+  // ports listen even while Online is off (they answer that the workspace is stopped).
+  const portRanges: Record<string, string> = {};
+  for (const kind of WORKSPACE_KINDS) {
+    const firstPort = config.workspace.kinds[kind].agentPortBase + 1;
+    const lastPort = firstPort + config.agentPortCount - 2;
+    for (let port = firstPort; port <= lastPort; port++) {
+      const agent = createAgentServer();
+      await listen(agent, { host: config.agentBind, port });
+      servers.push(agent);
+    }
+    portRanges[kind] = `${config.agentBind}:${firstPort}-${lastPort}`;
   }
   log.info("gateway listening", {
     control: `127.0.0.1:${config.controlPort}`,
-    workspaces: `${config.agentBind}:${firstPort}-${lastPort}`,
+    workspaces: portRanges,
     agents: config.workspace.agents.map((agent) => versions.selection(agent).image),
     maxRunning: config.maxRunning,
     idleTimeoutMinutes: config.idleTimeoutMs / 60_000,
   });
 
-  const bridge = config.workspace.gatewayIp;
-  const onRetry = (): void => log.warn("workspace bridge address not up yet; retrying", { address: bridge });
-  listen(service, { host: bridge, port: config.servicePort, waitForAddressMs: BRIDGE_WAIT_MS, onRetry }).then(
-    () => log.info("service API listening", { service: `${bridge}:${config.servicePort}`, llm: config.llm.upstreamUrl, search: config.search.url, reader: config.reader.url || "off" }),
-    (error: unknown) => {
-      log.error("cannot listen on the workspace bridge", { address: bridge, error });
-      process.exit(1);
-    },
-  );
+  // A service listener per kind, on the host's address on that kind's network, answering only that kind's
+  // containers. The address exists once Docker has brought the bridge up.
+  for (const kind of kinds) {
+    const service = createServiceServer({ kind, config, db, manager, llm, requests, log, search, reader });
+    servers.push(service);
+    const bridge = config.workspace.kinds[kind].gatewayIp;
+    const onRetry = (): void => log.warn(`${kind} workspace bridge address not up yet; retrying`, { address: bridge });
+    listen(service, { host: bridge, port: config.servicePort, waitForAddressMs: BRIDGE_WAIT_MS, onRetry }).then(
+      () =>
+        log.info("service API listening", {
+          kind,
+          service: `${bridge}:${config.servicePort}`,
+          llm: config.llm.upstreamUrl,
+          search: config.search.url,
+          reader: config.reader.url || "off",
+        }),
+      (error: unknown) => {
+        log.error(`cannot listen on the ${kind} workspace bridge`, { address: bridge, error });
+        process.exit(1);
+      },
+    );
+  }
 
   let shuttingDown = false;
   const shutdown = (signal: string): void => {
@@ -184,6 +221,7 @@ async function main(log: Logger): Promise<void> {
     }
     connections.closeAll(1001, "gateway restarting");
     live.close();
+    energy.stop();
     hosts.portal.close();
     hosts.llm.close();
     manager.shutdown();

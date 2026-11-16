@@ -1,7 +1,13 @@
-import type { EngineRelease } from "@/lib/engine-types";
+"use client";
+
+import type { RefObject } from "react";
+import { returnFocus } from "@/lib/focus";
+import type { ReleaseNotes } from "@/lib/gateway-types";
 import { parseReleaseNotes, type NoteBlock, type NoteSpan } from "@/lib/release-notes";
 import { LocalTime } from "@/components/local-time";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { RightUpIcon } from "@/components/ui/icons";
 
 /** Spans as text: bold and code only. Never HTML. */
@@ -42,57 +48,85 @@ function safeUrl(url: string): string | null {
   }
 }
 
-/** One release's notes: its version, date and a "Breaking changes" badge, then the notes as simple text. */
-export function ReleaseNotes({ release }: { release: EngineRelease }) {
-  const notes = release.notes;
-  const url = notes ? safeUrl(notes.url) : null;
+/** Whose notes the dialog shows: the card's product, the row's version and its GitHub release. */
+export interface ReleaseNotesTarget {
+  name: string;
+  version: string;
+  notes: ReleaseNotes;
+}
+
+interface ReleaseNotesDialogProps {
+  /** Kept while the dialog closes, so its content doesn't change mid-animation. */
+  target: ReleaseNotesTarget | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** The Release notes button that opened it (the dialog has no Trigger of its own). */
+  returnFocusTo: RefObject<HTMLElement | null>;
+}
+
+/**
+ * One release's notes, the same for the engine and the agents (each Package images row's "Release notes"): its
+ * Breaking changes badge and date, the notes as simple text (lib/release-notes.ts; never HTML), and the release on
+ * GitHub for the whole of a long changelog. The notes scroll inside the dialog, which never outgrows the screen.
+ */
+export function ReleaseNotesDialog({ target, open, onOpenChange, returnFocusTo }: ReleaseNotesDialogProps) {
+  const url = target ? safeUrl(target.notes.url) : null;
   return (
-    <article className="flex flex-col gap-2">
-      <header className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <h4 className="font-mono text-13 font-medium">{release.version}</h4>
-        {notes?.breaking ? <Badge variant="destructive">Breaking changes</Badge> : null}
-        {notes?.publishedAt ? (
-          <span className="text-12 text-muted-foreground">
-            <LocalTime at={notes.publishedAt} relative />
-          </span>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent onCloseAutoFocus={returnFocus(returnFocusTo)} className="flex max-h-[calc(100dvh-2rem)] flex-col sm:max-w-2xl">
+        {target ? (
+          <>
+            <DialogHeader className="pr-8">
+              <DialogTitle className="text-16 leading-6">
+                {target.name} <span className="font-mono">{target.version}</span>
+              </DialogTitle>
+              <DialogDescription asChild>
+                <div className="flex flex-wrap items-center gap-2 text-13">
+                  {target.notes.breaking ? <Badge variant="destructive">Breaking changes</Badge> : null}
+                  {target.notes.publishedAt ? (
+                    <span>
+                      Released <LocalTime at={target.notes.publishedAt} relative />
+                    </span>
+                  ) : (
+                    <span>{target.notes.title}</span>
+                  )}
+                </div>
+              </DialogDescription>
+            </DialogHeader>
+            <div className="-mx-4 flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto px-4 text-13 text-muted-foreground">
+              {group(parseReleaseNotes(target.notes.body, 60, target.version)).map((block, index) =>
+                block.kind === "list" ? (
+                  <ul key={index} className="flex list-disc flex-col gap-1 pl-5">
+                    {block.items.map((item, itemIndex) => (
+                      <li key={itemIndex} className="wrap-anywhere">
+                        <Spans spans={item.spans} />
+                      </li>
+                    ))}
+                  </ul>
+                ) : block.kind === "heading" ? (
+                  <h3 key={index} className="mt-2 text-13 font-medium text-foreground first:mt-0">
+                    <Spans spans={block.spans} />
+                  </h3>
+                ) : (
+                  <p key={index} className="wrap-anywhere">
+                    <Spans spans={block.spans} />
+                  </p>
+                ),
+              )}
+            </div>
+            {url ? (
+              <DialogFooter>
+                <Button variant="outline" asChild>
+                  <a href={url} target="_blank" rel="noopener noreferrer">
+                    On GitHub
+                    <RightUpIcon data-icon="inline-end" />
+                  </a>
+                </Button>
+              </DialogFooter>
+            ) : null}
+          </>
         ) : null}
-        {url ? (
-          <a
-            href={url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="ml-auto inline-flex items-center gap-1 text-12 text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
-          >
-            On GitHub
-            <RightUpIcon className="size-3.5" />
-          </a>
-        ) : null}
-      </header>
-      {notes ? (
-        <div className="flex flex-col gap-1.5 text-13 text-muted-foreground">
-          {group(parseReleaseNotes(notes.body, 60, release.version)).map((block, index) =>
-            block.kind === "list" ? (
-              <ul key={index} className="flex list-disc flex-col gap-1 pl-5">
-                {block.items.map((item, itemIndex) => (
-                  <li key={itemIndex} className="wrap-anywhere">
-                    <Spans spans={item.spans} />
-                  </li>
-                ))}
-              </ul>
-            ) : block.kind === "heading" ? (
-              <h5 key={index} className="mt-1 text-12 font-medium text-foreground">
-                <Spans spans={block.spans} />
-              </h5>
-            ) : (
-              <p key={index} className="wrap-anywhere">
-                <Spans spans={block.spans} />
-              </p>
-            ),
-          )}
-        </div>
-      ) : (
-        <p className="text-13 text-muted-foreground">No release notes were found for this version.</p>
-      )}
-    </article>
+      </DialogContent>
+    </Dialog>
   );
 }

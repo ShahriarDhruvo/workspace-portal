@@ -1,12 +1,14 @@
-// Service API for workspace containers (WORKSPACE_GATEWAY_IP:SERVICE_PORT), the only address a
-// workspace can reach: the LLM proxy (to LLM_UPSTREAM_URL, with the real API key added) and the
+// Service API for workspace containers, one server per workspace kind on the host's address on that kind's
+// network (Private: WORKSPACE_GATEWAY_IP:SERVICE_PORT, the only address a Private workspace can reach; Online:
+// ONLINE_GATEWAY_IP:SERVICE_PORT): the LLM proxy (to LLM_UPSTREAM_URL, with the real API key added) and the
 // web MCP server (web_search queries SEARXNG_URL; read_page asks the reader container at
-// READER_URL). Callers are identified by their source address;
-// containers run without capabilities on a network without inter-container traffic, so they
-// cannot spoof it.
+// READER_URL). Callers are identified by their source address, among the running containers of this server's kind
+// only, so an address of the other kind is unknown here; containers run without capabilities on networks without
+// inter-container traffic, so they cannot spoof it. Each server keeps its own per-workspace state (the URLs a
+// workspace was shown, its search and read slots): nothing one kind did carries over to the other.
 import type http from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { PortalDb } from "@portal/db";
+import type { PortalDb, WorkspaceKind } from "@portal/db";
 import type { Config } from "./config.ts";
 import { forward, type ForwardResult } from "./forward.ts";
 import { endToEndHeaders, llmRequestHeaders } from "./headers.ts";
@@ -21,6 +23,8 @@ import { recordUsage, usageParserFor, usageTap, type UsageParser } from "./usage
 import type { WorkspaceManager } from "./workspaces.ts";
 
 export interface ServiceDeps {
+  /** The workspaces this server answers: those on its kind's network, where it listens. */
+  kind: WorkspaceKind;
   config: Config;
   db: PortalDb;
   manager: WorkspaceManager;
@@ -32,7 +36,7 @@ export interface ServiceDeps {
   search: SearchBackend;
   /** The page reader for the read_page tool; without it only web_search is offered. */
   reader?: ReaderBackend | null;
-  /** Maps a source address to a user id. Defaults to the addresses of running workspace containers. */
+  /** Maps a source address to a user id. Defaults to the addresses of running workspace containers of `kind`. */
   resolveCaller?: (address: string) => number | null;
 }
 
@@ -128,7 +132,7 @@ function createWebTools(deps: ServiceDeps): WebTools {
 }
 
 export function createServiceServer(deps: ServiceDeps): http.Server {
-  const resolveCaller = deps.resolveCaller ?? ((address: string) => deps.manager.userIdForIp(address));
+  const resolveCaller = deps.resolveCaller ?? ((address: string) => deps.manager.userIdForIp(deps.kind, address));
   const web = createWebTools(deps);
   // LLM streams run as long as generation does.
   const server = createStreamingServer((req, res) => {

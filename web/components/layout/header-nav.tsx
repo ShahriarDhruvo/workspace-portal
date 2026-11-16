@@ -4,16 +4,14 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
-import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
-import { CheckIcon } from "@/components/ui/icons";
 
-// The top bars' page links, in two forms: text tabs in the bar from `md`, and menu items for the bar's menu
-// below it. Both mark the current page.
+// Page links as text tabs in a bar (the top bar's and the admin console's bar under it), the current page marked.
 
 export interface NavLink {
   href: string;
   label: string;
-  icon: ReactNode;
+  /** Shown before the label from `sm` up (the admin bar's tabs; the top bar's are text only). */
+  icon?: ReactNode;
   /** Pages under this path count as this link's too (a user's page under Users). */
   prefix?: string;
 }
@@ -24,7 +22,7 @@ function isCurrent(pathname: string, link: NavLink): boolean {
 
 /**
  * Web Shell text tabs (as on Daemon Status): 13px/500, muted until hovered or current; the current one gets a
- * 2px primary underline on the bar's bottom rule. Below `md` only the current one shows, as the page's name.
+ * 2px primary underline on its bar's bottom rule.
  */
 export function HeaderNav({ label, links }: { label: string; links: NavLink[] }) {
   const pathname = usePathname();
@@ -38,33 +36,16 @@ export function HeaderNav({ label, links }: { label: string; links: NavLink[] })
             href={link.href}
             aria-current={current ? "page" : undefined}
             className={cn(
-              "-mb-px inline-flex items-center border-b-2 px-3 text-13 font-medium transition-colors focus-visible:-outline-offset-2",
-              current
-                ? "border-primary text-foreground"
-                : "border-transparent text-muted-foreground hover:text-foreground max-md:hidden",
+              "-mb-px inline-flex shrink-0 items-center gap-1.5 border-b-2 px-3 text-13 font-medium whitespace-nowrap transition-colors focus-visible:-outline-offset-2 max-sm:px-2.5",
+              current ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground",
+              "[&_svg]:max-sm:hidden",
             )}
           >
+            {link.icon}
             {link.label}
           </Link>
         );
       })}
     </nav>
   );
-}
-
-/** The same links as items of the bar's menu (below `md`), the current one ticked. */
-export function NavMenuItems({ links }: { links: NavLink[] }) {
-  const pathname = usePathname();
-  return links.map((link) => {
-    const current = isCurrent(pathname, link);
-    return (
-      <DropdownMenuItem key={link.href} asChild>
-        <Link href={link.href} aria-current={current ? "page" : undefined}>
-          {link.icon}
-          {link.label}
-          {current ? <CheckIcon className="ml-auto" /> : null}
-        </Link>
-      </DropdownMenuItem>
-    );
-  });
 }

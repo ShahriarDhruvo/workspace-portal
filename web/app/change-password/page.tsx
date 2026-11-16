@@ -15,10 +15,10 @@ export default async function ChangePasswordPage() {
   return (
     <AuthScreen
       title="Choose a new password"
-      description="You signed in with a temporary password. Choose your own to continue."
+      description="Replace your temporary password to continue."
       footer={
         <form action={signOut}>
-          <SubmitButton variant="ghost" size="sm">
+          <SubmitButton variant="ghost">
             Sign out
           </SubmitButton>
         </form>

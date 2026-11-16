@@ -39,7 +39,7 @@ export function LoginForm() {
           aria-invalid={invalid}
         />
       </FieldGroup>
-      <SubmitButton size="lg" className="w-full" pendingLabel="Signing in…">
+      <SubmitButton className="w-full" pendingLabel="Signing in…">
         Sign in
       </SubmitButton>
     </form>

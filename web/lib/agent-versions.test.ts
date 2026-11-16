@@ -4,9 +4,8 @@ import {
   ACTIVE_POLL_MS,
   IDLE_POLL_MS,
   agentActionError,
-  channelTags,
+  agentPackageRows,
   currentImageMissing,
-  defaultVersionNote,
   formatElapsed,
   isJobActive,
   jobElapsedMs,
@@ -14,9 +13,9 @@ import {
   jobOutcome,
   jobTitle,
   mergeAgents,
+  packageSummary,
   pollDelay,
   removeBlocker,
-  runningSummary,
   updateBlocker,
   updateWork,
   versionStatus,
@@ -33,9 +32,11 @@ const qwen: AgentVersionInfo = {
   defaultVersion: "0.27.0",
   latest: "0.27.4",
   updateAvailable: true,
-  channels: [
-    { tag: "latest", version: "0.27.4" },
-    { tag: "preview", version: "0.27.2-preview.0" },
+  releases: [
+    { version: "0.27.4", publishedAt: 4, latest: true, notes: null },
+    { version: "0.27.2", publishedAt: 2, latest: false, notes: { title: "v0.27.2", url: "https://github.com/QwenLM/qwen-code/releases/tag/v0.27.2", publishedAt: 2, body: "", breaking: true } },
+    { version: "0.27.0", publishedAt: 1, latest: false, notes: null },
+    { version: "0.26.0", publishedAt: null, latest: false, notes: null },
   ],
   installed: [
     { version: "0.27.0", image: "workspace-portal/workspace:qwen-0.27.0", sizeBytes: 1, createdAt: 1, current: true, inUse: 1 },
@@ -91,47 +92,36 @@ test("the version badge: update available, up to date, ahead of latest, or unkno
   assert.deepEqual(versionStatus({ current: "0.27.0", latest: null, updateAvailable: false }), { tone: "neutral", label: "Latest unknown" });
 });
 
-test("notes beside the current version: the .env default, channels, a missing image", () => {
-  assert.equal(defaultVersionNote(qwen), null);
-  assert.equal(defaultVersionNote({ current: "0.26.0", defaultVersion: "0.27.0" }), "The .env default is 0.27.0.");
-  assert.deepEqual(channelTags(qwen, "0.27.4"), ["latest"]);
-  assert.deepEqual(channelTags(qwen, "0.27.0"), []);
+test("the current version's image can be missing", () => {
   assert.equal(currentImageMissing(qwen), false);
   assert.equal(currentImageMissing({ installed: qwen.installed.map((image) => ({ ...image, current: false })) }), true);
 });
 
-test("an image on the server is used as it is, unless built again from scratch", () => {
-  // 0.26.0 is on the server: rolling back to it is a switch, unless it is to be built again from scratch.
-  assert.equal(updateWork(qwen, "0.26.0", false), "switch");
-  assert.equal(updateWork(qwen, "0.26.0", true), "rebuild");
-  // The current version, image here: nothing to do, except building it again from scratch.
-  assert.equal(updateWork(qwen, "0.27.0", false), "none");
-  assert.equal(updateWork(qwen, "0.27.0", true), "rebuild");
-  // No image here: built first, the latest release or an older version alike, from scratch when asked (the
-  // dialog says so beside "build").
-  assert.equal(updateWork(qwen, "0.27.4", false), "build");
-  assert.equal(updateWork(qwen, "0.25.1", false), "build");
-  assert.equal(updateWork(qwen, "0.25.1", true), "build");
+test("an image on the server is used as it is; any other version is built first", () => {
+  assert.equal(updateWork(qwen, "0.26.0"), "switch");
+  assert.equal(updateWork(qwen, "0.27.0"), "none");
+  assert.equal(updateWork(qwen, "0.27.4"), "build");
+  assert.equal(updateWork(qwen, "0.25.1"), "build");
   // The current version's image is missing: building it is the way back.
-  assert.equal(updateWork({ current: "0.27.0", installed: qwen.installed.slice(1) }, "0.27.0", false), "build");
+  assert.equal(updateWork({ current: "0.27.0", installed: qwen.installed.slice(1) }, "0.27.0"), "build");
 });
 
-test("running workspaces by version, in a sentence", () => {
-  const summary = (running: AgentVersionInfo["running"]) => runningSummary({ current: "0.27.4", running });
-  assert.equal(summary([]), null);
-  assert.equal(summary([{ version: "0.27.4", count: 1 }]), "1 workspace running.");
-  assert.equal(summary([{ version: "0.27.4", count: 2 }]), "2 workspaces running.");
-  assert.equal(summary([{ version: "0.27.0", count: 1 }]), "1 workspace still runs 0.27.0 until it restarts.");
-  assert.equal(summary([{ version: "0.27.0", count: 2 }]), "2 workspaces still run 0.27.0 until they restart.");
-  assert.equal(summary([{ version: null, count: 1 }]), "1 workspace running, on an unknown version.");
-  assert.equal(
-    summary([
-      { version: "0.27.4", count: 2 },
-      { version: "0.27.0", count: 1 },
-      { version: null, count: 1 },
-    ]),
-    "4 workspaces running: 2 on this version, 1 still on 0.27.0 until it restarts, 1 on an unknown version.",
+test("Package images: every release the gateway lists, with its image and what its button does", () => {
+  const rows = agentPackageRows(qwen);
+  assert.deepEqual(
+    rows.map((row) => [row.version, row.current, row.latest, row.notes?.breaking ?? null, row.image?.inUse ?? null, row.action]),
+    [
+      ["0.27.4", false, true, null, null, "build"],
+      ["0.27.2", false, false, true, null, "build"],
+      ["0.27.0", true, false, null, 1, "rebuild"],
+      ["0.26.0", false, false, null, 0, "use"],
+    ],
   );
+  assert.equal(rows[0]!.publishedAt, 4);
+  const missing = agentPackageRows({ ...qwen, installed: qwen.installed.slice(1) });
+  assert.equal(missing.find((row) => row.current)?.action, "build", "the current version without its image: built again");
+  assert.equal(packageSummary(rows), "4 versions · 2 on this server");
+  assert.equal(packageSummary(rows.slice(0, 1), "the LLM server"), "1 version · 0 on the LLM server");
 });
 
 test("one job at a time blocks every update; an offline gateway blocks everything", () => {
@@ -145,7 +135,7 @@ test("an image can't be removed while current, in use, or while its agent is bei
   const idle = { job: null, offline: false };
   const [current, old] = qwen.installed as [AgentVersionInfo["installed"][number], AgentVersionInfo["installed"][number]];
   assert.equal(removeBlocker(idle, qwen, old), null);
-  assert.equal(removeBlocker(idle, qwen, current), "New workspaces start from this image. Switch to another version first.");
+  assert.equal(removeBlocker(idle, qwen, current), "New workspaces start from this image. Use another version first.");
   assert.equal(
     removeBlocker(idle, qwen, { ...old, inUse: 1 }),
     "1 running workspace uses it. It can be removed once that workspace has stopped.",
@@ -240,26 +230,22 @@ test("elapsed time as a stopwatch", () => {
   assert.equal(jobElapsedMs(job({ startedAt: 1_000, finishedAt: 31_000 }), 61_000), 30_000, "finished: until it ended");
 });
 
-test("gateway errors in words: version problems belong to the version field", () => {
+test("gateway errors in words", () => {
   const notPublished = { error: "version_not_found", message: "Qwen Code 9.9.9 is not published (@qwen-code/qwen-code)." };
-  assert.deepEqual(agentActionError("update", notPublished), { message: notPublished.message, field: "version" });
-  const channel = { error: "invalid_version", message: 'Qwen Code has no release channel "next" (it has: latest, preview).' };
-  assert.deepEqual(agentActionError("update", channel), { message: channel.message, field: "version" });
-  assert.deepEqual(agentActionError("update", { error: "registry_unreachable", message: "The npm registry is unreachable (fetch failed)." }), {
-    message: "The npm registry is unreachable (fetch failed). Nothing was started; try again in a minute.",
-  });
+  assert.equal(agentActionError("update", notPublished), notPublished.message);
+  assert.equal(
+    agentActionError("update", { error: "registry_unreachable", message: "The npm registry is unreachable (fetch failed)." }),
+    "The npm registry is unreachable (fetch failed). Nothing was started; try again in a minute.",
+  );
   const running = { error: "update_running", message: "Qwen Code is being updated to 0.27.4. Wait for it to finish, or cancel it." };
-  assert.deepEqual(agentActionError("update", running), { message: running.message });
-  assert.match(agentActionError("update", { error: "timeout", message: "x" }).message, /may have started anyway/);
-  assert.deepEqual(agentActionError("remove", { error: "image_in_use", message: "workspace-portal/workspace:qwen-0.27.0 is in use…" }), {
-    message: "A workspace still uses this image. It can be removed once that workspace has stopped.",
-  });
-  assert.deepEqual(agentActionError("remove", { error: "not_found", message: "There is no image …" }), {
-    message: "This image is no longer on the server.",
-  });
-  assert.deepEqual(agentActionError("cancel", { error: "unreachable", message: "The workspace service is not reachable." }), {
-    message: "The workspace service is not reachable.",
-  });
+  assert.equal(agentActionError("update", running), running.message);
+  assert.match(agentActionError("update", { error: "timeout", message: "x" }), /may have started anyway/);
+  assert.equal(
+    agentActionError("remove", { error: "image_in_use", message: "workspace-portal/workspace:qwen-0.27.0 is in use…" }),
+    "A workspace still uses this image. It can be removed once that workspace has stopped.",
+  );
+  assert.equal(agentActionError("remove", { error: "not_found", message: "There is no image …" }), "This image is no longer on the server.");
+  assert.equal(agentActionError("cancel", { error: "unreachable", message: "The workspace service is not reachable." }), "The workspace service is not reachable.");
 });
 
 test("the Updates page's agent badge and job steps", () => {

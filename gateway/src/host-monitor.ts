@@ -1,5 +1,5 @@
 // Live hardware readings of one server, from its portal-hostd's event stream. Connected only while
-// someone watches (the admin's Overview), so hostd samples nothing the rest of the time. Keeps the last
+// someone watches (Admin > Usage), so hostd samples nothing the rest of the time. Keeps the last
 // minute of readings for the charts a new viewer opens with.
 import { HostdClient, HostdError, type HostInfo, type HostSample } from "./hostd.ts";
 import type { HostdConfig } from "./config.ts";

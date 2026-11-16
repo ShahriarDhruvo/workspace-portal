@@ -1,5 +1,7 @@
 // When the user's own Stop (or "Restart now") asks first. A stop is immediate, even mid-task, so the pages confirm
-// when it would cut work short or pull the workspace from under someone. Pure; unit tested.
+// when it would cut work short or pull the workspace from under someone. And what "Restart now" starts again.
+// Pure; unit tested.
+import type { WorkspaceKind } from "@portal/db";
 import type { WorkspaceInfo } from "./gateway-types.ts";
 
 export interface StopWarnings {
@@ -26,4 +28,13 @@ export function stopWarnings(info: Pick<WorkspaceInfo, "busy" | "connections">, 
 /** Whether to confirm before stopping: anything at all would be interrupted. */
 export function stopNeedsConfirm(warnings: StopWarnings): boolean {
   return warnings.busy || warnings.openElsewhere || warnings.admin;
+}
+
+/**
+ * The kind "Restart now" starts again: the one starting or running when the action runs, else none. A workspace
+ * that stopped since Settings rendered stays stopped, so a restart never starts a kind the user didn't choose on
+ * Home (Online among them).
+ */
+export function restartKind(info: Pick<WorkspaceInfo, "status" | "kind">): WorkspaceKind | null {
+  return info.status === "starting" || info.status === "running" ? info.kind : null;
 }

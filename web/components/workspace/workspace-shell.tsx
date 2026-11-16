@@ -3,11 +3,12 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useReducer, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import type { AgentKind } from "@portal/db";
+import type { AgentKind, WorkspaceKind } from "@portal/db";
 import { agentFrameUrl, type AgentFrame } from "@/lib/agent-url";
 import { fetchJson, needsReauth } from "@/lib/fetch-json";
 import { stopReasonText, workspaceState, type WorkspaceState } from "@/lib/format";
-import type { ApiError, WorkspaceStatusResponse } from "@/lib/gateway-types";
+import type { ApiError, OnlineAccess, WorkspaceStatusResponse } from "@/lib/gateway-types";
+import { hasContainer, initialKind, KIND_NAMES, onlineAccessAfter, startErrorText } from "@/lib/workspace-kind";
 import { stopNeedsConfirm, stopWarnings } from "@/lib/workspace-stop";
 import { PortalMark } from "@/components/brand";
 import { BarMenu } from "@/components/common/bar-menu";
@@ -18,26 +19,29 @@ import { HeaderBar } from "@/components/layout/header-bar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
-import { CloseIcon, EyeIcon, HomeIcon, PlayIcon, SettingsIcon, ShieldIcon, StopIcon, WarningIcon } from "@/components/ui/icons";
+import { CloseIcon, EyeIcon, HomeIcon, SettingsIcon, ShieldIcon, StopIcon, WarningIcon } from "@/components/ui/icons";
 import { Separator } from "@/components/ui/separator";
 import { Spinner } from "@/components/ui/spinner";
 import { BootScreen } from "./boot-screen";
+import { KindBadge } from "./kind-badge";
+import { StartWorkspace } from "./start-workspace";
 import { StateCard } from "./state-card";
 import { StatusPill } from "./status-pill";
 import { StopDialog } from "./stop-dialog";
 
 // The /workspace page body: a slim 46px top bar and the workspace's agent (Qwen Code or DeepSeek Harness) in an
-// iframe, served by the gateway on the workspace's own port (AGENT_PORT_BASE + user id). It polls
-// /api/workspace/status (2 s until ready, then 10 s) and only mounts the iframe once the agent is ready.
-// Nothing here starts a workspace by itself: stopped, it says so and offers Start (the owner's harness from
-// Settings). Stop (own workspace only) asks first when it would interrupt something, then goes back to Home.
+// iframe, served by the gateway on the running kind's own port (Private: AGENT_PORT_BASE + user id, Online:
+// ONLINE_AGENT_PORT_BASE + user id). It polls /api/workspace/status (2 s until ready, then 10 s) and only mounts
+// the iframe once the agent is ready. Nothing here starts a workspace by itself: stopped, it says so and offers
+// the Private | Online switch and Start, which confirms the kind (the owner's harness from Settings). Stop (own
+// workspace only) asks first when it would interrupt something, then goes back to Home.
 
 interface WorkspaceShellProps {
   viewer: Viewer;
   /** Whose workspace this page shows; the gateway routes by the session's target, which must match. */
   target: { id: number; name: string; isViewer: boolean };
-  /** null when the user id is outside AGENT_PORT_COUNT (the page then explains it). */
-  frame: AgentFrame | null;
+  /** Each kind's iframe port and token; null when the user id is outside AGENT_PORT_COUNT (the page explains it). */
+  frames: Readonly<Record<WorkspaceKind, AgentFrame | null>>;
   idleTimeoutMinutes: number;
   /** Display names of all agent kinds (AGENT_NAMES), so a running agent is named even if no longer enabled. */
   agentNames: Readonly<Record<AgentKind, string>>;
@@ -50,6 +54,9 @@ interface State {
   pollError: ApiError | null;
   /** A start request is in flight. */
   starting: boolean;
+  /** The kind the last Start asked for (the bar's badge until the gateway's answer, and what Try again retries). */
+  startedKind: WorkspaceKind;
+  /** Why the last start was refused, in the portal's words (startErrorText). */
   startError: ApiError | null;
   /** Seen starting or running since the page loaded, so a later "stopped" means it was stopped on us. */
   active: boolean;
@@ -62,9 +69,10 @@ interface State {
 type Action =
   | { type: "status"; info: WorkspaceStatusResponse }
   | { type: "pollFailed"; error: ApiError }
-  | { type: "startRequested" }
+  | { type: "startRequested"; kind: WorkspaceKind }
   | { type: "startSucceeded"; info: WorkspaceStatusResponse }
-  | { type: "startFailed"; error: ApiError }
+  /** `online`: what a refusal for Online access says about it, so the switch shows it unavailable at once. */
+  | { type: "startFailed"; error: ApiError; online: OnlineAccess | null }
   | { type: "stopRequested" }
   | { type: "stopFailed"; message: string | null }
   | { type: "stopErrorDismissed" };
@@ -73,6 +81,7 @@ const INITIAL: State = {
   info: null,
   pollError: null,
   starting: false,
+  startedKind: "private",
   startError: null,
   active: false,
   leaving: false,
@@ -94,11 +103,18 @@ function reducer(state: State, action: Action): State {
     case "pollFailed":
       return { ...state, pollError: action.error };
     case "startRequested":
-      return { ...state, starting: true, startError: null };
+      return { ...state, starting: true, startedKind: action.kind, startError: null };
     case "startSucceeded":
       return { ...state, starting: false, info: action.info, pollError: null, active: true };
-    case "startFailed":
-      return { ...state, starting: false, startError: action.error };
+    case "startFailed": {
+      const { online } = action;
+      return {
+        ...state,
+        starting: false,
+        startError: action.error,
+        info: online && state.info ? { ...state.info, online } : state.info,
+      };
+    }
     case "stopRequested":
       return { ...state, leaving: true, stopError: null };
     case "stopFailed":
@@ -184,28 +200,30 @@ function pillOf(phase: Phase, state: State): WorkspaceState {
 /** What "Admin connected" means, for the pill's tooltip and the menu. */
 const ADMIN_CONNECTED = "An administrator has your workspace open";
 
-/** What a not-running workspace says, and what its Start button is called. */
+/** "Your", or the owner's name with "'s" for an administrator viewing someone else's workspace. */
+function whoseOf(target: WorkspaceShellProps["target"]): string {
+  return target.isViewer ? "Your" : `${target.name}'s`;
+}
+
+/**
+ * What a not-running workspace says (a body only when there is something to explain), and what its Start button
+ * is called. `kind`: the one stopped or refused.
+ */
 function idleCopy(
   idle: Idle,
   target: WorkspaceShellProps["target"],
-  harness: string | null,
+  kind: WorkspaceKind,
   idleTimeoutMinutes: number,
-): { title: string; body: string; warning: boolean; action: string } {
-  const whose = target.isViewer ? "Your" : `${target.name}'s`;
-  const starts = harness ? `Start launches ${harness}. ` : "";
+): { title: string; body: string | null; warning: boolean; action: string } {
+  const whose = whoseOf(target);
   switch (idle.kind) {
     case "fresh":
-      return {
-        title: `${whose} workspace is stopped`,
-        body: `${starts}Files in the workspace are kept.`,
-        warning: false,
-        action: "Start",
-      };
+      return { title: `${whose} workspace is stopped`, body: null, warning: false, action: "Start" };
     case "stopped": {
       const reason = stopReasonText(idle.reason, idleTimeoutMinutes, target.isViewer ? "owner" : "other");
       return {
-        title: `${whose} workspace was stopped`,
-        body: `${reason ? `It was stopped ${reason}. ` : ""}Files in the workspace are kept.`,
+        title: `${whose} ${KIND_NAMES[kind]} workspace was stopped`,
+        body: reason ? `It was stopped ${reason}.` : null,
         warning: false,
         action: "Start again",
       };
@@ -219,7 +237,7 @@ function idleCopy(
       };
     case "failed":
       return {
-        title: "The workspace couldn't start",
+        title: `The ${KIND_NAMES[kind]} workspace couldn't start`,
         body: idle.message ?? "Something went wrong while starting it.",
         warning: true,
         action: "Try again",
@@ -229,7 +247,7 @@ function idleCopy(
 
 const noopSubscribe = () => () => {};
 
-export function WorkspaceShell({ viewer, target, frame, idleTimeoutMinutes, agentNames, banner }: WorkspaceShellProps) {
+export function WorkspaceShell({ viewer, target, frames, idleTimeoutMinutes, agentNames, banner }: WorkspaceShellProps) {
   const router = useRouter();
   const theme = useTheme();
   const [state, dispatch] = useReducer(reducer, INITIAL);
@@ -244,6 +262,10 @@ export function WorkspaceShell({ viewer, target, frame, idleTimeoutMinutes, agen
   const pill = pillOf(phase, state);
   const running = info?.status === "starting" || info?.status === "running" ? info : null;
   const runningAgent = running?.agent ?? null;
+  // The iframe is the running kind's: its own port, so its own browser origin.
+  const frame = running ? frames[running.kind] : null;
+  // The kind in the bar while a container is there (or a start was just asked for).
+  const shownKind = switched ? null : state.starting ? state.startedKind : info && hasContainer(info.status) ? info.kind : null;
   // Needs window.location, so it is only known in the browser (null while server rendering).
   const agentUrl = useSyncExternalStore(
     noopSubscribe,
@@ -284,13 +306,21 @@ export function WorkspaceShell({ viewer, target, frame, idleTimeoutMinutes, agen
     };
   }, [pollRound, switched, router]);
 
-  async function start() {
-    dispatch({ type: "startRequested" });
+  /** Starts that kind (confirmed in the start dialog, or retried after the service couldn't be reached). */
+  async function start(kind: WorkspaceKind) {
+    dispatch({ type: "startRequested", kind });
     pollNow();
-    const result = await fetchJson<WorkspaceStatusResponse>("/api/workspace/start", { method: "POST" });
+    const result = await fetchJson<WorkspaceStatusResponse>("/api/workspace/start", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind }),
+    });
     if (result.ok) dispatch({ type: "startSucceeded", info: result.data });
     else if (needsReauth(result)) router.refresh();
-    else dispatch({ type: "startFailed", error: result.error });
+    else {
+      const error = { ...result.error, message: startErrorText(result.error, kind, whoseOf(target)) };
+      dispatch({ type: "startFailed", error, online: onlineAccessAfter(result.error) });
+    }
   }
 
   /** Stops the user's workspace, then goes Home; resolves to an error message when it couldn't. */
@@ -318,7 +348,6 @@ export function WorkspaceShell({ viewer, target, frame, idleTimeoutMinutes, agen
     if (problem) dispatch({ type: "stopFailed", message: problem });
   }
 
-  const harness = info?.nextAgent ? agentNames[info.nextAgent] : null;
   const home = target.isViewer ? (
     <Button asChild variant="outline">
       <Link href="/">
@@ -354,18 +383,26 @@ export function WorkspaceShell({ viewer, target, frame, idleTimeoutMinutes, agen
       content = <BootScreen hint={`Stopping ${target.isViewer ? "your" : `${target.name}'s`} workspace…`} />;
       break;
     case "idle": {
-      const copy = idleCopy(phase.idle, target, harness, idleTimeoutMinutes);
+      const kind = state.startError ? state.startedKind : (info?.kind ?? "private");
+      const copy = idleCopy(phase.idle, target, kind, idleTimeoutMinutes);
       content = (
         <StateCard
           title={copy.title}
           warning={copy.warning}
           actions={
             <>
-              {home}
-              <Button type="button" onClick={start} disabled={info?.nextAgent === null}>
-                <PlayIcon />
-                {copy.action}
-              </Button>
+              {/* Apart from the switch and Start, which belong together; under them when a phone has no room. */}
+              {home ? <div className="mr-auto max-sm:order-last">{home}</div> : null}
+              {info ? (
+                <StartWorkspace
+                  online={info.online}
+                  initialKind={state.startError ? kind : initialKind(info)}
+                  whose={target.isViewer ? "your" : `${target.name}'s`}
+                  label={copy.action}
+                  disabled={info.nextAgent === null}
+                  onStart={start}
+                />
+              ) : null}
             </>
           }
         >
@@ -382,7 +419,7 @@ export function WorkspaceShell({ viewer, target, frame, idleTimeoutMinutes, agen
           actions={
             <>
               {home}
-              <Button type="button" onClick={state.startError ? start : pollNow}>
+              <Button type="button" onClick={state.startError ? () => void start(state.startedKind) : pollNow}>
                 Try again
               </Button>
             </>
@@ -411,7 +448,7 @@ export function WorkspaceShell({ viewer, target, frame, idleTimeoutMinutes, agen
   return (
     <div className="flex h-dvh flex-col overflow-hidden bg-background">
       {banner}
-      <HeaderBar sticky={false}>
+      <HeaderBar>
         <Link
           href={target.isViewer ? "/" : "/admin"}
           aria-label={target.isViewer ? "Home" : "Admin"}
@@ -420,30 +457,37 @@ export function WorkspaceShell({ viewer, target, frame, idleTimeoutMinutes, agen
           <PortalMark />
         </Link>
         <Separator orientation="vertical" className="data-vertical:h-4 data-vertical:self-center" />
-        <StatusPill state={pill} />
-        {runningAgent ? (
-          <span className="min-w-0 truncate text-13 font-medium max-sm:hidden">
-            <span className="sr-only">Harness: </span>
-            {agentNames[runningAgent]}
-          </span>
-        ) : null}
-        {adminConnected ? (
-          // On the narrowest phones the label is cut short rather than pushing the buttons off the bar.
-          <Badge role="status" title={ADMIN_CONNECTED} variant="warning" className="min-w-0 shrink">
-            <EyeIcon />
-            <span className="truncate">Admin connected</span>
-          </Badge>
-        ) : null}
+        {/*
+          On a phone the badges keep only their icons and the state's label is cut short, rather than the buttons
+          being pushed off the bar.
+        */}
+        <div className="flex min-w-0 items-center gap-3 overflow-hidden max-sm:gap-2">
+          <StatusPill state={pill} className="min-w-0 shrink" />
+          {shownKind ? <KindBadge kind={shownKind} compact /> : null}
+          {runningAgent ? (
+            <span className="min-w-0 truncate text-13 font-medium max-sm:hidden">
+              <span className="sr-only">Harness: </span>
+              {agentNames[runningAgent]}
+            </span>
+          ) : null}
+          {adminConnected ? (
+            <Badge role="status" title={ADMIN_CONNECTED} variant="warning">
+              <EyeIcon />
+              <span className="max-sm:sr-only">Admin connected</span>
+            </Badge>
+          ) : null}
+        </div>
         <div className="ml-auto flex shrink-0 items-center gap-2">
           {canStop ? (
-            <Button ref={stopButton} type="button" variant="outline" size="sm" onClick={onStop}>
+            // Only its icon on phones, as icon-sm's square.
+            <Button ref={stopButton} type="button" variant="outline" size="sm" onClick={onStop} className="max-sm:w-7 max-sm:px-0">
               <StopIcon />
-              Stop
+              <span className="max-sm:sr-only">Stop</span>
             </Button>
           ) : state.leaving ? (
-            <Button type="button" variant="outline" size="sm" disabled aria-busy>
+            <Button type="button" variant="outline" size="sm" disabled aria-busy className="max-sm:w-7 max-sm:px-0">
               <Spinner aria-hidden="true" />
-              Stopping…
+              <span className="max-sm:sr-only">Stopping…</span>
             </Button>
           ) : null}
           <ThemeToggle />
@@ -454,7 +498,7 @@ export function WorkspaceShell({ viewer, target, frame, idleTimeoutMinutes, agen
               </DropdownMenuLabel>
             ) : null}
             {adminConnected ? (
-              // The bar's pill may be cut short, and its tooltip needs a mouse.
+              // On a phone the bar's badge is only an eye, and its tooltip needs a mouse.
               <DropdownMenuLabel className="flex gap-2 text-warning">
                 <EyeIcon className="shrink-0" />
                 {ADMIN_CONNECTED}

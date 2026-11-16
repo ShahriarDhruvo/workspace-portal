@@ -70,7 +70,7 @@ test("GET /control/live streams an init event, then frames with the workspaces a
     await waitFor(() => g.live.viewers === 0, "the viewer to leave");
   }));
 
-test("engine overview, update, rollback and image removal through the control API", () =>
+test("engine overview, updates (a download, or the image already there) and image removal through the control API", () =>
   withGateway({}, async (g) => {
     const { admin } = g.ids;
     const overview = json<{ state: string; engine: { version: string }; releases: { releases: Array<{ version: string; latest: boolean }> }; job: null; drainMinutes: number }>(
@@ -92,10 +92,10 @@ test("engine overview, update, rollback and image removal through the control AP
     await refused("POST", "/control/engine/update", { version: "0.99.0" }, 404, "version_not_found");
     await refused("POST", "/control/engine/update", { version: "0.31.0" }, 409, "already_current");
     await refused("POST", "/control/engine/update", { version: "0.34.0", actorUserId: 999 }, 400, "invalid_actor");
-    await refused("POST", "/control/engine/rollback", {}, 409, "no_previous");
+    await refused("POST", "/control/engine/rollback", {}, 404, "not_found");
 
-    const started = json<{ kind: string; toVersion: string; image: string }>(await g.control("POST", "/control/engine/update", { version: "0.34.0", actorUserId: admin }));
-    assert.deepEqual([started.kind, started.toVersion, started.image], ["update", "0.34.0", `${ENGINE_REPOSITORY}@${engineDigest("0.34.0")}`]);
+    const started = json<{ reuse: boolean; toVersion: string; image: string }>(await g.control("POST", "/control/engine/update", { version: "0.34.0", actorUserId: admin }));
+    assert.deepEqual([started.reuse, started.toVersion, started.image], [false, "0.34.0", `${ENGINE_REPOSITORY}@${engineDigest("0.34.0")}`]);
     const running = async () => json<{ running: boolean; agent: boolean; engine: boolean }>(await g.control("GET", "/control/updates/running"));
     const during = await running();
     assert.equal(during.engine, g.engine.snapshot()?.finishedAt === null, "the deploy scripts' check follows the job");
@@ -106,8 +106,10 @@ test("engine overview, update, rollback and image removal through the control AP
     assert.equal(json<{ ok: boolean }>(await g.control("POST", "/control/engine/restart-now")).ok, false, "no drain to end");
     assert.equal(json<{ cancelled: boolean }>(await g.control("POST", "/control/engine/cancel")).cancelled, false);
 
-    await g.control("POST", "/control/engine/rollback", { actorUserId: admin });
-    await waitFor(() => g.engine.snapshot()?.kind === "rollback" && g.engine.snapshot()?.stage === "succeeded", "the rollback");
+    // Back to the version before: its image is on the LLM server, so nothing is downloaded.
+    const back = json<{ reuse: boolean }>(await g.control("POST", "/control/engine/update", { version: "0.31.0", actorUserId: admin }));
+    assert.equal(back.reuse, true);
+    await waitFor(() => g.engine.snapshot()?.toVersion === "0.31.0" && g.engine.snapshot()?.stage === "succeeded", "the switch back");
     assert.equal(g.engineHost!.version, "0.31.0");
 
     await refused("DELETE", `/control/engine/images/${encodeURIComponent(engineDigest("0.31.0"))}`, undefined, 409, "image_current");

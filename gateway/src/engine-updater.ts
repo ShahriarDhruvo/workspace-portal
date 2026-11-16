@@ -1,16 +1,16 @@
-// Updates (or rolls back) the LLM engine on the LLM server from Admin > Updates, through that server's
-// portal-hostd, which owns the engine's Podman quadlet (hostd/README.md).
+// Switches the LLM engine on the LLM server to another release (newer or older) from Admin > Updates,
+// through that server's portal-hostd, which owns the engine's Podman quadlet (hostd/README.md).
 //
 // An update:
 //   1. pulling:    hostd downloads the version's image (by digest, resolved from the registry now);
-//                  the engine keeps serving meanwhile. Cancellable.
+//                  the engine keeps serving meanwhile. Cancellable. Skipped when the LLM server has an
+//                  image of that version already (`reuse`): it is used as it is, without the registry.
 //   2. draining:   the gateway holds new LLM requests in its queue (they wait, they don't fail) and waits
 //                  for the running ones to finish: at most ENGINE_DRAIN_MINUTES, or until the admin says
 //                  "Restart now". Cancellable (the queue opens again, nothing changed).
 //   3. restarting: hostd points the quadlet at the new image, restarts the engine and checks it serves
 //                  the new version; if it doesn't, hostd puts the old image back and restarts that.
 //   4. the queue opens again; the held requests go to the (new or restored) engine.
-// A rollback is the same without step 1: hostd swaps back to the image that ran before the last change.
 // One job at a time; the last one stays visible until the next starts.
 import crypto from "node:crypto";
 import { writeAudit, type AuditAction, type PortalDb } from "@portal/db";
@@ -36,11 +36,12 @@ export type EngineJobStage = "pulling" | "draining" | "restarting" | "succeeded"
 
 export interface EngineUpdateJob {
   id: string;
-  kind: "update" | "rollback";
   fromVersion: string | null;
-  /** The version asked for (an update) or restored (a rollback); null when unknown. */
+  /** The version asked for; once it succeeded, the one the engine reports. */
   toVersion: string | null;
   image: string | null;
+  /** The LLM server had an image of that version: no download, it is used as it is. */
+  reuse: boolean;
   stage: EngineJobStage;
   step: string;
   log: string[];
@@ -98,7 +99,6 @@ export interface EngineHost {
   status(): Promise<EngineStatus>;
   pull(image: string): Promise<EngineJob>;
   apply(image: string, version: string | null): Promise<EngineJob>;
-  rollback(): Promise<EngineJob>;
   cancel(): Promise<boolean>;
   removeImage(digest: string): Promise<void>;
 }
@@ -108,7 +108,6 @@ export function createEngineHost(client: HostdClient): EngineHost {
     status: () => client.get<EngineStatus>("/v1/engine"),
     pull: (image) => client.post<EngineJob>("/v1/engine/pull", { image }),
     apply: (image, version) => client.post<EngineJob>("/v1/engine/apply", { image, version }),
-    rollback: () => client.post<EngineJob>("/v1/engine/rollback"),
     cancel: async () => (await client.post<{ cancelled: boolean }>("/v1/engine/cancel")).cancelled === true,
     removeImage: async (digest) => {
       await client.delete(`/v1/engine/images/${encodeURIComponent(digest)}`);
@@ -161,7 +160,9 @@ export class EngineUpdater {
       if (error instanceof HostdError && error.code === "no_engine") return { ...base, state: "no_engine", error: error.message, engine: null, releases: null };
       return { ...base, state: "offline", error: errorMessage(error), engine: null, releases: null };
     }
-    return { ...base, state: "ok", error: null, engine, releases: await releases.list(engine.repository, options) };
+    // What runs and the images on the LLM server are listed too, whether or not they are among the newest releases.
+    const local = [{ version: engine.version, digest: engine.digest }, ...engine.images];
+    return { ...base, state: "ok", error: null, engine, releases: await releases.list(engine.repository, options, local) };
   }
 
   snapshot(): EngineUpdateJob | null {
@@ -171,24 +172,34 @@ export class EngineUpdater {
     return { ...job, log: [...job.log, ...live].slice(-LOG_LINES), drain: job.drain && { ...job.drain, inFlight: this.#options.queue.inFlight } };
   }
 
-  /** Starts an update to `version` (X.Y.Z); resolves once it has started. */
+  /**
+   * Starts switching the engine to `version` (X.Y.Z, newer or older); resolves once it has started. An image of that
+   * version on the LLM server is used as it is; any other is resolved to its digest in the registry and downloaded.
+   */
   async startUpdate(request: { version: string; actorUserId: number | null }): Promise<EngineUpdateJob> {
     const { version, actorUserId } = request;
     if (!isStableVersion(version)) throw new EngineRequestError("invalid_version", "version must be a release version, like 0.34.0.");
     const { engine, host } = await this.#ready();
     if (engine.version === version) throw new EngineRequestError("already_current", `The engine already runs ${version}.`);
-    let digest: string;
-    try {
-      digest = await this.#options.releases.resolve(engine.repository, version);
-    } catch (error) {
-      if (error instanceof EngineReleaseError) throw new EngineRequestError("version_not_found", error.message);
-      throw error;
+    const local = engine.images.find((image) => image.version === version && image.digest !== null)?.digest ?? null;
+    let digest = local;
+    if (digest === null) {
+      try {
+        digest = await this.#options.releases.resolve(engine.repository, version);
+      } catch (error) {
+        if (error instanceof EngineReleaseError) throw new EngineRequestError("version_not_found", error.message);
+        throw error;
+      }
     }
     if (this.running) throw new EngineJobRunningError();
     const image = `${engine.repository}@${digest}`;
-    const job = this.#begin("update", engine.version, version, image, actorUserId);
+    const job = this.#begin(engine.version, version, image, local !== null, actorUserId);
     void this.#run(job, host, {
       beforeDrain: async () => {
+        if (job.reuse) {
+          this.#note(job, `Using the image already on the LLM server (${image}).`);
+          return;
+        }
         this.#stage(job, "pulling", `Downloading ${version}`, true);
         const pulled = await this.#follow(job, await host.pull(image), host, PULL_TIMEOUT_MS);
         if (pulled.phase === "cancelled" || this.#cancelRequested) throw new Cancelled();
@@ -196,21 +207,6 @@ export class EngineUpdater {
       },
       restart: () => host.apply(image, version),
     });
-    return this.snapshot()!;
-  }
-
-  /** Swaps back to the image that ran before the last engine change. */
-  async startRollback(request: { actorUserId: number | null }): Promise<EngineUpdateJob> {
-    const { engine, host } = await this.#ready();
-    if (engine.previous === null) throw new EngineRequestError("no_previous", "There is no previous engine version to go back to.");
-    // Refused now, not after a drain that held every new request: hostd would refuse at the restart.
-    if (!engine.images.some((image) => image.previous)) {
-      const version = engine.previous.version ?? "previous";
-      throw new EngineRequestError("not_pulled", `The ${version} image is no longer on the LLM server. Install ${version} from the list of versions instead.`);
-    }
-    if (this.running) throw new EngineJobRunningError();
-    const job = this.#begin("rollback", engine.version, engine.previous.version, engine.previous.image, request.actorUserId);
-    void this.#run(job, host, { restart: () => host.rollback() });
     return this.snapshot()!;
   }
 
@@ -258,17 +254,17 @@ export class EngineUpdater {
     }
   }
 
-  #begin(kind: "update" | "rollback", fromVersion: string | null, toVersion: string | null, image: string | null, actorUserId: number | null): EngineUpdateJob {
+  #begin(fromVersion: string | null, toVersion: string, image: string, reuse: boolean, actorUserId: number | null): EngineUpdateJob {
     this.#cancelRequested = false;
     this.#restartNow = false;
     this.#hostJob = null;
     const job: EngineUpdateJob = {
       id: crypto.randomBytes(6).toString("hex"),
-      kind,
       fromVersion,
       toVersion,
       image,
-      stage: kind === "update" ? "pulling" : "draining",
+      reuse,
+      stage: reuse ? "draining" : "pulling",
       step: "Starting",
       log: [],
       startedAt: this.#now(),
@@ -280,17 +276,17 @@ export class EngineUpdater {
       actorUserId,
     };
     this.#job = job;
-    this.#options.log.info(kind === "update" ? "engine update started" : "engine rollback started", { from: fromVersion, to: toVersion });
+    this.#options.log.info("engine update started", { from: fromVersion, to: toVersion, reuse });
     return job;
   }
 
-  /** Runs a job: what comes before the drain (an update's download), the drain, then hostd's restart. */
-  async #run(job: EngineUpdateJob, host: EngineHost, plan: { beforeDrain?: () => Promise<void>; restart: () => Promise<EngineJob> }): Promise<void> {
+  /** Runs a job: what comes before the drain (the download), the drain, then hostd's restart. */
+  async #run(job: EngineUpdateJob, host: EngineHost, plan: { beforeDrain: () => Promise<void>; restart: () => Promise<EngineJob> }): Promise<void> {
     const { queue } = this.#options;
     try {
-      await plan.beforeDrain?.();
+      await plan.beforeDrain();
       await this.#drain(job);
-      this.#stage(job, "restarting", `Restarting the engine with ${job.toVersion ?? "the previous version"}`, false);
+      this.#stage(job, "restarting", `Restarting the engine with ${job.toVersion}`, false);
       const result = await this.#follow(job, await plan.restart(), host, APPLY_TIMEOUT_MS);
       if (result.phase !== "succeeded") {
         job.rolledBack = result.rolledBack;
@@ -392,10 +388,10 @@ export class EngineUpdater {
     job.drain = null;
     job.cancellable = false;
     job.step = stage === "succeeded" ? "Done" : stage === "cancelled" ? "Cancelled" : job.rolledBack ? "Failed; the previous version runs again" : "Failed";
-    const details = { kind: job.kind, from: job.fromVersion, to: job.toVersion };
+    const details = { from: job.fromVersion, to: job.toVersion };
     if (stage === "succeeded") {
       this.#audit("engine_updated", job.actorUserId, details);
-      this.#options.log.info(job.kind === "update" ? "engine updated" : "engine rolled back", { ...details, seconds: Math.round((job.finishedAt - job.startedAt) / 1000) });
+      this.#options.log.info("engine updated", { ...details, seconds: Math.round((job.finishedAt - job.startedAt) / 1000) });
     } else {
       this.#audit("engine_update_failed", job.actorUserId, { ...details, error, rolledBack: job.rolledBack });
       this.#options.log.warn(stage === "cancelled" ? "engine update cancelled" : "engine update failed", { ...details, error, rolledBack: job.rolledBack });

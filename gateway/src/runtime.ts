@@ -1,11 +1,11 @@
 // What WorkspaceManager needs from a container engine. DockerRuntime implements it for real;
 // the integration tests use an in-process fake.
-import type { AgentKind } from "@portal/db";
+import type { AgentKind, WorkspaceKind } from "@portal/db";
 import type { WorkspaceStartOptions } from "./container-spec.ts";
 
 export interface StartedContainer {
   id: string;
-  /** Address on the workspace network. The service API identifies callers by it. */
+  /** Address on its kind's network. The service API identifies callers by it, within that network only. */
   ip: string;
   /** Where the agent's web server listens on `ip` (the driver's port for real workspaces). */
   port: number;
@@ -15,9 +15,12 @@ export interface ContainerSummary {
   id: string;
   /** From the user-id label; null when the label is missing or malformed. */
   userId: number | null;
+  /** From the kind label (none means Private, from before kinds); null when it names no known kind. */
+  kind: WorkspaceKind | null;
   /** From the agent label (none means Qwen Code, from before the choice); null when it names no known agent. */
   agent: AgentKind | null;
   running: boolean;
+  /** Its address on its own kind's network. */
   ip: string | null;
   /** The agent's port; null when the agent is unknown. */
   port: number | null;
@@ -55,7 +58,7 @@ export class WorkspaceImageMissingError extends Error {
 }
 
 export interface ContainerRuntime {
-  /** Removes any stale container for this user, then creates and starts a new one. */
+  /** Removes any stale container of this user, of either kind, then creates and starts a new one of `options.kind`. */
   startWorkspace(userId: number, options: WorkspaceStartOptions): Promise<StartedContainer>;
   /** The credential a running container's agent was started with; null if unknown or gone. */
   credential(id: string, agent: AgentKind): Promise<string | null>;

@@ -1,8 +1,17 @@
 "use client";
 
 import { useActionState, useEffect, useEffectEvent, useRef, useState, type ReactNode, type RefObject } from "react";
-import { deleteUser, resetPassword, setUserActive, stopWorkspace, type ActionState } from "@/lib/actions/admin";
+import {
+  deleteUser,
+  eraseWorkspaceFiles,
+  resetPassword,
+  setOnlineAccess,
+  setUserActive,
+  stopWorkspace,
+  type ActionState,
+} from "@/lib/actions/admin";
 import { returnFocus } from "@/lib/focus";
+import { GuardedButton } from "@/components/common/guarded-button";
 import { SecretValue } from "@/components/common/secret-value";
 import { FormError } from "@/components/forms/form-error";
 import { FormField } from "@/components/forms/form-field";
@@ -19,11 +28,20 @@ import {
 import { Button } from "@/components/ui/button";
 import { BusyWarning } from "@/components/workspace/busy-warning";
 
-// The admin's actions on one user (stop the workspace, reset the password, deactivate, activate, delete), each
-// as a confirmation dialog bound to its server action. A dialog closes itself once its action succeeds, except
-// a password reset, which shows the new temporary password once. Deleting asks for the username first.
+// The admin's actions on one user (stop the workspace, reset the password, deactivate, activate, delete, erase one
+// kind's files, turn Online off while it runs), each as a confirmation dialog bound to its server action. A dialog
+// closes itself once its action succeeds, except a password reset, which shows the new temporary password once.
+// Deleting asks for the username first.
 
-export type UserDialogKind = "stop" | "reset" | "deactivate" | "activate" | "delete";
+export type UserDialogKind =
+  | "stop"
+  | "reset"
+  | "deactivate"
+  | "activate"
+  | "delete"
+  | "erasePrivate"
+  | "eraseOnline"
+  | "onlineOff";
 
 export interface DialogUser {
   id: number;
@@ -34,11 +52,14 @@ export interface DialogUser {
 }
 
 const TITLES: Record<UserDialogKind, string> = {
-  stop: "Stop workspace",
-  reset: "Reset password",
-  deactivate: "Deactivate user",
-  activate: "Activate user",
-  delete: "Delete user",
+  stop: "Stop workspace?",
+  reset: "Reset password?",
+  deactivate: "Deactivate user?",
+  activate: "Activate user?",
+  delete: "Delete user?",
+  erasePrivate: "Erase Private files?",
+  eraseOnline: "Erase Online files?",
+  onlineOff: "Turn off Online workspace?",
 };
 
 const IDLE: ActionState = { status: "idle" };
@@ -66,17 +87,22 @@ export function UserDialog({ kind, user, open, onOpenChange, returnFocusTo }: Us
   );
 }
 
-/** A button that opens one of the user dialogs (used on the user detail page); closing it refocuses the button. */
+/** A button that opens one of the user dialogs (on a user's page); closing it refocuses the button. */
 export function UserDialogButton({
   kind,
   user,
   children,
+  icon,
   danger = false,
+  blockedReason,
 }: {
   kind: UserDialogKind;
   user: DialogUser;
   children: ReactNode;
+  icon?: ReactNode;
   danger?: boolean;
+  /** Why the action can't run now (the button then says so in a tooltip, as GuardedButton does). */
+  blockedReason?: string | null;
 }) {
   const [open, setOpen] = useState(false);
   // The dialog as it was opened. The page can change `kind` under an open dialog: a deactivation that couldn't
@@ -85,18 +111,19 @@ export function UserDialogButton({
   const button = useRef<HTMLButtonElement>(null);
   return (
     <>
-      <Button
+      <GuardedButton
         ref={button}
         type="button"
         variant={danger ? "destructive" : "outline"}
-        size="sm"
+        blockedReason={blockedReason}
         onClick={() => {
           setShown(kind);
           setOpen(true);
         }}
       >
+        {icon}
         {children}
-      </Button>
+      </GuardedButton>
       <UserDialog kind={shown} user={user} open={open} onOpenChange={setOpen} returnFocusTo={button} />
     </>
   );
@@ -118,12 +145,12 @@ function UserDialogBody({ kind, user, onDone }: { kind: UserDialogKind; user: Di
           description={
             user.busy ? (
               <p>
-                <BusyWarning whose={whose} effect="Stopping ends it mid-way; files written so far are kept. Stop anyway?" />
+                <BusyWarning whose={whose} effect="Stopping ends it mid-way; files written so far are kept." />
               </p>
             ) : (
               <p>
-                Stop {whose} workspace now? Anything running in it ends; files are kept. It starts again the next time
-                it&apos;s opened.
+                Anything running in {whose} workspace ends; files are kept. It starts again the next time it&apos;s
+                opened.
               </p>
             )
           }
@@ -190,6 +217,52 @@ function UserDialogBody({ kind, user, onDone }: { kind: UserDialogKind; user: Di
       );
     case "delete":
       return <DeleteUserForm user={user} whose={whose} onDone={onDone} />;
+    case "erasePrivate":
+    case "eraseOnline": {
+      const [erased, kept] = kind === "erasePrivate" ? ["Private", "Online"] : ["Online", "Private"];
+      return (
+        <ActionForm
+          user={user}
+          action={eraseWorkspaceFiles}
+          onDone={onDone}
+          danger
+          confirmLabel="Erase files"
+          pendingLabel="Erasing…"
+          fields={<input type="hidden" name="kind" value={erased.toLowerCase()} />}
+          description={
+            <p>
+              This permanently erases every file in {whose} {erased} workspace, its home folder included. The {kept}{" "}
+              workspace is not touched. This can&apos;t be undone.
+            </p>
+          }
+        />
+      );
+    }
+    case "onlineOff":
+      return (
+        <ActionForm
+          user={user}
+          action={setOnlineAccess}
+          onDone={onDone}
+          danger
+          confirmLabel="Turn off"
+          pendingLabel="Turning off…"
+          fields={<input type="hidden" name="allowed" value="false" />}
+          description={
+            <>
+              {user.busy ? (
+                <p>
+                  <BusyWarning whose={whose} effect="Turning Online off ends it mid-way." />
+                </p>
+              ) : null}
+              <p>
+                {whose} Online workspace is running and <strong className="font-medium text-foreground">stops now</strong>.
+                Its files are kept, and {name} can still use the Private workspace.
+              </p>
+            </>
+          }
+        />
+      );
   }
 }
 

@@ -210,13 +210,139 @@ stack_port_available() { # service port
 # The host's address on the default route (what users type in the browser on the LAN).
 host_ip() { ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}'; }
 
-# The ports users' browsers need: the portal and one port per workspace.
+# ---------------------------------------------------------------- addresses
+# A URL's host (an IPv6 literal with its brackets) and port (the scheme's default when it names none).
+url_authority() { # url
+  local rest=${1#*://}
+  rest=${rest%%/*}
+  rest=${rest%%\?*}
+  rest=${rest%%#*}
+  printf '%s' "${rest##*@}"
+}
+url_host() { # url
+  local authority
+  authority=$(url_authority "$1")
+  case $authority in
+    \[*) printf '%s]' "${authority%%]*}" ;;
+    *) printf '%s' "${authority%:*}" ;;
+  esac
+}
+url_port() { # url
+  local authority scheme=${1%%://*}
+  authority=$(url_authority "$1")
+  authority=${authority##*]}
+  if [[ $authority == *:* ]]; then
+    printf '%s' "${authority##*:}"
+  elif [[ ${scheme,,} == https ]]; then
+    printf 443
+  else
+    printf 80
+  fi
+}
+
+# The IPv4 addresses of a URL's host: the address itself, or what this host's resolver answers for the name now
+# (nothing for an IPv6 literal or a name that doesn't resolve).
+url_ipv4s() { # url
+  local host
+  host=$(url_host "$1")
+  if [[ $host =~ ^[0-9]+(\.[0-9]+){3}$ ]]; then
+    printf '%s\n' "$host"
+  elif [[ $host != \[* && -n $host ]]; then
+    getent ahostsv4 "$host" 2>/dev/null | awk '{print $1}' | sort -u
+  fi
+}
+
+# firewall.sh's not_public ranges (the private, link-local, carrier-NAT and other reserved ones), one per line.
+not_public_ranges() { bash "$ROOT/deploy/firewall.sh" not-public; }
+
+# True when the IPv4 ADDRESS lies in none of CIDRS (separated by commas, spaces or newlines).
+ipv4_outside() { # address cidrs
+  python3 -I -c '
+import ipaddress, sys
+address = ipaddress.ip_address(sys.argv[1])
+networks = [ipaddress.ip_network(item, strict=False) for item in sys.argv[2].replace(",", " ").split()]
+sys.exit(1 if any(address in network for network in networks) else 0)' "$1" "$2"
+}
+
+# True when the IPv4 ADDRESS is a public one: in none of the firewall's not_public ranges.
+ipv4_public() { ipv4_outside "$1" "$(not_public_ranges)"; }
+
+# IPv4 addresses and CIDRs from stdin (separated by commas, spaces or newlines) as one comma-separated list for
+# the firewall: networks masked, overlaps merged, loopback and IPv6 left out (the fenced containers have no IPv6,
+# and nothing is forwarded to loopback). Fails, naming them, on items that are neither.
+ipv4_networks() {
+  python3 -I -c '
+import ipaddress, sys
+networks, bad = [], []
+for item in sys.stdin.read().replace(",", " ").split():
+    try:
+        network = ipaddress.ip_network(item, strict=False)
+    except ValueError:
+        bad.append(item)
+        continue
+    if network.version == 4 and not network.is_loopback:
+        networks.append(network)
+if bad:
+    sys.exit("not an IPv4 address or CIDR: " + ", ".join(bad))
+print(",".join(str(n.network_address) if n.prefixlen == 32 else str(n) for n in ipaddress.collapse_addresses(networks)))'
+}
+
+# The servers the portal talks to (deploy/firewall.sh keeps the Online workspaces, the reader and SearXNG off
+# them, whatever their addresses): the LLM server, portal-hostd on either server, an outside SearXNG or page reader.
+PORTAL_UPSTREAMS=(LLM_UPSTREAM_URL HOSTD_LLM_URL HOSTD_PORTAL_URL SEARXNG_URL READER_URL)
+
+# What the Online workspaces, the reader and SearXNG must never reach, whatever its address (firewall.sh's
+# NEVER_REACH, on top of the private ranges it drops anyway): every network this host has an address on, and its
+# router; the PORTAL_UPSTREAMS, by the addresses their names have now; and FIREWALL_NEVER_REACH from .env. Warns
+# about a server whose name doesn't resolve; fails on a FIREWALL_NEVER_REACH item that is no IPv4 address or CIDR.
+never_reach() {
+  local key url addresses
+  {
+    ip -4 -o addr show scope global | awk '{print $4}'
+    ip -4 route show default | awk '{for (i = 1; i < NF; i++) if ($i == "via") print $(i + 1)}'
+    for key in "${PORTAL_UPSTREAMS[@]}"; do
+      url=$(env_get "$key")
+      [[ $url == *://* ]] || continue
+      addresses=$(url_ipv4s "$url")
+      if [[ -z $addresses ]]; then
+        warn "$key: $(url_host "$url") has no IPv4 address now, so the firewall can't keep the Online workspaces, the reader and SearXNG off it by address (they still reach no private address). Run this again once it resolves."
+        continue
+      fi
+      printf '%s\n' "$addresses"
+    done
+    env_get FIREWALL_NEVER_REACH
+    echo
+  } | ipv4_networks
+}
+
+# The port each agent's server listens on inside its workspace container (the drivers' port in gateway/src/agents/).
+agent_port() { # agent
+  case $1 in
+    qwen) printf 4170 ;;
+    dsh) printf 3080 ;;
+    *) die "unknown agent \"$1\" (one of: ${AGENTS[*]})" ;;
+  esac
+}
+
+# The ports users' browsers need: the portal and one port per workspace, in a range per kind (a user's
+# Private and Online workspaces are separate browser origins). Online's range follows Private's unless
+# ONLINE_AGENT_PORT_BASE says otherwise, as in the gateway (gateway/src/config.ts).
 web_port() { env_get WEB_PORT; }
-agent_port_range() { # prints FIRST-LAST
-  local base count
-  base=$(env_get AGENT_PORT_BASE)
-  count=$(env_get AGENT_PORT_COUNT)
-  printf '%s-%s' "$((base + 1))" "$((base + count - 1))"
+online_agent_port_base() {
+  env_get ONLINE_AGENT_PORT_BASE "$(($(env_get AGENT_PORT_BASE) + $(env_get AGENT_PORT_COUNT)))"
+}
+port_range_from() { # base -> FIRST-LAST
+  printf '%s-%s' "$(($1 + 1))" "$(($1 + $(env_get AGENT_PORT_COUNT) - 1))"
+}
+agent_port_range() { port_range_from "$(env_get AGENT_PORT_BASE)"; }        # Private
+online_agent_port_range() { port_range_from "$(online_agent_port_base)"; } # Online
+
+# True unless ONLINE_WORKSPACES turns Online workspaces off for the whole portal (the gateway's default is on).
+online_enabled() {
+  case $(env_get ONLINE_WORKSPACES on | tr '[:upper:]' '[:lower:]') in
+    false | off | no | 0) return 1 ;;
+    *) return 0 ;;
+  esac
 }
 
 # Sources allowed to reach those ports: FIREWALL_ALLOW_SOURCE, or the LAN of the default route
@@ -231,11 +357,12 @@ portal_sources() {
   printf '%s' "$lan"
 }
 
-# firewalld rich rules (or ufw rules) for the portal ports, one per source and port range.
+# firewalld rich rules for the portal ports, one per source and port (range). Both kinds' workspace
+# ranges are opened even with Online off: the gateway answers there that the workspace is stopped.
 portal_rich_rules() {
   local source port
   for source in $(portal_sources); do
-    for port in "$(web_port)" "$(agent_port_range)"; do
+    for port in "$(web_port)" "$(agent_port_range)" "$(online_agent_port_range)"; do
       printf 'rule family="ipv4" source address="%s" port port="%s" protocol="tcp" accept\n' "$source" "$port"
     done
   done

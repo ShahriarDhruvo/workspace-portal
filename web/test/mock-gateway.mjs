@@ -1,38 +1,51 @@
 // Test double for the gateway, for local end-to-end runs of the web app. NOT used in production.
 // Implements the control API (docs/ARCHITECTURE.md) with in-memory workspace state, plus a tiny
-// workspace port per user (AGENT_PORT_BASE + id) that resolves the portal_session cookie like the real proxy,
-// refuses sessions using another workspace, and shows whose workspace it is and which agent runs there. Like
-// the real gateway, start answers at once with "starting", and the workspace turns "running" and ready startMs
-// later. A workspace runs one agent at a time. A start without `{agent}` (what the portal sends) attaches to a
-// workspace that is starting or running, else launches the user's harness (users.agent, chosen in Settings) if
-// enabled, else the first enabled agent; a start naming another agent while one runs is refused (409
-// agent_mismatch). POST /control/workspaces/:id/attach only calls off a pending stop, as on the gateway.
+// workspace port per user and kind (Private: AGENT_PORT_BASE + id, Online: ONLINE_AGENT_PORT_BASE + id) that resolves
+// the portal_session cookie like the real proxy, refuses sessions using another workspace, and shows whose workspace
+// it is, its kind and which agent runs there (the other kind running, or none: the gateway's themed pages; nothing
+// starts from a port). Like the real gateway, start answers at once with "starting", and the workspace turns
+// "running" and ready startMs later. A workspace runs one agent and one kind at a time. A start without `{kind}`
+// attaches to a workspace that is starting or running, else starts Private; naming the other kind while one runs is
+// 409 kind_mismatch; Online while the global switch is off is 409 online_disabled, for a user whose
+// users.online_allowed is 0 403 online_not_allowed. A start without `{agent}` (what the portal sends) launches the
+// user's harness (users.agent, chosen in Settings) if enabled, else the first enabled agent; a start naming another
+// agent while one runs is refused (409 agent_mismatch). POST /control/workspaces/:id/attach only calls off a pending
+// stop, as on the gateway. DELETE /control/workspaces/:id/files?kind= erases one kind's files (409 workspace_running
+// while that kind is starting, running or stopping) and audits workspace_files_erased {kind} as the gateway does.
 //
 //   PORTAL_DATA_DIR=... GATEWAY_CONTROL_SECRET=... CONTROL_PORT=4002 AGENT_PORT_BASE=3100 AGENT_PORT_COUNT=20 \
 //   MOCK_AGENTS=qwen,dsh node test/mock-gateway.mjs
 //
+// ONLINE_AGENT_PORT_BASE defaults to AGENT_PORT_BASE + AGENT_PORT_COUNT (as for the web app and the gateway), and
+// ONLINE_WORKSPACES=on|off (default on) is the global Online switch.
 // MOCK_AGENTS (default "qwen,dsh") lists the enabled agents in display order, like the gateway's WORKSPACE_AGENTS.
 //
-// Agent versions (docs/ARCHITECTURE.md, "Agent versions and updates"), with an in-memory npm registry and image
-// store: GET /control/agents/versions[?refresh=1], POST /control/agents/:agent/update (a version whose image is on
-// the server, the current one included, skips the registry and the build unless from scratch: it logs that it uses
-// that image and only the version check runs; any other is a simulated build, steps and log lines over
-// MOCK_BUILD_MS, default 20 s, then the version check; then the version is current), POST
-// /control/agents/update/cancel, DELETE /control/agents/:agent/images/:version. The
-// same refusals and error codes as the gateway, which writes the agent_updated / agent_update_failed audit entries
-// as the gateway does. It starts with Qwen Code 0.27.0 (latest is 0.27.4, and 0.26.0 is on the server too) and
-// DeepSeek Harness 0.2.2-rc.1 (latest; next is 0.2.2-rc.3). Workspaces report the version they started with.
+// Agent versions (docs/ARCHITECTURE.md, "Agent versions and updates"), with an in-memory npm registry (publish
+// times, dist-tags, GitHub release notes) and image store: GET /control/agents/versions[?refresh=1] lists each
+// agent's releases as the gateway picks them (the 5 newest stable ones, the current one, those with an image), POST
+// /control/agents/:agent/update with an exact version (one whose image is on the server, the current one included,
+// skips the registry and the build unless from scratch: it logs that it uses that image and only the version check
+// runs; any other is a simulated build, steps and log lines over MOCK_BUILD_MS, default 20 s, then the version
+// check; then the version is current), POST /control/agents/update/cancel, DELETE
+// /control/agents/:agent/images/:version. The same refusals and error codes as the gateway, which writes the
+// agent_updated / agent_update_failed audit entries as the gateway does. It starts with Qwen Code 0.27.0 (latest is
+// 0.27.4; 0.27.2 has breaking changes; 0.26.0 is on the server too, without release notes) and DeepSeek Harness
+// 0.2.2-rc.1 (latest, every release a prerelease; 0.2.1-rc.5 is on the server too). Workspaces report the version
+// they started with.
 //
 // Test hooks (no auth): POST /__mock/workspaces/:id/stop?reason=idle,
 // POST /__mock/workspaces/:id/connections?admin=N&owner=N, POST /__mock/workspaces/:id/busy?on=1|0,
 // POST /__mock/workspaces/:id/error?message=… (a start that failed),
-// POST /__mock/config?maxRunning=N&startMs=N&stopMs=N&buildMs=N&agents=qwen,dsh, GET /__mock/log (paths in `log`,
-// and `calls` with method, path and JSON body).
+// POST /__mock/workspaces/:id/kind?kind=online (the kind a stopped workspace ran last, for screenshots),
+// POST /__mock/config?maxRunning=N&startMs=N&stopMs=N&buildMs=N&agents=qwen,dsh&online=on|off (off stops the running
+// Online workspaces, stopReason "online_disabled", as a gateway started with the switch off), GET /__mock/log (paths
+// in `log`, and `calls` with method, path and JSON body). A user's own Online permission is users.online_allowed in
+// the DB (the admin's switch).
 // Agent versions: POST /__mock/agents/reset (the starting versions and images, no job),
 // POST /__mock/agents/fail-next?message=… (the next job's build fails at its last step; without a message, as a
 // DeepSeek Harness lockdown that doesn't fit), POST /__mock/agents/drop-image?agent=dsh&version=0.2.2-rc.1 (an image
 // gone from Docker, e.g. the current one), POST /__mock/registry?down=1|0&known=0 (the npm registry unreachable;
-// known=0: it never answered, so channels and latest are unknown).
+// known=0: it never answered, so the releases' dates, notes and latest are unknown).
 // The live view (GET /control/live) and LLM engine updates (/control/engine...) are simulated in mock-live.mjs, with
 // its hooks POST /__mock/live?... and POST /__mock/engine?... (see there).
 import crypto from "node:crypto";
@@ -45,7 +58,12 @@ const env = process.env;
 const controlPort = Number(env.CONTROL_PORT || 4002);
 const agentPortBase = Number(env.AGENT_PORT_BASE || 3100);
 const agentPortCount = Number(env.AGENT_PORT_COUNT || 20);
+const onlineAgentPortBase = Number(env.ONLINE_AGENT_PORT_BASE || agentPortBase + agentPortCount);
 const secret = env.GATEWAY_CONTROL_SECRET || "";
+
+/** The two workspaces every user has (@portal/db WORKSPACE_KINDS), with their display names. */
+const KIND_NAMES = { private: "Private", online: "Online" };
+const isWorkspaceKind = (value) => typeof value === "string" && Object.hasOwn(KIND_NAMES, value);
 
 /** Every agent kind the gateway knows (GET /control/agents lists the enabled ones, with their current version). */
 const AGENTS = {
@@ -86,7 +104,15 @@ const settings = {
   agents: agentList(env.MOCK_AGENTS || "qwen,dsh"),
   /** How long an update's simulated image build takes (an update that uses an image on the server builds none). */
   buildMs: Number(env.MOCK_BUILD_MS || 20_000),
+  /** ONLINE_WORKSPACES: Online workspaces exist on this portal at all. */
+  online: onOff(env.ONLINE_WORKSPACES || "on"),
 };
+
+function onOff(value) {
+  if (["on", "1", "true"].includes(value)) return true;
+  if (["off", "0", "false"].includes(value)) return false;
+  throw new Error(`bad on/off value "${value}"`);
+}
 const db = new Database(path.join(env.PORTAL_DATA_DIR || "/srv/workspace-portal", "db", "portal.sqlite"), {
   fileMustExist: true,
 });
@@ -96,6 +122,23 @@ db.pragma("busy_timeout = 5000");
 function preferredAgent(userId) {
   const chosen = db.prepare("SELECT agent FROM users WHERE id = ?").get(userId)?.agent ?? null;
   return chosen !== null && settings.agents.includes(chosen) ? chosen : (settings.agents[0] ?? null);
+}
+
+/** WorkspaceInfo.online, as the gateway works it out: the global switch, then the admin's per-user permission. */
+function onlineAccess(userId) {
+  if (!settings.online) return "off";
+  const row = db.prepare("SELECT online_allowed FROM users WHERE id = ?").get(userId);
+  return row && row.online_allowed === 0 ? "not_allowed" : "allowed";
+}
+
+/** The gateway's refusal of an Online start for this user, or null when it may start. */
+function onlineRefusal(userId) {
+  const access = onlineAccess(userId);
+  if (access === "off") return [409, { error: "online_disabled", message: "Online workspaces are turned off on this portal." }];
+  if (access === "not_allowed") {
+    return [403, { error: "online_not_allowed", message: "Your administrator hasn't allowed you an Online workspace." }];
+  }
+  return null;
 }
 
 /** @type {Map<number, any>} */
@@ -111,7 +154,7 @@ const live = createMockLive({
   },
   maxRunning: () => settings.maxRunning,
   memoryLimitBytes: 2304 * 1024 ** 2,
-  audit: auditAgent,
+  audit,
 });
 
 function info(userId) {
@@ -122,6 +165,8 @@ function info(userId) {
     userId,
     status: w?.status ?? "stopped",
     agent: w?.agent ?? null,
+    kind: w?.kind ?? "private",
+    online: onlineAccess(userId),
     agentVersion: isActive(w) ? (w.agentVersion ?? null) : null,
     ready: Boolean(running && w.ready),
     startedAt: w?.startedAt ?? null,
@@ -192,6 +237,13 @@ async function control(req, res, url) {
         if (url.searchParams.has(key)) settings[key] = Number(url.searchParams.get(key));
       }
       if (url.searchParams.has("agents")) settings.agents = agentList(url.searchParams.get("agents"));
+      if (url.searchParams.has("online")) {
+        settings.online = onOff(url.searchParams.get("online"));
+        // As a gateway that starts with ONLINE_WORKSPACES=off: running Online workspaces are stopped.
+        if (!settings.online) {
+          for (const [id, w] of workspaces) if (isActive(w) && w.kind === "online") stop(id, "online_disabled");
+        }
+      }
       return send(res, 200, settings);
     }
     const id = Number(parts[2]);
@@ -206,6 +258,11 @@ async function control(req, res, url) {
     if (parts[3] === "error") {
       const message = url.searchParams.get("message") || "The workspace exited during start.";
       workspaces.set(id, { ...workspaces.get(id), status: "error", ready: false, busy: false, lastError: message, admin: 0, owner: 0 });
+    }
+    if (parts[3] === "kind") {
+      const kind = url.searchParams.get("kind");
+      if (!isWorkspaceKind(kind)) return send(res, 400, { error: "unknown_kind", message: `There is no kind "${kind}".` });
+      workspaces.set(id, { ...workspaces.get(id), kind });
     }
     if (parts[3] === "busy") {
       const on = url.searchParams.get("on") === "1";
@@ -249,6 +306,7 @@ async function control(req, res, url) {
     workspaces.delete(id);
     return send(res, 200, { ok: true });
   }
+  if (req.method === "DELETE" && action === "files") return eraseFiles(req, res, url, id);
   if (req.method !== "POST") return send(res, 405, { error: "method_not_allowed", message: "Method not allowed" });
   const body = await readBody(req);
   calls.push({ method: req.method, path: url.pathname, body });
@@ -284,11 +342,19 @@ async function control(req, res, url) {
     if (requested !== undefined && !isAgentKind(requested)) {
       return send(res, 400, { error: "unknown_agent", message: `There is no agent "${requested}".` });
     }
+    if (body.kind !== undefined && !isWorkspaceKind(body.kind)) {
+      return send(res, 400, { error: "unknown_kind", message: 'kind must be "private" or "online".' });
+    }
     const unavailable = (agent) =>
       send(res, 400, { error: "agent_unavailable", message: `${AGENTS[agent].name} isn't enabled on this server.` });
     if (requested !== undefined && !settings.agents.includes(requested)) return unavailable(requested);
     const current = workspaces.get(id);
     if (isActive(current)) {
+      // Without a kind: attach to whichever kind runs. Naming the other one is refused, like another agent.
+      if (body.kind !== undefined && body.kind !== (current.kind ?? "private")) {
+        const message = `Your ${KIND_NAMES[current.kind ?? "private"]} workspace is running. Stop it to start the ${KIND_NAMES[body.kind]} one.`;
+        return send(res, 409, { error: "kind_mismatch", message });
+      }
       if (requested !== undefined && requested !== current.agent) {
         const message = `${AGENTS[current.agent].name} is already running in this workspace. Stop it to switch.`;
         return send(res, 409, { error: "agent_mismatch", message });
@@ -296,6 +362,9 @@ async function control(req, res, url) {
       // Someone is using it again: a stop that waited for the agent to finish is off.
       workspaces.set(id, { ...current, stopPending: false });
     } else {
+      const kind = body.kind ?? "private";
+      const refusal = kind === "online" ? onlineRefusal(id) : null;
+      if (refusal) return send(res, ...refusal);
       // No agent named: the user's harness from Settings while it is enabled, else the first enabled agent.
       const agent = requested ?? preferredAgent(id);
       if (!agent) return send(res, 400, { error: "agent_unavailable", message: "No agent is enabled on this server." });
@@ -309,6 +378,7 @@ async function control(req, res, url) {
         ...current,
         status: "starting",
         agent,
+        kind,
         agentVersion: agentVersions.current[agent],
         ready: false,
         startedAt: now,
@@ -328,26 +398,124 @@ async function control(req, res, url) {
   return send(res, 404, { error: "not_found", message: "Not found" });
 }
 
+/** DELETE /control/workspaces/:id/files?kind=: body { actorUserId? }; the gateway's checks and audit entry. */
+async function eraseFiles(req, res, url, id) {
+  const body = await readBody(req);
+  calls.push({ method: req.method, path: `${url.pathname}${url.search}`, body });
+  if (body === null) return send(res, 400, { error: "invalid_json", message: "The body must be a JSON object." });
+  const kind = url.searchParams.get("kind");
+  if (!isWorkspaceKind(kind)) return send(res, 400, { error: "unknown_kind", message: 'kind must be "private" or "online".' });
+  const { actorUserId } = body;
+  if (actorUserId !== undefined && actorUserId !== null && !(Number.isSafeInteger(actorUserId) && actorUserId > 0)) {
+    return send(res, 400, { error: "invalid_actor", message: "actorUserId must be a positive integer." });
+  }
+  if (!db.prepare("SELECT id FROM users WHERE id = ?").get(id)) return send(res, 404, { error: "user_not_found", message: "No such user." });
+  const w = workspaces.get(id);
+  if ((isActive(w) || w?.status === "stopping") && (w.kind ?? "private") === kind) {
+    return send(res, 409, {
+      error: "workspace_running",
+      message: `The ${KIND_NAMES[kind]} workspace is running. Stop it before erasing its files.`,
+    });
+  }
+  audit("workspace_files_erased", actorUserId ?? null, { kind }, id);
+  return send(res, 200, { ok: true });
+}
+
 // ---- Agent versions ------------------------------------------------------------------------------------------
 
-/** What the npm registry has: each package's dist-tags (experiment tags besides the channels) and its versions. */
+const DAY = 86_400_000;
+const T0 = Date.now();
+
+/** A Qwen Code release's notes, as its GitHub releases are written (the section is there even without any). */
+const qwenNotes = (highlights, breaking = "No known breaking changes.") =>
+  [
+    "<!-- qwen-release-notes:v1 -->",
+    "",
+    "## Highlights",
+    "",
+    ...highlights.map((line) => `- ${line}`),
+    "",
+    "## Breaking Changes",
+    "",
+    breaking,
+    "",
+    "## Complete Change List",
+    "",
+    "### Features",
+    "",
+    "- feat(cli): show the session's token use in the footer ([#16490](https://github.com/QwenLM/qwen-code/pull/16490))",
+    "- feat(core): read `.qwenignore` in nested folders ([#16471](https://github.com/QwenLM/qwen-code/pull/16471))",
+    "",
+    "### Fixes",
+    "",
+    "- fix(mcp): reconnect after the server restarts ([#16482](https://github.com/QwenLM/qwen-code/pull/16482))",
+    "- fix(tools): keep the file's line endings on edit ([#16477](https://github.com/QwenLM/qwen-code/pull/16477))",
+  ].join("\n");
+
+/**
+ * What the npm registry and GitHub have: each package's dist-tags, its versions with their publish times (days
+ * ago) and deprecation, and the release notes of the versions the repository has a release for.
+ */
 const RELEASES = {
   qwen: {
-    distTags: { latest: "0.27.4", preview: "0.27.2-preview.0", nightly: "0.27.2-nightly.20261113.6f754be654", jobbench: "0.0.0-jobbench.3" },
-    published: ["0.25.0", "0.26.0", "0.27.0", "0.27.1", "0.27.2", "0.27.3", "0.27.4", "0.27.2-preview.0", "0.27.2-nightly.20261113.6f754be654"],
+    distTags: { latest: "0.27.4", preview: "0.28.0-preview.0", nightly: "0.28.0-nightly.20261115.6e3b2dcc19", jobbench: "0.0.0-jobbench.3" },
+    versions: [
+      ["0.25.0", 71],
+      ["0.26.0", 42],
+      ["0.27.0", 21],
+      ["0.27.1", 14],
+      ["0.27.2", 9],
+      ["0.27.3", 5],
+      ["0.27.4", 2],
+      ["0.28.0-preview.0", 1],
+      ["0.28.0-nightly.20261115.6e3b2dcc19", 0.5],
+      ["0.0.0-jobbench.3", 30],
+    ],
+    notes: {
+      "0.27.4": qwenNotes(["**Faster start**: extensions load when first used.", "Fixes the `/resume` picker on narrow terminals."]),
+      "0.27.3": qwenNotes(["MCP servers reconnect by themselves after a restart."]),
+      "0.27.2": qwenNotes(
+        ["Dependencies upgraded, Node 22 or newer required.", "New `/usage` command."],
+        "- fix(deps)!: upgrade dependencies; Node 20 is no longer supported ([#16452](https://github.com/QwenLM/qwen-code/pull/16452))",
+      ),
+      "0.27.1": qwenNotes(["Edits keep the file's line endings."]),
+      "0.27.0": qwenNotes(["**Session footer** with the token use.", "`.qwenignore` in nested folders."]),
+    },
+    tag: (version) => `v${version}`,
+    repo: "QwenLM/qwen-code",
   },
   dsh: {
     distTags: { latest: "0.2.2-rc.1", next: "0.2.2-rc.3" },
-    published: ["0.2.0", "0.2.1", "0.2.2-rc.1", "0.2.2-rc.2", "0.2.2-rc.3"],
+    versions: [
+      ["0.1.5-rc.3", 74],
+      ["0.1.7-rc.1", 60],
+      ["0.1.7-rc.2", 55],
+      ["0.2.0-rc.2", 44],
+      ["0.2.1-rc.4", 33],
+      ["0.2.1-rc.5", 30],
+      ["0.2.2-rc.1", 8],
+      ["0.2.2-rc.2", 5],
+      ["0.2.2-rc.3", 2],
+    ],
+    notes: {
+      "0.2.2-rc.1": [
+        "## What's Changed",
+        "- Sessions resume after a restart of the harness by @deepseek-dev",
+        "- `dsh serve` answers health checks before the model is warm by @deepseek-dev",
+        "",
+        "**Full Changelog**: https://github.com/deepseek-ai/deepseek-harness/compare/dsh-v0.2.1-rc.5...dsh-v0.2.2-rc.1",
+      ].join("\n"),
+    },
+    tag: (version) => `dsh-v${version}`,
+    repo: "deepseek-ai/deepseek-harness",
   },
 };
-const RELEASE_CHANNELS = ["latest", "next", "preview", "beta", "rc", "alpha", "nightly"];
+/** The gateway's hasBreakingChanges as far as the notes above need it: a `type!:` list entry. */
+const breakingIn = (body) => /^- [a-z]+(?:\([^)]*\))?!:/m.test(body);
+const published = (kind) => RELEASES[kind].versions.map(([version]) => version);
 const isVersion = (value) => typeof value === "string" && value.length <= 100 && /^\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.]+)?$/.test(value);
-const isChannelName = (value) => /^[a-z][a-z0-9-]{0,63}$/.test(value);
-const releaseChannels = (tags) => RELEASE_CHANNELS.filter((tag) => isVersion(tags[tag])).map((tag) => ({ tag, version: tags[tag] }));
 const workspaceImage = (kind, version) => `workspace-portal/workspace:${kind}-${version}`;
 const GiB = 1024 ** 3;
-const DAY = 86_400_000;
 
 /** Semver precedence, prereleases included (a release sorts after its prereleases). */
 function compareVersions(a, b) {
@@ -376,7 +544,7 @@ function compareVersions(a, b) {
 /** The npm registry as the gateway's release cache sees it: answers cached, an outage keeps the last answer. */
 const registry = {
   down: false,
-  /** False until it answered once: channels and latest are unknown. */
+  /** False until it answered once: the releases' dates and notes, and latest, are unknown. */
   known: true,
   checkedAt: Date.now(),
   error: null,
@@ -396,8 +564,54 @@ const registry = {
     if (this.down) this.error = "The npm registry is unreachable (fetch failed).";
     else Object.assign(this, { known: true, checkedAt: Date.now(), error: null });
   },
-  tags(kind) {
-    return this.known ? RELEASES[kind].distTags : undefined;
+  /**
+   * The gateway's offeredReleases: the 5 newest stable releases (no prerelease but latest itself, none deprecated,
+   * none newer than latest), filled up for a prerelease latest with the newest prerelease of its kind per earlier
+   * version line, and every version in `keep`, newest first. Unknown registry: `keep` only.
+   */
+  releases(kind, keep) {
+    const { distTags, versions, notes, tag, repo } = RELEASES[kind];
+    const latest = this.known ? distTags.latest : null;
+    const stable = this.known
+      ? versions
+          .map(([version]) => version)
+          .filter((version) => version === latest || (/^\d+\.\d+\.\d+$/.test(version) && compareVersions(version, latest) <= 0))
+          .sort((a, b) => compareVersions(b, a))
+          .slice(0, 5)
+      : [];
+    const channel = latest && /^\d+\.\d+\.\d+-([0-9A-Za-z]+)/.exec(latest)?.[1];
+    if (channel) {
+      const line = (version) => version.replace(/[-+].*$/, "");
+      const lines = new Set(stable.map(line));
+      for (const [version] of [...versions].sort(([a], [b]) => compareVersions(b, a))) {
+        if (stable.length >= 5) break;
+        if (lines.has(line(version)) || compareVersions(version, latest) > 0) continue;
+        if (/^\d+\.\d+\.\d+-([0-9A-Za-z]+)/.exec(version)?.[1] !== channel) continue;
+        lines.add(line(version));
+        stable.push(version);
+      }
+    }
+    const times = new Map(versions.map(([version, daysAgo]) => [version, Math.round(T0 - daysAgo * DAY)]));
+    return [...new Set([...stable, ...keep])]
+      .sort((a, b) => compareVersions(b, a))
+      .map((version) => {
+        const body = this.known ? notes[version] : undefined;
+        return {
+          version,
+          publishedAt: this.known ? (times.get(version) ?? null) : null,
+          latest: version === latest,
+          notes:
+            body === undefined
+              ? null
+              : {
+                  title: tag(version),
+                  url: `https://github.com/${repo}/releases/tag/${tag(version)}`,
+                  publishedAt: times.get(version) ?? null,
+                  body,
+                  breaking: breakingIn(body),
+                },
+        };
+      });
   },
   snapshot() {
     return { down: this.down, known: this.known, checkedAt: this.checkedAt, error: this.error };
@@ -437,16 +651,19 @@ function resetAgentVersions() {
   addImage("qwen", "0.27.0", 2.31 * GiB, now - 6 * DAY);
   addImage("qwen", "0.26.0", 2.27 * GiB, now - 24 * DAY);
   addImage("dsh", "0.2.2-rc.1", 2.64 * GiB, now - 3 * DAY);
+  addImage("dsh", "0.2.1-rc.5", 2.61 * GiB, now - 29 * DAY);
 }
 resetAgentVersions();
 
 const jobActive = () => agentVersions.job?.phase === "building" || agentVersions.job?.phase === "verifying";
 const jobSnapshot = () => (agentVersions.job ? { ...agentVersions.job, log: [...agentVersions.job.log] } : null);
 
-function auditAgent(action, actorUserId, details) {
-  db.prepare("INSERT INTO audit_log (at, actor_user_id, action, details) VALUES (?, ?, ?, ?)").run(
+/** An audit entry, as the gateway writes it (`targetUserId`: the workspace's user, when it is about one). */
+function audit(action, actorUserId, details, targetUserId = null) {
+  db.prepare("INSERT INTO audit_log (at, actor_user_id, target_user_id, action, details) VALUES (?, ?, ?, ?, ?)").run(
     Date.now(),
     actorUserId,
+    targetUserId,
     action,
     JSON.stringify(details),
   );
@@ -455,8 +672,7 @@ function auditAgent(action, actorUserId, details) {
 function versionInfo(kind) {
   const { name, packageName, defaultVersion } = AGENTS[kind];
   const current = agentVersions.current[kind];
-  const tags = registry.tags(kind);
-  const latest = isVersion(tags?.latest) ? tags.latest : null;
+  const latest = registry.known ? RELEASES[kind].distTags.latest : null;
   const counts = new Map();
   for (const w of workspaces.values()) {
     if (w.agent === kind && isActive(w)) counts.set(w.agentVersion ?? null, (counts.get(w.agentVersion ?? null) ?? 0) + 1);
@@ -483,7 +699,7 @@ function versionInfo(kind) {
     defaultVersion,
     latest,
     updateAvailable: latest !== null && compareVersions(latest, current) > 0,
-    channels: tags ? releaseChannels(tags) : [],
+    releases: registry.releases(kind, [current, ...installed.map((image) => image.version)]),
     installed,
     running,
   };
@@ -610,7 +826,7 @@ function verifyAndPromote(job, at, { built }) {
     if (built) addImage(kind, version, previous?.sizeBytes ?? (kind === "dsh" ? 2.66 : 2.33) * GiB, Date.now());
     agentVersions.current[kind] = version;
     finishJob("succeeded", null);
-    auditAgent("agent_updated", actorUserId, { agent: kind, from: job.fromVersion, to: version, rebuild });
+    audit("agent_updated", actorUserId, { agent: kind, from: job.fromVersion, to: version, rebuild });
   });
 }
 
@@ -667,7 +883,7 @@ function startJob(kind, version, rebuild, actorUserId) {
       at(clock, () => {
         append(`#${n} ERROR: ${failure.error}`);
         finishJob("failed", failure.error);
-        auditAgent("agent_update_failed", actorUserId, { agent: kind, version, error: failure.error });
+        audit("agent_update_failed", actorUserId, { agent: kind, version, error: failure.error });
       });
       return job;
     }
@@ -677,31 +893,14 @@ function startJob(kind, version, rebuild, actorUserId) {
   return job;
 }
 
-/** A channel resolved to its version, or an exact version the registry has; else the gateway's refusal. */
+/** An exact version the registry has; else the gateway's refusal. */
 async function resolveVersion(kind, requested) {
   const { name, packageName } = AGENTS[kind];
-  const unreachable = { status: 502, error: "registry_unreachable", message: "The npm registry is unreachable (fetch failed)." };
-  if (isVersion(requested)) {
-    await sleep(300);
-    if (registry.down) return unreachable;
-    if (RELEASES[kind].published.includes(requested)) return { version: requested };
-    return { status: 404, error: "version_not_found", message: `${name} ${requested} is not published (${packageName}).` };
-  }
-  if (!isChannelName(requested)) {
-    return {
-      status: 400,
-      error: "invalid_version",
-      message: `"${requested}" is not a version (like 0.27.4) or a release channel (${RELEASE_CHANNELS.join(", ")}).`,
-    };
-  }
+  if (!isVersion(requested)) return { status: 400, error: "invalid_version", message: `"${requested}" is not a version (like 0.27.4).` };
   await sleep(300);
-  if (registry.down) return unreachable;
-  registry.known = true;
-  const channels = releaseChannels(RELEASES[kind].distTags);
-  const channel = channels.find((candidate) => candidate.tag === requested);
-  if (channel) return { version: channel.version };
-  const offered = channels.map((candidate) => candidate.tag).join(", ") || "none";
-  return { status: 400, error: "invalid_version", message: `${name} has no release channel "${requested}" (it has: ${offered}).` };
+  if (registry.down) return { status: 502, error: "registry_unreachable", message: "The npm registry is unreachable (fetch failed)." };
+  if (published(kind).includes(requested)) return { version: requested };
+  return { status: 404, error: "version_not_found", message: `${name} ${requested} is not published (${packageName}).` };
 }
 
 const unknownAgent = { status: 400, error: "unknown_agent", message: `agent must be one of ${Object.keys(AGENTS).map((kind) => `"${kind}"`).join(", ")}.` };
@@ -712,7 +911,7 @@ async function startUpdate(kind, body) {
   if (body === null) return { status: 400, error: "bad_request", message: "The body must be a JSON object." };
   const { version, rebuild, actorUserId } = body;
   if (typeof version !== "string" || version.trim() === "" || version.length > 128) {
-    return { status: 400, error: "bad_request", message: "version must be a version (like 0.27.4) or a release channel (like latest)." };
+    return { status: 400, error: "bad_request", message: "version must be a version, like 0.27.4." };
   }
   if (rebuild !== undefined && rebuild !== null && typeof rebuild !== "boolean") {
     return { status: 400, error: "bad_request", message: "rebuild must be true or false." };
@@ -751,7 +950,7 @@ function cancelUpdate() {
   agentVersions.timers.push(
     setTimeout(() => {
       finishJob("cancelled", "Cancelled");
-      auditAgent("agent_update_failed", job.actorUserId, { agent: job.agent, version: job.version, error: "Cancelled" });
+      audit("agent_update_failed", job.actorUserId, { agent: job.agent, version: job.version, error: "Cancelled" });
     }, 800),
   );
   return true;
@@ -825,6 +1024,7 @@ http
   })
   .listen(controlPort, "127.0.0.1", () => console.log(`mock control API on 127.0.0.1:${controlPort}`));
 
+/** The session's id (the cookie token's hash) and the workspace it uses, or null when signed out. */
 function sessionTarget(cookieHeader) {
   const match = /(?:^|;\s*)portal_session=([^;]+)/.exec(cookieHeader || "");
   if (!match) return null;
@@ -837,37 +1037,64 @@ function sessionTarget(cookieHeader) {
     .get(hash, Date.now());
   if (!row) return null;
   const targetId = row.role === "admin" && row.acting_as_user_id ? row.acting_as_user_id : row.user_id;
-  return db.prepare("SELECT id, username FROM users WHERE id = ?").get(targetId) ?? null;
+  const target = db.prepare("SELECT id, username FROM users WHERE id = ?").get(targetId);
+  return target ? { ...target, sessionId: hash } : null;
 }
 
-function agentPage(req, res) {
-  const userId = req.socket.localPort - agentPortBase;
-  const target = sessionTarget(req.headers.cookie);
-  const host = (req.headers.host || "").replace(/:\d+$/, "");
-  const status = !target ? 401 : target.id === userId ? 200 : 403;
-  res.writeHead(status, {
-    "content-type": "text/html; charset=utf-8",
-    "content-security-policy": `frame-ancestors http://${host}:* https://${host}:*`,
-  });
-  if (status === 200) {
-    const w = workspaces.get(target.id);
-    if (w) w.lastActivityAt = Date.now();
-  }
-  const agent = status === 200 ? AGENTS[workspaces.get(target.id)?.agent]?.name : undefined;
-  const text =
-    status === 200 ? `Mock workspace · ${target.username} (#${target.id})` : status === 401 ? "Signed out" : "This workspace isn't open here";
-  res.end(`<!doctype html><meta charset="utf-8"><title>Mock workspace</title>
+/** The gateway's agentBrowserToken (@portal/db): the iframe's fragment must carry this one for the port's kind. */
+const browserToken = (sessionId, userId, kind) =>
+  crypto.createHmac("sha256", secret).update(`workspace-portal/agent-token/v2\n${sessionId}\n${userId}\n${kind}`).digest("base64url");
+
+/**
+ * One workspace port: the port says the user and the kind. Its own kind starting or running shows the mock
+ * workspace (and whether the fragment's token is this session's for this kind); the other kind running, or none,
+ * shows what the gateway's themed pages say. Nothing starts here, as on the gateway.
+ */
+function agentPage(kind) {
+  const base = kind === "online" ? onlineAgentPortBase : agentPortBase;
+  return (req, res) => {
+    const userId = req.socket.localPort - base;
+    const target = sessionTarget(req.headers.cookie);
+    const host = (req.headers.host || "").replace(/:\d+$/, "");
+    const w = workspaces.get(userId);
+    const runningKind = isActive(w) || w?.status === "stopping" ? (w.kind ?? "private") : null;
+    const status = !target ? 401 : target.id !== userId ? 403 : runningKind !== null && runningKind !== kind ? 409 : 200;
+    res.writeHead(status, {
+      "content-type": "text/html; charset=utf-8",
+      "content-security-policy": `frame-ancestors http://${host}:* https://${host}:*`,
+    });
+    const open = status === 200 && runningKind === kind;
+    if (open) w.lastActivityAt = Date.now();
+    const text =
+      status === 401
+        ? "Signed out"
+        : status === 403
+          ? "This workspace isn't open here"
+          : status === 409
+            ? `Your ${KIND_NAMES[runningKind]} workspace is running, not this one`
+            : open
+              ? `Mock workspace · ${target.username} (#${target.id}) · ${KIND_NAMES[kind]}`
+              : `Your ${KIND_NAMES[kind]} workspace is stopped`;
+    const agent = open ? AGENTS[w.agent]?.name : undefined;
+    const expected = status === 200 ? browserToken(target.sessionId, userId, kind) : "";
+    res.end(`<!doctype html><meta charset="utf-8"><title>Mock workspace</title>
 <style>
   html{color-scheme:dark}
   body{margin:0;height:100vh;display:grid;place-items:center;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;background:#0a0a0a;color:#a1a1a1}
 </style>
 <p id="who">${text}</p>
+<p id="kind">${KIND_NAMES[kind]}</p>
 <p id="agent">${agent ?? ""}</p>
 <p id="token"></p>
-<script>document.getElementById("token").textContent = location.hash.startsWith("#token=") ? "token in fragment" : "no token";</script>`);
+<script>
+  const token = location.hash.startsWith("#token=") ? location.hash.slice(7) : null;
+  document.getElementById("token").textContent = token === null ? "no token" : token === ${JSON.stringify(expected)} ? "token in fragment" : "token in fragment (wrong token for this workspace)";
+</script>`);
+  };
 }
 
-for (let port = agentPortBase + 1; port < agentPortBase + agentPortCount; port++) {
-  http.createServer(agentPage).listen(port, "127.0.0.1");
+for (const kind of ["private", "online"]) {
+  const base = kind === "online" ? onlineAgentPortBase : agentPortBase;
+  for (let port = base + 1; port < base + agentPortCount; port++) http.createServer(agentPage(kind)).listen(port, "127.0.0.1");
+  console.log(`mock ${kind} workspace ports on 127.0.0.1:${base + 1}-${base + agentPortCount - 1}`);
 }
-console.log(`mock workspace ports on 127.0.0.1:${agentPortBase + 1}-${agentPortBase + agentPortCount - 1}`);

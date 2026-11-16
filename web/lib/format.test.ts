@@ -48,6 +48,8 @@ test("stop reasons in plain words", () => {
   assert.equal(stopReasonText("idle", 30), "after 30 minutes without activity");
   assert.equal(stopReasonText("admin", 30), "by the administrator");
   assert.equal(stopReasonText("capacity", 30), "to free resources");
+  assert.equal(stopReasonText("online_disabled", 30), "because Online workspaces were turned off on this portal");
+  assert.equal(stopReasonText("online_not_allowed", 30, "owner"), "because Online workspaces were turned off for your account");
   assert.equal(stopReasonText("logout", 30), "because its owner signed out");
   assert.equal(stopReasonText("logout", 30, "owner"), "because you signed out");
   assert.equal(stopReasonText("user", 30), "by its owner");
@@ -61,6 +63,8 @@ const running: WorkspaceInfo = {
   userId: 2,
   status: "running",
   agent: "qwen",
+  kind: "private",
+  online: "allowed",
   agentVersion: "0.27.0",
   ready: true,
   startedAt: 1,

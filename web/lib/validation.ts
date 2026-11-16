@@ -1,7 +1,7 @@
 // Input rules shared by the server actions, the admin seed and the forms.
 // Pure module (no server-only imports) so it can be unit tested with `node --test`.
 import { z } from "zod";
-import { AGENT_KINDS } from "@portal/db";
+import { AGENT_KINDS, WORKSPACE_KINDS } from "@portal/db";
 import { isAgentVersion, NAME_MAX_LENGTH, PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, USERNAME_PATTERN } from "./limits.ts";
 
 // Letters from any script (with combining marks), spaces, hyphens, straight and curly apostrophes, periods.
@@ -69,10 +69,17 @@ export const profileSchema = z.object({
   lastName: requiredName("last name"),
 });
 
+/** A checkbox or switch in a form: "on" when checked, absent (formText: "") when not. */
+const checkboxSchema = z.string().transform((value) => value === "on");
+
+/** A new account: names, username and (temporary) password. Also the admin seed's ADMIN_* settings. */
 export const newUserSchema = profileSchema.extend({
   username: usernameSchema,
   password: newPasswordSchema,
 });
+
+/** The New user form: a new account plus its "Online workspace" permission. */
+export const newUserFormSchema = newUserSchema.extend({ onlineAllowed: checkboxSchema });
 
 export const loginSchema = z.object({
   username: z
@@ -105,6 +112,23 @@ export const userIdSchema = z.coerce.number().int().positive();
 
 const agentKindSchema = z.enum(AGENT_KINDS, "Unknown agent.");
 
+const workspaceKindSchema = z.enum(WORKSPACE_KINDS, "Choose Private or Online.");
+
+/**
+ * POST /api/workspace/start: the kind the person chose and confirmed. Required: nothing starts a workspace without
+ * that choice (the gateway would start Private).
+ */
+export const workspaceStartSchema = z.object({ kind: workspaceKindSchema });
+
+/** The admin's per-user Online permission (the user page's switch). */
+export const onlineAccessSchema = z.object({
+  userId: userIdSchema,
+  allowed: z.enum(["true", "false"]).transform((value) => value === "true"),
+});
+
+/** Erasing one kind's files (the user page's "Erase Private files…" / "Erase Online files…"). */
+export const eraseFilesSchema = z.object({ userId: userIdSchema, kind: workspaceKindSchema });
+
 /** A harness choice in Settings: an agent kind. Whether this install enables it is the action's check. */
 export const harnessSchema = z.object({ agent: agentKindSchema });
 
@@ -121,8 +145,8 @@ export const agentImageSchema = z.object({
 });
 
 /**
- * An update: the exact version to install and the rebuild checkbox. Never a release channel, although the gateway
- * takes one: it would resolve it again, possibly to a newer version than the one the admin saw and confirmed.
+ * An update: the exact version to install (a Package images row's) and the rebuild checkbox. Never an npm dist-tag
+ * ("latest"), which could name a newer version than the one the admin saw and confirmed.
  */
 export const agentUpdateSchema = z.object({
   agent: agentKindSchema,
@@ -130,7 +154,7 @@ export const agentUpdateSchema = z.object({
     .string()
     .trim()
     .refine(isAgentVersion, AGENT_VERSION_ERROR),
-  rebuild: z.string().transform((value) => value === "on"),
+  rebuild: checkboxSchema,
 });
 
 /** The first message for each top-level field. */

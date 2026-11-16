@@ -24,6 +24,10 @@ export interface HostInfo {
   sources: { perf: boolean; bandwidth: string | null; power: string | null; gpuBusy: string | null };
   power: { label: string } | null;
   engine: { unit: string } | null;
+  /** The physical network interfaces that `net` counts; absent from hostd before API version 2. */
+  network?: { interfaces: string[] } | null;
+  /** The whole disks that `disk` I/O counts, and the mount points of the local filesystems its space adds up. */
+  disks?: { devices: string[]; mounts: string[] } | null;
 }
 
 export interface HostSample {
@@ -44,6 +48,25 @@ export interface HostSample {
   power: { watts: number | null; parts: { gpu: number | null; cpu: number | null; dram: number | null } };
   fans: Array<{ label: string; rpm: number | null; duty: number | null }>;
   throttling?: boolean | null;
+  /** Bytes per second over the physical interfaces together (hostd API version 2 on). */
+  net?: { rxBps: number | null; txBps: number | null } | null;
+  /** Bytes per second over the whole disks together, and the local filesystems' space together (version 2 on). */
+  disk?: { readBps: number | null; writeBps: number | null; totalBytes: number | null; freeBytes: number | null } | null;
+}
+
+/** GET /v1/meter (hostd API version 2 on): running totals since hostd started, kept whether or not anyone watches. */
+export interface MeterReading {
+  /** New on each hostd start, when the totals begin again at zero. */
+  instance: string;
+  /** Epoch ms on the host. */
+  startedAt: number;
+  /** When the totals were last brought up to date (epoch ms on the host; every 2 s). */
+  t: number;
+  /** The energy behind the samples' power.watts; null when the host's power can't be measured. */
+  energyJ: number | null;
+  /** Received and sent on the physical interfaces; null without any. */
+  rxBytes: number | null;
+  txBytes: number | null;
 }
 
 export interface EngineImage {
@@ -57,7 +80,7 @@ export interface EngineImage {
   previous: boolean;
 }
 
-export type EngineJobKind = "pull" | "apply" | "rollback";
+export type EngineJobKind = "pull" | "apply";
 export type EngineJobPhase = "running" | "succeeded" | "failed" | "cancelled";
 
 export interface EngineJob {

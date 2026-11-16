@@ -152,6 +152,64 @@ def make_intel(root, ncpu=2):
     write(root, '/usr/share/hwdata/pci.ids', PCI_IDS)
 
 
+def net_dev(counters):
+    """/proc/net/dev with counters: {name: (rx_bytes, tx_bytes)}."""
+    head = ('Inter-|   Receive                                                |  Transmit\n'
+            ' face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed\n')
+    return head + ''.join(f'{n:>6}: {rx} 10 0 0 0 0 0 0 {tx} 10 0 0 0 0 0 0\n' for n, (rx, tx) in counters.items())
+
+
+def disk_stats(counters):
+    """/proc/diskstats with counters: {name: (sectors_read, sectors_written)}."""
+    return ''.join(f' 259 {i} {n} 100 0 {r} 50 200 0 {w} 70 0 90 120 0 0 0 0\n' for i, (n, (r, w)) in enumerate(counters.items()))
+
+
+# As a hardened portal-hostd sees them: btrfs / with its /home subvolume, a separate /srv/data partition, a loop
+# mount, PrivateDevices' /dev and PrivateTmp's bind mount, and a separate /home2 partition that ProtectHome-like
+# overmounting hides behind an empty tmpfs.
+MOUNTS = """/dev/dm-0 / btrfs rw,relatime,subvolid=256,subvol=/root 0 0
+proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0
+/dev/dm-0 /home btrfs rw,relatime,subvolid=257,subvol=/home 0 0
+/dev/nvme0n1p1 /boot/efi vfat rw,relatime 0 0
+/dev/sda1 /srv/my\\040data xfs rw,relatime 0 0
+/dev/sdb1 /home2 ext4 rw,relatime 0 0
+/dev/sdb2 /home2/inner ext4 rw,relatime 0 0
+/dev/loop0 /var/lib/snapd/snap/core squashfs ro 0 0
+/dev/zram1 /var/compressed ext4 rw 0 0
+tmpfs /dev tmpfs ro,nosuid,noexec,mode=755 0 0
+/dev/dm-0 /var/tmp btrfs rw,relatime,subvolid=256,subvol=/root/var/tmp 0 0
+tmpfs /home2 tmpfs ro,nosuid,nodev,noexec,mode=700 0 0
+"""
+SPACE = {'/': (1000, 400), '/boot/efi': (10, 5), '/srv/my data': (500, 100), '/home2': (7, 7), '/home': (3, 3)}
+
+
+def fake_statvfs(root):
+    """statvfs over the fixture: SPACE[mount point] = (blocks, available blocks) of 4096 bytes."""
+    def statvfs(path):
+        point = path[len(root):] or '/'
+        if point not in SPACE:
+            raise FileNotFoundError(path)
+        blocks, avail = SPACE[point]
+        return os.statvfs_result((4096, 4096, blocks, avail + 1, avail, 0, 0, 0, 0, 255))
+    return statvfs
+
+
+def make_net_disk(root, net=None):
+    write(root, '/proc/net/dev', net_dev(net or {'lo': (5000, 5000), 'docker0': (900, 900), 'veth1a2b': (800, 800),
+                                                 'enp1s0': (10_000, 2_000), 'wlan0': (100, 50), 'wg0': (70, 70)}))
+    for name in ('lo', 'docker0', 'veth1a2b', 'wg0'):
+        os.makedirs(root + f'/sys/class/net/{name}', exist_ok=True)
+    for name in ('enp1s0', 'wlan0'):
+        os.makedirs(root + f'/sys/class/net/{name}/device', exist_ok=True)
+    write(root, '/proc/diskstats', disk_stats({'nvme0n1': (1000, 2000), 'nvme0n1p1': (900, 1900), 'dm-0': (800, 1800),
+                                               'loop0': (5, 0), 'zram0': (7, 7), 'sda': (10, 20)}))
+    for name in ('dm-0', 'loop0', 'zram0'):
+        os.makedirs(root + f'/sys/block/{name}', exist_ok=True)
+    for name in ('nvme0n1', 'sda'):
+        os.makedirs(root + f'/sys/block/{name}/device', exist_ok=True)
+    write(root, '/proc/self/mounts', MOUNTS)
+
+
 class TmpRoot(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp(prefix='hostd-test-')
@@ -180,6 +238,15 @@ class FakeGroup:
 
     def read(self):
         return None
+
+
+class CountingGroup(FakeGroup):
+    """A FakeGroup whose read() returns the counts the test sets (cumulative since open, like perf)."""
+
+    counts = None
+
+    def read(self):
+        return (1, 1, list(self.counts)) if self.fds and self.counts is not None else None
 
 
 # ------------------------------------------------------------------------------------ hardware tests
@@ -251,7 +318,7 @@ class TestHostAmd(TmpRoot):
 
     def test_info(self):
         info = self.host.info()
-        self.assertEqual(info['hostd'], 1)
+        self.assertEqual(info['hostd'], 2)
         self.assertEqual(info['role'], 'llm')
         self.assertEqual(info['os'], 'Fedora Linux 44 (Server Edition)')
         self.assertEqual(info['kernel'], '7.2.15-200.fc44.x86_64')
@@ -263,6 +330,8 @@ class TestHostAmd(TmpRoot):
         self.assertEqual(info['power'], {'label': 'APU socket power'})
         self.assertEqual(info['engine'], {'unit': 'gufo.service'})
         self.assertEqual(info['intervalMs'], 500)
+        self.assertIsNone(info['network'])    # no /sys/class/net or /sys/block in this fixture
+        self.assertIsNone(info['disks'])
         json.dumps(info, allow_nan=False)
 
     def test_first_sample_has_null_rates(self):
@@ -277,6 +346,8 @@ class TestHostAmd(TmpRoot):
         self.assertEqual(s['fans'], [{'label': 'Fan 1', 'rpm': None, 'duty': None},
                                      {'label': 'Fan 2', 'rpm': None, 'duty': None},
                                      {'label': 'Fan 3', 'rpm': None, 'duty': None}])
+        self.assertIsNone(s['net'])            # missing sources stay null
+        self.assertIsNone(s['disk'])
 
     def test_rates_clocks_and_values(self):
         a = self.host.read()
@@ -392,6 +463,146 @@ class TestHostIntel(TmpRoot):
         self.assertEqual(s['gpu']['usage'], 50.0)
         self.assertEqual(s['memory']['readBps'], 1000 * 64 * 2)
         self.assertEqual(self.host.sources(), {'perf': False, 'bandwidth': 'uncore_imc', 'power': 'rapl', 'gpuBusy': 'pmu'})
+
+
+class TestNetDisk(TmpRoot):
+    def setUp(self):
+        super().setUp()
+        make_intel(self.root)
+        make_net_disk(self.root)
+        self.host = H.Host(H.Fs(self.root), 'portal', 500)
+        self.host.space = H.FsSpace(H.Fs(self.root), statvfs=fake_statvfs(self.root))
+
+    def test_local_filesystems(self):
+        self.assertEqual(H.local_filesystems(MOUNTS), [('/dev/dm-0', '/'), ('/dev/nvme0n1p1', '/boot/efi'),
+                                                       ('/dev/sda1', '/srv/my data')])
+
+    def test_info_lists_what_is_counted(self):
+        info = self.host.info()
+        self.assertEqual(info['network'], {'interfaces': ['enp1s0', 'wlan0']})
+        self.assertEqual(info['disks'], {'devices': ['nvme0n1', 'sda'], 'mounts': ['/', '/boot/efi', '/srv/my data']})
+
+    def test_rates_and_space(self):
+        a = self.host.read()
+        write(self.root, '/proc/net/dev', net_dev({'lo': (9000, 9000), 'docker0': (5000, 5000), 'veth1a2b': (900, 900),
+                                                   'enp1s0': (60_000, 4_000), 'wlan0': (600, 50), 'wg0': (900, 900)}))
+        write(self.root, '/proc/diskstats', disk_stats({'nvme0n1': (1100, 2400), 'nvme0n1p1': (1000, 2300),
+                                                        'dm-0': (900, 2200), 'loop0': (9, 0), 'zram0': (9, 9),
+                                                        'sda': (10, 20)}))
+        b = self.host.read()
+        b['mono'] = a['mono'] + 0.5
+        first = self.host.compute(None, a)
+        self.assertEqual(first['net'], {'rxBps': None, 'txBps': None})
+        self.assertEqual((first['disk']['readBps'], first['disk']['totalBytes']), (None, 1510 * 4096))
+        s = self.host.compute(a, b)
+        self.assertEqual(s['net'], {'rxBps': (50_000 + 500) * 2, 'txBps': 2_000 * 2})
+        self.assertEqual(s['disk'], {'readBps': 100 * 512 * 2, 'writeBps': 400 * 512 * 2,
+                                     'totalBytes': (1000 + 10 + 500) * 4096, 'freeBytes': (400 + 5 + 100) * 4096})
+        json.dumps(s, allow_nan=False)
+
+    def test_counter_reset_and_vanished_interface_add_nothing(self):
+        a = self.host.read()
+        write(self.root, '/proc/net/dev', net_dev({'enp1s0': (50, 2_500)}))
+        b = self.host.read()
+        b['mono'] = a['mono'] + 1.0
+        self.assertEqual(self.host.compute(a, b)['net'], {'rxBps': 0, 'txBps': 500})
+
+    def test_space_refreshes_in_the_background(self):
+        space = H.FsSpace(H.Fs(self.root), period=0.05, statvfs=fake_statvfs(self.root))
+        self.assertEqual(space.get(), (1510 * 4096, 505 * 4096))
+        SPACE['/'] = (1000, 300)
+        try:
+            time.sleep(0.06)
+            self.assertEqual(space.get(), (1510 * 4096, 505 * 4096))   # answers at once with the last result
+            for _ in range(100):
+                if space.get() == (1510 * 4096, 405 * 4096):
+                    break
+                time.sleep(0.01)
+            self.assertEqual(space.get(), (1510 * 4096, 405 * 4096))
+        finally:
+            SPACE['/'] = (1000, 400)
+
+    def test_no_sources(self):
+        for path in ('/proc/net/dev', '/proc/diskstats', '/proc/self/mounts'):
+            os.remove(self.root + path)
+        host = H.Host(H.Fs(self.root), 'portal', 500)
+        s = host.compute(host.read(), host.read())
+        self.assertEqual((s['net'], s['disk']), (None, None))
+
+
+class TestMeter(TmpRoot):
+    def test_amd_socket_power_is_integrated(self):
+        make_amd(self.root)
+        m = H.Meter(H.Host(H.Fs(self.root), 'llm', 500), period=3600)
+        m.start()
+        self.assertEqual(m.snapshot()['energyJ'], 0.0)
+        write(self.root, '/sys/class/drm/card1/device/gpu_metrics', gpu_metrics_blob(socket_mw=12_423), 'wb')
+        m._mono -= 2.0                     # the last reading (7.577 W) was 2 s ago
+        m.tick()
+        self.assertAlmostEqual(m.snapshot()['energyJ'], (7.577 + 12.423) / 2 * 2.0, delta=0.05)
+        m.stop()
+
+    def test_intel_rapl_counts_package_and_dram(self):
+        make_intel(self.root)
+        host = H.Host(H.Fs(self.root), 'portal', 500)
+        self.assertIsNone(H.Meter(host).rapl)               # no RAPL PMU in the fixture: no energy
+        host.groups['rapl'] = FakeGroup(['pkg', 'ram', 'cores'], [1.0] * 3)
+        m = H.Meter(host, period=3600)
+        group = CountingGroup(['pkg', 'ram'], [2 ** -32] * 2)
+        m.rapl = group
+        m.start()
+        self.assertEqual(group.opened, 1)
+        group.counts = [5 * 2 ** 32, 2 ** 31]
+        m.tick()
+        self.assertEqual(m.snapshot()['energyJ'], 5.5)
+        group.counts = [9 * 2 ** 32, 2 ** 32]
+        m.tick()
+        self.assertEqual(m.snapshot()['energyJ'], 10.0)
+        m.stop()
+        self.assertEqual(group.closed, 1)
+
+    def test_no_power_source(self):
+        make_intel(self.root)
+        m = H.Meter(H.Host(H.Fs(self.root), 'portal', 500), period=3600)
+        m.start()
+        snap = m.snapshot()
+        self.assertEqual((snap['energyJ'], snap['rxBytes'], snap['txBytes']), (None, None, None))  # nor /proc/net/dev
+        m.stop()
+
+    def test_bytes_survive_resets_and_interfaces_coming_and_going(self):
+        make_intel(self.root)
+        make_net_disk(self.root)
+        m = H.Meter(H.Host(H.Fs(self.root), 'portal', 500), period=3600)
+        m.start()
+        self.assertEqual((m.snapshot()['rxBytes'], m.snapshot()['txBytes']), (0, 0))   # counting starts now
+        steps = [
+            ({'enp1s0': (15_000, 2_500), 'wlan0': (100, 50), 'veth1a2b': (90_000, 90_000)}, (5_000, 500)),
+            ({'enp1s0': (15_000, 2_500)}, (5_000, 500)),                       # wlan0 gone
+            ({'enp1s0': (400, 2_600), 'wlan0': (30, 10)}, (5_430, 610)),       # enp1s0 reset; wlan0 back from zero
+            ({'enp1s0': (1_400, 2_600), 'wlan0': (30, 10), 'usb0': (7, 3)}, (6_437, 613)),  # usb0 new: from zero
+        ]
+        for counters, want in steps:
+            write(self.root, '/proc/net/dev', net_dev(counters))
+            for name in counters:
+                os.makedirs(self.root + f'/sys/class/net/{name}' + ('' if name.startswith('veth') else '/device'),
+                            exist_ok=True)
+            m.tick()
+            snap = m.snapshot()
+            self.assertEqual((snap['rxBytes'], snap['txBytes']), want, counters)
+        m.stop()
+
+    def test_runs_without_viewers(self):
+        make_amd(self.root)
+        m = H.Meter(H.Host(H.Fs(self.root), 'llm', 500), period=0.02)
+        m.start()
+        t0 = m.snapshot()['t']
+        time.sleep(0.1)
+        snap = m.snapshot()
+        m.stop()
+        self.assertGreater(snap['t'], t0)
+        self.assertGreater(snap['energyJ'], 0)
+        self.assertEqual(len(snap['instance']), 16)
+        self.assertNotEqual(snap['instance'], H.Meter(H.Host(H.Fs(self.root), 'llm', 500)).instance)
 
 
 class TestGpuName(TmpRoot):
@@ -696,11 +907,8 @@ class TestEngine(EngineCase):
         with self.assertRaises(H.ApiError) as c:
             self.engine.start_apply(f'{REPO}@{D_OLD}', 'v1')
         self.assertEqual(c.exception.code, 'invalid_version')
-        with self.assertRaises(H.ApiError) as c:
-            self.engine.start_rollback()
-        self.assertEqual(c.exception.code, 'no_previous')
 
-    def test_pull_apply_rollback_toggle(self):
+    def test_pull_then_apply(self):
         job = self.engine.start_pull(f'{REPO}@{D_NEW}')
         self.assertEqual((job['kind'], job['phase']), ('pull', 'running'))
         j = self.wait_job()
@@ -724,15 +932,11 @@ class TestEngine(EngineCase):
                          [(D_NEW, True, False), (D_OLD, False, True), (D_THIRD, False, False)])
         self.assertEqual(st['job']['id'], j['id'])
 
-        self.engine.start_rollback()
+        # Switching back is an apply like any other (the gateway's Package images "Switch…"), not a rollback.
+        self.engine.start_apply(f'{REPO}@{D_OLD}', '0.31.0')
         j = self.wait_job()
-        self.assertEqual((j['kind'], j['phase'], j['image'], j['version']), ('rollback', 'succeeded', f'{REPO}@{D_OLD}', '0.31.0'))
-        self.assertEqual(self.read_quadlet(), QUADLET)        # back byte-for-byte, documentation included
+        self.assertEqual((j['kind'], j['phase'], j['image'], j['version']), ('apply', 'succeeded', f'{REPO}@{D_OLD}', '0.31.0'))
         self.assertEqual(self.state.running, D_OLD)
-        self.engine.start_rollback()                           # rollback toggles
-        self.wait_job()
-        self.assertEqual(self.state.running, D_NEW)
-        self.assertIn('v0.34.0', self.read_quadlet())
 
     def test_failed_apply_bogus_version_rolls_back(self):
         self.state.local[f'{REPO}@{D_NEW}'] = self.state.remote[f'{REPO}@{D_NEW}']
@@ -749,7 +953,7 @@ class TestEngine(EngineCase):
         self.assertTrue(self.engine.ready())
 
     def test_failed_apply_keeps_the_saved_previous(self):
-        # 0.34 runs and 0.31 is the saved previous; a failed update to D_BAD must leave Roll back pointing at 0.31.
+        # 0.34 runs and 0.31 is the saved previous; a failed update to D_BAD must put 0.34 back and keep 0.31 on record.
         self.state.local[f'{REPO}@{D_NEW}'] = self.state.remote[f'{REPO}@{D_NEW}']
         self.engine.start_apply(f'{REPO}@{D_NEW}', '0.34.0')
         self.assertEqual(self.wait_job()['phase'], 'succeeded')
@@ -761,9 +965,6 @@ class TestEngine(EngineCase):
         with open(self.engine.prev_path) as f:
             self.assertEqual(f.read(), QUADLET)
         self.assertEqual(self.engine.status()['previous']['version'], '0.31.0')
-        self.engine.start_rollback()
-        self.assertEqual(self.wait_job()['phase'], 'succeeded')
-        self.assertEqual(self.state.running, D_OLD)
 
     def test_failed_apply_never_ready_rolls_back(self):
         self.state.local[f'{REPO}@{D_BAD}'] = self.state.remote[f'{REPO}@{D_BAD}']
@@ -850,10 +1051,12 @@ class HttpCase(TmpRoot):
         make_amd(self.root)
         host = H.Host(H.Fs(self.root), 'llm', 50, None)
         self.sampler = H.Sampler(host, 0.05, keepalive=0.3)
-        self.app = H.App(host, self.sampler, TOKEN, self.make_engine())
+        self.meter = H.Meter(host, period=0.05)
+        self.app = H.App(host, self.sampler, self.meter, TOKEN, self.make_engine())
         self.server = H.Server(('127.0.0.1', 0), self.app, max_connections=self.max_conn())
         self.port = self.server.server_address[1]
         self.sampler.start()
+        self.meter.start()
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
     def make_engine(self):
@@ -866,6 +1069,7 @@ class HttpCase(TmpRoot):
         self.server.shutdown()
         self.server.server_close()
         self.sampler.stop()
+        self.meter.stop()
         super().tearDown()
 
     def req(self, method, path, body=None, token=TOKEN, headers=None):
@@ -889,7 +1093,8 @@ class TestHttp(HttpCase):
         self.assertEqual(self.req('GET', '/v1/info', token='b' * 40)[0], 401)
         st, info = self.req('GET', '/v1/info')
         self.assertEqual(st, 200)
-        self.assertEqual(info['hostd'], 1)
+        self.assertEqual(info['hostd'], 2)
+        self.assertEqual(self.req('GET', '/v1/meter', token=None)[0], 401)
 
     def test_errors(self):
         self.assertEqual(self.req('GET', '/nope'), (404, {'error': 'not_found', 'message': 'no such endpoint'}))
@@ -903,10 +1108,23 @@ class TestHttp(HttpCase):
     def test_sample(self):
         st, s = self.req('GET', '/v1/sample')
         self.assertEqual(st, 200)
-        self.assertEqual(set(s), {'t', 'cpu', 'gpu', 'memory', 'power', 'fans', 'throttling'})
+        self.assertEqual(set(s), {'t', 'cpu', 'gpu', 'memory', 'power', 'fans', 'throttling', 'net', 'disk'})
         time.sleep(0.12)
         st, s2 = self.req('GET', '/v1/sample')
         self.assertIsNotNone(s2['throttling'])
+
+    def test_meter(self):
+        st, m = self.req('GET', '/v1/meter')
+        self.assertEqual(st, 200)
+        self.assertEqual(set(m), {'instance', 'startedAt', 't', 'energyJ', 'rxBytes', 'txBytes'})
+        self.assertEqual((m['rxBytes'], m['txBytes']), (None, None))   # the AMD fixture has no /proc/net/dev
+        time.sleep(0.15)
+        st, m2 = self.req('GET', '/v1/meter')
+        self.assertEqual(m2['instance'], m['instance'])
+        self.assertGreater(m2['t'], m['t'])
+        self.assertGreater(m2['energyJ'], m['energyJ'])            # 7.577 W, counted without any stream open
+        self.assertEqual(self.sampler.samples_taken, 0)
+        self.assertEqual(self.req('POST', '/v1/meter')[0], 405)
 
     def open_stream(self):
         s = socket.create_connection(('127.0.0.1', self.port), timeout=5)
@@ -930,7 +1148,7 @@ class TestHttp(HttpCase):
         self.assertIn('200', head.splitlines()[0])
         self.assertIn('Content-Type: text/event-stream', head)
         self.assertTrue(events[0].startswith('event: info\ndata: '))
-        self.assertEqual(json.loads(events[0].split('data: ', 1)[1])['hostd'], 1)
+        self.assertEqual(json.loads(events[0].split('data: ', 1)[1])['hostd'], 2)
         self.assertTrue(events[1].startswith('event: sample\ndata: '))
         sample = json.loads(events[2].split('data: ', 1)[1])
         self.assertIn('cpu', sample)
@@ -1032,7 +1250,7 @@ class TestHttpEngine(HttpCase):
         st, body = self.req('POST', '/v1/engine/cancel')
         self.assertEqual((st, body), (200, {'cancelled': False}))
         st, body = self.req('POST', '/v1/engine/rollback')
-        self.assertEqual((st, body['error']), (409, 'not_pulled'))
+        self.assertEqual((st, body['error']), (404, 'not_found'))   # removed: switching back is an apply
 
 
 # --------------------------------------------------------------------------------------- config tests

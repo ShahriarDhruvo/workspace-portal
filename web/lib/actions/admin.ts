@@ -3,7 +3,7 @@
 import { eq } from "drizzle-orm";
 import { refresh, revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { displayName, sessions, users, writeAudit, type SessionContext, type User } from "@portal/db";
+import { displayName, sessions, users, WORKSPACE_KIND_NAMES, writeAudit, type SessionContext, type User } from "@portal/db";
 import { getDb } from "../db";
 import { attachWorkspaceInBackground, describeError, endSessionsInBackground, gateway, releaseInBackground, toApiError } from "../gateway";
 import { clearLoginFailures } from "../login-throttle";
@@ -11,11 +11,20 @@ import { generateTemporaryPassword } from "../password-generator";
 import { hashPassword } from "../passwords";
 import { requireAdmin } from "../session";
 import { deleteSessions } from "../session-store";
-import { fieldErrors, formText, newUserSchema, profileSchema, userIdSchema, type FieldErrors } from "../validation";
+import {
+  eraseFilesSchema,
+  fieldErrors,
+  formText,
+  newUserFormSchema,
+  onlineAccessSchema,
+  profileSchema,
+  userIdSchema,
+  type FieldErrors,
+} from "../validation";
 
 // Every action re-checks the admin role (requireAdmin), validates its input with zod, and is audited.
 
-/** Result of the confirm-dialog actions (stop, reset password, activate/deactivate, delete). */
+/** Result of the confirm-dialog actions (stop, reset password, activate/deactivate, delete, erase files, Online access). */
 export type ActionState =
   | { status: "idle" }
   | { status: "error"; message: string }
@@ -27,7 +36,12 @@ type Target = { user: User } | { error: string };
 function loadTarget(formData: FormData, session: SessionContext, options: { allowSelf?: boolean } = {}): Target {
   const id = userIdSchema.safeParse(formData.get("userId"));
   if (!id.success) return { error: "Unknown user." };
-  const user = getDb().select().from(users).where(eq(users.id, id.data)).get();
+  return loadUserById(id.data, session, options);
+}
+
+/** loadTarget for an id parsed already (with the action's other fields). */
+function loadUserById(id: number, session: SessionContext, options: { allowSelf?: boolean } = {}): Target {
+  const user = getDb().select().from(users).where(eq(users.id, id)).get();
   if (!user) return { error: "This user no longer exists." };
   if (!options.allowSelf && (user.id === session.user.id || user.role === "admin")) {
     return { error: "This action is not available for the administrator account." };
@@ -35,7 +49,7 @@ function loadTarget(formData: FormData, session: SessionContext, options: { allo
   return { user };
 }
 
-const NEW_USER_FIELDS = ["firstName", "middleName", "lastName", "username", "password"] as const;
+const NEW_USER_FIELDS = ["firstName", "middleName", "lastName", "username", "password", "onlineAllowed"] as const;
 type NewUserValues = Record<(typeof NEW_USER_FIELDS)[number], string>;
 
 export type CreateUserState =
@@ -46,10 +60,10 @@ export type CreateUserState =
 export async function createUser(_previous: CreateUserState, formData: FormData): Promise<CreateUserState> {
   const session = await requireAdmin();
   const values = formText(formData, NEW_USER_FIELDS);
-  const parsed = newUserSchema.safeParse(values);
+  const parsed = newUserFormSchema.safeParse(values);
   if (!parsed.success) return { status: "invalid", fieldErrors: fieldErrors(parsed.error), values };
 
-  const { username, password, firstName, middleName, lastName } = parsed.data;
+  const { username, password, firstName, middleName, lastName, onlineAllowed } = parsed.data;
   const db = getDb();
   const taken = { status: "invalid", fieldErrors: { username: "That username is already taken." }, values } as const;
   if (db.select({ id: users.id }).from(users).where(eq(users.username, username)).get()) return taken;
@@ -69,13 +83,19 @@ export async function createUser(_previous: CreateUserState, formData: FormData)
           passwordHash,
           role: "user",
           mustChangePassword: true,
+          onlineAllowed,
           createdAt: now,
           updatedAt: now,
         })
         .returning()
         .get();
       clearLoginFailures(db, username);
-      writeAudit(db, { action: "user_created", actorUserId: session.user.id, targetUserId: user.id, details: { username } });
+      writeAudit(db, {
+        action: "user_created",
+        actorUserId: session.user.id,
+        targetUserId: user.id,
+        details: { username, onlineAllowed },
+      });
       return user;
     });
   } catch (error) {
@@ -188,6 +208,77 @@ export async function stopWorkspace(_previous: ActionState, formData: FormData):
     await gateway.stop(target.user.id, "admin", session.user.id);
   } catch (error) {
     return { status: "error", message: toApiError(error).message };
+  }
+  refresh();
+  return { status: "done" };
+}
+
+/**
+ * The admin's per-user "Online workspace" permission (users.online_allowed), audited as
+ * `user_online_access_changed` {allowed}. Switching it off stops the user's Online workspace if it starts or runs
+ * (the confirmation says so); the gateway refuses their Online starts from then on. Also for the admin's own
+ * account.
+ */
+export async function setOnlineAccess(_previous: ActionState, formData: FormData): Promise<ActionState> {
+  const session = await requireAdmin();
+  const parsed = onlineAccessSchema.safeParse({ userId: formData.get("userId"), allowed: formData.get("allowed") });
+  if (!parsed.success) return { status: "error", message: "Unknown user." };
+  const target = loadUserById(parsed.data.userId, session, { allowSelf: true });
+  if ("error" in target) return { status: "error", message: target.error };
+  const { allowed } = parsed.data;
+
+  if (target.user.onlineAllowed !== allowed) {
+    const db = getDb();
+    db.transaction(() => {
+      db.update(users).set({ onlineAllowed: allowed, updatedAt: Date.now() }).where(eq(users.id, target.user.id)).run();
+      writeAudit(db, {
+        action: "user_online_access_changed",
+        actorUserId: session.user.id,
+        targetUserId: target.user.id,
+        details: { allowed },
+      });
+    });
+    refresh();
+  }
+  if (!allowed) {
+    // After the write, so a start racing this one is refused by the gateway or stopped here.
+    try {
+      const workspace = await gateway.getWorkspace(target.user.id);
+      if (workspace.kind === "online" && (workspace.status === "starting" || workspace.status === "running")) {
+        await gateway.stop(target.user.id, "admin", session.user.id);
+      }
+    } catch (error) {
+      return {
+        status: "error",
+        message: `Online access is off, but the Online workspace could not be stopped: ${toApiError(error).message}`,
+      };
+    }
+  }
+  return { status: "done" };
+}
+
+/**
+ * Erases one kind's files: that workspace's home and workspace folders, left empty. The gateway refuses while that
+ * kind is starting, running or stopping, and writes the `workspace_files_erased` audit entry.
+ */
+export async function eraseWorkspaceFiles(_previous: ActionState, formData: FormData): Promise<ActionState> {
+  const session = await requireAdmin();
+  const parsed = eraseFilesSchema.safeParse({ userId: formData.get("userId"), kind: formData.get("kind") });
+  if (!parsed.success) return { status: "error", message: "Unknown user or workspace." };
+  const target = loadUserById(parsed.data.userId, session, { allowSelf: true });
+  if ("error" in target) return { status: "error", message: target.error };
+  const { kind } = parsed.data;
+  try {
+    await gateway.eraseFiles(target.user.id, kind, session.user.id);
+  } catch (error) {
+    const problem = toApiError(error);
+    return {
+      status: "error",
+      message:
+        problem.error === "workspace_running"
+          ? `The ${WORKSPACE_KIND_NAMES[kind]} workspace is running. Stop it first.`
+          : problem.message,
+    };
   }
   refresh();
   return { status: "done" };

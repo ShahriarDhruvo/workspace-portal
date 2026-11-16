@@ -85,4 +85,54 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE users ADD COLUMN agent TEXT CHECK (agent IN ('qwen', 'dsh'));
   UPDATE users SET agent = (SELECT agent FROM workspaces WHERE workspaces.user_id = users.id);
   `,
+  // 4: each server's energy and network totals per local day (the gateway's energy meter), the meter's last
+  // reading, and the electricity price over time (Admin > Usage).
+  `
+  CREATE TABLE host_daily (
+    day        TEXT    NOT NULL CHECK (day GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
+    role       TEXT    NOT NULL CHECK (role IN ('portal', 'llm')),
+    energy_wh  REAL,
+    rx_bytes   INTEGER NOT NULL DEFAULT 0,
+    tx_bytes   INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (day, role)
+  );
+
+  CREATE TABLE host_meter (
+    role     TEXT    PRIMARY KEY CHECK (role IN ('portal', 'llm')),
+    instance TEXT    NOT NULL,
+    at       INTEGER NOT NULL,
+    energy_j REAL,
+    rx_bytes INTEGER,
+    tx_bytes INTEGER
+  );
+
+  CREATE TABLE energy_rates (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    effective_from TEXT    NOT NULL UNIQUE CHECK (effective_from GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
+    cents_per_kwh  REAL    NOT NULL CHECK (cents_per_kwh >= 0),
+    note           TEXT,
+    created_at     INTEGER NOT NULL
+  );
+
+  -- Tampa Electric (TECO) residential service, first 1,000 kWh a month: every per-kWh charge (energy, fuel,
+  -- capacity, conservation, environmental, storm protection, clean energy transition, storm surcharge) plus the
+  -- 2.5641% gross receipts tax; the daily basic service charge is left out. From TECO's rate notices and the
+  -- Florida PSC's orders, each from the first billing cycle of its month.
+  INSERT INTO energy_rates (effective_from, cents_per_kwh, note, created_at) VALUES
+    ('2024-01-01', 12.163, 'TECO residential, first 1,000 kWh, with gross receipts tax', 0),
+    ('2024-06-01', 11.459, 'TECO residential, first 1,000 kWh, with gross receipts tax (fuel cut)', 0),
+    ('2025-01-01', 13.235, 'TECO residential, first 1,000 kWh, with gross receipts tax', 0),
+    ('2025-03-01', 15.281, 'TECO residential, first 1,000 kWh, with gross receipts tax (storm surcharge)', 0),
+    ('2025-06-01', 15.478, 'TECO residential, first 1,000 kWh, with gross receipts tax (fuel credit ended)', 0),
+    ('2026-01-01', 16.305, 'TECO residential, first 1,000 kWh, with gross receipts tax', 0),
+    ('2026-08-01', 14.258, 'TECO residential, first 1,000 kWh, with gross receipts tax (storm surcharge ended)', 0);
+  `,
+  // 5: every user has a Private and an Online workspace (WORKSPACE_KINDS), one running at a time. The workspace row
+  // keeps the kind of its current or last container; existing rows are the Private one. The admin can bar a user
+  // from Online.
+  `
+  ALTER TABLE users ADD COLUMN online_allowed INTEGER NOT NULL DEFAULT 1 CHECK (online_allowed IN (0, 1));
+  ALTER TABLE workspaces ADD COLUMN kind TEXT NOT NULL DEFAULT 'private' CHECK (kind IN ('private', 'online'));
+  `,
 ];

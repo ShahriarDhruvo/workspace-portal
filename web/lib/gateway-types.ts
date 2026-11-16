@@ -1,6 +1,6 @@
 // Gateway control API types (docs/ARCHITECTURE.md) plus the shapes of the portal's own JSON routes.
 // Type-only module: safe to import from client components.
-import type { AgentKind, WorkspaceStatus } from "@portal/db";
+import type { AgentKind, WorkspaceKind, WorkspaceStatus } from "@portal/db";
 
 /** GET /control/agents: one of the agents enabled on this install (Settings' choices, in display order). */
 export interface AgentInfo {
@@ -12,6 +12,8 @@ export interface AgentInfo {
   version: string;
 }
 
+export type OnlineAccess = "allowed" | "off" | "not_allowed";
+
 export interface WorkspaceInfo {
   userId: number;
   status: WorkspaceStatus;
@@ -20,6 +22,13 @@ export interface WorkspaceInfo {
    * workspace never started.
    */
   agent: AgentKind | null;
+  /** The kind of the starting or running container; when stopped (or error), the one used last ("private" if never). */
+  kind: WorkspaceKind;
+  /**
+   * Whether this user can start an Online workspace now: "allowed"; "off" when ONLINE_WORKSPACES=off for the whole
+   * portal; "not_allowed" when the admin switched it off for this user (users.online_allowed).
+   */
+  online: OnlineAccess;
   /** The agent version of the starting or running container's image; null when stopped or unknown. */
   agentVersion: string | null;
   /** The agent answered its health check. */
@@ -56,11 +65,26 @@ export interface HostStats {
   llm: { inFlight: number; queued: number; maxConcurrency: number };
 }
 
-/** One of a package's release channels (npm dist-tags) the admin may update an agent to. */
-export interface ReleaseChannel {
-  /** "latest", then next, preview, beta, rc, alpha, nightly when the package has them. */
-  tag: string;
+/** A release's notes on GitHub (the agents' and the LLM engine's), markdown cut when long. */
+export interface ReleaseNotes {
+  title: string;
+  /** The release's page on github.com. */
+  url: string;
+  publishedAt: number | null;
+  body: string;
+  /** The notes announce breaking changes (by the conventions changelogs follow; never guessed). */
+  breaking: boolean;
+}
+
+/** One version in an agent's Package images table. */
+export interface AgentRelease {
   version: string;
+  /** Epoch ms npm published it; null when unknown. */
+  publishedAt: number | null;
+  /** dist-tags.latest names it. */
+  latest: boolean;
+  /** Its release on the package's GitHub repository; null when there is none. */
+  notes: ReleaseNotes | null;
 }
 
 /** A workspace image of one agent version that Docker has. */
@@ -77,7 +101,7 @@ export interface InstalledImage {
   inUse: number;
 }
 
-/** GET /control/agents/versions → agents[]: one enabled agent's versions, images and release channels. */
+/** GET /control/agents/versions → agents[]: one enabled agent's versions, releases and images. */
 export interface AgentVersionInfo {
   id: AgentKind;
   name: string;
@@ -91,8 +115,11 @@ export interface AgentVersionInfo {
   latest: string | null;
   /** latest is newer than current (semver precedence, prereleases included). */
   updateAvailable: boolean;
-  /** "latest" first; [] when unknown. */
-  channels: ReleaseChannel[];
+  /**
+   * Newest first: the 5 newest stable releases (no prerelease except latest itself, nothing newer than latest), the
+   * current version and every version with an image on this server.
+   */
+  releases: AgentRelease[];
   /** This agent's workspace images, newest version first. */
   installed: InstalledImage[];
   /** Starting and running workspaces by image version (null: unknown), newest first. */
@@ -111,7 +138,7 @@ export interface AgentUpdateJob {
   agent: AgentKind;
   /** The current version when the job started. */
   fromVersion: string;
-  /** The version being installed (a requested channel is resolved before the job starts). */
+  /** The version being installed. */
   version: string;
   /** Built without the cache: fresh system packages and npm install. */
   rebuild: boolean;
@@ -134,7 +161,7 @@ export interface AgentVersionsOverview {
   agents: AgentVersionInfo[];
   /** The running job, else the last finished one since the gateway started. */
   job: AgentUpdateJob | null;
-  /** The last npm registry check failed: channels and latest are unknown or stale. */
+  /** The last npm registry check failed: releases and latest are unknown or stale. */
   registryError: string | null;
   /** Epoch ms of the last successful registry check. */
   checkedAt: number | null;
@@ -142,7 +169,7 @@ export interface AgentVersionsOverview {
 
 /** Body of POST /control/agents/:agent/update. */
 export interface AgentUpdateRequest {
-  /** An exact version (0.27.4, 0.2.2-rc.3) or one of the agent's release channels (latest, next, …). */
+  /** An exact version (0.27.4, 0.2.2-rc.3). */
   version: string;
   /** Build without the cache. */
   rebuild?: boolean;

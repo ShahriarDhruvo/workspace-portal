@@ -3,7 +3,10 @@
 // the app's own components (the shadcn/ui primitives import theirs as the registry has them). Icons are
 // decorative (aria-hidden) unless given an aria-label.
 import {
+  Activity,
+  ArrowDown,
   ArrowRight,
+  ArrowUp,
   ArrowUpRight,
   Check,
   ChevronDown,
@@ -17,12 +20,14 @@ import {
   Copy,
   Ellipsis,
   Eye,
+  Globe,
   House,
+  Info,
   KeyRound,
   LogOut,
   Menu,
   Moon,
-  LayoutDashboard,
+  Lock,
   Package,
   Play,
   Plus,
@@ -32,7 +37,6 @@ import {
   Shield,
   Square,
   SquarePen,
-  SquareTerminal,
   Sun,
   Trash2,
   UserCheck,
@@ -73,8 +77,8 @@ export const ShieldIcon = icon(Shield, "ShieldIcon");
 export const UsersIcon = icon(Users, "UsersIcon");
 export const RightUpIcon = icon(ArrowUpRight, "RightUpIcon");
 export const BackIcon = icon(ChevronLeft, "BackIcon");
+export const ChevronLeftIcon = icon(ChevronLeft, "ChevronLeftIcon");
 export const LogOutIcon = icon(LogOut, "LogOutIcon");
-export const TerminalIcon = icon(SquareTerminal, "TerminalIcon");
 export const AuditIcon = icon(ScrollText, "AuditIcon");
 export const KeyIcon = icon(KeyRound, "KeyIcon");
 export const StopIcon = icon(Square, "StopIcon");
@@ -82,7 +86,7 @@ export const UserCheckIcon = icon(UserCheck, "UserCheckIcon");
 export const UserXIcon = icon(UserX, "UserXIcon");
 export const EyeIcon = icon(Eye, "EyeIcon");
 export const PackageIcon = icon(Package, "PackageIcon");
-export const OverviewIcon = icon(LayoutDashboard, "OverviewIcon");
+export const UsageIcon = icon(Activity, "UsageIcon");
 export const SuccessIcon = icon(CircleCheck, "SuccessIcon");
 export const FailedIcon = icon(CircleX, "FailedIcon");
 export const CancelledIcon = icon(CircleSlash, "CancelledIcon");
@@ -92,3 +96,10 @@ export const SunIcon = icon(Sun, "SunIcon");
 export const MoonIcon = icon(Moon, "MoonIcon");
 export const PlayIcon = icon(Play, "PlayIcon");
 export const ArrowRightIcon = icon(ArrowRight, "ArrowRightIcon");
+export const ArrowDownIcon = icon(ArrowDown, "ArrowDownIcon");
+export const ArrowUpIcon = icon(ArrowUp, "ArrowUpIcon");
+export const InfoIcon = icon(Info, "InfoIcon");
+/** The Private workspace (no internet). */
+export const LockIcon = icon(Lock, "LockIcon");
+/** The Online workspace (public internet). */
+export const GlobeIcon = icon(Globe, "GlobeIcon");

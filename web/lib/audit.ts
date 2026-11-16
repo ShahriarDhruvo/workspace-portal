@@ -1,5 +1,5 @@
 // Human-readable audit log entries. Pure; unit tested.
-import { AGENT_NAMES, isAgentKind, type AuditAction } from "@portal/db";
+import { AGENT_NAMES, isAgentKind, isWorkspaceKind, WORKSPACE_KIND_NAMES, type AuditAction } from "@portal/db";
 
 const ACTION_LABELS: Record<AuditAction, string> = {
   login: "Signed in",
@@ -24,6 +24,9 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   engine_updated: "LLM engine updated",
   engine_update_failed: "LLM engine update failed",
   engine_image_removed: "LLM engine image removed",
+  energy_rate_set: "Set electricity price",
+  workspace_files_erased: "Erased workspace files",
+  user_online_access_changed: "Changed Online access",
 };
 
 function isKnownAction(action: string): action is AuditAction {
@@ -47,11 +50,14 @@ const DETAIL_LABELS: Record<string, string> = {
   to: "To",
   version: "Version",
   rebuild: "From scratch",
-  // LLM engine updates (written by the gateway) and image removals: kind (update or rollback), from/to or
-  // version, rolledBack, digest.
+  // LLM engine updates (written by the gateway) and image removals: from/to or version, rolledBack, digest (older
+  // engine entries also a kind: update or rollback). A workspace's start and erased files: kind (Private or Online).
   kind: "Type",
   rolledBack: "Rolled back",
   digest: "Digest",
+  // A new user's Online permission, and a change of it.
+  onlineAllowed: "Online workspace",
+  allowed: "Allowed",
 };
 
 function humanize(key: string): string {
@@ -107,9 +113,11 @@ export function auditActorFallback(action: string): string {
 /** Keys that hold an agent: `agent`, and from/to of a harness change (an agent update's are versions). */
 const AGENT_KEYS = new Set(["agent", "from", "to"]);
 
-/** Agents by name ("Qwen Code", not "qwen"); everything else as formatValue has it. */
+/** Agents and workspace kinds by name ("Qwen Code", not "qwen"; "Online"); everything else as formatValue has it. */
 function formatDetail(key: string, value: unknown): string {
-  return AGENT_KEYS.has(key) && isAgentKind(value) ? AGENT_NAMES[value] : formatValue(value);
+  if (AGENT_KEYS.has(key) && isAgentKind(value)) return AGENT_NAMES[value];
+  if (key === "kind" && isWorkspaceKind(value)) return WORKSPACE_KIND_NAMES[value];
+  return formatValue(value);
 }
 
 /** Renders the JSON `details` column as "Key: value · Key: value". */

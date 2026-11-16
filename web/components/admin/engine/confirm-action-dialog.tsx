@@ -32,7 +32,7 @@ interface ConfirmActionDialogProps {
   returnFocusTo: RefObject<HTMLElement | null>;
 }
 
-/** Confirms one LLM engine action (update, rollback, restart now, remove an image) and runs it. */
+/** Confirms one LLM engine action (switch to a version, restart now, remove an image) and runs it. */
 export function ConfirmActionDialog({ open, onOpenChange, returnFocusTo, ...props }: ConfirmActionDialogProps) {
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>

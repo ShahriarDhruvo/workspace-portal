@@ -1,9 +1,12 @@
 // The gateway's own pages, shown inside the portal's iframe instead of the agent's UI
-// while a workspace is starting, stopped or failing. Same dark look as the Web Shell and the portal.
+// while a workspace is starting, stopped or failing, or while the user's other kind runs. Same dark look as the
+// Web Shell and the portal. Nothing here starts a workspace by being loaded: a stopped one is started from the
+// portal, where the kind is chosen; only "Try again" after a failure (a POST) starts that port's kind again.
+import { WORKSPACE_KIND_NAMES, type WorkspaceKind } from "@portal/db";
 
 /** Agent-port paths under this prefix belong to the gateway and are never proxied to the workspace. */
 export const PORTAL_PATH_PREFIX = "/__portal/";
-/** POST target of the "Try again" buttons: starts the workspace, then redirects to /. */
+/** POST target of the "Try again" buttons: starts that port's kind of the workspace, then redirects to /. */
 export const START_PATH = `${PORTAL_PATH_PREFIX}start`;
 
 const MAX_DETAIL_CHARS = 4_000;
@@ -70,9 +73,9 @@ function render(options: PageOptions): string {
 
 const RETRY_FORM = `<form method="post" action="${START_PATH}"><button class="button" type="submit">Try again</button></form>`;
 
-export function startingPage(): string {
+export function startingPage(kind: WorkspaceKind): string {
   return render({
-    title: "Starting your workspace…",
+    title: `Starting your ${WORKSPACE_KIND_NAMES[kind]} workspace…`,
     text: "This usually takes a few seconds. The page reloads by itself.",
     spinner: true,
     refreshSeconds: 2,
@@ -97,13 +100,30 @@ export function capacityPage(maxRunning: number): string {
   });
 }
 
-/** Shown instead of auto-starting when the page load came from another site. */
-export function stoppedPage(): string {
+/** `portalUrl` is protocol-relative (`//host:port/`): the portal's Home, where a workspace is started. */
+const portalLink = (portalUrl: string): string => `<a class="button" href="${escapeHtml(portalUrl)}" target="_top">Go to the portal</a>`;
+
+/** A stopped workspace's port: it is started from the portal, where its kind is chosen and confirmed. */
+export function stoppedPage(kind: WorkspaceKind, portalUrl: string): string {
   return render({
-    title: "Your workspace is stopped",
-    text: "Start it to continue where you left off.",
-    action: `<form method="post" action="${START_PATH}"><button class="button" type="submit">Start workspace</button></form>`,
+    title: `Your ${WORKSPACE_KIND_NAMES[kind]} workspace is stopped`,
+    text: "Start it from the portal to continue where you left off.",
+    action: portalLink(portalUrl),
   });
+}
+
+/** One kind's port while the user's other kind runs: only one runs at a time, and this port never reaches it. */
+export function otherKindPage(running: WorkspaceKind, kind: WorkspaceKind, portalUrl: string): string {
+  return render({
+    title: `Your ${WORKSPACE_KIND_NAMES[running]} workspace is running, not this one`,
+    text: `Only one of your workspaces runs at a time. Stop the ${WORKSPACE_KIND_NAMES[running]} one in the portal to start the ${WORKSPACE_KIND_NAMES[kind]} one.`,
+    action: portalLink(portalUrl),
+  });
+}
+
+/** A start the gateway refused for good (Online turned off, or not allowed): trying again won't help. */
+export function refusedPage(text: string, portalUrl: string): string {
+  return render({ title: "Your workspace can't start", text, action: portalLink(portalUrl) });
 }
 
 export function errorPage(text: string, detail: string | null): string {
@@ -113,7 +133,7 @@ export function errorPage(text: string, detail: string | null): string {
 export function unreachablePage(): string {
   return render({
     title: "Your workspace isn't answering",
-    text: "It may have stopped a moment ago. Reload the page to start it again.",
+    text: "It may have stopped a moment ago. Reload the page.",
   });
 }
 
@@ -122,7 +142,7 @@ export function otherWorkspacePage(portalUrl: string): string {
   return render({
     title: "This workspace isn't open here",
     text: "Your session is using a different workspace. Open it again from the portal.",
-    action: `<a class="button" href="${escapeHtml(portalUrl)}" target="_top">Go to the portal</a>`,
+    action: portalLink(portalUrl),
   });
 }
 

@@ -1,6 +1,6 @@
 // The admin's live view: the events of GET /api/admin/live, passed through from the gateway's GET /control/live
 // (docs/ARCHITECTURE.md, "Live view"). HostInfo and HostSample are portal-hostd's (hostd/README.md).
-import type { AgentKind, WorkspaceStatus } from "@portal/db";
+import type { AgentKind, WorkspaceKind, WorkspaceStatus } from "@portal/db";
 
 export type HostRole = "portal" | "llm";
 /** off: not set up; connecting; online: readings arrive; offline: portal-hostd can't be reached or refused. */
@@ -18,6 +18,10 @@ export interface HostInfo {
   sources: { perf: boolean; bandwidth: string | null; power: string | null; gpuBusy: string | null };
   power: { label: string } | null;
   engine: { unit: string } | null;
+  /** The physical network interfaces counted in `net` (not lo, bridges, veth or VPN tunnels); absent from older hostd. */
+  network?: { interfaces: string[] } | null;
+  /** The whole disks counted in `disk` I/O, and the mount points of the local filesystems counted in its space. */
+  disks?: { devices: string[]; mounts: string[] } | null;
 }
 
 export interface HostSample {
@@ -37,6 +41,20 @@ export interface HostSample {
   power: { watts: number | null; parts: { gpu: number | null; cpu: number | null; dram: number | null } };
   fans: Array<{ label: string; rpm: number | null; duty: number | null }>;
   throttling?: boolean | null;
+  /** Physical interfaces together, bytes per second; absent from older hostd. */
+  net?: { rxBps: number | null; txBps: number | null } | null;
+  /** Whole disks together (bytes per second), and space on the local filesystems together; absent from older hostd. */
+  disk?: { readBps: number | null; writeBps: number | null; totalBytes: number | null; freeBytes: number | null } | null;
+}
+
+/** A server's totals for the current local day, from the gateway's energy meter (stored in host_daily). */
+export interface HostToday {
+  /** YYYY-MM-DD, local. */
+  day: string;
+  /** null: its power can't be measured. */
+  energyWh: number | null;
+  rxBytes: number;
+  txBytes: number;
 }
 
 export interface HostLive {
@@ -45,6 +63,8 @@ export interface HostLive {
   error: string | null;
   info: HostInfo | null;
   sample: HostSample | null;
+  /** Today's totals so far; null until the energy meter has read this server once. */
+  today: HostToday | null;
 }
 
 export type EngineState = "ready" | "loading" | "offline" | "unknown";
@@ -103,6 +123,8 @@ export interface LiveWorkspace {
   userName: string | null;
   status: WorkspaceStatus;
   agent: AgentKind | null;
+  /** Of the current container, or the last one. */
+  kind: WorkspaceKind;
   agentVersion: string | null;
   busy: boolean;
   busyReason: "task" | "llm" | "cpu" | null;

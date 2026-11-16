@@ -8,10 +8,14 @@ import {
   formText,
   harnessSchema,
   loginSchema,
+  eraseFilesSchema,
+  newUserFormSchema,
   newUserSchema,
   normalizeName,
+  onlineAccessSchema,
   profileSchema,
   usernameSchema,
+  workspaceStartSchema,
 } from "./validation.ts";
 
 const validUser = { firstName: "Ada", middleName: "", lastName: "Lovelace", username: "ada", password: "correct horse" };
@@ -84,7 +88,7 @@ test("formText reads strings and maps missing fields to empty strings", () => {
   assert.deepEqual(formText(data, ["firstName", "middleName", "file"]), { firstName: "Ada", middleName: "", file: "" });
 });
 
-test("agent updates take an exact version, never a release channel, and the rebuild checkbox", () => {
+test("agent updates take an exact version, never a dist-tag, and the rebuild checkbox", () => {
   assert.deepEqual(agentUpdateSchema.parse({ agent: "qwen", version: " 0.27.4 ", rebuild: "" }), {
     agent: "qwen",
     version: "0.27.4",
@@ -95,10 +99,10 @@ test("agent updates take an exact version, never a release channel, and the rebu
     version: "0.2.2-rc.3",
     rebuild: true,
   });
-  // A channel would be resolved again by the gateway, maybe to a newer version than the one confirmed.
-  const channel = agentUpdateSchema.safeParse({ agent: "dsh", version: "next", rebuild: "" });
-  assert.equal(channel.success, false);
-  assert.deepEqual(fieldErrors(channel.error!), { version: "Enter a version like 0.27.4." });
+  // A dist-tag could name a newer version than the one confirmed.
+  const tag = agentUpdateSchema.safeParse({ agent: "dsh", version: "next", rebuild: "" });
+  assert.equal(tag.success, false);
+  assert.deepEqual(fieldErrors(tag.error!), { version: "Enter a version like 0.27.4." });
   // Every bad version, an empty one included, gets the same message.
   for (const version of ["", "  ", "0.27", "v0.27.4", "0.27.4 && reboot", "latest", `0.27.4-${"a".repeat(100)}`]) {
     const parsed = agentUpdateSchema.safeParse({ agent: "qwen", version, rebuild: "" });
@@ -125,4 +129,28 @@ test("a harness choice is one of the agent kinds", () => {
   for (const agent of ["", "QWEN", "claude", null, undefined, 1]) {
     assert.equal(harnessSchema.safeParse({ agent }).success, false, String(agent));
   }
+});
+
+test("a new user's Online permission is the form's switch: on when checked, off when absent", () => {
+  assert.equal(newUserFormSchema.parse({ ...validUser, onlineAllowed: "on" }).onlineAllowed, true);
+  assert.equal(newUserFormSchema.parse({ ...validUser, onlineAllowed: "" }).onlineAllowed, false, "formText's value for an unchecked switch");
+  assert.ok(newUserSchema.safeParse(validUser).success, "the admin seed has no such setting");
+});
+
+test("a start names the kind, and only Private or Online", () => {
+  assert.deepEqual(workspaceStartSchema.parse({ kind: "online" }), { kind: "online" });
+  assert.deepEqual(workspaceStartSchema.parse({ kind: "private" }), { kind: "private" });
+  for (const body of [{}, { kind: "public" }, { kind: null }, null, "online"]) {
+    assert.equal(workspaceStartSchema.safeParse(body).success, false, `${JSON.stringify(body)} is refused`);
+  }
+  assert.equal(fieldErrors(workspaceStartSchema.safeParse({ kind: "x" }).error!).kind, "Choose Private or Online.");
+});
+
+test("the Online permission and file erasing take a user id and a value or a kind", () => {
+  assert.deepEqual(onlineAccessSchema.parse({ userId: "7", allowed: "false" }), { userId: 7, allowed: false });
+  assert.deepEqual(onlineAccessSchema.parse({ userId: "7", allowed: "true" }), { userId: 7, allowed: true });
+  assert.equal(onlineAccessSchema.safeParse({ userId: "7", allowed: "yes" }).success, false);
+  assert.deepEqual(eraseFilesSchema.parse({ userId: "3", kind: "online" }), { userId: 3, kind: "online" });
+  assert.equal(eraseFilesSchema.safeParse({ userId: "3", kind: "all" }).success, false);
+  assert.equal(eraseFilesSchema.safeParse({ userId: "0", kind: "private" }).success, false);
 });

@@ -2,18 +2,28 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   appendHistory,
+  axisTicks,
+  daysOfMonth,
   formatBandwidth,
   formatBytesOf,
+  formatCents,
   formatClock,
   formatClockOrIdle,
+  formatDate,
+  formatDay,
   formatElapsed,
+  formatKwh,
+  formatMonth,
   formatNumber,
   formatPercent,
+  formatRate,
   formatTemp,
+  formatUsd,
   formatWatts,
   historyFromInit,
   historyWithFrame,
   memoryFree,
+  usedPercent,
 } from "./live-format.ts";
 import type { HostSample, LiveFrame } from "./live-types.ts";
 
@@ -39,7 +49,54 @@ test("readings are short and say when they are unknown", () => {
   assert.equal(formatElapsed(45_900), "45 s");
   assert.equal(formatElapsed(125_000), "2m 05s");
   assert.equal(formatElapsed(3_840_000), "1h 04m");
-  for (const format of [formatTemp, formatClock, formatWatts, formatPercent, formatBandwidth, formatElapsed]) assert.equal(format(null), "—");
+  for (const format of [formatTemp, formatClock, formatWatts, formatPercent, formatBandwidth, formatElapsed, formatRate]) assert.equal(format(null), "—");
+});
+
+test("network and disk rates are in decimal units, down to bytes", () => {
+  assert.equal(formatRate(92.4e6), "92 MB/s");
+  assert.equal(formatRate(1.25e6), "1.3 MB/s");
+  assert.equal(formatRate(820e3), "820 kB/s");
+  assert.equal(formatRate(4_200), "4.2 kB/s");
+  assert.equal(formatRate(512), "512 B/s");
+  assert.equal(formatRate(0), "0 B/s");
+  assert.equal(formatRate(2.5e9), "2.5 GB/s");
+  assert.equal(usedPercent(25, 100), 25);
+  assert.equal(usedPercent(5, 0), null);
+  assert.equal(usedPercent(null, 100), null);
+});
+
+test("energy, money and prices stay readable when tiny", () => {
+  assert.equal(formatKwh(0.0144), "0.014");
+  assert.equal(formatKwh(0.3), "0.300");
+  assert.equal(formatKwh(41.749), "41.75");
+  assert.equal(formatKwh(204.56), "204.6");
+  assert.equal(formatKwh(12_045.4), "12,045");
+  assert.equal(formatKwh(null), "—");
+  assert.equal(formatUsd(0.0213), "$0.02");
+  assert.equal(formatUsd(0.004), "<$0.01");
+  assert.equal(formatUsd(0), "$0.00");
+  assert.equal(formatUsd(1234.5), "$1,234.50");
+  assert.equal(formatUsd(null), "—");
+  assert.equal(formatCents(14.258), "14.258");
+  assert.equal(formatCents(15), "15.000");
+  assert.equal(formatCents(null), "—");
+});
+
+test("days and months read the same in every time zone", () => {
+  assert.equal(formatDay("2026-11-16"), "Mon, Nov 16");
+  assert.equal(formatDate("2026-08-01"), "Aug 1, 2026");
+  assert.equal(formatMonth("2026-11"), "November 2026");
+  assert.equal(daysOfMonth("2026-11").length, 30);
+  assert.equal(daysOfMonth("2028-02").at(-1), "2028-02-29");
+  assert.equal(daysOfMonth("2026-12")[0], "2026-12-01");
+});
+
+test("axis ticks are round numbers from zero", () => {
+  assert.deepEqual(axisTicks(1.023), [0, 0.5, 1, 1.5]);
+  assert.deepEqual(axisTicks(0.9), [0, 0.5, 1]);
+  assert.deepEqual(axisTicks(0.3), [0, 0.1, 0.2, 0.3]);
+  assert.deepEqual(axisTicks(41), [0, 20, 40, 60]);
+  assert.deepEqual(axisTicks(0), [0, 1]);
 });
 
 function sample(t: number, availableBytes = 6e9): HostSample {

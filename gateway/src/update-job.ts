@@ -15,7 +15,7 @@ export interface AgentUpdateJob {
   agent: AgentKind;
   /** The current version when the job started. */
   fromVersion: string;
-  /** The version being installed (a channel is resolved before the job starts). */
+  /** The exact version being installed (X.Y.Z, as listed in Package images). */
   version: string;
   rebuild: boolean;
   /**

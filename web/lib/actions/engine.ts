@@ -6,11 +6,11 @@ import { engineActionError, engineImageSchema, engineVersionSchema, type EngineA
 import { gateway, toApiError } from "../gateway";
 import { requireAdmin } from "../session";
 
-// The Updates page's LLM engine actions: update to a release, roll back, cancel, restart now (ending the drain),
-// remove an old image. Each re-checks the admin role and validates its input; the gateway refuses what it can't do
-// (one job at a time, the running image) and audits updates and rollbacks itself, attributed to the admin passed as
-// actorUserId; an image removal is audited here, as for agent images. The page polls for the job's progress, so the
-// actions only report whether the gateway accepted.
+// The Updates page's LLM engine actions: switch to a release (newer or older), cancel, restart now (ending the drain),
+// remove an image. Each re-checks the admin role and validates its input; the gateway refuses what it can't do (one
+// job at a time, the running image) and audits updates itself, attributed to the admin passed as actorUserId; an
+// image removal is audited here, as for agent images. The page polls for the job's progress, so the actions only
+// report whether the gateway accepted.
 
 export type EngineActionResult = { ok: true } | { ok: false; message: string };
 
@@ -23,18 +23,12 @@ async function run(action: EngineAction, work: () => Promise<unknown>): Promise<
   return { ok: true };
 }
 
-/** Starts updating the engine to `version`, an exact release (never "latest": the one on screen is confirmed). */
+/** Starts switching the engine to `version`, an exact release (never "latest": the one on screen is confirmed). */
 export async function updateEngine(version: string): Promise<EngineActionResult> {
   const session = await requireAdmin();
   const parsed = engineVersionSchema.safeParse(version);
   if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message ?? "Unknown version." };
   return run("update", () => gateway.updateEngine(parsed.data, session.user.id));
-}
-
-/** Starts going back to the version that ran before the last change. */
-export async function rollbackEngine(): Promise<EngineActionResult> {
-  const session = await requireAdmin();
-  return run("rollback", () => gateway.rollbackEngine(session.user.id));
 }
 
 /** Cancels the job while it downloads or drains; nothing changes. */

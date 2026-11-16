@@ -1,12 +1,15 @@
-// The agent ports: every browser request for a workspace. One port per user (AGENT_PORT_BASE + id),
-// so each workspace is its own browser origin. It checks the portal session, starts a stopped
-// workspace on document navigations only, and streams everything else to that user's agent, with
-// the container's credential added by the agent's driver (for token agents only when the browser
-// presented its session-bound token). WebSocket upgrades go to ws-relay.ts.
+// The agent ports: every browser request for a workspace. One port per user and kind (Private: AGENT_PORT_BASE +
+// id, Online: ONLINE_AGENT_PORT_BASE + id), so each workspace, and each of a user's two kinds, is its own browser
+// origin. It checks the portal session and streams requests to that user's agent when the port's kind is the one
+// running, with the container's credential added by the agent's driver (for token agents only when the browser
+// presented its session-bound token of this kind). It never starts a workspace by itself: a stopped one is
+// started from the portal, where the kind is chosen; only "Try again" (a POST) starts this port's kind after a
+// failure or at the cap. WebSocket upgrades go to ws-relay.ts.
 import type http from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tokensEqual, type SessionContext } from "@portal/db";
-import { checkAgentAccess, INVALID_TOKEN, unavailableError, type AgentDeps } from "./agent-access.ts";
+import type { WorkspaceKind } from "@portal/db";
+import { checkAgentAccess, INVALID_TOKEN, otherKindError, unavailableError, type AgentDeps } from "./agent-access.ts";
 import { driverFor, type AgentDriver } from "./agents/index.ts";
 import { MIB } from "./config.ts";
 import { connectionRole } from "./connections.ts";
@@ -18,14 +21,16 @@ import {
   START_PATH,
   capacityPage,
   errorPage,
+  otherKindPage,
   otherWorkspacePage,
+  refusedPage,
   signedOutPage,
   startingPage,
   stoppedPage,
   unreachablePage,
 } from "./pages.ts";
 import { createWsRelay } from "./ws-relay.ts";
-import { CapacityError, type StartRefusal } from "./workspaces.ts";
+import { CapacityError, KindMismatchError, OnlineDisabledError, OnlineNotAllowedError, type StartRefusal } from "./workspaces.ts";
 
 /**
  * The path as a lenient router might see it: percent-decoded, backslashes and repeated slashes
@@ -91,19 +96,20 @@ async function handleRequest(deps: AgentDeps, req: IncomingMessage, res: ServerR
     return sendError(res, access.status, access.code, access.message);
   }
 
-  const { host, context, userId } = access;
+  const { host, context, userId, kind } = access;
   const { pathname } = splitTarget(target);
-  if (pathname.startsWith(PORTAL_PATH_PREFIX)) return handlePortalPath(deps, req, res, userId, host, pathname);
+  if (pathname.startsWith(PORTAL_PATH_PREFIX)) return handlePortalPath(deps, req, res, userId, kind, host, pathname);
 
-  // Whatever the agent, a token the browser presents must be this session's token for this workspace.
+  // Whatever the agent, a token the browser presents must be this session's token for this workspace and kind.
   const presentsToken = req.headers.authorization !== undefined;
   if (presentsToken) {
     const presented = bearerToken(req.headers.authorization);
     if (presented === null || !tokensEqual(presented, access.browserToken)) return sendError(res, 401, INVALID_TOKEN.code, INVALID_TOKEN.message);
   }
 
-  const upstream = deps.manager.upstream(userId);
-  if (!upstream) return handleUnavailable(deps, res, userId, host, navigation, req.headers["sec-fetch-site"] === "cross-site");
+  // Only this kind's container: while the other kind runs, nothing here reaches it.
+  const upstream = deps.manager.upstream(userId, kind);
+  if (!upstream) return handleUnavailable(deps, res, userId, kind, host, navigation);
   const driver = driverFor(upstream.agent);
   if (isBlockedPath(driver, pathname)) {
     return sendError(res, 403, "not_available", "This feature is not available in the portal.");
@@ -156,60 +162,65 @@ function trackStream(deps: AgentDeps, res: ServerResponse, userId: number, conte
 }
 
 /**
- * The workspace is not ready. Only a page load starts it; anything else just gets a 503. A page
- * load from another site (a link elsewhere) gets a Start button instead, so outside pages can't
- * boot workspaces.
+ * This kind's workspace is not ready, and nothing here starts it (an open tab's reconnect loop must not wake a
+ * stopped workspace, and the portal is where the kind is chosen). A page load gets a themed page: starting (it
+ * reloads), the other kind running, the error with "Try again", or stopped with a link to the portal; anything
+ * else gets the JSON error (409 for the other kind, else 503).
  */
-function handleUnavailable(
-  deps: AgentDeps,
-  res: ServerResponse,
-  userId: number,
-  host: HostParts,
-  navigation: boolean,
-  crossSite: boolean,
-): void {
-  const { status, lastError } = deps.manager.info(userId);
+function handleUnavailable(deps: AgentDeps, res: ServerResponse, userId: number, kind: WorkspaceKind, host: HostParts, navigation: boolean): void {
+  const info = deps.manager.info(userId);
+  const other = otherKindError(info, kind);
+  const portal = `//${host.hostname}:${deps.config.webPort}/`;
   if (!navigation) {
-    const { code, message, headers } = unavailableError(status);
+    if (other) return sendError(res, 409, other.code, other.message);
+    const { code, message, headers } = unavailableError(info.kind === kind ? info.status : "stopped");
     return sendError(res, 503, code, message, headers);
   }
-  const starting = status === "starting" || status === "running";
-  if (starting) return sendPage(res, 503, startingPage(), framing(deps, host), { "retry-after": "2" });
-  if (status === "error") return sendPage(res, 503, errorPage("Something went wrong while it was starting.", lastError), framing(deps, host));
-  if (crossSite) return sendPage(res, 503, stoppedPage(), framing(deps, host));
-  startAndRespond(deps, res, userId, host, () => sendPage(res, 503, startingPage(), framing(deps, host), { "retry-after": "2" }));
+  if (other) return sendPage(res, 409, otherKindPage(other.running, kind, portal), framing(deps, host));
+  if (info.kind === kind && (info.status === "starting" || info.status === "running")) {
+    return sendPage(res, 503, startingPage(kind), framing(deps, host), { "retry-after": "2" });
+  }
+  if (info.kind === kind && info.status === "error") {
+    return sendPage(res, 503, errorPage("Something went wrong while it was starting.", info.lastError), framing(deps, host));
+  }
+  sendPage(res, 503, stoppedPage(kind, portal), framing(deps, host));
 }
 
-/** Gateway-owned paths: the "Try again" form of the capacity and error pages. */
+/** Gateway-owned paths: the "Try again" form of the capacity and error pages, for this port's kind. */
 function handlePortalPath(
   deps: AgentDeps,
   req: IncomingMessage,
   res: ServerResponse,
   userId: number,
+  kind: WorkspaceKind,
   host: HostParts,
   pathname: string,
 ): void {
   if (pathname !== START_PATH) return sendError(res, 404, "not_found", "Not found.");
   if (req.method !== "POST") return sendError(res, 405, "method_not_allowed", "Use POST.", { allow: "POST" });
   req.resume();
-  startAndRespond(deps, res, userId, host, () => {
-    res.writeHead(303, { location: "/", "cache-control": "no-store", "content-length": 0 });
-    res.end();
-  });
-}
-
-/** Starts the user's agent (the one chosen in the portal's Settings). */
-function startAndRespond(deps: AgentDeps, res: ServerResponse, userId: number, host: HostParts, onStarted: () => void): void {
+  // The user's agent (the one chosen in the portal's Settings); the same checks as the portal's Start, Online's
+  // permission included.
   deps.manager.touch(userId);
-  const attempt = deps.manager.requestStart(userId);
-  if (!attempt.ok) return sendPage(res, 503, refusalPage(deps, attempt.error), framing(deps, host));
+  const attempt = deps.manager.requestStart(userId, { kind });
+  if (!attempt.ok) return sendPage(res, refusalStatus(attempt.error), refusalPage(deps, attempt.error, kind, host), framing(deps, host));
   // Failures are recorded on the workspace; the starting page's next reload shows them.
   attempt.done.catch(() => undefined);
-  onStarted();
+  res.writeHead(303, { location: "/", "cache-control": "no-store", "content-length": 0 });
+  res.end();
 }
 
-function refusalPage(deps: AgentDeps, error: StartRefusal): string {
+function refusalStatus(error: StartRefusal): number {
+  if (error instanceof KindMismatchError) return 409;
+  if (error instanceof OnlineNotAllowedError) return 403;
+  return error instanceof OnlineDisabledError ? 409 : 503;
+}
+
+function refusalPage(deps: AgentDeps, error: StartRefusal, kind: WorkspaceKind, host: HostParts): string {
+  const portal = `//${host.hostname}:${deps.config.webPort}/`;
   if (error instanceof CapacityError) return capacityPage(deps.config.maxRunning);
+  if (error instanceof KindMismatchError) return otherKindPage(error.running, kind, portal);
+  if (error instanceof OnlineDisabledError || error instanceof OnlineNotAllowedError) return refusedPage(error.message, portal);
   return errorPage(error.message, null);
 }
 

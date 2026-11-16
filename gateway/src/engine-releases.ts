@@ -1,17 +1,23 @@
 // The LLM engine's releases, for Admin > Updates: the stable version tags of the engine's container
 // image in its registry (any Docker Registry v2, with the anonymous token flow ghcr.io and Docker Hub
-// use), their image digests, and their release notes from GitHub. Cached for 10 minutes like the
-// agents' release channels (release-cache.ts): the console polls, and GitHub allows 60 anonymous
-// requests an hour.
-import { errorMessage } from "./log.ts";
+// use), their image digests, and their release notes from GitHub (github-releases.ts). Cached for 10
+// minutes like the agents' releases (release-cache.ts): the console polls, and GitHub allows 60
+// anonymous requests an hour.
+import { readBoundedText } from "./bounded-body.ts";
+import { createGitHubReleases, type GitHubReleases, type ReleaseNotes } from "./github-releases.ts";
+import { errorMessage, type Logger } from "./log.ts";
+
+export type { ReleaseNotes } from "./github-releases.ts";
 
 const TTL_MS = 10 * 60_000;
 const RETRY_MS = 60_000;
 const TIMEOUT_MS = 10_000;
-/** Versions offered, newest first (older ones are of no use for an update). */
-const VERSIONS_SHOWN = 8;
-/** Release notes longer than this are cut (the console links to the full page). */
-const NOTES_CHARS = 12_000;
+/** The tag list (n=1000) and a token answer are small; anything larger than this is refused while it streams in. */
+const MAX_BYTES = 4 * 1024 * 1024;
+/** Versions offered to install, newest first, as for the agents (agent-overview.ts RELEASES_OFFERED). */
+export const RELEASES_OFFERED = 5;
+/** The newest tags whose digests are read: those offered, and enough to find what `latest` points at. */
+const VERSIONS_CHECKED = 8;
 const STABLE_TAG = /^v?(\d+)\.(\d+)\.(\d+)$/;
 const MANIFEST_TYPES = [
   "application/vnd.oci.image.index.v1+json",
@@ -19,16 +25,6 @@ const MANIFEST_TYPES = [
   "application/vnd.oci.image.manifest.v1+json",
   "application/vnd.docker.distribution.manifest.v2+json",
 ].join(", ");
-
-export interface ReleaseNotes {
-  title: string;
-  url: string;
-  publishedAt: number | null;
-  /** Markdown, cut at NOTES_CHARS. */
-  body: string;
-  /** The notes announce breaking changes. */
-  breaking: boolean;
-}
 
 export interface EngineRelease {
   version: string;
@@ -41,6 +37,7 @@ export interface EngineRelease {
 
 export interface EngineReleaseList {
   repository: string;
+  /** withLocalVersions: the newest releases, and the versions the LLM server has an image of, newest first. */
   releases: EngineRelease[];
   checkedAt: number | null;
   error: string | null;
@@ -116,7 +113,7 @@ export function createRegistryClient(fetchImpl: typeof fetch = fetch): RegistryC
 
   return {
     async tags(repository) {
-      const body = (await (await get(repository, "tags/list?n=1000")).json()) as { tags?: unknown };
+      const body = (await boundedJson(await get(repository, "tags/list?n=1000"), "tag list")) as { tags?: unknown };
       return Array.isArray(body.tags) ? body.tags.filter((tag): tag is string => typeof tag === "string") : [];
     },
     async digest(repository, tag) {
@@ -125,6 +122,17 @@ export function createRegistryClient(fetchImpl: typeof fetch = fetch): RegistryC
       return digest !== null && /^sha256:[0-9a-f]{64}$/.test(digest) ? digest : null;
     },
   };
+}
+
+/** A registry answer's JSON, refused when larger than MAX_BYTES or not JSON. */
+async function boundedJson(response: Response, what: string): Promise<unknown> {
+  const text = await readBoundedText(response, MAX_BYTES);
+  if (text === null) throw new EngineReleaseError(`the registry's ${what} is larger than ${MAX_BYTES / 1024 / 1024} MiB`);
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    throw new EngineReleaseError(`the registry's ${what} is not JSON`);
+  }
 }
 
 /** Follows a `WWW-Authenticate: Bearer realm=...,service=...,scope=...` challenge anonymously. */
@@ -143,43 +151,41 @@ async function anonymousToken(fetchImpl: typeof fetch, challenge: string): Promi
     await response.body?.cancel();
     throw new EngineReleaseError(`the registry's token service answered ${response.status}`);
   }
-  const body = (await response.json()) as { token?: unknown; access_token?: unknown };
+  const body = (await boundedJson(response, "token answer")) as { token?: unknown; access_token?: unknown };
   const token = typeof body.token === "string" ? body.token : body.access_token;
   if (typeof token !== "string" || token === "") throw new EngineReleaseError("the registry's token service sent no token");
   return token;
 }
 
-/** GitHub releases (anonymous: 60 requests an hour, hence the cache). */
-export function createNotesClient(fetchImpl: typeof fetch = fetch): NotesClient {
+/** The engine's stable releases (X.Y.Z tags, no prereleases) on GitHub, by version. */
+export function createNotesClient(github: GitHubReleases = createGitHubReleases()): NotesClient {
   return {
     async notes(repo) {
-      const response = await fetchImpl(`https://api.github.com/repos/${repo}/releases?per_page=30`, {
-        headers: { accept: "application/vnd.github+json", "user-agent": "workspace-portal", "x-github-api-version": "2022-11-28" },
-        signal: AbortSignal.timeout(TIMEOUT_MS),
-      });
-      if (!response.ok) {
-        await response.body?.cancel();
-        throw new EngineReleaseError(`GitHub answered ${response.status} for ${repo}'s releases`);
-      }
-      const releases = (await response.json()) as unknown;
       const notes = new Map<string, ReleaseNotes>();
-      if (!Array.isArray(releases)) return notes;
-      for (const release of releases as Array<Record<string, unknown>>) {
-        const tag = typeof release.tag_name === "string" ? release.tag_name : "";
-        if (!STABLE_TAG.test(tag) || release.draft === true || release.prerelease === true) continue;
-        const body = typeof release.body === "string" ? release.body : "";
-        const published = typeof release.published_at === "string" ? Date.parse(release.published_at) : NaN;
-        notes.set(tag.replace(/^v/, ""), {
-          title: typeof release.name === "string" && release.name !== "" ? release.name : tag,
-          url: typeof release.html_url === "string" && release.html_url.startsWith("https://github.com/") ? release.html_url : `https://github.com/${repo}/releases`,
-          publishedAt: Number.isFinite(published) ? published : null,
-          body: body.length > NOTES_CHARS ? `${body.slice(0, NOTES_CHARS)}\n\n…` : body,
-          breaking: /BREAKING CHANGE/i.test(body),
-        });
+      for (const release of await github.list(repo)) {
+        if (STABLE_TAG.test(release.tag) && !release.prerelease) notes.set(release.tag.replace(/^v/, ""), release.notes);
       }
       return notes;
     },
   };
+}
+
+/**
+ * The versions the engine card lists, newest first: `releases` (the newest in the registry), plus every version in
+ * `local` (what runs, the images on the LLM server) that isn't among them, with its local digest and the notes GitHub
+ * has for it.
+ */
+export function withLocalVersions(
+  releases: readonly EngineRelease[],
+  local: ReadonlyArray<{ version: string | null; digest: string | null }>,
+  notes: ReadonlyMap<string, ReleaseNotes>,
+): EngineRelease[] {
+  const listed = new Map(releases.map((release) => [release.version, release]));
+  for (const { version, digest } of local) {
+    if (version === null || listed.has(version)) continue;
+    listed.set(version, { version, digest, latest: false, notes: notes.get(version) ?? null });
+  }
+  return [...listed.values()].sort((a, b) => compareVersions(b.version, a.version));
 }
 
 export interface EngineReleasesOptions {
@@ -188,13 +194,20 @@ export interface EngineReleasesOptions {
   /** GitHub owner/name of the release notes; "" = none. */
   notesRepo: string;
   now?: () => number;
+  log?: Logger;
 }
 
-/** The engine's releases, cached; a failed check keeps the last good list and is retried after a minute. */
+/**
+ * The engine's releases, cached; a failed check keeps the last good list and is retried after a minute. Offered: the
+ * RELEASES_OFFERED newest stable tags no newer than the one `latest` points at (a version pushed but not yet made
+ * latest is not offered).
+ */
 export class EngineReleases {
   readonly #options: EngineReleasesOptions;
   readonly #now: () => number;
   #list: EngineReleaseList | null = null;
+  /** Every stable release's notes from the last answer GitHub gave, for the versions on the LLM server too. */
+  #notes: ReadonlyMap<string, ReleaseNotes> = new Map();
   #attemptedAt: number | null = null;
   #checking: Promise<void> | null = null;
 
@@ -203,13 +216,19 @@ export class EngineReleases {
     this.#now = options.now ?? Date.now;
   }
 
-  async list(repository: string, options: { refresh?: boolean } = {}): Promise<EngineReleaseList> {
+  /** The releases, with the versions in `local` (withLocalVersions). */
+  async list(
+    repository: string,
+    options: { refresh?: boolean } = {},
+    local: ReadonlyArray<{ version: string | null; digest: string | null }> = [],
+  ): Promise<EngineReleaseList> {
     const cached = this.#list?.repository === repository ? this.#list : null;
     const now = this.#now();
     const fresh = cached?.checkedAt != null && now - cached.checkedAt < TTL_MS;
     const retryDue = this.#attemptedAt === null || now - this.#attemptedAt >= RETRY_MS || cached === null;
     if (options.refresh || (!fresh && retryDue)) await this.#check(repository);
-    return this.#list?.repository === repository ? this.#list : { repository, releases: [], checkedAt: null, error: null };
+    const list = this.#list?.repository === repository ? this.#list : { repository, releases: [], checkedAt: null, error: null };
+    return { ...list, releases: withLocalVersions(list.releases, local, this.#notes) };
   }
 
   /** A version's digest straight from the registry (an update must not act on a stale list). */
@@ -233,24 +252,25 @@ export class EngineReleases {
     const previous = this.#list?.repository === repository ? this.#list : null;
     try {
       const tags = await registry.tags(repository);
-      const versions = tags.filter(isStableVersion).sort((a, b) => compareVersions(b, a)).slice(0, VERSIONS_SHOWN);
+      const versions = tags.filter(isStableVersion).sort((a, b) => compareVersions(b, a)).slice(0, VERSIONS_CHECKED);
       const [digests, latest, notesByVersion] = await Promise.all([
         Promise.all(versions.map((version) => registry.digest(repository, version))),
         tags.includes("latest") ? registry.digest(repository, "latest") : Promise.resolve(null),
         notesRepo === "" ? Promise.resolve(new Map<string, ReleaseNotes>()) : notes.notes(notesRepo).catch((error: unknown) => errorMessage(error)),
       ]);
-      const notesMap = typeof notesByVersion === "string" ? null : notesByVersion;
+      // Notes that couldn't be fetched this time (GitHub down, or its anonymous limit of 60 an hour reached): last
+      // time's. That is no registry failure, so it isn't the list's error: the versions are fresh and updates work.
+      if (typeof notesByVersion !== "string") this.#notes = notesByVersion;
+      else this.#options.log?.warn("could not read the LLM engine's release notes; keeping the last ones", { error: notesByVersion });
+      const latestAt = latest === null ? -1 : digests.indexOf(latest);
       this.#list = {
         repository,
-        releases: versions.map((version, index) => ({
-          version,
-          digest: digests[index] ?? null,
-          latest: latest !== null && digests[index] === latest,
-          // Notes that couldn't be fetched this time keep last time's.
-          notes: notesMap ? (notesMap.get(version) ?? null) : (previous?.releases.find((r) => r.version === version)?.notes ?? null),
-        })),
+        releases: versions
+          .map((version, index) => ({ version, digest: digests[index] ?? null, latest: index === latestAt, notes: this.#notes.get(version) ?? null }))
+          .slice(Math.max(0, latestAt))
+          .slice(0, RELEASES_OFFERED),
         checkedAt: this.#now(),
-        error: typeof notesByVersion === "string" ? `release notes: ${notesByVersion}` : null,
+        error: null,
       };
     } catch (error) {
       this.#list = { repository, releases: previous?.releases ?? [], checkedAt: previous?.checkedAt ?? null, error: errorMessage(error) };

@@ -6,30 +6,38 @@ DeepSeek Harness web UI (`dsh`), with a shell, files, a headless browser, web se
 driven by a model you host.
 
 - Username/password sign-in. One admin creates the users (first, middle and last name).
+- **Two workspaces per user, one running at a time.** **Private** has no internet access of its own, for
+  sensitive work; **Online** reaches the public internet, for work that needs it (installing packages, testing
+  against a CDN or an API). The user chooses one at every Start. The two share nothing: not files, accounts,
+  networks or browser storage, so what runs in Online can't touch the Private files.
 - **One container per user**, shared by all of that user's sign-ins (two browsers, two devices: same workspace).
 - **One harness per user.** Each user picks Qwen Code or DeepSeek Harness in Settings (Qwen Code by default)
-  and presses Start; both work on the same files. Every new session starts at low reasoning effort; the user
-  can raise it inside that session.
-- It starts when the user opens it. It stops when the user signs out, or after 30 minutes without use, **but
+  and presses Start; both work on the same files (of the workspace that runs). Every new session starts at
+  low reasoning effort; the user can raise it inside that session.
+- It starts when the user presses Start and confirms Private or Online. It stops when the user signs out, or
+  after 30 minutes without use, **but
   never while the agent is working**. A long task keeps running after the user leaves, and the workspace stops
   once the task is done.
 - The admin sees every workspace's state and can open any of them, even while the user is in it.
-- **Live monitoring and updates** for the admin: both servers' CPU, GPU, memory, bandwidth and power twice a
-  second, every LLM session's read and write speed, and one-click updates of the agents and of the LLM engine
-  (gufo), with automatic rollback.
-- **Locked down by default:** a workspace can reach one address, the portal's gateway, which gives it the
-  model, web search and a reader for public web pages. It has no internet access of its own, can't reach
-  your LAN or other workspaces, and has nothing mounted except the user's own files.
+- **Live monitoring and updates** for the admin: both servers' CPU, GPU, memory, bandwidth, power, network and
+  disks twice a second, their energy use per day with its cost, every LLM session's read and write speed, and
+  one-click updates of the agents and of the LLM engine (gufo), with automatic rollback.
+- **Locked down by default:** a Private workspace can reach one address, the portal's gateway, which gives it
+  the model, web search and a reader for public web pages. It has no internet access of its own. An Online
+  workspace reaches the gateway and the public internet (any TCP port, DNS through two public resolvers).
+  Neither can reach your LAN, the host or another workspace, and each has nothing mounted except that
+  workspace's own files. The admin can turn Online off per user or for the whole portal.
 
 ```
  browser ──:3000──▶ web (Next.js)  ── sign-in, admin console, starts/stops workspaces
     │                   │ control API (127.0.0.1:4002)
-    └──:3100+id──▶ gateway ────────── Docker ──▶ wp-ws-<id>  (Qwen Code or DeepSeek Harness, one per user)
-                        ▲                              │
-                        └─ 172.29.0.1:4001 ◀───────────┘ the only address a workspace can reach
-                               ├─ /llm/v1    ──▶ LLM_UPSTREAM_URL (your model server)
-                               └─ /mcp/search ─┬▶ searxng container (public search engines: web_search)
-                                               └▶ reader container  (public web pages: read_page)
+    ├──:3100+id──▶ gateway ────────── Docker ──▶ wp-ws-<id>  Private (Qwen Code or DeepSeek Harness)
+    └──:3300+id──▶   │  ▲                     ─▶ wp-wo-<id>  Online, or this one: one per user at a time
+                     │  ├─ 172.29.0.1:4001 ◀── Private: the only address it can reach
+                     │  └─ 172.28.0.1:4001 ◀── Online: this, and the public internet (TCP, DNS) through NAT
+                     ├─ /llm/v1    ──▶ LLM_UPSTREAM_URL (your model server)
+                     └─ /mcp/search ─┬▶ searxng container (public search engines: web_search)
+                                     └▶ reader container  (public web pages: read_page)
 ```
 
 ## Contents
@@ -57,16 +65,26 @@ driven by a model you host.
 Each item is enforced by the gateway or the host, not by the agent. `deploy/verify-isolation.sh` checks the
 network and container items on a live install.
 
-**Network: one address, three services**
-- Workspaces sit on a Docker *internal* network: Docker gives it no route off the host. There is no DNS for
-  internet names, no NAT and no IPv6.
+**Two workspaces per user**
+- Every user has a Private and an Online workspace, and at most one of them runs. Each has its own folder,
+  its own UID (`WORKSPACE_UID_BASE + N` and `ONLINE_UID_BASE + N`), its own container, network, browser
+  origin and token, and its own listener at the gateway. Neither can see the other's files, reach the other's
+  container, or read what the other left in the browser. Files reach the other kind only if the user carries
+  them over (download from one, upload to the other).
+- Online is meant for less sensitive work: anything in it that is misconfigured or compromised can send its
+  files to the internet. Private is for the rest.
+
+**Network of a Private workspace: one address, three services**
+- Private workspaces sit on a Docker *internal* network: Docker gives it no route off the host. There is no
+  DNS for internet names, no NAT and no IPv6.
 - Inter-container traffic is disabled, so a workspace can't reach another workspace.
 - The one address a workspace can reach is the host side of that network (`172.29.0.1`). A host firewall
   (`deploy/firewall.sh`: an nftables table of its own, `inet workspace_portal`, loaded at boot by
   `workspace-portal-firewall.service`) drops every connection from the workspace network except the one to
   the gateway's service port. SSH, the portal, the LLM server and SearXNG on the host are all unreachable,
   and nothing from the workspace network is forwarded anywhere. A drop in nftables is final, so rules that
-  Docker, firewalld or Tailscale add elsewhere can't reopen it.
+  Docker, firewalld or Tailscale add elsewhere can't reopen it. Docker requires that unit: should the rules
+  fail to load at boot, Docker and every container stay down rather than run without them.
 - On that port the gateway serves only:
   - the model: chat completions, completions, embeddings and the model list under `/llm/v1/`, forwarded to
     `LLM_UPSTREAM_URL` with your real API key added (any other path of the model server is refused);
@@ -106,16 +124,41 @@ network and container items on a live install.
   Harness workspace the only ones came from the headless browser's Chromium asking for Google hosts; Docker's
   resolver answers those with a failure and nothing leaves the host.
 
-**Files: only the user's own**
-- User N's workspace runs as its own UID (`WORKSPACE_UID_BASE + N`, 200000+N by default). That UID owns two
-  directories, the user's home and workspace, and nothing else on the host.
+**Network of an Online workspace: the public internet, nothing private**
+- Online workspaces sit on a network of their own (`172.28.0.0/16`, bridge `br-wonline`) with NAT to the
+  internet, inter-container traffic off and no IPv6.
+- The host firewall's chains for it: to the host, only the gateway's service port on that network's address
+  (`172.28.0.1`); out, DNS to its two resolvers (`ONLINE_DNS_1`, `ONLINE_DNS_2`, public ones: the gateway and
+  the installer refuse others) and new TCP connections to any port of a public address. Every private,
+  link-local, carrier-NAT and other reserved range is dropped: your LAN, the host's other addresses, the
+  Private network, SearXNG, the reader and the other Online workspaces are all out of reach. So are, even at
+  public addresses, the networks this host is on, its router, the LLM server and the other servers the portal
+  talks to (portal-hostd, an outside SearXNG or reader) and anything in `FIREWALL_NEVER_REACH`: the installer
+  resolves them into the firewall's `never` set (re-run it when one of them changes address). Those drops come
+  before DNS is let through. No other UDP, no ICMP of its own, and nothing can open a connection to it from
+  outside.
+- The gateway runs Online workspaces only while those rules are loaded. It checks every few seconds (and
+  right before each start) with a marker the rules carry; without them it refuses Online starts and stops
+  every Online workspace, and Private ones run on.
+- The gateway gives it the same service port as a Private one (the model, `web_search`, `read_page`), with
+  its own state: what an Online workspace was shown never opens a page for the Private one. The agents'
+  internet features stay off as in Private; the agent reaches the internet through its shell and tools.
+- `ONLINE_WORKSPACES=off` in `.env` turns Online off for everyone (the gateway then creates no Online network
+  and stops any Online workspace it finds); the admin can also refuse it per user.
+
+**Files: only the workspace's own**
+- User N's Private workspace runs as its own UID (`WORKSPACE_UID_BASE + N`, 200000+N by default), the Online
+  one as another (`ONLINE_UID_BASE + N`, 2000000000+N). Each UID owns two directories, that workspace's home and
+  workspace, and nothing else on the host; no `/etc/subuid` range may cover it (the installer refuses that, and
+  `verify-isolation.sh` checks it again, with the folders' owners and modes). Only user ids below
+  `AGENT_PORT_COUNT` get a workspace at all.
 - The container's root filesystem is read-only. Writable are `/home/user`, `/workspace` (the user's storage)
   and an in-memory `/tmp`.
 - The rest is mounted read-only and is a per-user copy:
   - the running agent's settings (`/etc/workspace-portal/qwen/` or `/etc/workspace-portal/dsh/`);
   - `/etc/passwd` and `/etc/group`.
 
-  No directory, socket or file is shared between workspaces.
+  No directory, socket or file is shared between workspaces, not even between a user's two.
 - A workspace gets files only two ways: uploads into its own storage, and what the agent produces from the
   model and search results.
 
@@ -141,19 +184,30 @@ network and container items on a live install.
   lock an account for 15 minutes.
 
 **Browser isolation**
-- Every workspace is served on its own port (`AGENT_PORT_BASE + user id`), so it is a separate browser origin.
-  Its storage, service worker and scripts can't see another user's workspace, even in the same browser.
+- Every workspace is served on its own port (`AGENT_PORT_BASE + user id` for Private,
+  `ONLINE_AGENT_PORT_BASE + user id` for Online), so it is a separate browser origin. Its storage, service
+  worker and scripts can't see another workspace, even in the same browser: a page the agent built in Online,
+  with whatever scripts it loads, can't read the Private one's. Each port reaches only its own kind's
+  container, with a browser token of its own.
+- The ports of one host are one *site* to the browser, so it sends the portal's session cookie along with
+  whatever a page on another port asks of a workspace's port. The gateway refuses every such request but the
+  portal's own frame of the workspace: a page on the Online origin can't get as much as an image request
+  through to the Private agent.
 - A session can use only the workspace it has open. An admin's session can use another user's workspace only
   after opening it from the admin console, which writes to the audit log.
 
 **Inside the workspace**
-- Qwen Code asks before it runs commands or edits files, unless the user picks another approval mode.
+- Qwen Code starts each Web Shell session in Plan mode: until the user approves its plan, the agent only
+  reads, and anything else needs the user's approval. Its commands and edits then go through the session's
+  approval mode: by default Classifier Approval (a model call approves safe tool calls and blocks or asks
+  about risky ones); the user can pick Ask Approval or a more permissive mode.
 - DeepSeek Harness runs the agent's commands in a Landlock sandbox. Without asking, they may write only
   `/workspace`, `/tmp` and the home directory's caches. Anything else, including dsh's own settings and shell
   start-up files, needs the user's approval. The terminal in the UI is the user's own and is not sandboxed.
 - Either way the container is the boundary: whatever runs inside it has the limits above.
 
-**What the admin can do:** read and use every workspace. That is by design.
+**What the admin can do:** read and use every workspace, of both kinds, and erase a kind's files. That is by
+design, and audited.
 
 ## Requirements
 
@@ -177,15 +231,18 @@ sudo bash deploy/install.sh
 The installer is idempotent; re-run it after pulling changes (see [Updating the portal](#updating-the-portal)).
 It:
 
-1. checks the host: Docker version, `nft`, and that workspace UIDs don't overlap a range in `/etc/subuid`;
-2. creates `.env` from `.env.example` (mode 600), generating `GATEWAY_CONTROL_SECRET` and an `ADMIN_PASSWORD`;
+1. checks the host: Docker version, `nft`, and that the workspace UIDs of both kinds don't overlap a range in
+   `/etc/subuid`, and checks the Online settings (ports and UIDs apart from Private's, addresses, the switch);
+2. creates `.env` from `.env.example` (mode 600), generating `GATEWAY_CONTROL_SECRET` and an `ADMIN_PASSWORD`,
+   and records the host's time zone as `TZ` (the daily totals begin at local midnight);
 3. creates `PORTAL_DATA_DIR` (`/srv/workspace-portal`) with the ownership model above, plus the SELinux labels;
 4. installs the example Qwen Code settings into `PORTAL_DATA_DIR/config/qwen/` (never overwriting yours);
 5. builds a workspace image for each agent in `WORKSPACE_AGENTS` at its current version (`QWEN_CODE_VERSION`,
    `DSH_VERSION` until an admin picks another; a few minutes each the first time) and the web, gateway,
    SearXNG and page reader images;
-6. installs and starts the firewall unit (workspaces, SearXNG and the page reader), and opens ports 3000 and
-   3101–3299 to your LAN (and to Tailscale, if present) in firewalld or ufw;
+6. installs and starts the firewall unit (both workspace networks, SearXNG and the page reader), and opens
+   ports 3000, 3101–3299 (Private workspaces) and 3301–3499 (Online) to your LAN (and to Tailscale, if
+   present) in firewalld or ufw;
 7. checks that no other program holds the two loopback ports the stack publishes (SearXNG's and the
    reader's), generates SearXNG's key, starts the stack with `docker compose up -d`, waits for the web app,
    SearXNG and the reader to answer, and prints the URL.
@@ -195,9 +252,9 @@ the tree, keeping the server's `.env` and nothing else: a file of the project th
 (`searxng/settings.yml`, say) is replaced by yours.
 
 Edit `.env` before the first install if you need different ports, paths or limits. Every variable is
-documented in `.env.example`. Changing a port or a network setting (`WORKSPACE_*`, `READER_*` or `SEARXNG_*`
-subnet, bridge or DNS server) later needs a re-run of the installer, which regenerates the firewall from
-them; other settings need only `docker compose up -d`.
+documented in `.env.example`. Changing a port or a network setting (`WORKSPACE_*`, `ONLINE_*`, `READER_*` or
+`SEARXNG_*` subnet, bridge or DNS server) later needs a re-run of the installer, which regenerates the
+firewall from them; other settings need only `docker compose up -d`.
 
 **Starting, stopping and restarting the web server.** Run these in the project directory on the server, with
 sudo unless you are in the `docker` group:
@@ -424,10 +481,11 @@ sudo bash deploy/qwen-config.sh check     # validate the installed files
 They are stored in `PORTAL_DATA_DIR/config/qwen/` (root-owned; workspaces never see this directory).
 You can upload one file or both; the name decides which is which.
 
-**When they apply.** At every workspace start the gateway renders a private copy for that user into
-`PORTAL_DATA_DIR/users/<id>/system/qwen/` and mounts it read-only. New settings therefore apply at each
-workspace's next start. To apply them right away, stop the running workspaces in the admin console; each one
-starts again when its user opens it. An invalid file makes starts fail with a message naming it, shown in the
+**When they apply.** At every workspace start the gateway renders a private copy for that user and kind into
+`PORTAL_DATA_DIR/users/<id>/<kind>/system/qwen/` (`<kind>` is `private` or `online`; the two copies differ
+only in the gateway address) and mounts it read-only. New settings therefore apply at each workspace's next
+start. To apply them right away, stop the running workspaces in the admin console; each user starts theirs
+again from the portal. An invalid file makes starts fail with a message naming it, shown in the
 portal and in `docker compose logs gateway`.
 
 **What the portal always enforces** on top of your files, because the isolation depends on it:
@@ -449,6 +507,23 @@ Users keep their own Qwen Code settings, chats and memory in their home director
 new session, whatever a user picked last time; a user who raises it does so for that session only. A
 `model.reasoningEffort` in your `settings.json` (system scope) wins over this default.
 
+**The Web Shell, trimmed** (built into the image by `workspace-image/qwen/trim-web-shell.mjs`, since Qwen Code
+has no settings for it):
+
+- The left rail keeps Home and the sidebar toggle. Gone: Activity, Plugins, Channels, Channel events, Live,
+  Scheduled Tasks, PR watches, Goals and the "More" menu (with the Web Shell's own Settings page, Session
+  Overview, Split View, Daemon Status, Local files and Use this computer). The chat header loses Mobile access.
+  Files, Terminal and Web preview stay in the right panel.
+- Every new session starts with **Plan mode** on: the agent plans first and works only after the user approves
+  the plan, then in the approval mode the composer shows. A user can switch it off for a session in the
+  composer's + menu. This is the Web Shell only: `qwen` in the terminal and `qwen -p` start as before.
+
+When a Qwen Code version no longer fits a part of this, the image still builds and that part stays as shipped;
+the build log says which (`trim-web-shell: warning: ...`). The rail and header items are also hidden by a
+stylesheet keyed on the Web Shell's markup, which outlasts most changes. A change to the script applies at the
+next build: rebuild the current version with `sudo bash deploy/update-image.sh qwen --refresh` or in Admin >
+Updates.
+
 ### DeepSeek Harness
 
 DeepSeek Harness takes its models from the same files (see [Connect the model](#connect-the-model)), with
@@ -460,7 +535,7 @@ the user's own settings, so the UI shows those settings as read-only:
   `sudo bash deploy/update-image.sh dsh --refresh`. The image build also switches off the web and plugin
   manager tools inside dsh's own agent presets (`workspace-image/dsh/adapt-presets.mjs`), so all four
   (Standard, PTC, Minimal, Cordis) work offline.
-- `portal.patch.yml`, rendered by the gateway at every start into `PORTAL_DATA_DIR/users/<id>/system/dsh/`:
+- `portal.patch.yml`, rendered by the gateway at every start into `PORTAL_DATA_DIR/users/<id>/<kind>/system/dsh/`:
   the models, the default model and the MCP servers.
 
 Users keep their own sessions, settings and skills in `~/.dsh` and `~/.agents`.
@@ -468,9 +543,10 @@ Users keep their own sessions, settings and skills in `~/.dsh` and `~/.agents`.
 ## Server monitoring and LLM engine updates
 
 A small daemon, `portal-hostd` (Python standard library only, in `hostd/`), runs on each server. It reads the
-hardware only while an admin has the Overview open, and costs about 1 ms of CPU per reading. On the LLM server
-it also updates the engine container (the gufo quadlet) when the admin asks. Details:
-[hostd/README.md](hostd/README.md).
+hardware only while an admin has Admin > Usage open, at about 1 ms of CPU per reading. All the time it keeps
+only a running total of energy and network traffic (one read every 2 s, under 0.05% of one core), from which
+the gateway records each server's energy use and traffic per day. On the LLM server it also updates the
+engine container (the gufo quadlet) when the admin asks. Details: [hostd/README.md](hostd/README.md).
 
 - **Portal server:** `deploy/install.sh` installs it and its token by itself. It listens on 127.0.0.1 only.
 - **LLM server:** install it there once, from a copy of this repository:
@@ -492,18 +568,21 @@ it also updates the engine container (the gufo quadlet) when the admin asks. Det
   sudo docker compose up -d
   ```
 
-**Admin > Overview** then shows, twice a second: each server's total power draw, CPU and GPU usage, clocks,
-temperatures and power, memory used and free (GiB and %), memory bandwidth and fans; every LLM session with its
+**Admin > Usage** then shows, twice a second: each server's total power draw, CPU and GPU usage, clocks,
+temperatures and power, memory used and free, memory bandwidth and fans, network upload and download (and the
+day's totals), disk read and write and the free space; every LLM session with its
 read speed (prompt tokens per second) and write speed (answer tokens per second), with the totals charted over
 the last minute; the requests waiting; the last finished requests with the engine's own timings; and the running
-workspaces. Readings a machine can't provide show "—".
+workspaces. Readings a machine can't provide show "—". It also keeps both servers' energy per day with its cost
+at the electricity price, for good.
 
-**Admin > Updates > LLM engine** lists the engine's releases with their notes ("Breaking changes" marked) and
-updates it in three steps: download the new image, wait for running LLM requests to finish (new ones wait in
-the portal's queue, they don't fail; up to `ENGINE_DRAIN_MINUTES`, 15, or "Restart now"), then restart the
-engine and check that it reports the new version. If it doesn't come up, the previous version is restored by
-itself. Roll back and removing old images are there too. Without `HOSTD_LLM_*` the page says how to set it up;
-updating by hand on the LLM server still works as before.
+**Admin > Updates > LLM engine** lists the engine's latest five releases and the images on the LLM server, each
+with its release notes ("Breaking changes" marked), and switches to any of them in three steps: download its
+image (unless it is on the LLM server already), wait for running LLM requests to finish (new ones wait in the
+portal's queue, they don't fail; up to `ENGINE_DRAIN_MINUTES`, 15, or "Restart now"), then restart the engine and
+check that it reports that version. If it doesn't come up, the previous version is restored by itself. Going back
+to an older version works the same way, and images that don't run can be removed. Without `HOSTD_LLM_*` the page
+says how to set it up; updating by hand on the LLM server still works as before.
 
 ## Updating the portal
 
@@ -526,6 +605,12 @@ sudo bash deploy/verify-isolation.sh
   when no agent is working (the admin console shows which workspaces are).
 - A workspace keeps the image it started with. It gets a rebuilt image at its next start.
 - `verify-isolation.sh` must end with `failed 0`.
+- **From a version before Online workspaces:** every user's files become their Private workspace. The
+  gateway moves `users/<id>/home` and `workspace` into `users/<id>/private/` (a rename: nothing is copied,
+  owners and SELinux labels stay) for every user with no workspace running when it starts, and for the others
+  at their next start; a workspace that runs through the update keeps running as Private. Online is on for
+  everyone unless you set `ONLINE_WORKSPACES=off` in `.env` first (the installer writes `ONLINE_WORKSPACES=on`
+  when the line is missing), and the installer opens the Online ports (3301–3499) next to the Private ones.
 
 What this does not update:
 
@@ -533,7 +618,8 @@ What this does not update:
   [Updating the workspace images](#updating-the-workspace-images)).
 - **portal-hostd on the LLM server.** After a `git pull` there, run its installer again (`sudo bash
   hostd/install.sh llm --portal PORTAL_IP`); it keeps its token and restarts only if something changed. The
-  portal server's copy is updated by `deploy/install.sh`.
+  portal server's copy is updated by `deploy/install.sh`. Until it is updated, the LLM server's network and
+  disk readings and its energy per day stay empty.
 - **Debian packages inside the images**, Chromium among them. The base images are pinned by digest, so a
   build repeats itself. `sudo bash deploy/update-image.sh --refresh` rebuilds the workspace images with
   today's packages; the pins of the other images move with the repository.
@@ -556,15 +642,15 @@ with the tools and Chromium) and tagged `workspace-portal/workspace:<agent>-<ver
 last chosen in the admin console or with `update-image.sh` (kept in `PORTAL_DATA_DIR/config/agent-versions.env`),
 else `QWEN_CODE_VERSION` and `DSH_VERSION` from `.env`, the defaults.
 
-**In the admin console** (Admin > Updates), each agent shows its current version, the latest release and its
-other release channels on npm (next, preview, nightly, ...), and its images on the server. Choose a version or a
-channel to update to: the gateway builds that image on the server, checks that it really contains that version
-(`qwen --version` or `dsh --version`, in a container without network) and makes it the current version. The
-build output shows live, and the update can be cancelled; a failed or cancelled update changes nothing. One
-update runs at a time. Choosing an older version rolls back: if its image is still on the server, it is checked
-and used as it is, without a build or npm; a rebuild without the cache picks up new Debian packages (Chromium,
-...). Running workspaces keep their image until they stop; every new start uses the new version. Images that are
-not current and that no container uses can be removed there too.
+**In the admin console** (Admin > Updates), each agent shows its current version and its package images: the
+latest five stable releases on npm (with their dates, GitHub release notes and "Breaking changes" when the notes
+say so), and every version whose image is on the server. Build one: the gateway builds that image on the server,
+checks that it really contains that version (`qwen --version` or `dsh --version`, in a container without network)
+and makes it the current version. The build output shows live, and the update can be cancelled; a failed or
+cancelled update changes nothing. One update runs at a time. A version whose image is still on the server (an
+older one, to go back) is used as it is: checked, without a build or npm. Rebuild the current version to pick up
+new Debian packages (Chromium, ...) without the cache. Running workspaces keep their image until they stop; every
+new start uses the new version. Images that are not current and that no container uses can be removed there too.
 
 The console builds from the project's `workspace-image/` directory (mounted read-only into the gateway), so an
 edit there applies to the next build in the console, as with `update-image.sh`. An image that is already on the
@@ -617,17 +703,24 @@ an update in the admin console, run `sudo bash deploy/verify-isolation.sh` yours
 ## Using it
 
 1. **Admin → New user** creates an account with a one-time temporary password. The user chooses their own at
-   first sign-in.
-2. Signing in opens **Home**: the workspace's state and one button. **Start** launches the user's harness
-   (chosen in **Settings**, Qwen Code by default) in a few seconds and opens it; **Open workspace** goes back to
-   a running one. The page loads the agent from that user's own port (`3100 + user id`), which must be
-   reachable. **Stop** (in the workspace's bar or on Home) asks first only if the agent is working or the
-   workspace is open elsewhere, then returns to Home.
-3. **One container per user, one harness.** More sign-ins (another tab, browser or device) attach to the same
+   first sign-in. The **Online workspace** switch (on by default) lets them use the Online workspace.
+2. **Two workspaces per user, one running at a time:** **Private** has no internet access (only the portal's web
+   search and page reader reach the internet for it), **Online** reaches the public internet. Each has its own
+   files, container, network and browser origin; they never share files and can't reach each other.
+3. Signing in opens **Home**: the workspace card with a **Private | Online** switch (Online by default) and
+   **Start**. Start asks first, saying what the chosen kind means; **Use Private** / **Use Online** in that
+   dialog flips to the other one, **Start Online** / **Start Private** starts it with the user's harness (chosen
+   in **Settings**, Qwen Code by default) in a few seconds and opens it. Online can't be chosen (its tooltip says
+   why) when the admin barred the user or `ONLINE_WORKSPACES=off`. While a workspace runs, its kind shows as a
+   badge (on Home and in the workspace's bar) and **Open workspace** goes back to it. The page loads the agent
+   from that user's own port for that kind (Private `3100 + user id`, Online `3300 + user id` by default), which
+   must be reachable. **Stop** (in the workspace's bar or on Home) asks first only if the agent is
+   working or the workspace is open elsewhere, then returns to Home; the other kind can start after that.
+4. **One container per user, one harness.** More sign-ins (another tab, browser or device) attach to the same
    container and see the same sessions live. Changing the harness in Settings applies at the next Start, or
-   right away with **Restart now**; files are kept. Settings also holds the password and the dark or light
-   theme.
-4. **When it stops:**
+   right away with **Restart now** (the same kind again); files are kept. Settings also holds the password and
+   the dark or light theme.
+5. **When it stops:**
    - after `IDLE_TIMEOUT_MINUTES` (30) without use, when nothing is running;
    - soon after the user signs out on every device, when nothing is running;
    - when an admin stops it (immediately; the dialog warns if the agent is working).
@@ -640,13 +733,16 @@ an update in the admin console, run `sudo bash deploy/verify-isolation.sh` yours
    - an approval prompt nobody answers doesn't keep the workspace up: Qwen Code declines it after
      `IDLE_TIMEOUT_MINUTES`; a DeepSeek Harness turn that only waits for an answer doesn't count as work;
    - after `MAX_BUSY_HOURS` (24) without anyone using the workspace, work no longer keeps it running.
-5. **Admin console:** **Overview** is the live view of both servers, the LLM sessions and the running
-   workspaces (see [Server monitoring](#server-monitoring-and-llm-engine-updates)). **Users** lists everyone with
-   their workspace and harness; open, stop, deactivate, reset or delete any user there. Opening a user's
-   workspace shows them an "Admin connected" notice and is audit-logged; a stopped one waits for the admin's
+6. **Admin console:** **Usage** is the live view of both servers, the LLM sessions and the running
+   workspaces with their kind (see [Server monitoring](#server-monitoring-and-llm-engine-updates)). **Users**
+   lists everyone with their workspace (and the kind that runs) and harness; open, stop, deactivate, reset or
+   delete any user there. A user's page also has their **Online workspace** permission (switching it off stops a
+   running Online workspace, after a confirmation) and **Erase Private files…** / **Erase Online files…** (that
+   kind's home and workspace folders, refused while it runs). Opening a user's workspace shows them an "Admin
+   connected" notice and is audit-logged; a stopped one waits for the admin's choice of Private or Online and
    Start, which launches that user's harness. **Updates** updates, rolls back or rebuilds each agent and updates
    the LLM engine (see "Updating the workspace images").
-6. When all `MAX_RUNNING_WORKSPACES` slots are taken, a new start replaces the workspace that has been idle
+7. When all `MAX_RUNNING_WORKSPACES` slots are taken, a new start replaces the workspace that has been idle
    longest (over 5 minutes, and never a working one). If there is none, the user sees "try again".
 
 ## Remote access with Tailscale
@@ -654,8 +750,8 @@ an update in the admin console, run `sudo bash deploy/verify-isolation.sh` yours
 The simplest setup uses the tailnet directly. Tailscale already encrypts the traffic end to end.
 
 1. Install Tailscale on the server and run `tailscale up`.
-2. Re-run `sudo bash deploy/install.sh`. When a `tailscale0` interface exists, it also opens 3000 and
-   3101–3299 to Tailscale addresses (100.64.0.0/10). With firewalld you can instead put `tailscale0` in a
+2. Re-run `sudo bash deploy/install.sh`. When a `tailscale0` interface exists, it also opens 3000,
+   3101–3299 and 3301–3499 to Tailscale addresses (100.64.0.0/10). With firewalld you can instead put `tailscale0` in a
    trusted zone.
 3. Users open `http://<machine>.<tailnet>.ts.net:3000` (MagicDNS) or `http://100.x.y.z:3000`. The workspace
    iframe follows the page's host automatically.
@@ -677,10 +773,10 @@ docker compose ps                                              # status
 docker compose logs -f gateway web                             # logs (JSON lines)
 docker compose logs --tail 50 searxng reader                   # the search engine and the page reader
 docker ps --filter label=workspace-portal.workspace=1 \
-  --format '{{.Names}} {{.Label "workspace-portal.agent"}} {{.Status}}'   # running workspaces and their agents
-sudo bash deploy/verify-isolation.sh                           # prove a workspace reaches only the gateway
+  --format '{{.Names}} {{.Label "workspace-portal.kind"}} {{.Label "workspace-portal.agent"}} {{.Status}}'   # running workspaces
+sudo bash deploy/verify-isolation.sh                           # prove what each kind of workspace can reach
 systemctl status portal-hostd                                  # the monitoring daemon (on each server)
-sudo nft list table inet workspace_portal                      # the firewall rules (workspaces, SearXNG, reader)
+sudo nft list table inet workspace_portal                      # the firewall rules (both workspace networks, SearXNG, reader)
 docker compose exec web node scripts/reset-admin-password.mjs  # forgot the admin password: prints a temporary one
 ```
 
@@ -688,13 +784,15 @@ docker compose exec web node scripts/reset-admin-password.mjs  # forgot the admi
 
 - `db/portal.sqlite`: accounts, sessions, audit log, LLM usage. It runs in WAL mode; back it up with
   `sqlite3 portal.sqlite ".backup /path/backup.sqlite"`, or stop the stack first.
-- `users/<id>/home`: the agents' state (Qwen Code's `~/.qwen`: chats, memory, the user's settings; DeepSeek
-  Harness's `~/.dsh` and `~/.agents`: sessions, settings, skills) and caches.
-- `users/<id>/workspace`: the user's files, `/workspace` in the container.
-- `users/<id>/system`: the rendered settings and passwd/group, regenerated at every start.
+- `users/<id>/private/` and `users/<id>/online/`: the user's two workspaces, each with
+  - `home`: the agents' state (Qwen Code's `~/.qwen`: chats, memory, the user's settings; DeepSeek
+    Harness's `~/.dsh` and `~/.agents`: sessions, settings, skills) and caches;
+  - `workspace`: the user's files, `/workspace` in the container;
+  - `system`: the rendered settings and passwd/group, regenerated at every start.
 - `config/qwen`: the admin's Qwen Code settings (also DeepSeek Harness's models).
 
-Deleting a user in the admin console removes their directory.
+Deleting a user in the admin console removes their directory (both workspaces). "Erase Private files…" and
+"Erase Online files…" on a user's page empty one workspace's `home` and `workspace` (while it is stopped).
 
 **Uninstall:**
 
@@ -732,8 +830,11 @@ Layout:
 ## Limitations
 
 - Single host: workspaces run next to the portal. `MAX_RUNNING_WORKSPACES` caps them (4 by default).
-- Up to `AGENT_PORT_COUNT - 1` users (199 by default), because each user's workspace has its own port. Raise
-  `AGENT_PORT_COUNT` (and re-run the installer to open the ports) for more.
+- Up to `AGENT_PORT_COUNT - 1` users (199 by default), because each user's workspace of each kind has its own
+  port. Raise `AGENT_PORT_COUNT` (and re-run the installer to open the ports) for more; with Online's ports
+  right after Private's by default, both ranges grow.
+- One workspace per user runs at a time: switching between Private and Online means stopping one and starting
+  the other (a few seconds).
 - The admin can see everything in every workspace.
 - Plain HTTP on the LAN: use Tailscale (above) or a VPN when you leave it.
 - Web search depends on public search engines answering this server's address. They block addresses that

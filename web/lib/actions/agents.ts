@@ -7,10 +7,11 @@ import { gateway, toApiError } from "../gateway";
 import { requireAdmin } from "../session";
 import { agentImageSchema, agentUpdateSchema, fieldErrors, formText, type FieldErrors } from "../validation";
 
-// The Agents page's actions: start an update (or rollback, or rebuild), cancel it, remove an old image. Each
-// re-checks the admin role and validates its input; the gateway refuses what it can't do (one job at a time, the
-// current image, images in use) and audits updates itself, attributed to the admin passed as actorUserId. The
-// page polls for the job's progress, so the actions only report whether the gateway accepted.
+// The Updates page's agent actions: make a version current (switching to its image, or building it), rebuild the
+// current one, cancel the job, remove an image. Each re-checks the admin role and validates its input; the gateway
+// refuses what it can't do (one job at a time, the current image, images in use) and audits updates itself,
+// attributed to the admin passed as actorUserId. The page polls for the job's progress, so the actions only report
+// whether the gateway accepted.
 
 export type AgentActionState =
   | { status: "idle" }
@@ -19,13 +20,12 @@ export type AgentActionState =
   | { status: "done" };
 
 function failure(action: AgentAction, error: unknown): AgentActionState {
-  const { message, field } = agentActionError(action, toApiError(error));
-  return field ? { status: "invalid", fieldErrors: { [field]: message } } : { status: "error", message };
+  return { status: "error", message: agentActionError(action, toApiError(error)) };
 }
 
 /**
- * Starts the job that makes `version` of `agent` current: an exact version (the dialogs never send a channel). It
- * switches to an image on the server or builds one (updateWork in lib/agent-versions.ts), checked before it counts.
+ * Starts the job that makes `version` of `agent` current, the exact version the dialog showed. It switches to an
+ * image on the server or builds one (updateWork in lib/agent-versions.ts), checked before it counts.
  */
 export async function updateAgent(_previous: AgentActionState, formData: FormData): Promise<AgentActionState> {
   const session = await requireAdmin();

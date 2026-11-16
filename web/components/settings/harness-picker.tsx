@@ -9,7 +9,7 @@ import { stopNeedsConfirm, stopWarnings } from "@/lib/workspace-stop";
 import { FormError } from "@/components/forms/form-error";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Field, FieldContent, FieldDescription, FieldLabel, FieldTitle } from "@/components/ui/field";
+import { Field, FieldContent, FieldLabel, FieldTitle } from "@/components/ui/field";
 import { CheckIcon, RefreshIcon } from "@/components/ui/icons";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Spinner } from "@/components/ui/spinner";
@@ -22,13 +22,16 @@ interface HarnessPickerProps {
   /** The running (or starting) workspace, to tell when it runs another harness; null when stopped or unknown. */
   running: Pick<WorkspaceInfo, "agent" | "busy" | "connections"> | null;
   agentNames: Readonly<Record<AgentKind, string>>;
+  /** The id of the visible title that names the choice. */
+  labelledBy: string;
 }
 
 /**
- * Settings' harness choice: a radio card per enabled agent, saved as soon as it changes. A running workspace
- * keeps its harness until it starts again; the card says so and offers "Restart now".
+ * Settings' harness choice: a radio card per enabled agent (its name and version, side by side on wider screens),
+ * saved as soon as it changes. A running workspace keeps its harness until it starts again; the card says so and
+ * offers "Restart now".
  */
-export function HarnessPicker({ agents, chosen, running, agentNames }: HarnessPickerProps) {
+export function HarnessPicker({ agents, chosen, running, agentNames, labelledBy }: HarnessPickerProps) {
   const [value, setValue] = useOptimistic(chosen);
   const [saving, startSaving] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -70,16 +73,22 @@ export function HarnessPicker({ agents, chosen, running, agentNames }: HarnessPi
   const differs = running?.agent != null && running.agent !== value;
   return (
     <div className="flex flex-col gap-4">
-      <RadioGroup value={value} onValueChange={choose} aria-label="Harness" aria-busy={saving || undefined} disabled={restarting}>
+      <RadioGroup
+        value={value}
+        onValueChange={choose}
+        aria-labelledby={labelledBy}
+        aria-busy={saving || undefined}
+        disabled={restarting}
+        className="sm:grid-cols-2"
+      >
         {agents.map((agent) => (
           <FieldLabel key={agent.id} htmlFor={`harness-${agent.id}`}>
             <Field orientation="horizontal">
               <FieldContent>
-                <FieldTitle>
+                <FieldTitle className="flex-wrap gap-x-2 gap-y-0">
                   {agent.name}
                   <span className="font-mono text-12 font-normal text-muted-foreground">{formatVersion(agent.version)}</span>
                 </FieldTitle>
-                <FieldDescription>{agent.description}</FieldDescription>
               </FieldContent>
               <RadioGroupItem value={agent.id} id={`harness-${agent.id}`} />
             </Field>
@@ -95,7 +104,6 @@ export function HarnessPicker({ agents, chosen, running, agentNames }: HarnessPi
             <Button
               ref={restartButton}
               type="button"
-              size="sm"
               variant="outline"
               onClick={onRestart}
               disabled={restarting || saving}

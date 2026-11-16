@@ -1,6 +1,6 @@
 import "server-only";
 import { after } from "next/server";
-import type { AgentKind } from "@portal/db";
+import type { AgentKind, WorkspaceKind } from "@portal/db";
 import { config } from "./config";
 import type {
   AgentInfo,
@@ -22,10 +22,13 @@ const START_TIMEOUT_MS = 30_000;
 /** Stop, release and data deletion include `docker stop -t 10`. */
 const STOP_TIMEOUT_MS = 30_000;
 /**
- * Calls that may wait on the npm registry, which the gateway gives 10 s: the versions overview (when its cache
- * of release channels is stale or a refresh is asked for) and an update, which resolves the version first.
+ * Calls that may wait on the registries (the versions overviews when their 10-minute cache is stale or a refresh is
+ * asked for, and an update, which resolves the version first). The gateway gives each request 10 s, and a check can
+ * chain several: npm then GitHub for an agent; the engine registry's token challenge, the tag list, then digests and
+ * GitHub together. Normally a second; this only bounds a very slow registry, which must not read as the gateway
+ * being down.
  */
-const REGISTRY_TIMEOUT_MS = 15_000;
+const REGISTRY_TIMEOUT_MS = 45_000;
 /** Removing an image is Docker deleting its layers. */
 const IMAGE_REMOVE_TIMEOUT_MS = 30_000;
 
@@ -98,13 +101,15 @@ export const gateway = {
   getWorkspace: (userId: number, timeoutMs?: number) =>
     call<WorkspaceInfo>("GET", `/control/workspaces/${userId}`, timeoutMs ? { timeoutMs } : {}),
   /**
-   * Creates and starts the container with the user's harness (their choice in Settings while it is enabled, else
-   * the first enabled agent), then returns (status "starting"); poll getWorkspace until ready. An already
-   * starting or running workspace just returns its state, whatever its agent, and calls off a pending stop.
-   * 409 `capacity` when every slot is busy.
+   * Creates and starts the `kind` container with the user's harness (their choice in Settings while it is enabled,
+   * else the first enabled agent), then returns (status "starting"); poll getWorkspace until ready. An already
+   * starting or running workspace of that kind just returns its state, whatever its agent, and calls off a pending
+   * stop. Without `kind`: attaches to a starting or running workspace of either kind, else starts Private.
+   * Errors: 409 `capacity` when every slot is busy; 409 `kind_mismatch` while the other kind runs (stop it first);
+   * 409 `online_disabled` (ONLINE_WORKSPACES=off) and 403 `online_not_allowed` (the admin barred this user).
    */
-  start: (userId: number, timeoutMs = START_TIMEOUT_MS) =>
-    call<WorkspaceInfo>("POST", `/control/workspaces/${userId}/start`, { body: {}, timeoutMs }),
+  start: (userId: number, kind?: WorkspaceKind, timeoutMs = START_TIMEOUT_MS) =>
+    call<WorkspaceInfo>("POST", `/control/workspaces/${userId}/start`, { body: kind ? { kind } : {}, timeoutMs }),
   /** The gateway writes the `workspace_stopped` audit entry, attributed to `actorUserId`. */
   stop: (userId: number, reason: StopReason, actorUserId?: number) =>
     call<WorkspaceInfo>("POST", `/control/workspaces/${userId}/stop`, {
@@ -119,9 +124,18 @@ export const gateway = {
   /** Closes the agent connections of one session (`sessionId` = the sessions.id hash). */
   disconnect: (sessionId: string) =>
     call<{ closed: number }>("POST", `/control/sessions/${encodeURIComponent(sessionId)}/disconnect`),
+  /**
+   * Erases one kind's files (its home and workspace folders, left empty): 409 `workspace_running` while that kind
+   * is starting, running or stopping. The gateway writes the `workspace_files_erased` audit entry.
+   */
+  eraseFiles: (userId: number, kind: WorkspaceKind, actorUserId?: number) =>
+    call<{ ok: true }>("DELETE", `/control/workspaces/${userId}/files?kind=${kind}`, {
+      body: { actorUserId },
+      timeoutMs: STOP_TIMEOUT_MS,
+    }),
   deleteData: (userId: number) =>
     call<{ ok: true }>("DELETE", `/control/workspaces/${userId}/data`, { timeoutMs: STOP_TIMEOUT_MS }),
-  /** The enabled agents' versions, images and release channels, and the running or last update job. */
+  /** The enabled agents' versions, their Package images rows and the running or last update job. */
   agentVersions: ({ refresh = false }: { refresh?: boolean } = {}) =>
     call<AgentVersionsOverview>("GET", `/control/agents/versions${refresh ? "?refresh=1" : ""}`, {
       timeoutMs: REGISTRY_TIMEOUT_MS,
@@ -148,8 +162,6 @@ export const gateway = {
   /** Starts updating the engine to an exact release (resolved to its digest first). The gateway audits the outcome. */
   updateEngine: (version: string, actorUserId: number) =>
     call<EngineUpdateJob>("POST", "/control/engine/update", { body: { version, actorUserId }, timeoutMs: REGISTRY_TIMEOUT_MS }),
-  /** Starts going back to the image that ran before the last change. */
-  rollbackEngine: (actorUserId: number) => call<EngineUpdateJob>("POST", "/control/engine/rollback", { body: { actorUserId } }),
   /** false: too late (restarting or finished). */
   cancelEngineUpdate: () => call<{ cancelled: boolean }>("POST", "/control/engine/cancel"),
   /** Ends the drain: restarts even though requests still run (they are cut off). false: not draining. */
