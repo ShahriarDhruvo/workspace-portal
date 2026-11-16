@@ -97,6 +97,33 @@
   }
 }
 
+/* Inside a Table that stacks (components/ui/table.tsx), below the breakpoint it names: its rows are then blocks
+   of labelled lines instead of table rows. */
+@custom-variant stacked {
+  @media (width < theme(--breakpoint-lg)) {
+    &:is([data-stacked="lg"] *) {
+      @slot;
+    }
+  }
+  @media (width < theme(--breakpoint-xl)) {
+    &:is([data-stacked="xl"] *) {
+      @slot;
+    }
+  }
+}
+
+/* On touch screens, grows what a finger can hit to at least 40px each way, centred on the control, without
+   changing how it looks. The control must be positioned (relative). */
+@utility hit-area {
+  @media (pointer: coarse) {
+    &::after {
+      content: "";
+      position: absolute;
+      inset: min(0px, (100% - 2.5rem) / 2);
+    }
+  }
+}
+
 /* Uppercase section and card labels (12px/600, .04em, muted). */
 @utility label-caps {
   font-size: 12px;

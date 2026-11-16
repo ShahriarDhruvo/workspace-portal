@@ -37,7 +37,7 @@ export default async function AuditPage() {
   return (
     <>
       <PageHeading title="Audit log">The latest {LIMIT} entries, newest first.</PageHeading>
-      <Table className="min-w-[880px]">
+      <Table stacked="lg">
         <TableHeader>
           <TableRow>
             {["Time", "Actor", "Action", "Target", "Details"].map((heading) => (
@@ -50,36 +50,43 @@ export default async function AuditPage() {
         <TableBody>
           {entries.length === 0 ? (
             <TableRow className="hover:bg-transparent">
-              <TableCell colSpan={5} className="py-10 text-center text-muted-foreground">
+              <TableCell colSpan={5} className="py-10 text-center text-muted-foreground stacked:py-7">
                 Nothing has been recorded yet.
               </TableCell>
             </TableRow>
           ) : null}
           {entries.map((entry) => {
             const subject = entry.target ? displayName(entry.target) : auditDetailsSubject(entry.details);
+            const details = formatAuditDetails(entry.details);
             return (
               <TableRow key={entry.id}>
-                <TableCell className="align-top whitespace-nowrap text-muted-foreground tabular-nums">
+                <TableCell label="Time" className="align-top whitespace-nowrap text-muted-foreground tabular-nums">
                   <LocalTime at={entry.at} />
                 </TableCell>
-                <TableCell className="align-top whitespace-nowrap">
+                <TableCell label="Actor" className="align-top wrap-anywhere">
                   {entry.actor ? (
                     displayName(entry.actor)
                   ) : (
                     <span className="text-muted-foreground">{auditActorFallback(entry.action)}</span>
                   )}
                 </TableCell>
-                <TableCell className="align-top font-medium whitespace-nowrap">
+                <TableCell label="Action" className="align-top font-medium whitespace-nowrap">
                   {auditActionLabel(entry.action, entry.actor !== null)}
                 </TableCell>
-                <TableCell className="align-top whitespace-nowrap">
+                {/* A stacked row leaves out the lines that say nothing. */}
+                <TableCell label="Target" className={cn("align-top wrap-anywhere", !subject && "stacked:hidden")}>
                   {subject ? (
                     <span className={cn(!entry.target && "text-muted-foreground")}>{subject}</span>
                   ) : (
                     <span className="text-muted-foreground">—</span>
                   )}
                 </TableCell>
-                <TableCell className="align-top text-muted-foreground">{formatAuditDetails(entry.details)}</TableCell>
+                <TableCell
+                  label="Details"
+                  className={cn("align-top wrap-anywhere text-muted-foreground stacked:col-span-full", !details && "stacked:hidden")}
+                >
+                  {details}
+                </TableCell>
               </TableRow>
             );
           })}

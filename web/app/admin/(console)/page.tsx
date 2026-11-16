@@ -25,7 +25,7 @@ export default async function AdminPage() {
   return (
     <>
       <PageHeading
-        title="Dashboard"
+        title="Users"
         actions={
           <Button asChild>
             <Link href="/admin/users/new">

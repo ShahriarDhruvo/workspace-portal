@@ -28,7 +28,7 @@ export function FormField({ label, name, error, hint, optional, addon, mono, id,
       name={name}
       aria-invalid={error ? true : undefined}
       aria-describedby={[errorId, hintId].filter(Boolean).join(" ") || undefined}
-      className={cn(mono && "font-mono", className)}
+      className={cn(mono && "font-mono", addon && "grow basis-40", className)}
       {...input}
     />
   );
@@ -39,7 +39,8 @@ export function FormField({ label, name, error, hint, optional, addon, mono, id,
         {optional ? <span className="font-normal text-muted-foreground">(optional)</span> : null}
       </FieldLabel>
       {addon ? (
-        <div className="flex items-center gap-2">
+        // The addon moves under an input that it would leave too narrow for a generated secret.
+        <div className="flex flex-wrap items-center gap-2">
           {control}
           {addon}
         </div>

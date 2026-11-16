@@ -45,7 +45,7 @@ function AlertDialogContent({ className, ...props }: React.ComponentProps<typeof
       <AlertDialogPrimitive.Content
         data-slot="alert-dialog-content"
         className={cn(
-          "fixed inset-0 z-50 m-auto flex h-fit max-h-[calc(100dvh-48px)] w-[min(420px,calc(100vw-48px))] flex-col overflow-y-auto rounded-xl border bg-popover font-mono text-14 text-popover-foreground outline-none [--primary:var(--foreground)] duration-100 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 motion-reduce:animate-none",
+          "fixed inset-0 z-50 m-auto flex h-fit max-h-[calc(100dvh-48px)] w-[min(420px,calc(100vw-48px))] flex-col overflow-y-auto rounded-xl border bg-popover font-mono text-14 wrap-anywhere text-popover-foreground outline-none [--primary:var(--foreground)] duration-100 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 motion-reduce:animate-none",
           className,
         )}
         {...props}
@@ -87,7 +87,7 @@ function AlertDialogBody({ className, ...props }: React.ComponentProps<"div">) {
 }
 
 function AlertDialogFooter({ className, ...props }: React.ComponentProps<"div">) {
-  return <div data-slot="alert-dialog-footer" className={cn("flex flex-wrap justify-end gap-2", className)} {...props} />;
+  return <div data-slot="alert-dialog-footer" className={cn("flex flex-wrap justify-end gap-2 pointer-coarse:gap-y-3", className)} {...props} />;
 }
 
 function AlertDialogTitle({ className, ...props }: React.ComponentProps<typeof AlertDialogPrimitive.Title>) {

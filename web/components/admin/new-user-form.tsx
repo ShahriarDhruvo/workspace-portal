@@ -89,7 +89,7 @@ function NewUserForm({ onAnother }: { onAnother: () => void }) {
             hint={`At least ${PASSWORD_MIN_LENGTH} characters. The user must change it at first sign-in.`}
             error={errors.password}
             addon={
-              <Button type="button" variant="outline" onClick={() => setPassword(generateTemporaryPassword())}>
+              <Button type="button" variant="outline" className="pointer-coarse:h-10" onClick={() => setPassword(generateTemporaryPassword())}>
                 <RefreshIcon />
                 Generate
               </Button>

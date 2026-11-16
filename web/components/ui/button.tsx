@@ -7,9 +7,10 @@ import { cn } from "@/lib/utils";
 // 28px square (icon); a light-grey primary; focus as a border plus a 3px ring. Destructive actions are a red
 // tint or a red outline, never solid red. `asChild` puts the styles on the child, e.g. a Next <Link>.
 // A pending form (SubmitButton) sets data-pending: a wait cursor over a less faded look than disabled.
+// On touch screens the sizes stay and the hit area grows to 40px (hit-area, app/globals.css).
 
 const buttonVariants = cva(
-  "inline-flex shrink-0 cursor-pointer items-center justify-center gap-1.5 border border-transparent font-medium whitespace-nowrap select-none outline-none transition-[color,background-color,border-color,box-shadow] focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 active:translate-y-px disabled:cursor-not-allowed disabled:opacity-50 disabled:active:translate-y-0 data-pending:cursor-wait data-pending:opacity-70 [&_svg]:pointer-events-none [&_svg]:shrink-0",
+  "hit-area relative inline-flex shrink-0 cursor-pointer items-center justify-center gap-1.5 border border-transparent font-medium whitespace-nowrap select-none outline-none transition-[color,background-color,border-color,box-shadow] focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 active:translate-y-px disabled:cursor-not-allowed disabled:opacity-50 disabled:active:translate-y-0 data-pending:cursor-wait data-pending:opacity-70 [&_svg]:pointer-events-none [&_svg]:shrink-0",
   {
     variants: {
       variant: {

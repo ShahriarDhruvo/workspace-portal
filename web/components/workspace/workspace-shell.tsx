@@ -194,6 +194,9 @@ const PILL_VARIANTS = {
   idle: "neutral",
 } as const satisfies Record<DotTone, string>;
 
+/** What "Admin connected" means, for the pill's tooltip and the menu below `bar`. */
+const ADMIN_CONNECTED = "An administrator has your workspace open";
+
 /** What a not-running workspace says, whether it then offers a button (one agent) or the agents to choose from. */
 function idleCopy(
   idle: Idle,
@@ -262,6 +265,7 @@ export function WorkspaceShell({ viewer, target, frame, idleTimeoutMinutes, agen
     () => (frame && runningAgent ? agentFrameUrl(window.location, frame, runningAgent) : null),
     () => null,
   );
+  const adminConnected = !viewer.isAdmin && (info?.connections.admin ?? 0) > 0;
   // One agent at a time: the user can stop theirs to choose again, when there is another to choose.
   const canSwitch = target.isViewer && !switched && !state.starting && running !== null && running.agents.length > 1;
 
@@ -420,14 +424,14 @@ export function WorkspaceShell({ viewer, target, frame, idleTimeoutMinutes, agen
     <div className="flex h-dvh flex-col overflow-hidden bg-background">
       {banner}
       <header className="flex h-11.5 shrink-0 items-center gap-3 border-b bg-background px-5 max-sm:gap-2 max-sm:px-4">
-        <Brand compact />
+        <Brand compact="bar" />
         <Separator orientation="vertical" className="data-[orientation=vertical]:h-4" />
         <Badge role="status" aria-label={`Workspace status: ${pill.label}`} variant={PILL_VARIANTS[pill.tone]} size="lg">
           <StatusDot tone={pill.tone} pulse={pill.label === "Starting" || pill.label === "Stopping"} />
           {pill.label}
         </Badge>
         {runningAgent ? (
-          <span className="truncate text-13 font-medium text-foreground max-sm:hidden">
+          <span className="shrink-0 text-13 font-medium text-foreground max-sm:hidden">
             <span className="sr-only">Agent: </span>
             {agentNames[runningAgent]}
           </span>
@@ -442,14 +446,14 @@ export function WorkspaceShell({ viewer, target, frame, idleTimeoutMinutes, agen
             onClick={() => openSwitch(false)}
           >
             <SwitchIcon />
-            Switch agent
+            Switch agent…
           </Button>
         ) : null}
-        {!viewer.isAdmin && (info?.connections.admin ?? 0) > 0 ? (
+        {adminConnected ? (
           // On the narrowest phones the label is cut short rather than pushing the menu button off the bar.
           <Badge
             role="status"
-            title="An administrator has your workspace open"
+            title={ADMIN_CONNECTED}
             variant="warning"
             size="lg"
             className="max-sm:min-w-0 max-sm:shrink"
@@ -489,9 +493,19 @@ export function WorkspaceShell({ viewer, target, frame, idleTimeoutMinutes, agen
               {canSwitch ? (
                 <DropdownMenuItem onSelect={() => openSwitch(true)}>
                   <SwitchIcon />
-                  Switch agent
+                  Switch agent…
                 </DropdownMenuItem>
               ) : null}
+              <DropdownMenuSeparator />
+            </>
+          ) : null}
+          {adminConnected ? (
+            // The bar's pill may be cut short here, and its tooltip needs a mouse.
+            <>
+              <DropdownMenuLabel className="flex gap-2 text-warning">
+                <EyeIcon className="shrink-0" />
+                {ADMIN_CONNECTED}
+              </DropdownMenuLabel>
               <DropdownMenuSeparator />
             </>
           ) : null}
@@ -514,7 +528,7 @@ export function WorkspaceShell({ viewer, target, frame, idleTimeoutMinutes, agen
       {state.notice ? (
         <div
           role="status"
-          className="flex min-h-9 shrink-0 items-center gap-2.5 border-b bg-card px-5 py-1 text-13 text-foreground"
+          className="flex min-h-9 shrink-0 items-center gap-2.5 border-b bg-card px-5 py-1 text-13 text-foreground pointer-coarse:min-h-11"
         >
           <WarningIcon className="shrink-0 text-attention" />
           <span className="min-w-0 flex-1">{state.notice}</span>
@@ -533,7 +547,10 @@ export function WorkspaceShell({ viewer, target, frame, idleTimeoutMinutes, agen
         {phase.kind === "ready" ? (
           content
         ) : (
-          <div className="absolute inset-0 flex items-center justify-center overflow-y-auto p-6">{content}</div>
+          // Centred by auto margins, which keep the top of a card taller than the screen in reach.
+          <div className="absolute inset-0 flex overflow-y-auto p-6">
+            <div className="m-auto flex w-full justify-center">{content}</div>
+          </div>
         )}
       </main>
       {info ? (

@@ -21,13 +21,22 @@ export function PortalMark({ size = 22 }: { size?: number }) {
   );
 }
 
-/** The mark and the name. `compact` (the top bars): on narrow screens only the mark shows; the name stays for screen readers. */
-export function Brand({ size = "md", compact = false }: { size?: "md" | "lg"; compact?: boolean }) {
+/**
+ * The mark and the name. In a top bar, `compact` names the breakpoint from which the bar shows all its controls:
+ * from there up to `lg`, and on phones, the bar has no room for the name and only the mark shows (the name stays
+ * for screen readers).
+ */
+export function Brand({ size = "md", compact }: { size?: "md" | "lg"; compact?: "md" | "bar" }) {
   return (
     <span className="flex shrink-0 items-center gap-2">
       <PortalMark size={size === "lg" ? 26 : 22} />
       <span
-        className={cn(size === "lg" ? "text-18 leading-5 font-medium" : "text-14 font-semibold", compact && "max-sm:sr-only")}
+        className={cn(
+          size === "lg" ? "text-18 leading-5 font-medium" : "text-14 font-semibold",
+          compact && "max-sm:sr-only",
+          compact === "md" && "md:max-lg:sr-only",
+          compact === "bar" && "bar:max-lg:sr-only",
+        )}
       >
         Workspace Portal
       </span>
@@ -50,12 +59,14 @@ export function Avatar({ initials, size = "sm" }: { initials: string; size?: "sm
   );
 }
 
-/** Avatar plus full name, as shown on the right of the top bars where they show in full. */
+/** Avatar plus full name, on the right of the top bars where they show in full. Cut short, the name is in its tooltip. */
 export function UserChip({ name, initials }: { name: string; initials: string }) {
   return (
     <span className="flex min-w-0 items-center gap-2 text-13 text-foreground">
       <Avatar initials={initials} />
-      <span className="truncate">{name}</span>
+      <span className="truncate" title={name}>
+        {name}
+      </span>
     </span>
   );
 }

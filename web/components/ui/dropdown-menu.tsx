@@ -6,9 +6,10 @@ import { cn } from "@/lib/utils";
 import { CheckIcon, ChevronRightIcon, CircleIcon } from "@/components/ui/icons";
 
 // shadcn/ui DropdownMenu as the Web Shell's menu: a solid #171717 panel (no blur), 6px radius, 4px padding,
-// a 1px border plus shadow-md; 28px items with a 4px radius and a raised fill on hover and keyboard focus;
-// destructive items in red with a red tint. It renders in a portal, so a scrolling table never clips it, and
-// closes on an outside click or Escape. Pass modal={false} to keep the page scrollable while it is open.
+// a 1px border plus shadow-md; 28px items (40px on touch screens) with a 4px radius and a raised fill on hover
+// and keyboard focus; destructive items in red with a red tint. It renders in a portal, so a scrolling table
+// never clips it, and closes on an outside click or Escape. Pass modal={false} to keep the page scrollable
+// while it is open.
 
 function DropdownMenu({ ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) {
   return <DropdownMenuPrimitive.Root data-slot="dropdown-menu" {...props} />;
@@ -51,7 +52,7 @@ function DropdownMenuGroup({ ...props }: React.ComponentProps<typeof DropdownMen
 }
 
 const ITEM =
-  "relative flex w-full cursor-pointer items-center gap-2 rounded-sm px-1.5 py-1 text-left text-14 outline-hidden select-none focus:bg-accent focus:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50 data-inset:pl-8 [&_svg]:pointer-events-none [&_svg]:shrink-0";
+  "relative flex w-full cursor-pointer items-center gap-2 rounded-sm px-1.5 py-1 text-left text-14 outline-hidden select-none pointer-coarse:py-2.5 focus:bg-accent focus:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50 data-inset:pl-8 [&_svg]:pointer-events-none [&_svg]:shrink-0";
 
 function DropdownMenuItem({
   className,

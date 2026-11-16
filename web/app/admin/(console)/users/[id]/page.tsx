@@ -49,6 +49,8 @@ export default async function UserPage({ params }: PageProps<"/admin/users/[id]"
     workspaceError = toApiError(error).message;
   }
   const summary = workspace ? summarizeWorkspace(workspace, config.idleTimeoutMinutes) : null;
+  // Both in words here: the users table keeps the second (why it stopped, the last error) in a tooltip.
+  const workspaceFacts = summary ? [summary.detail, summary.title].filter((fact) => fact !== null) : [];
   const dialogUser = { id: user.id, name, username: user.username, busy: workspace?.busy ?? false };
   const running = workspace?.status === "running" || workspace?.status === "starting";
 
@@ -60,11 +62,11 @@ export default async function UserPage({ params }: PageProps<"/admin/users/[id]"
           <div className="flex min-w-0 items-center gap-3">
             <Avatar initials={initials(user.firstName, user.lastName)} size="lg" />
             <div className="flex min-w-0 flex-col gap-1">
-              <h1 className="truncate text-18 font-semibold">{name}</h1>
+              <h1 className="text-18 font-semibold wrap-anywhere">{name}</h1>
               <div className="flex flex-wrap items-center gap-2 text-13 text-muted-foreground">
-                <span className="font-mono text-12">{user.username}</span>
+                <span className="font-mono text-12 break-all">{user.username}</span>
                 {user.role === "admin" ? <Badge>Admin</Badge> : <Badge variant="outline">User</Badge>}
-                {user.active ? <Badge variant="success">Active</Badge> : <Badge variant="neutral">Disabled</Badge>}
+                {user.active ? <Badge variant="success">Active</Badge> : <Badge variant="neutral">Deactivated</Badge>}
                 {user.mustChangePassword ? <Badge variant="warning">Temporary password</Badge> : null}
               </div>
             </div>
@@ -84,7 +86,7 @@ export default async function UserPage({ params }: PageProps<"/admin/users/[id]"
           <CardRow
             title={
               summary ? (
-                <span className="flex items-center gap-2" title={summary.title ?? undefined}>
+                <span className="flex items-center gap-2">
                   <StatusDot tone={summary.tone} pulse={summary.label === "Working"} />
                   {summary.label}
                 </span>
@@ -92,10 +94,12 @@ export default async function UserPage({ params }: PageProps<"/admin/users/[id]"
                 "Status unavailable"
               )
             }
-            action={running ? <UserDialogButton kind="stop" user={dialogUser}>Stop workspace</UserDialogButton> : null}
+            action={running ? <UserDialogButton kind="stop" user={dialogUser}>Stop workspace…</UserDialogButton> : null}
           >
             {summary
-              ? (summary.detail ?? summary.title ?? "Starts when the user signs in or opens it.")
+              ? workspaceFacts.length > 0
+                ? workspaceFacts.map((fact) => <p key={fact}>{fact}</p>)
+                : "Starts when the user signs in or opens it."
               : workspaceError}
           </CardRow>
           {workspace ? (

@@ -8,7 +8,6 @@ import { fetchJson } from "@/lib/fetch-json";
 import { agentLabel, summarizeWorkspace } from "@/lib/format";
 import type { AdminOverview, WorkspaceInfo } from "@/lib/gateway-types";
 import type { UserSummary } from "@/lib/user-summary";
-import { cn } from "@/lib/utils";
 import { Avatar } from "@/components/brand";
 import { StatusDot } from "@/components/common/status-dot";
 import { LocalTime } from "@/components/local-time";
@@ -74,7 +73,7 @@ export function AdminDashboard({ users, initialOverview, currentAdminId, idleTim
         <h2 id="users-heading" className="label-caps">
           Users <span className="tabular-nums">({users.length})</span>
         </h2>
-        <Table className="min-w-[880px]">
+        <Table stacked="xl">
           <TableHeader>
             <TableRow>
               {["Name", "Username", "Role", "Account", "Workspace", "Agent", "Last sign-in"].map((heading) => (
@@ -122,37 +121,56 @@ function UserRow({ user, isSelf, workspace, idleTimeoutMinutes, agentNames }: Us
   return (
     <TableRow>
       <TableCell>
-        <Link href={`/admin/users/${user.id}`} className="flex min-w-0 items-center gap-2 rounded-sm font-medium text-foreground">
+        {/* A long name wraps: 2px down, its first line is level with the 24px avatar. */}
+        <Link
+          href={`/admin/users/${user.id}`}
+          className="hit-area relative flex min-w-0 items-start gap-2 rounded-sm font-medium text-foreground"
+        >
           <Avatar initials={user.initials} />
-          <span className="truncate">{user.name}</span>
-          {isSelf ? <Badge variant="outline">You</Badge> : null}
+          <span className="mt-0.5 min-w-24 wrap-anywhere">{user.name}</span>
+          {isSelf ? (
+            <Badge variant="outline" className="mt-0.5">
+              You
+            </Badge>
+          ) : null}
         </Link>
       </TableCell>
-      <TableCell className="text-muted-foreground">{user.username}</TableCell>
-      <TableCell>{user.role === "admin" ? <Badge>Admin</Badge> : <Badge variant="outline">User</Badge>}</TableCell>
-      <TableCell>{user.active ? <Badge variant="success">Active</Badge> : <Badge variant="neutral">Disabled</Badge>}</TableCell>
-      <TableCell className="whitespace-nowrap" title={summary?.title ?? undefined}>
+      <TableCell label="Username" className="text-muted-foreground">
+        {user.username}
+      </TableCell>
+      <TableCell label="Role">{user.role === "admin" ? <Badge>Admin</Badge> : <Badge variant="outline">User</Badge>}</TableCell>
+      <TableCell label="Account">
+        {user.active ? <Badge variant="success">Active</Badge> : <Badge variant="neutral">Deactivated</Badge>}
+      </TableCell>
+      <TableCell label="Workspace" title={summary?.title ?? undefined}>
         {summary ? (
-          <span className="flex items-center gap-1.5">
-            <StatusDot tone={summary.tone} pulse={summary.label === "Working"} />
-            <span className="text-foreground">{summary.label}</span>
-            {summary.detail ? <span className="text-muted-foreground">· {summary.detail}</span> : null}
+          <span className="flex flex-wrap items-center gap-x-1">
+            <span className="flex items-center gap-1.5 text-foreground">
+              <StatusDot tone={summary.tone} pulse={summary.label === "Working"} />
+              {summary.label}
+              {/* With the label, so that facts that wrap to a line of their own don't start with the dot. */}
+              {summary.detail ? <span className="text-muted-foreground">·</span> : null}
+            </span>
+            {summary.detail ? <span className="text-muted-foreground">{summary.detail}</span> : null}
           </span>
         ) : (
           <span className="text-muted-foreground">Unknown</span>
         )}
       </TableCell>
-      <TableCell className={cn("whitespace-nowrap", running ? "text-foreground" : "text-muted-foreground")}>
-        {agent ?? "—"}
-        {agent && workspace?.agentVersion ? (
-          <span className="ml-1.5 font-mono text-12 text-muted-foreground">{workspace.agentVersion}</span>
-        ) : null}
+      <TableCell label="Agent" className={running ? "text-foreground" : "text-muted-foreground"}>
+        {/* The version moves under the name before either breaks. */}
+        <span className="flex flex-wrap items-baseline gap-x-1.5">
+          <span className="whitespace-nowrap">{agent ?? "—"}</span>
+          {agent && workspace?.agentVersion ? (
+            <span className="font-mono text-12 text-muted-foreground">{workspace.agentVersion}</span>
+          ) : null}
+        </span>
       </TableCell>
-      <TableCell className="whitespace-nowrap text-muted-foreground">
+      <TableCell label="Last sign-in" className="text-muted-foreground">
         {user.lastLoginAt ? <LocalTime at={user.lastLoginAt} relative /> : "Never"}
       </TableCell>
-      <TableCell className="w-0">
-        <div className="flex items-center justify-end gap-1">
+      <TableCell className="w-0 stacked:w-auto">
+        <div className="flex items-center justify-end gap-1 pointer-coarse:gap-2">
           <OpenWorkspaceForm userId={user.id} label="Open" />
           <UserActions user={{ ...user, busy: workspace?.busy ?? false }} isSelf={isSelf} running={running} active={user.active} />
         </div>
@@ -183,7 +201,7 @@ function UserActions({ user, isSelf, running, active }: { user: DialogUser; isSe
         <DropdownMenuContent align="end">
           <DropdownMenuItem disabled={!running} onSelect={() => openDialog("stop")}>
             <StopIcon />
-            Stop workspace
+            Stop workspace…
           </DropdownMenuItem>
           <DropdownMenuItem asChild>
             <Link href={`/admin/users/${user.id}`}>

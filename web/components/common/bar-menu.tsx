@@ -2,7 +2,6 @@
 
 import { createContext, use, useEffect, useState, useTransition, type ComponentProps, type ReactNode, type Ref } from "react";
 import { signOut } from "@/lib/actions/auth";
-import { cn } from "@/lib/utils";
 import { Avatar } from "@/components/brand";
 import { Button } from "@/components/ui/button";
 import {
@@ -54,7 +53,6 @@ export function BarMenu({ viewer, children, className, ref }: BarMenuProps) {
     <RunAction value={(action) => startTransition(() => action())}>
       <DropdownMenu open={open} onOpenChange={setOpen}>
         <DropdownMenuTrigger asChild disabled={pending}>
-          {/* A 28px button in a 46px bar: the ::after widens what a finger can hit to 44px. */}
           <Button
             ref={ref}
             type="button"
@@ -63,18 +61,17 @@ export function BarMenu({ viewer, children, className, ref }: BarMenuProps) {
             aria-label="Menu"
             data-pending={pending ? "" : undefined}
             aria-busy={pending || undefined}
-            className={cn("relative after:absolute after:-inset-2", className)}
+            className={className}
           >
             {pending ? <Spinner aria-hidden="true" /> : <MenuIcon />}
           </Button>
         </DropdownMenuTrigger>
-        {/* A fixed width, so a long name is cut short rather than widening the menu past a phone's screen.
-            Taller items under a finger than under a mouse. */}
-        <DropdownMenuContent align="end" className="w-60 pointer-coarse:[&_[data-slot=dropdown-menu-item]]:py-2">
-          <DropdownMenuLabel className="flex items-center gap-2 text-13 font-normal text-foreground">
+        {/* A fixed width, so a long name wraps rather than widening the menu past a phone's screen. */}
+        <DropdownMenuContent align="end" className="w-60">
+          <DropdownMenuLabel className="flex items-start gap-2 text-13 font-normal text-foreground">
             <Avatar initials={viewer.initials} />
             <span className="sr-only">Signed in as </span>
-            <span className="truncate">{viewer.name}</span>
+            <span className="mt-0.5 min-w-0 wrap-anywhere">{viewer.name}</span>
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
           {children}

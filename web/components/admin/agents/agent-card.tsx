@@ -58,14 +58,14 @@ export function AgentCard({ agent, context, onChanged }: AgentCardProps) {
           </h2>
           <span className="font-mono text-12 break-all text-muted-foreground">{agent.packageName}</span>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 pointer-coarse:gap-y-3">
           {latest ? (
             <GuardedButton
               size="sm"
               blockedReason={blocked}
               onClick={(event) => show({ kind: "update", plan: { kind: "update", version: latest } }, event.currentTarget)}
             >
-              Update to {latest}
+              Update to {latest}…
             </GuardedButton>
           ) : null}
           <GuardedButton size="sm" variant="outline" blockedReason={blocked} onClick={(event) => show({ kind: "change" }, event.currentTarget)}>
@@ -89,7 +89,7 @@ export function AgentCard({ agent, context, onChanged }: AgentCardProps) {
                 blockedReason={blocked}
                 onClick={(event) => show({ kind: "update", plan: { kind: "build" } }, event.currentTarget)}
               >
-                Build {agent.current}
+                Build {agent.current}…
               </GuardedButton>
             </AlertDescription>
           </Alert>

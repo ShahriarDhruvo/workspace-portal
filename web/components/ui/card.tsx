@@ -42,7 +42,7 @@ function CardHeader({ className, ...props }: React.ComponentProps<"div">) {
  */
 function CardTitle({ className, asChild = false, ...props }: React.ComponentProps<"div"> & { asChild?: boolean }) {
   const Comp = asChild ? Slot.Root : "div";
-  return <Comp data-slot="card-title" className={cn("text-16 leading-snug font-medium", className)} {...props} />;
+  return <Comp data-slot="card-title" className={cn("text-16 leading-snug font-medium wrap-anywhere", className)} {...props} />;
 }
 
 function CardDescription({ className, ...props }: React.ComponentProps<"div">) {

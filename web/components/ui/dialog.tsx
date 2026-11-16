@@ -11,6 +11,7 @@ import { CloseIcon } from "@/components/ui/icons";
 // then a 16px-padded body and a right-aligned footer. The overlay barely dims (black/10%), on purpose. The
 // primary button is a shade lighter inside dialogs, as in the Web Shell. Controlled with open/onOpenChange;
 // Escape, the close button and DialogClose close it, and its content unmounts, so each opening starts fresh.
+// Taller than the screen, it scrolls inside; a word too long for it (a name, a version) breaks.
 
 function Dialog({ ...props }: React.ComponentProps<typeof DialogPrimitive.Root>) {
   return <DialogPrimitive.Root data-slot="dialog" {...props} />;
@@ -49,7 +50,7 @@ function DialogContent({ className, children, ...props }: React.ComponentProps<t
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
-          "fixed inset-0 z-50 m-auto flex h-fit max-h-[calc(100dvh-48px)] w-[min(420px,calc(100vw-48px))] flex-col overflow-y-auto rounded-xl border bg-popover font-mono text-14 text-popover-foreground outline-none [--primary:var(--foreground)] duration-100 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 motion-reduce:animate-none",
+          "fixed inset-0 z-50 m-auto flex h-fit max-h-[calc(100dvh-48px)] w-[min(420px,calc(100vw-48px))] flex-col overflow-y-auto rounded-xl border bg-popover font-mono text-14 wrap-anywhere text-popover-foreground outline-none [--primary:var(--foreground)] duration-100 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 motion-reduce:animate-none",
           className,
         )}
         {...props}
@@ -93,7 +94,7 @@ function DialogBody({ className, ...props }: React.ComponentProps<"div">) {
 }
 
 function DialogFooter({ className, ...props }: React.ComponentProps<"div">) {
-  return <div data-slot="dialog-footer" className={cn("flex flex-wrap justify-end gap-2", className)} {...props} />;
+  return <div data-slot="dialog-footer" className={cn("flex flex-wrap justify-end gap-2 pointer-coarse:gap-y-3", className)} {...props} />;
 }
 
 function DialogTitle({ className, ...props }: React.ComponentProps<typeof DialogPrimitive.Title>) {

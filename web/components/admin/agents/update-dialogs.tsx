@@ -213,8 +213,8 @@ function UpdateConfirmForm({ agent, copy, onDone }: { agent: AgentVersionInfo; c
         {problem ? <FormError>{problem}</FormError> : null}
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <SubmitButton size="sm" className="min-w-16" pendingLabel={copy.pending}>
-            {copy.confirm}
+          <SubmitButton size="sm" className="max-w-full min-w-16 shrink" pendingLabel={copy.pending}>
+            <span className="truncate">{copy.confirm}</span>
           </SubmitButton>
         </AlertDialogFooter>
       </AlertDialogBody>
@@ -240,7 +240,10 @@ const WORK_NOTES: Record<UpdateWork, (version: string, fromScratch: boolean) => 
       : `${version} is built on this server first (a few minutes, loading its CPU).`,
 };
 
-/** The confirm button, by the same work ("none" leaves it disabled). */
+/**
+ * The confirm button, by the same work ("none" leaves it disabled). A version too long for the dialog is cut
+ * short in the button; the note above it has it whole.
+ */
 const WORK_CONFIRMS: Record<UpdateWork, (version: string) => string> = {
   none: (version) => `Switch to ${version}`,
   switch: (version) => `Switch to ${version}`,
@@ -342,8 +345,8 @@ function ChangeVersionForm({ agent, onDone }: { agent: AgentVersionInfo; onDone:
               >
                 {agent.channels.map((option) => (
                   <SelectItem key={option.tag} value={option.tag}>
-                    <span>{option.tag}</span>
-                    <span className="text-muted-foreground">
+                    <span className="shrink-0">{option.tag}</span>
+                    <span className="min-w-0 break-all text-muted-foreground">
                       {option.version}
                       {option.version === agent.current ? " (current)" : ""}
                     </span>
@@ -395,8 +398,14 @@ function ChangeVersionForm({ agent, onDone }: { agent: AgentVersionInfo; onDone:
               Cancel
             </Button>
           </DialogClose>
-          <SubmitButton size="sm" className="min-w-16" pending={pending} pendingLabel="Starting…" disabled={work === "none"}>
-            {confirm}
+          <SubmitButton
+            size="sm"
+            className="max-w-full min-w-16 shrink"
+            pending={pending}
+            pendingLabel="Starting…"
+            disabled={work === "none"}
+          >
+            <span className="truncate">{confirm}</span>
           </SubmitButton>
         </DialogFooter>
       </DialogBody>

@@ -80,6 +80,9 @@ export function UserDialogButton({
   danger?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  // The dialog as it was opened. The page can change `kind` under an open dialog: a deactivation that couldn't
+  // stop the workspace leaves the account deactivated and its error on screen, and this button now activates.
+  const [shown, setShown] = useState(kind);
   const button = useRef<HTMLButtonElement>(null);
   return (
     <>
@@ -88,11 +91,14 @@ export function UserDialogButton({
         type="button"
         variant={danger ? "destructive-outline" : "outline"}
         size="sm"
-        onClick={() => setOpen(true)}
+        onClick={() => {
+          setShown(kind);
+          setOpen(true);
+        }}
       >
         {children}
       </Button>
-      <UserDialog kind={kind} user={user} open={open} onOpenChange={setOpen} returnFocusTo={button} />
+      <UserDialog kind={shown} user={user} open={open} onOpenChange={setOpen} returnFocusTo={button} />
     </>
   );
 }
