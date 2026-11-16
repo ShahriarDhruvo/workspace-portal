@@ -36,6 +36,8 @@ env_set() { # key value
   if grep -qE "^$1=" "$ENV_FILE"; then
     sed -i "s|^$1=.*|$1=$2|" "$ENV_FILE"
   else
+    # A last line without a newline would swallow the new one.
+    [[ -z $(tail -c 1 "$ENV_FILE") ]] || echo >>"$ENV_FILE"
     printf '%s=%s\n' "$1" "$2" >>"$ENV_FILE"
   fi
 }
@@ -155,6 +157,44 @@ image_agent_version() { # agent image
   case $1 in qwen) cli=qwen ;; dsh) cli=dsh ;; esac
   docker run --rm --network none --entrypoint "$cli" "$2" --version 2>/dev/null |
     grep -oE '[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?' | head -n 1 || true
+}
+
+# ---------------------------------------------------------------- web search
+# The stack's own SearXNG as the gateway reaches it, and the instance the gateway really uses:
+# SEARXNG_URL from .env when that names another one.
+searxng_builtin_url() { printf 'http://127.0.0.1:%s' "$(env_get SEARXNG_PORT)"; }
+searxng_url() {
+  local url
+  url=$(env_get SEARXNG_URL "$(searxng_builtin_url)")
+  printf '%s' "${url%/}"
+}
+# True when SearXNG's health page answers at URL (with SEARXNG_AUTHORIZATION, for an instance behind auth).
+searxng_answers() { # url
+  local auth header=()
+  auth=$(env_get SEARXNG_AUTHORIZATION)
+  [[ -z $auth ]] || header=(-H "Authorization: $auth")
+  curl -fsS --max-time 5 -o /dev/null "${header[@]}" "$1/healthz" 2>/dev/null
+}
+# True when the gateway searches through the stack's own SearXNG.
+searxng_is_builtin() {
+  local url
+  url=$(searxng_url)
+  [[ ${url/\/\/localhost:/\/\/127.0.0.1:} == "$(searxng_builtin_url)" ]]
+}
+
+# True when a program listens on TCP PORT of the loopback address (or of every address), where the
+# stack publishes SearXNG and the page reader.
+loopback_port_taken() { # port
+  ss -Hltn "sport = :$1" 2>/dev/null | awk '{print $4}' | grep -qE '^(127\.0\.0\.1|0\.0\.0\.0|\*|\[::\]):'
+}
+# Who holds it, for a message: "pasta, pid 1234" (as root; empty when ss cannot tell).
+loopback_port_holder() { # port
+  ss -Hltnp "sport = :$1" 2>/dev/null | sed -n 's/.*users:(("\([^"]*\)",pid=\([0-9]*\).*/\1, pid \2/p' | head -n 1
+}
+# True when a loopback port the stack publishes is its to use: the stack's own container already
+# publishes it, or nobody holds it. (Both containers listen on 8080 inside.)
+stack_port_available() { # service port
+  [[ $(docker compose --project-directory "$ROOT" port "$1" 8080 2>/dev/null) == "127.0.0.1:$2" ]] || ! loopback_port_taken "$2"
 }
 
 # The host's address on the default route (what users type in the browser on the LAN).

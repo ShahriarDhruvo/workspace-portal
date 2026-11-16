@@ -10,6 +10,7 @@ Browser ──▶ :3000            web (Next.js)       sign-in, change password,
 Browser ──▶ :3100+N          gateway agent port  user N's workspace: session check → HTTP/WebSocket proxy to wp-ws-N
                              gateway 127.0.0.1:4002   control API, called by web and the deploy scripts
                              gateway 172.29.0.1:4001  service API (LLM proxy + search/read MCP), called by workspaces only
+                             searxng 127.0.0.1:8888   search engine, called by the gateway only (network "workspace-portal-searxng")
                              reader  127.0.0.1:4003   page reader, called by the gateway only (network "workspace-portal-reader")
                                     │ Docker API (/var/run/docker.sock)
               ┌─────────────────────┼─────────────────────┐
@@ -31,8 +32,35 @@ Browser ──▶ :3100+N          gateway agent port  user N's workspace: sessi
     name, ICC off, masquerade off, and exactly one IPAM pool with the configured subnet, gateway and IP
     range. A network that differs is replaced when no container uses it; otherwise the gateway refuses to
     start and lists the differences.
-* The LLM server and SearXNG are external; on the test server they are `127.0.0.1:8080` and `127.0.0.1:8888`.
-  Only the gateway talks to them.
+* The LLM server is external; on the test server it is another machine on the LAN. Only the gateway talks to
+  it.
+* `searxng` is the search engine behind `web_search`: the upstream SearXNG image at the release pinned in
+  `searxng/Dockerfile`, with `searxng/settings.yml` copied into the image.
+  * It runs as uid 977 (the image's own user) with no capabilities, no volumes, a read-only root and one
+    secret, `SEARXNG_SECRET` (the key SearXNG signs its cookies with; without one compose passes SearXNG's
+    example key, which it refuses to start with). It is on the bridge network `workspace-portal-searxng`
+    (`SEARXNG_SUBNET`, bridge `SEARXNG_BRIDGE`, ICC and IPv6 off), with its port published on
+    `127.0.0.1:SEARXNG_PORT` for the gateway.
+  * The upstream image declares `/etc/searxng` and `/var/cache/searxng` as volumes. Compose puts a tmpfs on
+    each, so Docker creates no volume that would outlive the container and shadow a newer image. The settings
+    are therefore at `/usr/local/etc/searxng/settings.yml`, named by `SEARXNG_SETTINGS_PATH`; the example
+    settings the image's start script writes into the empty `/etc/searxng` are not read. SearXNG's caches
+    are in the `/tmp` tmpfs and are rebuilt at every start, among them the ClearURLs tracker list, which it
+    downloads then (`cdn.jsdelivr.net`, else `clearurls.xyz`) and uses to strip tracking parameters from
+    result links.
+  * `dns_search: ["."]` (here and on the reader) keeps the host's search domains out of the container, so a
+    failed lookup does not send the LAN's name to the public resolvers.
+  * The host firewall holds it exactly as it holds the reader (next item), with chains of its own:
+    `searxng_to_host`, `searxng_out` (DNS to `SEARXNG_DNS_1`/`SEARXNG_DNS_2`) and `searxng_in`. The two
+    containers are on separate bridges on purpose: the reader parses pages from anywhere, and SearXNG's
+    results decide which pages an agent may open, so neither may reach or impersonate the other.
+  * `SEARXNG_URL` names another instance for the gateway to use instead; the container then runs unused.
+    The installer comments out a `SEARXNG_URL` that names the built-in's own address (the old
+    `.env.example` set it), so the gateway follows `SEARXNG_PORT`.
+  * Order in the installer: images, firewall, then the check that the loopback ports are free, then
+    `SEARXNG_SECRET`, then `docker compose up`. Until the key exists compose passes SearXNG's example key
+    and SearXNG exits, so it cannot run before its firewall chains exist; and an installer that stops at
+    the port check has restarted nothing.
 * `reader` is the one container that connects to addresses an agent named (see Page reader below).
   * It runs as uid 10002 with no capabilities, no volumes, a read-only root and no secrets, on the bridge
     network `workspace-portal-reader` (`READER_SUBNET`, bridge `READER_BRIDGE`, ICC and IPv6 off), with its
@@ -40,13 +68,14 @@ Browser ──▶ :3100+N          gateway agent port  user N's workspace: sessi
   * The host firewall gives it three chains in the same table. `reader_to_host` (input): only replies to
     the gateway's connections. `reader_out` (forward): IPv4 only; DNS to `READER_DNS_1`/`READER_DNS_2`;
     then a drop for every address in the set `not_public` (the IANA special-purpose ranges); then TCP 80
-    and 443; then drop. `reader_in` (forward): only replies.
+    and 443; then drop. `reader_in` (forward): only replies. `deploy/firewall.sh` writes the same three
+    chains for every entry of its `INTERNET_ONLY` list (the reader and SearXNG).
 
 ## Ports and env
 
 All config comes from `.env` at the repo root (documented line by line in `.env.example`).
 `docker-compose.yml` passes each service only the variables listed for it below, so web never sees the LLM or
-SearXNG credentials and the gateway never sees `ADMIN_PASSWORD`. An empty value means the default. The deploy
+SearXNG credentials, the gateway never sees `ADMIN_PASSWORD`, and `searxng` sees only `SEARXNG_SECRET`. An empty value means the default. The deploy
 scripts read `.env` through `deploy/lib.sh` (`env_get`), falling back to `.env.example`.
 
 | Var | Default | Used by | Meaning |
@@ -62,9 +91,13 @@ scripts read `.env` through `deploy/lib.sh` (`env_get`), falling back to `.env.e
 | `LLM_UPSTREAM_URL` | `http://127.0.0.1:8080` | gateway | OpenAI-compatible server root; the proxy appends `/v1/...` |
 | `LLM_API_KEY` | empty | gateway | Sent upstream as `Authorization: Bearer` if set |
 | `LLM_MAX_CONCURRENCY` / `LLM_MAX_CONCURRENCY_PER_USER` | `3` / `2` | gateway | LLM queue limits |
-| `SEARXNG_URL`, `SEARXNG_AUTHORIZATION`, `SEARXNG_TIMEOUT_SECONDS` | `http://127.0.0.1:8888`, empty, `20` | gateway | SearXNG backend of the search MCP |
+| `SEARXNG_URL`, `SEARXNG_AUTHORIZATION`, `SEARXNG_TIMEOUT_SECONDS` | `http://127.0.0.1:SEARXNG_PORT`, empty, `20` | gateway | SearXNG backend of the search MCP: the stack's own unless `SEARXNG_URL` names another |
+| `SEARXNG_PORT` | `8888` | compose | The built-in SearXNG's loopback port |
+| `SEARXNG_SUBNET` / `SEARXNG_BRIDGE` | `172.30.250.16/28` / `br-wsearxng` | compose, firewall | The built-in SearXNG's network |
+| `SEARXNG_DNS_1` / `SEARXNG_DNS_2` | `1.1.1.1` / `9.9.9.9` | compose, firewall | The built-in SearXNG's DNS servers; the only DNS the firewall lets it reach |
+| `SEARXNG_SECRET` | generated by the installer | searxng | SearXNG's own cookie key |
 | `SEARCH_MAX_CONCURRENT_PER_USER` | `2` | gateway | Concurrent searches per workspace |
-| `SEARCH_FALLBACK_ENGINES` / `SEARCH_FALLBACK_BELOW` | empty / `3` | gateway | Engines asked by name, once, when a search returns fewer results than this |
+| `SEARCH_FALLBACK_ENGINES` / `SEARCH_FALLBACK_BELOW` | `duckduckgo,swisscows,privacywall,mojeek` (`none`: no second try) / `3` | gateway | Engines asked by name, once, when a search returns fewer results than this |
 | `SEARCH_CACHE_MINUTES` | `15` | gateway | How long an answer with results is reused for the same search (0 = off) |
 | `READER_URL` | `http://127.0.0.1:READER_PORT` | gateway | The page reader; `off` removes the `read_page` tool |
 | `READER_URL_POLICY` | `shown` | gateway | `shown`: a workspace opens only URLs it was shown, plus trusted hosts. `any`: every public page |

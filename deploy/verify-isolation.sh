@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2016,SC2034  # check() evaluates single-quoted conditions (see below)
 # Proves that a workspace can reach the gateway's service port (model + web search) and nothing else,
-# and that the page reader can reach the public internet and nothing else.
+# and that the page reader and the search engine can reach the public internet and nothing else.
 #
 #   1. Host: the Docker engine, the workspace network and the firewall table are what the gateway
 #      and deploy/firewall.sh expect.
@@ -11,8 +11,11 @@
 #      IPv6 targets: the gateway's other ports, every host address, the LLM server and SearXNG
 #      directly, the page reader, the router, the internet and the other workspaces.
 #   4. The page reader: its container has nothing (no capabilities, mounts or secrets), it refuses
-#      every address that is not public, and the firewall stops it from reaching the host, the LAN
-#      and the workspaces even when asked from inside the container.
+#      every address that is not public, and the firewall stops it from reaching the host, the LAN,
+#      the workspaces and SearXNG even when asked from inside the container.
+#   5. The search engine (SearXNG): its container has nothing but its own key, it answers the
+#      gateway's kind of request, and the firewall stops it from reaching the host, the LAN, the
+#      workspaces and the reader.
 #
 # Safe to run any time; touches no user data.
 #   sudo bash deploy/verify-isolation.sh
@@ -41,7 +44,15 @@ READER_ID=""
 if $READER_ON; then READER_ID=$(docker compose --project-directory "$ROOT" ps -q reader 2>/dev/null || true); fi
 READER_IP=""
 if [[ -n $READER_ID ]]; then READER_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$READER_ID"); fi
-READER_GW=$(ip -4 -o addr show dev "$READER_BRIDGE" 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
+READER_GW=$(ip -4 -o addr show dev "$READER_BRIDGE" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 || true)
+SEARXNG_PORT=$(env_get SEARXNG_PORT)
+SEARXNG_BRIDGE=$(env_get SEARXNG_BRIDGE)
+SEARXNG_SUBNET=$(env_get SEARXNG_SUBNET)
+SEARXNG_ID=$(docker compose --project-directory "$ROOT" ps -q searxng 2>/dev/null || true)
+SEARXNG_IP=""
+if [[ -n $SEARXNG_ID ]]; then SEARXNG_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$SEARXNG_ID"); fi
+SEARXNG_GW=$(ip -4 -o addr show dev "$SEARXNG_BRIDGE" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 || true)
+GATEWAY_ID=$(docker compose --project-directory "$ROOT" ps -q gateway 2>/dev/null || true)
 load_enabled_agents
 
 pass=0 fail=0
@@ -112,7 +123,7 @@ upstream() { # url label
   if [[ -n $address ]]; then add_closed "$address" "$port" "$2-directly"; fi
 }
 upstream "$(env_get LLM_UPSTREAM_URL)" "the-LLM-server"
-upstream "$(env_get SEARXNG_URL)" "SearXNG"
+upstream "$(searxng_url)" "SearXNG"
 ROUTER=$(ip -4 route show default | awk '{print $3; exit}')
 if [[ -n $ROUTER ]]; then add_closed "$ROUTER" 80 "the-router"; fi
 add_closed 1.1.1.1 443 "the-internet"
@@ -121,6 +132,10 @@ add_closed 8.8.8.8 53 "public-DNS-over-TCP"
 add_closed "$GW" "$READER_PORT" "the-page-reader-via-the-bridge"
 if [[ -n $READER_GW ]]; then add_closed "$READER_GW" "$READER_PORT" "the-page-reader-on-its-own-bridge"; fi
 if [[ -n $READER_IP ]]; then add_closed "$READER_IP" 8080 "the-page-reader-container"; fi
+# Nor is the stack's own SearXNG: the gateway does the searching.
+if ! searxng_is_builtin; then add_closed "$GW" "$SEARXNG_PORT" "the-built-in-SearXNG-via-the-bridge"; fi
+if [[ -n $SEARXNG_GW ]]; then add_closed "$SEARXNG_GW" "$SEARXNG_PORT" "the-built-in-SearXNG-on-its-own-bridge"; fi
+if [[ -n $SEARXNG_IP ]]; then add_closed "$SEARXNG_IP" 8080 "the-built-in-SearXNG-container"; fi
 for peer in $(docker ps -q --filter label=workspace-portal.workspace=1 | xargs -r docker inspect -f "{{(index .NetworkSettings.Networks \"$NETWORK\").IPAddress}}"); do
   add_closed "$peer" 4170 "another-workspace"
 done
@@ -174,7 +189,7 @@ if [ "$code" = 403 ]; then ok "the service API refuses callers that are not work
 caps=$(awk '/^CapEff/ {print $2}' /proc/self/status)
 [ "$caps" = 0000000000000000 ] && ok "no capabilities" || bad "capabilities: $caps"
 grep -q '^NoNewPrivs:[[:space:]]*1' /proc/self/status && ok "no-new-privileges" || bad "new privileges allowed"
-if touch /usr/probe 2>/dev/null; then bad "root filesystem is writable"; else ok "read-only root filesystem"; fi
+if LC_ALL=C touch /usr/probe 2>&1 | grep -q 'Read-only file system'; then ok "read-only root filesystem"; else bad "root filesystem is not read-only"; fi
 if [ -n "$(find / -xdev -perm /6000 -type f 2>/dev/null | head -1)" ]; then bad "setuid/setgid binaries in the image"; else ok "no setuid/setgid binaries"; fi
 if [ -S /var/run/docker.sock ] || [ -S /run/docker.sock ]; then bad "the Docker socket is inside"; else ok "no Docker socket inside"; fi
 if [ -n "$(ls -A /srv 2>/dev/null)" ]; then bad "host data visible in /srv"; else ok "no host data inside"; fi
@@ -183,26 +198,47 @@ echo "probe: passed $pass, failed $fail"
 SH
 )
 
-# Runs inside the reader container (section 4): what the firewall lets it reach.
-READER_PROBE=$(cat <<'PY'
-import os, socket
+# Runs inside the reader and the SearXNG container (sections 4 and 5): what the firewall lets each
+# of them reach.
+INSIDE_PROBE=$(cat <<'PY'
+import errno, os, socket, struct
+who, other_dns = os.environ["WHO"], os.environ["OTHER_DNS"]
 def reach(ip, port):
     s = socket.socket(); s.settimeout(3)
     try: s.connect((ip, int(port))); return True
     except OSError: return False
     finally: s.close()
+# UDP and ICMP have no handshake: send a real DNS query or echo request and wait for an answer.
+def dns(server):
+    query = struct.pack(">HHHHHH", 0x1234, 0x0100, 1, 0, 0, 0) + b"\x07example\x03com\x00" + struct.pack(">HH", 1, 1)
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(2)
+    try: s.sendto(query, (server, 53)); s.recvfrom(512); return True
+    except OSError: return False
+    finally: s.close()
+def ping(host):
+    try: s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_ICMP)
+    except OSError: return False  # unprivileged ICMP not even allowed
+    s.settimeout(2)
+    try: s.sendto(struct.pack(">BBHHH", 8, 0, 0, 0, 1) + b"probe", (host, 0)); s.recvfrom(512); return True
+    except OSError: return False
+    finally: s.close()
 for line in os.environ["TARGETS"].splitlines():
     ip, port, label = line.split(None, 2)
-    print(("FAIL  reader REACHES " if reach(ip, port) else "PASS  reader blocked: ") + label.replace("-", " ") + f" ({ip}:{port})")
-print(("PASS  reader reaches" if reach("1.1.1.1", 443) else "FAIL  reader cannot reach") + " the public internet (1.1.1.1:443)")
-try: socket.getaddrinfo("example.com", 443, socket.AF_INET); print("PASS  reader resolves public names")
-except OSError: print("FAIL  reader cannot resolve public names (READER_DNS_1 / READER_DNS_2 in .env)")
-print("FAIL  reader runs as root" if os.getuid() == 0 else f"PASS  reader runs as uid {os.getuid()}, not root")
+    print((f"FAIL  {who} REACHES " if reach(ip, port) else f"PASS  {who} blocked: ") + label.replace("-", " ") + f" ({ip}:{port})")
+print((f"FAIL  {who} REACHES " if reach(other_dns, 53) else f"PASS  {who} blocked: ") + f"a DNS server other than its own ({other_dns}:53)")
+print((f"FAIL  {who} gets an answer from " if dns(other_dns) else f"PASS  {who} blocked: ") + f"DNS over UDP to a server other than its own ({other_dns}:53)")
+print((f"FAIL  {who} gets an answer to " if ping("1.1.1.1") else f"PASS  {who} blocked: ") + "ICMP echo to 1.1.1.1")
+print((f"PASS  {who} reaches" if reach("1.1.1.1", 443) else f"FAIL  {who} cannot reach") + " the public internet (1.1.1.1:443)")
+try: socket.getaddrinfo("example.com", 443, socket.AF_INET); print(f"PASS  {who} resolves public names")
+except OSError: print(f"FAIL  {who} cannot resolve public names ({os.environ['DNS_SETTINGS']} in .env)")
+print(f"FAIL  {who} runs as root" if os.getuid() == 0 else f"PASS  {who} runs as uid {os.getuid()}, not root")
 caps = [line.split()[1] for line in open("/proc/self/status") if line.startswith("CapEff")][0]
-print("PASS  reader has no capabilities" if int(caps, 16) == 0 else "FAIL  reader capabilities: " + caps)
-try: open("/usr/probe", "w"); print("FAIL  reader root filesystem is writable")
-except OSError: print("PASS  reader has a read-only root filesystem")
-print("reader probe: done")
+print(f"PASS  {who} has no capabilities" if int(caps, 16) == 0 else f"FAIL  {who} capabilities: " + caps)
+# EROFS and nothing else: "permission denied" would also be the answer of a writable root to this user.
+try: open("/usr/probe", "w"); print(f"FAIL  {who} root filesystem is writable")
+except OSError as error:
+    print(f"PASS  {who} has a read-only root filesystem" if error.errno == errno.EROFS else f"FAIL  {who} root filesystem is not read-only ({error.strerror})")
+print("inside probe: done")
 PY
 )
 
@@ -229,36 +265,89 @@ for agent in "${ENABLED_AGENTS[@]}"; do
   grep -q '^probe: ' <<<"$probe_output" || bad "the probe container ($agent) did not run to the end (see output above)"
 done
 
-# ---------------------------------------------------------------- 4. the page reader
+# ---------------------------------------------------------------- 4 and 5. the internet-only containers
+# What the firewall must keep the reader and SearXNG from, asked from inside each container as if
+# its own checks had failed.
+inside=("$GW $SERVICE_PORT the-gateway-service-port" "$GW 22 host-SSH-via-the-workspace-bridge")
+for address in $(ip -4 -o addr show | awk '{print $4}' | cut -d/ -f1 | grep -v '^127\.'); do
+  inside+=("$address 22 SSH-on-host-address-$address" "$address $WEB_PORT the-portal-on-host-address-$address" "$address $CONTROL_PORT the-gateway-control-API-on-$address")
+done
+if [[ -n $ROUTER ]]; then inside+=("$ROUTER 80 the-router" "$ROUTER 53 DNS-on-the-router"); fi
+# The firewall lets these containers reach every public address on ports 80 and 443, so a model
+# server that is one (a hosted API) is not among the things they must be kept from.
+public_web_address() { # "ip port label"
+  local ip port _
+  read -r ip port _ <<<"$1"
+  [[ $port == 80 || $port == 443 ]] && python3 -c 'import ipaddress, sys; sys.exit(0 if ipaddress.ip_address(sys.argv[1]).is_global else 1)' "$ip" 2>/dev/null
+}
+for target in "${closed[@]}"; do
+  case $target in
+    *the-LLM-server-directly) public_web_address "$target" || inside+=("$target") ;;
+    *another-workspace) inside+=("$target") ;;
+  esac
+done
+inside+=("1.1.1.1 22 a-public-address-on-another-port")
+
+# The restrictions both containers run under.
+locked_down() { # who container user network bridge subnet port
+  local who=$1 id=$2 user=$3 network=$4 bridge=$5 subnet=$6 port=$7
+  on() { docker inspect -f "$1" "$id"; }
+  check "$who: read-only root, all capabilities dropped, no-new-privileges, not privileged" \
+    '[[ $(on "{{.HostConfig.ReadonlyRootfs}} {{.HostConfig.CapDrop}} {{.HostConfig.SecurityOpt}} {{.HostConfig.Privileged}}") == "true [ALL] [no-new-privileges:true] false" ]]'
+  check "$who runs as an unprivileged user ($(on '{{.Config.User}}'))" '[[ $(on "{{.Config.User}}") == "$user" ]]'
+  check "$who has no volumes and no Docker socket" '[[ $(on "{{len .Mounts}}") == 0 ]]'
+  check "$who is published on the loopback interface only (127.0.0.1:$port)" '[[ $(docker port "$id" 8080/tcp) == "127.0.0.1:$port" ]]'
+  check "$who is on its own network only ($network)" '[[ $(on "{{range \$name, \$_ := .NetworkSettings.Networks}}{{\$name}} {{end}}") == "$network " ]]'
+  check "$who network is bridge $bridge, $subnet, without IPv6" \
+    '[[ $(docker network inspect -f "{{index .Options \"com.docker.network.bridge.name\"}} {{range .IPAM.Config}}{{.Subnet}}{{end}} {{.EnableIPv6}}" "$network") == "$bridge $subnet false" ]]'
+}
+
+# The firewall chains of one of them: the jumps from its bridge, and in its own forward chain the
+# drop of everything that is not public before the two ports are let through.
+fenced() { # who chain-prefix bridge
+  local who=$1 name=$2 bridge=$3 out
+  out=$(nft list chain inet workspace_portal "${name}_out" 2>/dev/null || true)
+  check "firewall table keeps $who off the host and off private networks" \
+    '[[ $rules == *"iifname \"$bridge\" jump ${name}_to_host"* && $rules == *"iifname \"$bridge\" jump ${name}_out"* && $rules == *"oifname \"$bridge\" jump ${name}_in"* && $out == *"ip daddr @not_public drop"*"tcp dport { 80, 443 } accept"*"drop"* ]]'
+}
+
+# Runs INSIDE_PROBE in a container and counts what it prints.
+probe_inside() { # who container dns-settings-prefix target...
+  local who=$1 id=$2 prefix=$3 output other_dns candidate
+  shift 3
+  # A public resolver that is not one of the container's two.
+  for candidate in 8.8.8.8 208.67.222.222 9.9.9.10; do
+    if [[ $candidate != "$(env_get "${prefix}_1")" && $candidate != "$(env_get "${prefix}_2")" ]]; then other_dns=$candidate; break; fi
+  done
+  output=$(docker exec -e WHO="$who" -e DNS_SETTINGS="${prefix}_1 / ${prefix}_2" -e OTHER_DNS="$other_dns" -e TARGETS="$(printf '%s\n' "$@")" "$id" python3 -c "$INSIDE_PROBE" 2>&1) || true
+  echo "$output" | grep -v '^inside probe: '
+  pass=$((pass + $(grep -c '^PASS' <<<"$output" || true)))
+  fail=$((fail + $(grep -c '^FAIL' <<<"$output" || true)))
+  grep -q '^inside probe: done' <<<"$output" || bad "the probe inside the $who container did not run to the end (see output above)"
+}
+
 echo "== page reader"
 if ! $READER_ON; then
   echo "(off: READER_URL=off)"
 elif [[ -z $READER_ID ]]; then
   bad "the reader container is running (start it: sudo bash deploy/install.sh)"
 else
-  rd() { docker inspect -f "$1" "$READER_ID"; }
-  check "reader: read-only root, all capabilities dropped, no-new-privileges, not privileged" \
-    '[[ $(rd "{{.HostConfig.ReadonlyRootfs}} {{.HostConfig.CapDrop}} {{.HostConfig.SecurityOpt}} {{.HostConfig.Privileged}}") == "true [ALL] [no-new-privileges:true] false" ]]'
-  check "reader runs as an unprivileged user ($(rd '{{.Config.User}}'))" '[[ $(rd "{{.Config.User}}") == "10002:10002" ]]'
-  check "reader has no volumes and no Docker socket" '[[ $(rd "{{len .Mounts}}") == 0 ]]'
+  locked_down reader "$READER_ID" 10002:10002 workspace-portal-reader "$READER_BRIDGE" "$READER_SUBNET" "$READER_PORT"
   check "reader holds no secret (no key, password or token in its environment)" \
-    '! rd "{{range .Config.Env}}{{println .}}{{end}}" | grep -qiE "secret|password|api_key|authorization|token"'
-  check "reader is published on the loopback interface only (127.0.0.1:$READER_PORT)" \
-    '[[ $(docker port "$READER_ID" 8080/tcp) == "127.0.0.1:$READER_PORT" ]]'
-  check "reader network is bridge $READER_BRIDGE, $READER_SUBNET, without IPv6" \
-    '[[ $(docker network inspect -f "{{index .Options \"com.docker.network.bridge.name\"}} {{range .IPAM.Config}}{{.Subnet}}{{end}} {{.EnableIPv6}}" workspace-portal-reader) == "$READER_BRIDGE $READER_SUBNET false" ]]'
-  check "firewall table keeps the reader off the host and off private networks" \
-    '[[ $rules == *"iifname \"$READER_BRIDGE\" jump reader_to_host"* && $rules == *"iifname \"$READER_BRIDGE\" jump reader_out"* && $rules == *"ip daddr @not_public drop"* && $rules == *"oifname \"$READER_BRIDGE\" jump reader_in"* ]]'
+    '! docker inspect -f "{{range .Config.Env}}{{println .}}{{end}}" "$READER_ID" | grep -qiE "secret|password|api_key|authorization|token"'
+  fenced "the reader" reader "$READER_BRIDGE"
 
   # What the reader itself refuses. Each of these must come back as a refusal, never as a page.
   HOST_IP=$(host_ip || true)
   refused=("http://127.0.0.1/" "http://localhost/" "http://127.1/" "http://2130706433/" "http://0x7f.0.0.1/" "http://[::1]/"
     "http://[::ffff:127.0.0.1]/" "http://169.254.169.254/latest/meta-data/" "http://$GW:$SERVICE_PORT/llm/v1/models"
     "http://100.100.100.100/" "http://example.com:22/" "http://user:pw@example.com/" "file:///etc/passwd" "gopher://example.com/"
-    "http://portal.local/" "http://router/" "$(env_get LLM_UPSTREAM_URL)/v1/models" "$(env_get SEARXNG_URL)/search?q=x&format=json")
+    "http://portal.local/" "http://router/" "$(env_get LLM_UPSTREAM_URL)/v1/models" "$(searxng_builtin_url)/search?q=x&format=json")
+  if ! searxng_is_builtin; then refused+=("$(searxng_url)/search?q=x&format=json"); fi
   if [[ -n $HOST_IP ]]; then refused+=("http://$HOST_IP:$WEB_PORT/" "http://$HOST_IP/"); fi
   if [[ -n $ROUTER ]]; then refused+=("http://$ROUTER/"); fi
   if [[ -n $READER_GW ]]; then refused+=("http://$READER_GW/"); fi
+  if [[ -n $SEARXNG_IP ]]; then refused+=("http://$SEARXNG_IP:8080/"); fi
   ask_reader() { # url -> the reader's JSON answer
     python3 -c 'import json,sys; print(json.dumps({"url": sys.argv[1]}))' "$1" |
       curl -s --max-time 40 -H 'content-type: application/json' --data-binary @- "http://127.0.0.1:$READER_PORT/read" || true
@@ -270,21 +359,61 @@ else
   answer=$(ask_reader "https://example.com/")
   check "reader reads a public page (https://example.com/)" '[[ $answer == *"\"ok\": true"* && $answer == *"Example Domain"* ]]'
 
-  # The firewall, asked from inside the reader container, as if its own checks had failed.
-  inside=("$GW $SERVICE_PORT the-gateway-service-port" "$GW 22 host-SSH-via-the-workspace-bridge")
-  for address in $(ip -4 -o addr show | awk '{print $4}' | cut -d/ -f1 | grep -v '^127\.'); do
-    inside+=("$address 22 SSH-on-host-address-$address" "$address $WEB_PORT the-portal-on-host-address-$address" "$address $CONTROL_PORT the-gateway-control-API-on-$address")
-  done
-  if [[ -n $ROUTER ]]; then inside+=("$ROUTER 80 the-router" "$ROUTER 53 DNS-on-the-router"); fi
+  reader_inside=("${inside[@]}")
   for target in "${closed[@]}"; do
-    case $target in *the-LLM-server-directly | *SearXNG-directly | *another-workspace) inside+=("$target") ;; esac
+    case $target in *SearXNG-directly | *the-built-in-SearXNG-*) reader_inside+=("$target") ;; esac
   done
-  inside+=("1.1.1.1 22 a-public-address-on-another-port" "8.8.8.8 53 a-DNS-server-other-than-its-own")
-  inside_output=$(docker exec -e TARGETS="$(printf '%s\n' "${inside[@]}")" "$READER_ID" python3 -c "$READER_PROBE" 2>&1) || true
-  echo "$inside_output" | grep -v '^reader probe: '
-  pass=$((pass + $(grep -c '^PASS' <<<"$inside_output" || true)))
-  fail=$((fail + $(grep -c '^FAIL' <<<"$inside_output" || true)))
-  grep -q '^reader probe: done' <<<"$inside_output" || bad "the probe inside the reader container did not run to the end (see output above)"
+  probe_inside reader "$READER_ID" READER_DNS "${reader_inside[@]}"
+fi
+
+echo "== search engine (SearXNG)"
+if [[ -z $SEARXNG_ID ]]; then
+  bad "the searxng container is running (start it: sudo bash deploy/install.sh)"
+else
+  locked_down SearXNG "$SEARXNG_ID" 977:977 workspace-portal-searxng "$SEARXNG_BRIDGE" "$SEARXNG_SUBNET" "$SEARXNG_PORT"
+  searxng_env=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$SEARXNG_ID")
+  check "SearXNG holds no secret but its own key (nothing of the portal's, the LLM's or the admin's)" \
+    '! grep -iE "secret|password|api_key|authorization|token" <<<"$searxng_env" | grep -qv "^SEARXNG_SECRET="'
+  searxng_key=$(sed -n 's/^SEARXNG_SECRET=//p' <<<"$searxng_env")
+  check "SearXNG has a key of its own (not empty, not the example key)" '[[ -n $searxng_key && $searxng_key != ultrasecretkey ]]'
+  fenced SearXNG searxng "$SEARXNG_BRIDGE"
+  check "SearXNG answers on 127.0.0.1:$SEARXNG_PORT" 'curl -fsS --max-time 5 "http://127.0.0.1:$SEARXNG_PORT/healthz" >/dev/null'
+  # An empty query asks no search engine: SearXNG answers 400 when the JSON format is allowed and
+  # 403 when it is not.
+  check "SearXNG allows the JSON format the gateway asks for" \
+    '[[ $(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "http://127.0.0.1:$SEARXNG_PORT/search?q=&format=json") == 400 ]]'
+  # What the gateway container was really started with, against what .env says now.
+  gateway_searxng=""
+  if [[ -n $GATEWAY_ID ]]; then gateway_searxng=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$GATEWAY_ID" | sed -n 's/^SEARXNG_URL=//p'); fi
+  check "the gateway searches through $(searxng_url), as .env says" '[[ ${gateway_searxng%/} == "$(searxng_url)" ]]'
+  if searxng_is_builtin; then
+    # The engines SearXNG has loaded, and the ones among them that it asks on every search.
+    config=$(curl -fsS --max-time 5 "http://127.0.0.1:$SEARXNG_PORT/config" || true)
+    engine_names() { # all | enabled
+      python3 -c 'import json,sys; print("\n".join(e["name"] for e in json.load(sys.stdin)["engines"] if sys.argv[1] == "all" or e["enabled"]))' "$1" <<<"$config" 2>/dev/null || true
+    }
+    loaded=$(engine_names all)
+    always=$(engine_names enabled | paste -sd, | sed 's/,/, /g')
+    check "SearXNG asks at least one engine on every search (${always:-none})" '[[ -n $always ]]'
+    fallback_setting=$(env_get SEARCH_FALLBACK_ENGINES)
+    if [[ ${fallback_setting,,} != none ]]; then
+      IFS=, read -r -a fallback <<<"$fallback_setting"
+      for engine in "${fallback[@]}"; do
+        engine=$(sed 's/^ *//; s/ *$//' <<<"$engine")
+        [[ -n $engine ]] || continue
+        check "SearXNG has loaded the fallback engine $engine (SEARCH_FALLBACK_ENGINES)" 'grep -qxF "$engine" <<<"$loaded"'
+      done
+    fi
+  else
+    echo "(the gateway searches through $(searxng_url), not through this SearXNG)"
+    check "the SearXNG at $(searxng_url) answers" 'searxng_answers "$(searxng_url)"'
+  fi
+
+  searxng_inside=("${inside[@]}")
+  for target in "${closed[@]}"; do
+    case $target in *the-page-reader-*) searxng_inside+=("$target") ;; esac
+  done
+  probe_inside SearXNG "$SEARXNG_ID" SEARXNG_DNS "${searxng_inside[@]}"
 fi
 
 echo "passed $pass, failed $fail"

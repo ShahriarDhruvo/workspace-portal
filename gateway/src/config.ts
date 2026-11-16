@@ -187,7 +187,13 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
       authorization: read.string("SEARXNG_AUTHORIZATION", ""),
       timeoutMs: read.int("SEARXNG_TIMEOUT_SECONDS", 20, 1) * 1000,
       maxConcurrentPerUser: read.int("SEARCH_MAX_CONCURRENT_PER_USER", 2, 1),
-      fallbackEngines: read.list("SEARCH_FALLBACK_ENGINES", "", /^[A-Za-z0-9][A-Za-z0-9 ._-]*$/, "SearXNG engine names"),
+      // The engines searxng/settings.yml loads but keeps out of ordinary searches.
+      fallbackEngines: read.list(
+        "SEARCH_FALLBACK_ENGINES",
+        "duckduckgo,swisscows,privacywall,mojeek",
+        /^[A-Za-z0-9][A-Za-z0-9 ._-]*$/,
+        "SearXNG engine names",
+      ),
       fallbackBelow: read.int("SEARCH_FALLBACK_BELOW", 3, 1),
       cacheMs: read.int("SEARCH_CACHE_MINUTES", 15, 0) * 60_000,
     },

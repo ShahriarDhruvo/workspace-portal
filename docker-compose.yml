@@ -1,10 +1,11 @@
-# Workspace Portal: the web app, the gateway and the page reader. The per-user workspace containers
-# are not listed here. The gateway creates and removes them on demand from the image built from
-# workspace-image/, on an internal network it creates itself (no route anywhere except the gateway).
+# Workspace Portal: the web app, the gateway, the search engine (SearXNG) and the page reader. The
+# per-user workspace containers are not listed here. The gateway creates and removes them on demand
+# from the image built from workspace-image/, on an internal network it creates itself (no route
+# anywhere except the gateway).
 #
 # Settings come from .env (docker compose reads it for the ${...} values below). Each service gets
 # only the variables it uses: the web app never sees the LLM or SearXNG credentials, the gateway
-# never sees the admin password, and the reader sees no secret at all.
+# never sees the admin password, the reader sees no secret at all, and SearXNG sees only its own key.
 name: workspace-portal
 
 x-common: &common
@@ -80,7 +81,8 @@ services:
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_MAX_CONCURRENCY: ${LLM_MAX_CONCURRENCY:-}
       LLM_MAX_CONCURRENCY_PER_USER: ${LLM_MAX_CONCURRENCY_PER_USER:-}
-      SEARXNG_URL: ${SEARXNG_URL:-}
+      # The stack's own SearXNG (the searxng service below), unless .env names another instance.
+      SEARXNG_URL: ${SEARXNG_URL:-http://127.0.0.1:${SEARXNG_PORT:-8888}}
       SEARXNG_AUTHORIZATION: ${SEARXNG_AUTHORIZATION:-}
       SEARXNG_TIMEOUT_SECONDS: ${SEARXNG_TIMEOUT_SECONDS:-}
       SEARCH_MAX_CONCURRENT_PER_USER: ${SEARCH_MAX_CONCURRENT_PER_USER:-}
@@ -133,6 +135,56 @@ services:
       retries: 3
       start_period: 15s
 
+  # The search engine behind the web_search tool: SearXNG with the portal's settings (searxng/). It
+  # sends every query to public search engines, so like the reader it gets no volumes, no
+  # capabilities, a read-only root, an unprivileged user, and a network of its own from which
+  # deploy/firewall.sh lets it reach only public addresses on ports 80 and 443 (and its public DNS
+  # servers). Its one secret is the key SearXNG requires for its own cookies. Only the gateway talks
+  # to it, through a port published on the host's loopback interface.
+  searxng:
+    <<: *common
+    build: { context: searxng }
+    image: workspace-portal/searxng:latest
+    # The upstream image's own user (its start script complains about any other). The number may
+    # belong to a system account of the host; with no volume and no host file inside, that gives the
+    # container nothing.
+    user: "977:977"
+    read_only: true
+    # SearXNG keeps its caches (engine data, the tracker list it downloads at start) in /tmp and
+    # rebuilds them at every start.
+    # The upstream image declares /etc/searxng and /var/cache/searxng as volumes. A tmpfs on each
+    # keeps Docker from creating volumes that would outlive the container. The settings are elsewhere
+    # in the image (searxng/Dockerfile); the image's start script puts an example settings.yml into
+    # the empty /etc/searxng, which SearXNG does not read, and this release leaves the cache
+    # directory empty.
+    tmpfs:
+      - /tmp:size=128m,noexec,nosuid,nodev
+      - /etc/searxng:size=1m,uid=977,gid=977,mode=0700,noexec,nosuid,nodev
+      - /var/cache/searxng:size=16m,uid=977,gid=977,mode=0700,noexec,nosuid,nodev
+    networks: [searxng]
+    ports: ["127.0.0.1:${SEARXNG_PORT:-8888}:8080"]
+    dns: ["${SEARXNG_DNS_1:-1.1.1.1}", "${SEARXNG_DNS_2:-9.9.9.9}"]
+    # Not the host's search domains: a failed lookup would send the LAN's name to the public resolvers.
+    dns_search: ["."]
+    # Only these two, never the whole .env: the image's start script reads a SEARXNG_PORT in its
+    # environment as the port to listen on.
+    environment:
+      # The installer writes the key into .env, once the firewall is in place. Without one SearXNG
+      # gets its example key, which it refuses to start with.
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-ultrasecretkey}
+      # The image's default is "::", and this network has no IPv6.
+      GRANIAN_HOST: 0.0.0.0
+    mem_limit: 512m
+    memswap_limit: 512m
+    cpus: 1.0
+    pids_limit: 256
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
   # The page reader behind the read_page tool. It connects to addresses an agent named and parses
   # what comes back, so it gets nothing: no secrets, no volumes, no capabilities, a read-only root,
   # an unprivileged user, and a network of its own from which deploy/firewall.sh lets it reach only
@@ -148,6 +200,8 @@ services:
     networks: [reader]
     ports: ["127.0.0.1:${READER_PORT:-4003}:8080"]
     dns: ["${READER_DNS_1:-1.1.1.1}", "${READER_DNS_2:-9.9.9.9}"]
+    # Not the host's search domains: a failed lookup would send the LAN's name to the public resolvers.
+    dns_search: ["."]
     environment:
       READER_TIMEOUT_SECONDS: ${READER_FETCH_TIMEOUT_SECONDS:-}
       READER_MAX_CONCURRENT: ${READER_MAX_CONCURRENT:-}
@@ -167,7 +221,18 @@ services:
       start_period: 15s
 
 networks:
-  # A bridge with a fixed name and subnet, because the firewall matches on both.
+  # Bridges with fixed names and subnets, because the firewall matches on both. One each, so that
+  # neither container is on the other's network.
+  searxng:
+    name: workspace-portal-searxng
+    driver: bridge
+    enable_ipv6: false
+    driver_opts:
+      com.docker.network.bridge.name: ${SEARXNG_BRIDGE:-br-wsearxng}
+      com.docker.network.bridge.enable_icc: "false"
+    ipam:
+      config:
+        - subnet: ${SEARXNG_SUBNET:-172.30.250.16/28}
   reader:
     name: workspace-portal-reader
     driver: bridge

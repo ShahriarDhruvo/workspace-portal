@@ -24,8 +24,8 @@ driven by a model you host.
                         ▲                              │
                         └─ 172.29.0.1:4001 ◀───────────┘ the only address a workspace can reach
                                ├─ /llm/v1    ──▶ LLM_UPSTREAM_URL (your model server)
-                               └─ /mcp/search ─┬▶ SEARXNG_URL      (your SearXNG: web_search)
-                                               └▶ reader container (public web pages: read_page)
+                               └─ /mcp/search ─┬▶ searxng container (public search engines: web_search)
+                                               └▶ reader container  (public web pages: read_page)
 ```
 
 ## Contents
@@ -34,10 +34,11 @@ driven by a model you host.
 - [Requirements](#requirements)
 - [Install and start the web server](#install-and-start-the-web-server)
 - [Connect the model](#connect-the-model)
-- [Connect your SearXNG search engine](#connect-your-searxng-search-engine)
+- [Web search](#web-search)
 - [The page reader](#the-page-reader)
 - [The agents: Qwen Code and DeepSeek Harness](#the-agents-qwen-code-and-deepseek-harness)
 - [Agent settings for all workspaces](#agent-settings-for-all-workspaces)
+- [Updating the portal](#updating-the-portal)
 - [Updating the workspace images](#updating-the-workspace-images)
 - [Using it](#using-it)
 - [Remote access with Tailscale](#remote-access-with-tailscale)
@@ -64,8 +65,8 @@ network and container items on a live install.
 - On that port the gateway serves only:
   - the model: chat completions, completions, embeddings and the model list under `/llm/v1/`, forwarded to
     `LLM_UPSTREAM_URL` with your real API key added (any other path of the model server is refused);
-  - web search: an MCP `web_search` tool that sends the query to `SEARXNG_URL` and returns titles, links and
-    snippets;
+  - web search: an MCP `web_search` tool that sends the query to the stack's own SearXNG and returns titles,
+    links and snippets;
   - page reading: an MCP `read_page` tool that returns the text of one public web page or PDF.
 
   There is no proxy: the workspace never holds a connection to the internet. `read_page` is the one way
@@ -85,6 +86,10 @@ network and container items on a live install.
     host firewall enforces the same from outside: from the reader's network only public addresses on 80
     and 443 and its two DNS servers are reachable, so not the host, your LAN, the LLM server, a metadata
     address or a workspace.
+
+  SearXNG, which sends the queries on to public search engines, is held the same way from outside: an
+  unprivileged container with a read-only root, no capabilities and no volumes, on a network of its own
+  with the same firewall rules. It and the reader are on separate networks and cannot reach each other.
 - The agents' own internet features are off, and users can't turn them back on:
   - Qwen Code, pinned at system scope: auto-update, usage statistics, telemetry and the model catalogue
     refresh are off, `web_fetch` is denied, and the built-in web search providers are removed.
@@ -118,7 +123,8 @@ network and container items on a live install.
 **Credentials**
 - The LLM API key and SearXNG credentials stay in the gateway; a workspace sees a placeholder key. Each of
   the portal's containers gets only the settings it uses: the web app never sees those credentials, the
-  gateway never sees the admin password, and the page reader gets no secret at all.
+  gateway never sees the admin password, the page reader gets no secret at all, and SearXNG gets only the
+  key it signs its own cookies with.
 - Each container start gets a fresh random credential for its agent. It lives only in the gateway and in
   that container.
   - Qwen Code: the browser gets a different token, derived from its portal session and that one workspace.
@@ -150,8 +156,10 @@ network and container items on a live install.
   `openssl`, `curl`. Tested on Fedora 44 with Docker 29. Older Docker engines let containers on internal
   networks resolve internet names (CVE-2024-29018), so the installer and the gateway refuse them.
 - An OpenAI-compatible model server (llama.cpp, vLLM, Ollama, a hosted API). It runs anywhere the server can reach.
-- A SearXNG instance with the JSON output format enabled (optional; without it searches return an error).
-- RAM: about 0.5 GB per idle workspace and up to `WORKSPACE_MEMORY` (3 GB) under load.
+- Internet access from the server, for web search and page reading (without it both tools answer with an
+  error; everything else works).
+- RAM: about 0.5 GB per idle workspace and up to `WORKSPACE_MEMORY` (3 GB) under load, plus about 0.4 GB for
+  the portal's own containers.
 
 ## Install and start the web server
 
@@ -161,36 +169,44 @@ cd workspace-portal
 sudo bash deploy/install.sh
 ```
 
-The installer is idempotent; re-run it after pulling changes. It:
+The installer is idempotent; re-run it after pulling changes (see [Updating the portal](#updating-the-portal)).
+It:
 
 1. checks the host: Docker version, `nft`, and that workspace UIDs don't overlap a range in `/etc/subuid`;
 2. creates `.env` from `.env.example` (mode 600), generating `GATEWAY_CONTROL_SECRET` and an `ADMIN_PASSWORD`;
 3. creates `PORTAL_DATA_DIR` (`/srv/workspace-portal`) with the ownership model above, plus the SELinux labels;
 4. installs the example Qwen Code settings into `PORTAL_DATA_DIR/config/qwen/` (never overwriting yours);
 5. builds a workspace image for each agent in `WORKSPACE_AGENTS` at its current version (`QWEN_CODE_VERSION`,
-   `DSH_VERSION` until an admin picks another; a few minutes each the first time) and the web and gateway
-   images;
-6. installs and starts the workspace firewall unit, and opens ports 3000 and 3101–3299 to your LAN (and to
-   Tailscale, if present) in firewalld or ufw;
-7. starts the stack with `docker compose up -d` and prints the URL.
+   `DSH_VERSION` until an admin picks another; a few minutes each the first time) and the web, gateway,
+   SearXNG and page reader images;
+6. installs and starts the firewall unit (workspaces, SearXNG and the page reader), and opens ports 3000 and
+   3101–3299 to your LAN (and to Tailscale, if present) in firewalld or ufw;
+7. checks that no other program holds the two loopback ports the stack publishes (SearXNG's and the
+   reader's), generates SearXNG's key, starts the stack with `docker compose up -d`, waits for the web app,
+   SearXNG and the reader to answer, and prints the URL.
 
 From a development machine you can push and install in one step: `deploy/deploy.sh user@server`. It rsyncs
-the tree, keeping the server's `.env`.
+the tree, keeping the server's `.env` and nothing else: a file of the project that was changed on the server
+(`searxng/settings.yml`, say) is replaced by yours.
 
 Edit `.env` before the first install if you need different ports, paths or limits. Every variable is
-documented in `.env.example`. Changing a port or a `WORKSPACE_*` network setting later needs a re-run of the
-installer, which regenerates the firewall from them; other settings need only `docker compose up -d`.
+documented in `.env.example`. Changing a port or a network setting (`WORKSPACE_*`, `READER_*` or `SEARXNG_*`
+subnet, bridge or DNS server) later needs a re-run of the installer, which regenerates the firewall from
+them; other settings need only `docker compose up -d`.
 
 **Starting, stopping and restarting the web server.** Run these in the project directory on the server, with
 sudo unless you are in the `docker` group:
 
 ```sh
 docker compose up -d            # start (or apply .env changes)
-docker compose restart          # restart web + gateway; running workspaces keep running
+docker compose restart          # restart the portal's containers; running workspaces keep running
 docker compose down             # stop the portal; workspaces stay until the gateway stops them
 docker compose ps               # status
 docker compose logs -f web gateway
 ```
+
+`docker compose restart` and `down` also act on SearXNG and the page reader; name the services to leave them
+alone (`docker compose restart web gateway`).
 
 The stack starts at boot (Docker is enabled by the installer). Open `http://<server>:3000` and sign in as
 `admin`. The initial password is in `.env`:
@@ -258,53 +274,78 @@ Workspaces talk to the gateway, and the gateway talks to your model server, so o
    A reply that never comes usually means the model server is busy with other requests: the gateway's
    `/control/stats` shows `llm.inFlight`, and the server's own log shows its queue.
 
-## Connect your SearXNG search engine
+## Web search
 
-The agent's `web_search` tool is served by the gateway, which queries your SearXNG instance.
+The agent's `web_search` tool is served by the gateway, which asks the stack's own SearXNG: the `searxng`
+container, built from `searxng/` and started with everything else. There is nothing to install or connect.
 
-1. Enable JSON output in SearXNG's `settings.yml`, then restart SearXNG:
+- `searxng/Dockerfile` pins the SearXNG release, and `searxng/settings.yml` beside it holds the settings
+  tested with that release. Both are part of the image, so the container has no volume and a change to either
+  arrives with the next `sudo bash deploy/install.sh`.
+- No API key and no account. Every search asks four engines (keenable, yahoo, yandex, metacrawler). Four more
+  (duckduckgo, swisscows, privacywall, mojeek) are loaded but kept out of ordinary searches: the gateway
+  asks them by name when a search finds almost nothing.
+- Only the gateway reaches it, on `127.0.0.1:SEARXNG_PORT` (8888). It is an unprivileged container with a
+  read-only root and no capabilities, on a network of its own from which the host firewall lets it reach
+  public addresses on ports 80 and 443 and its two DNS servers, and nothing else: not the host, your LAN,
+  the LLM server, a workspace or the page reader.
+- Only the query text, page, time range and language are sent to SearXNG, and from there to the search
+  engines. The workspace never contacts either.
+- At every start SearXNG downloads the public ClearURLs list of tracking parameters (from
+  `cdn.jsdelivr.net`, else `clearurls.xyz`) and strips those parameters from the links in its results.
 
-   ```yaml
-   search:
-     formats:
-       - html
-       - json
-   ```
-
-2. Point the portal at it in `.env`:
-
-   ```sh
-   SEARXNG_URL=http://127.0.0.1:8888              # as the server reaches it; may include a path prefix
-   SEARXNG_AUTHORIZATION=                         # optional, for an instance behind auth: "Basic …" or "Bearer …"
-   SEARXNG_TIMEOUT_SECONDS=20
-   SEARCH_MAX_CONCURRENT_PER_USER=2
-   ```
-
-3. Apply the change with `docker compose up -d`. It takes effect immediately, with no workspace restart.
-
-4. Check it from the server: `curl -s "$SEARXNG_URL/search?q=test&format=json" | head -c 300` must return JSON.
-   A `403` means the JSON format is still disabled.
-
-Only the query text, page, time range and language are sent to SearXNG. The workspace never contacts it
-directly. The gateway's `limiter` setting in SearXNG (if you use its bot protection) sees the gateway's
-address, so allow it there.
-
-Three settings make searches hold up when engines misbehave:
+Check it from the server. The first command must print `OK`, the second a number above zero:
 
 ```sh
-SEARCH_FALLBACK_ENGINES=duckduckgo,mojeek      # asked by name when a search finds fewer than SEARCH_FALLBACK_BELOW results
+curl -s http://127.0.0.1:8888/healthz
+curl -s "http://127.0.0.1:8888/search?q=test&format=json" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["results"]))'
+```
+
+The settings in `.env`:
+
+```sh
+SEARXNG_PORT=8888                              # the loopback port SearXNG is published on
+SEARXNG_TIMEOUT_SECONDS=20
+SEARCH_MAX_CONCURRENT_PER_USER=2
+SEARCH_FALLBACK_ENGINES=duckduckgo,swisscows,privacywall,mojeek   # asked by name when a search finds fewer than SEARCH_FALLBACK_BELOW results; "none": never
 SEARCH_FALLBACK_BELOW=3
 SEARCH_CACHE_MINUTES=15                        # the same search again is answered from memory
 ```
 
-- Fallback engines can be engines SearXNG has loaded but keeps out of ordinary searches (`disabled: true`
-  in its `settings.yml`). That way a spare engine is only asked when the main ones come back thin, and is
+- Fallback engines are engines SearXNG has loaded but keeps out of ordinary searches (`disabled: true` in
+  `searxng/settings.yml`). That way a spare engine is only asked when the main ones come back thin, and is
   not worn out (and blocked) by every query.
 - When every engine fails, the agent is told which ones did not answer and that rewording will not help.
   Without that, a model takes "no results" as a bad query and retries it in ten spellings.
 - SearXNG skips, without an error, every engine that has no paging when asked for page 2, and every engine
   that has no date filter when asked for one. Keep at least one engine with both among the ones that are
   always on, or those searches come back empty.
+
+**Changing the engines.** Edit `searxng/settings.yml`, keep `SEARCH_FALLBACK_ENGINES` in `.env` in step with
+the engines it marks `disabled: true`, and run `sudo bash deploy/install.sh`. Search engines block addresses
+that send many queries in a short time, so test a change with a handful of searches, not a load test.
+`sudo bash deploy/verify-isolation.sh` checks that SearXNG runs with these settings (the JSON format is
+allowed and every fallback engine is loaded).
+
+**A SearXNG of your own instead.** Set `SEARXNG_URL` in `.env` to its base URL as the server reaches it (it
+may include a path prefix), and `SEARXNG_AUTHORIZATION` if it is behind auth (`Basic …` or `Bearer …`). Its
+`settings.yml` must allow the JSON format (`search.formats: [html, json]`; a `403` from
+`curl -s "$SEARXNG_URL/search?q=test&format=json"` means it does not), and its bot protection (`limiter`),
+if on, must let the gateway's address through. Set `SEARCH_FALLBACK_ENGINES` to engines your instance has
+loaded, or to `none`. Apply with `docker compose up -d`. The stack's own SearXNG keeps running, unused.
+
+**Coming from a version without its own SearXNG.** A SearXNG you installed for it holds `127.0.0.1:8888`,
+the port the portal's own now wants. Two ways:
+
+- Switch to the portal's own: stop and disable yours, then run the installer. `.env` needs no change (the
+  installer comments out the old `SEARXNG_URL` line, which named that address). Web search is down from the
+  moment yours stops until the installer has finished. To keep that short, run the installer first: it
+  builds everything, then stops without restarting anything and says which program holds the port. Stop
+  yours then and run it again.
+- Keep yours: set `SEARXNG_PORT` in `.env` to a free port and leave `SEARXNG_URL` pointing at yours.
+
+To go back to a version without its own SearXNG, start yours again: that version expects one at
+`SEARXNG_URL`, `http://127.0.0.1:8888` unless `.env` says otherwise.
 
 ## The page reader
 
@@ -413,6 +454,46 @@ the user's own settings, so the UI shows those settings as read-only:
   the models, the default model and the MCP servers.
 
 Users keep their own sessions, settings and skills in `~/.dsh` and `~/.agents`.
+
+## Updating the portal
+
+Everything the stack runs is built from this repository: the web app, the gateway, the page reader,
+SearXNG with its settings, the firewall and the recipes of the workspace images. One update brings all of
+it:
+
+```sh
+cd workspace-portal
+git pull --ff-only
+sudo bash deploy/install.sh
+sudo bash deploy/verify-isolation.sh
+```
+
+- The installer rebuilds what changed, reloads the firewall and replaces the containers whose image or
+  settings changed. `.env`, the agent settings in `PORTAL_DATA_DIR/config` and all user data are kept. A
+  setting that is new in `.env.example` needs no line in your `.env`: the default shown there applies.
+- Running workspaces keep running, and the gateway takes them over when it is back; open browser pages
+  reconnect by themselves. A request to the model that is in flight at that moment is cut off, so update
+  when no agent is working (the admin console shows which workspaces are).
+- A workspace keeps the image it started with. It gets a rebuilt image at its next start.
+- `verify-isolation.sh` must end with `failed 0`.
+
+What this does not update:
+
+- **The agents.** Qwen Code and DeepSeek Harness stay at the versions chosen in the admin console (see
+  [Updating the workspace images](#updating-the-workspace-images)).
+- **Debian packages inside the images**, Chromium among them. The base images are pinned by digest, so a
+  build repeats itself. `sudo bash deploy/update-image.sh --refresh` rebuilds the workspace images with
+  today's packages; the pins of the other images move with the repository.
+- **SearXNG**, beyond the release this repository pins. To move it yourself, change the `FROM` line in
+  `searxng/Dockerfile` as its comment describes and run the installer.
+- **The host**: its own packages, Docker and the kernel. After a reboot the firewall and the stack start by
+  themselves.
+
+To go back to an earlier state, check out that commit (`git log --oneline` lists them; `git checkout
+<commit>`) and run the installer again; `git checkout main` returns to the latest. If you changed files of
+the repository yourself (`searxng/settings.yml`, `workspace-image/Dockerfile`), `git pull` keeps your
+changes, and stops without changing anything when the update touches the same file: `git stash`, pull, then
+`git stash pop`.
 
 ## Updating the workspace images
 
@@ -538,10 +619,11 @@ All commands run in the project directory on the server.
 ```sh
 docker compose ps                                              # status
 docker compose logs -f gateway web                             # logs (JSON lines)
+docker compose logs --tail 50 searxng reader                   # the search engine and the page reader
 docker ps --filter label=workspace-portal.workspace=1 \
   --format '{{.Names}} {{.Label "workspace-portal.agent"}} {{.Status}}'   # running workspaces and their agents
 sudo bash deploy/verify-isolation.sh                           # prove a workspace reaches only the gateway
-sudo nft list table inet workspace_portal                      # the workspace firewall rules
+sudo nft list table inet workspace_portal                      # the firewall rules (workspaces, SearXNG, reader)
 docker compose exec web node scripts/reset-admin-password.mjs  # forgot the admin password: prints a temporary one
 ```
 
@@ -579,6 +661,7 @@ Layout:
 - `gateway/` holds the workspace manager, proxies, LLM queue and the MCP server for search and page reading.
 - `reader/` is the page reader container: fetching and address checks in Python, HTML to markdown with
   Defuddle in Node.
+- `searxng/` is the search engine container: the pinned SearXNG release and its `settings.yml`.
 - `packages/db/` is the SQLite schema shared by both.
 - `workspace-image/` builds the workspace images: one Dockerfile with a target per agent, the start scripts,
   and DeepSeek Harness's lockdown patch with its build-time preset adaptation and check.
@@ -596,6 +679,9 @@ Layout:
   `AGENT_PORT_COUNT` (and re-run the installer to open the ports) for more.
 - The admin can see everything in every workspace.
 - Plain HTTP on the LAN: use Tailscale (above) or a VPN when you leave it.
+- Web search depends on public search engines answering this server's address. They block addresses that
+  send many queries in a short time; the fallback engines and the search cache soften that, they do not
+  remove it.
 - The page reader runs no JavaScript and does not pretend to be a browser: pages built in the browser and
   sites that block automated readers come back as a refusal, and the agent has to use another source.
 - The LLM queue is per gateway process. Usage is counted per user per day in `llm_usage`, but not shown in the

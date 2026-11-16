@@ -57,7 +57,7 @@ test("defaults match .env.example", () => {
     authorization: "",
     timeoutMs: 20_000,
     maxConcurrentPerUser: 2,
-    fallbackEngines: [],
+    fallbackEngines: ["duckduckgo", "swisscows", "privacywall", "mojeek"],
     fallbackBelow: 3,
     cacheMs: 15 * 60_000,
   });
@@ -147,6 +147,8 @@ test("values are parsed and normalised", () => {
   assert.deepEqual(loadConfig({ ...secrets, READER_TRUSTED_HOSTS: "none" }).reader.trustedHosts, [], "none: no site is open as a whole");
   assert.equal(loadConfig({ ...secrets, READER_TRUSTED_HOSTS: "" }).reader.trustedHosts.length, DEFAULT_TRUSTED_HOSTS.split(",").length, "empty (as docker compose passes an unset value): the built-in list");
   assert.equal(loadConfig({ ...secrets, READER_URL: "off" }).reader.url, "", "off: no page reader");
+  assert.deepEqual(loadConfig({ ...secrets, SEARCH_FALLBACK_ENGINES: "none" }).search.fallbackEngines, [], "none: no second try");
+  assert.equal(loadConfig({ ...secrets, SEARCH_FALLBACK_ENGINES: "" }).search.fallbackEngines.length, 4, "empty (as docker compose passes an unset value): the four spare engines of searxng/settings.yml");
   assert.equal(config.workspace.nanoCpus, 1.5e9);
   assert.equal(config.workspace.uidBase, 300_000);
   assert.equal(config.workspace.tmpBytes, 256 * MIB);
