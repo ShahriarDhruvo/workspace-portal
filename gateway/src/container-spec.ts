@@ -16,12 +16,19 @@ import type Docker from "dockerode";
 import type { AgentKind } from "@portal/db";
 import { LLM_KEY_ENV, type AgentDriver } from "./agents/index.ts";
 import { MIB, type Config, type WorkspaceConfig } from "./config.ts";
+import { parseWorkspaceImage } from "./image-names.ts";
 import { userPaths, workspaceOwner } from "./paths.ts";
 
 export const WORKSPACE_LABEL = "workspace-portal.workspace";
 export const USER_ID_LABEL = "workspace-portal.user-id";
 /** The agent the container runs (an AgentKind). Containers from before the choice have none: Qwen Code. */
 export const AGENT_LABEL = "workspace-portal.agent";
+/**
+ * The agent version the container started with. Docker lists a container's image as an image id once its tag has
+ * moved to a rebuild (an update), so a restarted gateway reads the version from here. Containers from before it
+ * have none.
+ */
+export const VERSION_LABEL = "workspace-portal.version";
 
 /** Swap allowed on top of the memory limit, so short spikes slow down instead of OOM-killing the agent. */
 const SWAP_HEADROOM_BYTES = 512 * MIB;
@@ -49,13 +56,14 @@ export function workspaceContainerOptions(
   const ws = config.workspace;
   const paths = userPaths(config.dataDir, userId);
   const owner = workspaceOwner(ws.uidBase, userId);
+  const version = parseWorkspaceImage(image)?.version;
   return {
     name: containerName(userId),
     Hostname: "workspace",
     Image: image,
     User: `${owner.uid}:${owner.gid}`,
     WorkingDir: "/workspace",
-    Labels: { [WORKSPACE_LABEL]: "1", [USER_ID_LABEL]: String(userId), [AGENT_LABEL]: driver.kind },
+    Labels: { [WORKSPACE_LABEL]: "1", [USER_ID_LABEL]: String(userId), [AGENT_LABEL]: driver.kind, ...(version ? { [VERSION_LABEL]: version } : {}) },
     Env: [
       // A placeholder: the gateway replaces it with the real LLM key, which never enters a workspace.
       `${LLM_KEY_ENV}=portal`,

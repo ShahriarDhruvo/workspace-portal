@@ -44,7 +44,7 @@ test("Qwen Code workspace containers follow the container spec", () => {
     Image: "workspace-portal/workspace:qwen-0.27.4",
     User: "300042:300042",
     WorkingDir: "/workspace",
-    Labels: { "workspace-portal.workspace": "1", "workspace-portal.user-id": "42", "workspace-portal.agent": "qwen" },
+    Labels: { "workspace-portal.workspace": "1", "workspace-portal.user-id": "42", "workspace-portal.agent": "qwen", "workspace-portal.version": "0.27.4" },
     Env: [
       "PORTAL_LLM_KEY=portal",
       "HOME=/home/user",

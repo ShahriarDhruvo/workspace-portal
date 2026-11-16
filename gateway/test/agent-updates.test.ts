@@ -237,7 +237,7 @@ test("image removal refuses unknown agents, bad versions, missing and current im
     assert.ok(g.builder.images.has(workspaceImage("qwen", "0.27.0")));
   }));
 
-test("the admin's choice survives a restart; adopted containers report the version of their image", () =>
+test("the admin's choice survives a restart; adopted containers report the version they started with", () =>
   withGateway({ ...BOTH, agentVersionsFile: "# chosen in the admin console\nQWEN_CODE_VERSION=0.26.0\n" }, async (g) => {
     const { alice, bob } = g.ids;
     const agents = json<{ agents: Array<{ id: string; version: string }> }>(await g.control("GET", "/control/agents")).agents;
@@ -253,9 +253,13 @@ test("the admin's choice survives a restart; adopted containers report the versi
     await g.startReady(alice, "qwen");
     assert.equal(g.runtime.startsFor(alice)[0]!.options.image, workspaceImage("qwen", "0.26.0"));
     await g.startReady(bob, "dsh");
-    // bob's image tag moved since (docker shows an image id then): the version is unknown.
-    const bobContainer = g.workspaceRow(bob)!.containerId!;
-    g.runtime.containers.get(bobContainer)!.image = "sha256:0123abcd";
+    // Both images' tags moved since (a rebuild; docker shows an image id then): the version label still says.
+    const aliceContainer = g.runtime.containers.get(g.workspaceRow(alice)!.containerId!)!;
+    aliceContainer.image = "sha256:4567cdef";
+    // bob's container is from before the label: with its tag moved, its version is unknown.
+    const bobContainer = g.runtime.containers.get(g.workspaceRow(bob)!.containerId!)!;
+    bobContainer.image = "sha256:0123abcd";
+    bobContainer.version = null;
 
     g.manager.shutdown();
     const fresh = new WorkspaceManager({
@@ -270,7 +274,7 @@ test("the admin's choice survives a restart; adopted containers report the versi
     });
     await fresh.init();
     g.useManager(fresh);
-    assert.equal((await g.waitReady(alice)).agentVersion, "0.26.0", "parsed from the adopted container's image tag");
+    assert.equal((await g.waitReady(alice)).agentVersion, "0.26.0", "from the adopted container's version label");
     assert.equal((await g.waitReady(bob)).agentVersion, null);
     assert.deepEqual((await overview(g)).agents[1]!.running, [{ version: null, count: 1 }]);
   }));

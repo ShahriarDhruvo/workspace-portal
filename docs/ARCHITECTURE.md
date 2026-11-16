@@ -823,8 +823,8 @@ the UI, which shows those plugins read-only.
 
 ## Workspace lifecycle
 
-* Container `wp-ws-<id>`, with labels `workspace-portal.workspace=1`, `workspace-portal.user-id=<id>` and
-  `workspace-portal.agent=<qwen|dsh>`, runs as `User <200000+id>:<200000+id>` from
+* Container `wp-ws-<id>`, with labels `workspace-portal.workspace=1`, `workspace-portal.user-id=<id>`,
+  `workspace-portal.agent=<qwen|dsh>` and `workspace-portal.version=<version>`, runs as `User <200000+id>:<200000+id>` from
   `workspace-portal/workspace:<agent>-<version>`, the agent's current version when it started (the manager
   resolves the image at each start; `agentVersion` in WorkspaceInfo). One per user, whichever agent; the container spec
   (`container-spec.ts`) is the same for both apart from the image, the env and the settings mount.
@@ -862,7 +862,8 @@ the UI, which shows those plugins read-only.
 * Every Docker API call has a 60 s timeout, except an agent update's image build (30 minutes, see Agent
   versions and updates).
 * Gateway restart: workspace containers keep running. The next gateway adopts them (it reads the agent from
-  the label, the agent version from the image tag (null if the tag has moved since), and the credential back
+  the label, the agent version from its label (from the image tag for containers older than that label: null
+  once the tag has moved to a rebuild), and the credential back
   from the container's env) when it starts and every 5 min. Orphans are removed. A container IP claimed by a
   newer workspace is taken from the old entry, whose container is then checked.
 * At boot the gateway exits unless the Docker Engine is 25.0.5 or newer (CVE-2024-29018: older engines

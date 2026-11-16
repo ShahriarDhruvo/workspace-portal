@@ -958,7 +958,7 @@ export class WorkspaceManager {
       ...NO_CONTAINER,
       status: "starting",
       kind: container.agent,
-      version: image?.kind === container.agent ? image.version : null,
+      version: container.version ?? (image?.kind === container.agent ? image.version : null),
       containerId: container.id,
       ip: container.ip,
       port: container.port,

@@ -3,10 +3,12 @@ import Docker from "dockerode";
 import { isAgentKind, type AgentKind } from "@portal/db";
 import { driverFor } from "./agents/index.ts";
 import type { Config, WorkspaceConfig } from "./config.ts";
+import { isVersion } from "./versions.ts";
 import {
   AGENT_LABEL,
   containerName,
   USER_ID_LABEL,
+  VERSION_LABEL,
   WORKSPACE_LABEL,
   workspaceContainerOptions,
   workspaceNetworkOptions,
@@ -155,6 +157,7 @@ export class DockerRuntime implements ContainerRuntime {
         ip: row.NetworkSettings.Networks[network]?.IPAddress || null,
         port: agent === null ? null : driverFor(agent).port,
         image: row.Image,
+        version: isVersion(row.Labels[VERSION_LABEL] ?? "") ? row.Labels[VERSION_LABEL]! : null,
       };
     });
   }

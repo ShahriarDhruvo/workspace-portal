@@ -27,6 +27,8 @@ export interface ContainerSummary {
    * moved on since.
    */
   image: string;
+  /** From the version label (container-spec.ts VERSION_LABEL); null for containers from before it. */
+  version: string | null;
 }
 
 export type ContainerState =

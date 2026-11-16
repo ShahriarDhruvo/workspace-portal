@@ -421,6 +421,8 @@ interface FakeContainer {
   agent: AgentKind;
   /** The image it was created from. */
   image: string;
+  /** The version label (container-spec.ts VERSION_LABEL); null for a container from before it. */
+  version: string | null;
   /** Address on the "workspace network"; null for orphans nobody serves. */
   ip: string | null;
   running: boolean;
@@ -505,7 +507,7 @@ export class FakeRuntime implements ContainerRuntime {
   /** A container the gateway does not know about (as if left behind by someone else). */
   addOrphan(userId: number | null): string {
     const id = `orphan-${++this.#seq}`;
-    this.containers.set(id, { id, userId, agent: "qwen", image: workspaceImage("qwen", "0.27.0"), ip: null, running: true, exitCode: null, credential: null, server: null });
+    this.containers.set(id, { id, userId, agent: "qwen", image: workspaceImage("qwen", "0.27.0"), version: "0.27.0", ip: null, running: true, exitCode: null, credential: null, server: null });
     return id;
   }
 
@@ -549,7 +551,8 @@ export class FakeRuntime implements ContainerRuntime {
     const server =
       options.agent === "qwen" ? await startFakeQwen(options.credential, serverOptions) : await startFakeDsh(options.credential, serverOptions);
     const id = `fake-${++this.#seq}`;
-    this.containers.set(id, { id, userId, agent: options.agent, image: options.image, ip, running: true, exitCode: null, credential: options.credential, server });
+    const version = parseWorkspaceImage(options.image)?.version ?? null;
+    this.containers.set(id, { id, userId, agent: options.agent, image: options.image, version, ip, running: true, exitCode: null, credential: options.credential, server });
     const parsed = (name: string): SettingsObject | null => (options.agent === "qwen" ? (JSON.parse(files[name]!) as SettingsObject) : null);
     this.starts.push({ userId, containerId: id, options: { ...options }, files, settings: parsed("settings.json"), systemDefaults: parsed("system-defaults.json") });
     return { id, ip, port: server.port };
@@ -594,6 +597,7 @@ export class FakeRuntime implements ContainerRuntime {
       ip: c.ip,
       port: c.server?.port ?? 1,
       image: c.image,
+      version: c.version,
     }));
   }
 
