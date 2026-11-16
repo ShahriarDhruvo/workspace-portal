@@ -11,10 +11,12 @@ import { fetchJson, needsReauth } from "@/lib/fetch-json";
 import { stopReasonText } from "@/lib/format";
 import type { ApiError, StartRequest, WorkspaceStatusResponse } from "@/lib/gateway-types";
 import { Brand, UserChip } from "@/components/brand";
+import { BarMenu } from "@/components/common/bar-menu";
 import { StatusDot, type DotTone } from "@/components/common/status-dot";
 import { SubmitButton } from "@/components/forms/submit-button";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { CloseIcon, EyeIcon, KeyIcon, LogOutIcon, ShieldIcon, SwitchIcon, WarningIcon } from "@/components/ui/icons";
 import { Separator } from "@/components/ui/separator";
 import { AgentChooser } from "./agent-chooser";
@@ -28,6 +30,8 @@ import { SwitchAgentDialog } from "./switch-agent-dialog";
 // A workspace runs one agent at a time. When nothing runs, the page offers the agents to choose from; with a
 // single agent enabled it starts that one by itself. "Switch agent" stops the user's workspace and offers the
 // choice again.
+// The bar shows in full from the `bar` breakpoint (900px, app/globals.css). Below it, a menu button
+// (BarMenu) holds the controls: the bar keeps the mark, the status and "Admin connected".
 
 interface WorkspaceShellProps {
   viewer: { name: string; initials: string; isAdmin: boolean };
@@ -239,7 +243,10 @@ export function WorkspaceShell({ viewer, target, frame, idleTimeoutMinutes, agen
   const [state, dispatch] = useReducer(reducer, INITIAL);
   const [pollRound, pollNow] = useReducer((n: number) => n + 1, 0);
   const [switchOpen, setSwitchOpen] = useState(false);
+  /** The switch dialog was opened from the menu (below `bar`): the menu button gets the focus back, not the bar's. */
+  const [switchFromMenu, setSwitchFromMenu] = useState(false);
   const switchButton = useRef<HTMLButtonElement>(null);
+  const menuButton = useRef<HTMLButtonElement>(null);
   const autoStarted = useRef(false);
   const delay = useRef(2_000);
 
@@ -301,6 +308,11 @@ export function WorkspaceShell({ viewer, target, frame, idleTimeoutMinutes, agen
       dispatch({ type: "startConflicted", message: result.error.message });
       pollNow();
     } else dispatch({ type: "startFailed", error: result.error });
+  }
+
+  function openSwitch(fromMenu: boolean) {
+    setSwitchFromMenu(fromMenu);
+    setSwitchOpen(true);
   }
 
   /** "Switch agent": stops the user's workspace; the page then offers the agents again. */
@@ -407,7 +419,6 @@ export function WorkspaceShell({ viewer, target, frame, idleTimeoutMinutes, agen
   return (
     <div className="flex h-dvh flex-col overflow-hidden bg-background">
       {banner}
-      {/* On narrow screens icons stand in for the labels, and the gaps tighten, so the bar fits on one line. */}
       <header className="flex h-11.5 shrink-0 items-center gap-3 border-b bg-background px-5 max-sm:gap-2 max-sm:px-4">
         <Brand compact />
         <Separator orientation="vertical" className="data-[orientation=vertical]:h-4" />
@@ -422,23 +433,37 @@ export function WorkspaceShell({ viewer, target, frame, idleTimeoutMinutes, agen
           </span>
         ) : null}
         {canSwitch ? (
-          <Button ref={switchButton} type="button" variant="ghost" size="sm" onClick={() => setSwitchOpen(true)}>
+          <Button
+            ref={switchButton}
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="max-bar:hidden"
+            onClick={() => openSwitch(false)}
+          >
             <SwitchIcon />
-            <span className="max-sm:sr-only">Switch agent</span>
+            Switch agent
           </Button>
         ) : null}
         {!viewer.isAdmin && (info?.connections.admin ?? 0) > 0 ? (
-          <Badge role="status" title="An administrator has your workspace open" variant="warning" size="lg">
+          // On the narrowest phones the label is cut short rather than pushing the menu button off the bar.
+          <Badge
+            role="status"
+            title="An administrator has your workspace open"
+            variant="warning"
+            size="lg"
+            className="max-sm:min-w-0 max-sm:shrink"
+          >
             <EyeIcon />
-            <span className="max-sm:sr-only">Admin connected</span>
+            <span className="truncate">Admin connected</span>
           </Badge>
         ) : null}
-        <div className="ml-auto flex min-w-0 items-center gap-2">
+        <div className="ml-auto flex min-w-0 items-center gap-2 max-bar:hidden">
           {viewer.isAdmin ? (
             <Button asChild variant="ghost" size="sm">
               <Link href="/admin">
                 <ShieldIcon />
-                <span className="max-sm:sr-only">Admin</span>
+                Admin
               </Link>
             </Button>
           ) : null}
@@ -446,15 +471,45 @@ export function WorkspaceShell({ viewer, target, frame, idleTimeoutMinutes, agen
           <Button asChild variant="ghost" size="sm">
             <Link href="/change-password" title="Change your password">
               <KeyIcon />
-              <span className="max-sm:sr-only">Password</span>
+              Password
             </Link>
           </Button>
           <form action={signOut}>
             <SubmitButton variant="outline" size="sm" icon={<LogOutIcon />}>
-              <span className="max-sm:sr-only">Sign out</span>
+              Sign out
             </SubmitButton>
           </form>
         </div>
+        <BarMenu ref={menuButton} viewer={viewer} className="ml-auto bar:hidden">
+          {runningAgent ? (
+            <>
+              <DropdownMenuLabel>
+                Agent: <span className="text-foreground">{agentNames[runningAgent]}</span>
+              </DropdownMenuLabel>
+              {canSwitch ? (
+                <DropdownMenuItem onSelect={() => openSwitch(true)}>
+                  <SwitchIcon />
+                  Switch agent
+                </DropdownMenuItem>
+              ) : null}
+              <DropdownMenuSeparator />
+            </>
+          ) : null}
+          {viewer.isAdmin ? (
+            <DropdownMenuItem asChild>
+              <Link href="/admin">
+                <ShieldIcon />
+                Admin
+              </Link>
+            </DropdownMenuItem>
+          ) : null}
+          <DropdownMenuItem asChild>
+            <Link href="/change-password">
+              <KeyIcon />
+              Change password
+            </Link>
+          </DropdownMenuItem>
+        </BarMenu>
       </header>
       {state.notice ? (
         <div
@@ -487,7 +542,7 @@ export function WorkspaceShell({ viewer, target, frame, idleTimeoutMinutes, agen
           onOpenChange={setSwitchOpen}
           info={info}
           onConfirm={stopToSwitch}
-          returnFocusTo={switchButton}
+          returnFocusTo={switchFromMenu ? menuButton : switchButton}
         />
       ) : null}
     </div>

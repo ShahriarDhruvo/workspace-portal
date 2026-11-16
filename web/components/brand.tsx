@@ -50,12 +50,12 @@ export function Avatar({ initials, size = "sm" }: { initials: string; size?: "sm
   );
 }
 
-/** Avatar plus full name, as shown on the right of the top bars. */
+/** Avatar plus full name, as shown on the right of the top bars where they show in full. */
 export function UserChip({ name, initials }: { name: string; initials: string }) {
   return (
     <span className="flex min-w-0 items-center gap-2 text-13 text-foreground">
       <Avatar initials={initials} />
-      <span className="truncate max-sm:sr-only">{name}</span>
+      <span className="truncate">{name}</span>
     </span>
   );
 }

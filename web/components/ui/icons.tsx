@@ -21,6 +21,7 @@ import {
   KeyRound,
   LoaderCircle,
   LogOut,
+  Menu,
   Package,
   Plus,
   RefreshCw,
@@ -53,6 +54,7 @@ function icon(Glyph: LucideIcon, name: string) {
 
 export const PlusIcon = icon(Plus, "PlusIcon");
 export const EllipsisIcon = icon(Ellipsis, "EllipsisIcon");
+export const MenuIcon = icon(Menu, "MenuIcon");
 export const CloseIcon = icon(X, "CloseIcon");
 export const CheckIcon = icon(Check, "CheckIcon");
 export const CircleIcon = icon(Circle, "CircleIcon");

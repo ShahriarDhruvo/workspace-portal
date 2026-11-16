@@ -14,6 +14,11 @@
   /* Dialog overlays (bg-black/10: the backdrop barely dims, on purpose). */
   --color-black: #000;
 
+  /* 900px, where the workspace top bar starts to show in full (bar: and max-bar:). At their widest (two
+     agents, "Admin connected") its controls take about 845px before the user's name gets any room, so below
+     this a menu button holds them. In rem, like Tailwind's own breakpoints, so the variants sort with them. */
+  --breakpoint-bar: 56.25rem;
+
   /* Type scale in use: size / line-height. lib/utils.ts tells tailwind-merge about it. */
   --text-11: 11px;
   --text-11--line-height: 16px;
