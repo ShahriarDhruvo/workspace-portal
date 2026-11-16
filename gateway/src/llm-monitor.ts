@@ -133,6 +133,11 @@ export interface SessionTrack {
   promptTokens: number;
   cachedTokens: number;
   processedTokens: number;
+  /**
+   * processedTokens when first seen. The monitor polls only while someone watches, so a session may be well under
+   * way by then; its Read counts only what it reads from then on, not everything before over a few seconds.
+   */
+  baseTokens: number;
   generatedTokens: number;
   /** When processedTokens last changed. */
   processedAt: number | null;
@@ -145,16 +150,17 @@ export interface SessionTrack {
 }
 
 /**
- * Prompt tokens read per second of wall-clock time, from the session's admission until the prompt
- * was read (or until the latest progress while it still reads). Wall-clock on purpose: it is what the
- * person waits, with the engine's time shared among sessions.
+ * Prompt tokens read per second of wall-clock time, from when the session was first seen (its admission, give or
+ * take a poll, unless the monitor started later) until the prompt was read, or until the latest progress while it
+ * still reads. Wall-clock on purpose: it is what the person waits, with the engine's time shared among sessions.
  */
 export function readRate(track: SessionTrack): number | null {
-  if (track.processedTokens <= 0) return null;
+  const read = track.processedTokens - track.baseTokens;
+  if (read <= 0) return null;
   const end = track.writingSince ?? track.processedAt;
   if (end === null) return null;
   const span = end - track.firstSeen;
-  return span >= MIN_SPAN_MS / 2 ? (track.processedTokens * 1000) / span : null;
+  return span >= MIN_SPAN_MS / 2 ? (read * 1000) / span : null;
 }
 
 /** Tokens per second over the recent window of samples; null until there is enough history. */
@@ -184,7 +190,8 @@ export function updateTracks(tracks: Map<string, SessionTrack>, slots: readonly 
         firstSeen: now,
         promptTokens: slot.promptTokens,
         cachedTokens: slot.cachedTokens,
-        processedTokens: 0,
+        processedTokens: slot.processedTokens,
+        baseTokens: slot.processedTokens,
         generatedTokens: 0,
         processedAt: null,
         writingSince: null,

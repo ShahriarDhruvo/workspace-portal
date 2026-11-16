@@ -12,8 +12,8 @@ const RECHECK_MS = 30_000;
 
 /**
  * The admin's live view (Overview): the gateway's event stream (GET /control/live, docs/ARCHITECTURE.md "Live
- * view") passed through as it is. Ends when the browser leaves, the gateway closes it, or the session stops
- * being an admin's.
+ * view") passed through as it is. Ends when the browser leaves, the gateway closes or drops it, or the session
+ * stops being an admin's.
  */
 export async function GET(request: Request): Promise<Response> {
   const session = await apiSession({ admin: true });
@@ -44,11 +44,24 @@ export async function GET(request: Request): Promise<Response> {
   const stop = (): void => clearInterval(recheck);
   upstream.signal.addEventListener("abort", stop, { once: true });
 
-  const body = response.body.pipeThrough(
-    new TransformStream<Uint8Array, Uint8Array>({
-      flush: stop,
-    }),
-  );
+  // Ends cleanly when the gateway goes away mid-stream (a restart), so the browser sees a finished response and
+  // reconnects, instead of a broken one (an error in its console).
+  const reader = response.body.getReader();
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (!done) return controller.enqueue(value);
+      } catch {
+        // the upstream broke: end here
+      }
+      stop();
+      controller.close();
+    },
+    cancel() {
+      upstream.abort();
+    },
+  });
   return new Response(body, {
     headers: {
       "content-type": "text/event-stream; charset=utf-8",

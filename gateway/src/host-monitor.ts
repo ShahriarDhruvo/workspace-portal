@@ -10,7 +10,8 @@ const HISTORY_MS = 60_000;
 /** After the last viewer leaves, the stream stays open this long (a page reload doesn't reconnect). */
 const LINGER_MS = 15_000;
 const RETRY_MIN_MS = 1_000;
-const RETRY_MAX_MS = 15_000;
+/** Retries run only while someone watches, and one is a connection to a LAN host: readings return within 5 s. */
+const RETRY_MAX_MS = 5_000;
 
 export type HostRole = "portal" | "llm";
 /** off: not set up (no token); connecting; online: readings arrive; offline: hostd can't be reached or refused. */

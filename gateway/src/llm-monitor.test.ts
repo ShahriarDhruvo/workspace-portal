@@ -57,8 +57,20 @@ test("tracks follow each session's progress; Read is wall-clock from admission, 
   assert.equal(tracks.size, 0);
 });
 
+test("Read of a session first seen under way counts only what it reads from then on", () => {
+  // The first viewer opens the Overview while a long prompt is half read (36,000 tokens in): the monitor starts now.
+  const tracks = new Map<string, SessionTrack>();
+  const at = (t: number, slots: object[]): void => updateTracks(tracks, parseSlots(slots)!, t);
+  at(0, [slot(2, { task: 3, processing: true, prompt: 62_000, processed: 36_000 })]);
+  const track = tracks.get("2:3")!;
+  assert.equal(readRate(track), null, "nothing read since");
+  at(500, [slot(2, { task: 3, processing: true, prompt: 62_000, processed: 36_000 })]);
+  at(4000, [slot(2, { task: 3, processing: true, prompt: 62_000, processed: 37_600 })]);
+  assert.equal(readRate(track), 400, "1,600 tokens in 4 s, not 37,600");
+});
+
 function track(slotId: number, task: number, firstSeen: number): SessionTrack {
-  return { slot: slotId, task, firstSeen, promptTokens: 0, cachedTokens: 0, processedTokens: 0, generatedTokens: 0, processedAt: null, writingSince: null, samples: [], requestId: null };
+  return { slot: slotId, task, firstSeen, promptTokens: 0, cachedTokens: 0, processedTokens: 0, baseTokens: 0, generatedTokens: 0, processedAt: null, writingSince: null, samples: [], requestId: null };
 }
 
 function request(id: number, userId: number, forwardedAt: number | null): ActiveLlmRequest {

@@ -1,4 +1,5 @@
 // Formatting and history for the admin's live view (Overview). Pure; unit tested.
+import { formatBytes } from "./format.ts";
 import type { HostSample, LiveFrame, LiveInit, LlmTotalsPoint } from "./live-types.ts";
 
 /** How much history the charts show. */
@@ -55,6 +56,19 @@ export function formatElapsed(ms: number | null | undefined): string {
 }
 
 /** Memory a sample reports as free: what MemAvailable says (cache that can be dropped counts as free). */
+/** "113 / 124 GiB", the unit once when both share it; "228 KiB / 8.0 GiB" when not. */
+export function formatBytesOf(part: number, whole: number): string {
+  const [a, b] = [formatBytes(part), formatBytes(whole)];
+  const unit = b.slice(b.indexOf(" "));
+  return a.endsWith(unit) ? `${a.slice(0, -unit.length)} / ${b}` : `${a} / ${b}`;
+}
+
+/** A clock that reads 0 (an iGPU asleep) or is left out while the cores idle (portal-hostd) shows as idle. */
+export function formatClockOrIdle(mhz: number | null | undefined, usage: number | null | undefined): string {
+  if (mhz === 0 || ((mhz === null || mhz === undefined) && usage !== null && usage !== undefined)) return "idle";
+  return formatClock(mhz);
+}
+
 export function memoryFree(sample: HostSample): { bytes: number; percent: number } {
   const { totalBytes, availableBytes } = sample.memory;
   return { bytes: availableBytes, percent: totalBytes > 0 ? (availableBytes / totalBytes) * 100 : 0 };

@@ -1341,9 +1341,11 @@ class Engine:
                 job.rolled_back = True
                 job.error = str(e)
                 job.add('rolled back to the previous quadlet')
+                job.set_step('Failed; the previous version runs again')
             except (StepError, OSError) as e2:
                 job.error = f'{e}; rollback failed too: {e2}'
                 job.add(f'rollback failed: {e2}')
+                job.set_step('Failed; the rollback failed too')
             # The new image never took over, so the previous version on record stays what it was (a later
             # Roll back still reaches it).
             try:

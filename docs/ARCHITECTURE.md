@@ -455,7 +455,7 @@ Admin > Overview opens it through the web app (`/api/admin/live`). Server-sent e
 `frame` every 500 ms. Everything behind it runs only while at least one viewer is connected (at most 8):
 
 * **Server readings** (`host-monitor.ts`): one event stream per portal-hostd (`GET /v1/stream`), opened at
-  the first viewer, closed 15 s after the last left, reconnecting with backoff (1 s doubling to 15 s). The
+  the first viewer, closed 15 s after the last left, reconnecting with backoff (1 s doubling to 5 s). The
   last minute of readings is kept for a new viewer's charts. A host is `off` (no token), `connecting`,
   `online` or `offline` (with the error).
 * **LLM sessions** (`llm-monitor.ts`, `llm-requests.ts`): every 500 ms `GET LLM_UPSTREAM_URL/slots`
@@ -466,7 +466,9 @@ Admin > Overview opens it through the web app (`/api/admin/live`). Server-sent e
   new sessions are paired, in task order, with the oldest unpaired requests forwarded before the session
   was first seen.
   * Read = prompt tokens read per second of wall-clock time since the session was admitted (what the person
-    waits, the engine's time shared among sessions). Write = generated tokens per second over the last 3 s.
+    waits, the engine's time shared among sessions). A session already under way when the first viewer arrives
+    counts from then on: what it read before isn't spread over the first seconds. Write = generated tokens per
+    second over the last 3 s.
     Totals add up the sessions still reading (Read) and those writing (Write).
   * Recent finished requests show the engine's own figures (`timings`: compute time only).
   * A server without `/slots` (another engine): the rows come from the gateway alone (Write from the

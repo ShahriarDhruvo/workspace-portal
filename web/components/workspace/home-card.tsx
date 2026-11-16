@@ -134,7 +134,8 @@ export function HomeCard({ initial, initialError, idleTimeoutMinutes, agentNames
   const agent = active ? info.agent : info.nextAgent;
   const version = active ? info.agentVersion : info.agents.find((offered) => offered.id === info.nextAgent)?.version ?? null;
   const changesNextTime = active && info.nextAgent !== null && info.agent !== info.nextAgent;
-  const stoppedBecause = status === "stopped" ? stopReasonText(info.stopReason, idleTimeoutMinutes, "owner") : null;
+  // The owner's own Stop (here, on the workspace page or elsewhere) needs no explanation; the pill says Stopped.
+  const stoppedBecause = status === "stopped" && info.stopReason !== "user" ? stopReasonText(info.stopReason, idleTimeoutMinutes, "owner") : null;
   const ready = status === "running" && info.ready && request === null;
   const starting = request === "start" || status === "starting" || (status === "running" && !info.ready);
 

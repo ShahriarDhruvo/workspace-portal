@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import {
   appendHistory,
   formatBandwidth,
+  formatBytesOf,
   formatClock,
+  formatClockOrIdle,
   formatElapsed,
   formatNumber,
   formatPercent,
@@ -50,6 +52,17 @@ function sample(t: number, availableBytes = 6e9): HostSample {
     fans: [],
   };
 }
+
+test("used of total names a shared unit once; idle clocks say so", () => {
+  const GIB = 1024 ** 3;
+  assert.equal(formatBytesOf(113 * GIB, 124 * GIB), "113 / 124 GiB");
+  assert.equal(formatBytesOf(228 * 1024, 8 * GIB), "228 KiB / 8.0 GiB");
+  assert.equal(formatBytesOf(1.7 * GIB, 7.6 * GIB), "1.7 / 7.6 GiB");
+  assert.equal(formatClockOrIdle(0, 0), "idle");
+  assert.equal(formatClockOrIdle(null, 3), "idle");
+  assert.equal(formatClockOrIdle(null, null), "—");
+  assert.equal(formatClockOrIdle(606, 0), formatClock(606));
+});
 
 test("memory free is MemAvailable, with its share of the total", () => {
   assert.deepEqual(memoryFree(sample(0, 2e9)), { bytes: 2e9, percent: 25 });

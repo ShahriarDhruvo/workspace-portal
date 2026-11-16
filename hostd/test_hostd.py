@@ -740,6 +740,7 @@ class TestEngine(EngineCase):
         j = self.wait_job()
         self.assertEqual(j['phase'], 'failed')
         self.assertTrue(j['rolledBack'])
+        self.assertEqual(j['step'], 'Failed; the previous version runs again')
         self.assertIn('build_info', j['error'])
         self.assertEqual(self.read_quadlet(), QUADLET)
         self.assertEqual(self.state.running, D_OLD)
@@ -780,6 +781,7 @@ class TestEngine(EngineCase):
         j = self.wait_job()
         self.assertEqual(j['phase'], 'failed')
         self.assertFalse(j['rolledBack'])
+        self.assertEqual(j['step'], 'Failed; the rollback failed too')
         self.assertIn('rollback failed too', j['error'])
         self.assertEqual(self.read_quadlet(), QUADLET)          # the saved quadlet was still written back
 

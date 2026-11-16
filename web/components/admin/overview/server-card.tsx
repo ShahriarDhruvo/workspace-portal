@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import { formatBytes } from "@/lib/format";
-import { formatBandwidth, formatClock, formatNumber, formatPercent, formatTemp, formatWatts, memoryFree } from "@/lib/live-format";
+import { formatBandwidth, formatBytesOf, formatClock, formatClockOrIdle, formatNumber, formatPercent, formatTemp, formatWatts, memoryFree } from "@/lib/live-format";
 import type { HostLive, HostSample } from "@/lib/live-types";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -81,13 +81,13 @@ function Readings({ host, sample, history, now }: { host: HostLive; sample: Host
       ) : null}
       <div className="grid gap-3 sm:grid-cols-3">
         <Meter title="CPU" percent={cpu.usage}>
-          <Reading label="Clock" value={idleClock(cpu.mhz, cpu.usage)} hint={info?.cpu.maxMhz ? `Average of all cores; up to ${formatClock(info.cpu.maxMhz)}` : "Average of all cores"} />
-          <Reading label="Fastest core" value={idleClock(cpu.mhzPeak, cpu.usage)} />
+          <Reading label="Clock" value={formatClockOrIdle(cpu.mhz, cpu.usage)} hint={info?.cpu.maxMhz ? `Average of all cores; up to ${formatClock(info.cpu.maxMhz)}` : "Average of all cores"} />
+          <Reading label="Fastest core" value={formatClockOrIdle(cpu.mhzPeak, cpu.usage)} />
           <Reading label="Temperature" value={formatTemp(cpu.tempC)} />
           <Reading label="Power" value={formatWatts(cpu.powerW)} />
         </Meter>
         <Meter title={gpu ? "GPU" : "GPU: none found"} percent={gpu?.usage ?? null}>
-          <Reading label="Clock" value={formatClock(gpu?.mhz)} hint={info?.gpu?.maxMhz ? `Up to ${formatClock(info.gpu.maxMhz)}` : undefined} />
+          <Reading label="Clock" value={formatClockOrIdle(gpu?.mhz, gpu?.usage)} hint={info?.gpu?.maxMhz ? `Up to ${formatClock(info.gpu.maxMhz)}` : undefined} />
           <Reading label="Temperature" value={formatTemp(gpu?.tempC)} />
           <Reading label="Power" value={formatWatts(gpu?.powerW)} />
           {memory.gpuBytes !== null ? (
@@ -102,7 +102,7 @@ function Readings({ host, sample, history, now }: { host: HostLive; sample: Host
             value={`${formatBytes(free.bytes)} (${formatPercent(free.percent)})`}
             hint="MemAvailable: free memory plus cache the system can drop"
           />
-          <Reading label="Used" value={`${formatBytes(memory.usedBytes)} / ${formatBytes(memory.totalBytes)}`} />
+          <Reading label="Used" value={formatBytesOf(memory.usedBytes, memory.totalBytes)} />
           <Reading
             label="Bandwidth"
             value={memory.readBps === null && memory.writeBps === null ? "—" : formatBandwidth((memory.readBps ?? 0) + (memory.writeBps ?? 0))}
@@ -112,7 +112,7 @@ function Readings({ host, sample, history, now }: { host: HostLive; sample: Host
                 : `Read ${formatBandwidth(memory.readBps)} · write ${formatBandwidth(memory.writeBps)}`
             }
           />
-          {memory.swapTotalBytes > 0 ? <Reading label="Swap" value={`${formatBytes(memory.swapUsedBytes)} / ${formatBytes(memory.swapTotalBytes)}`} /> : null}
+          {memory.swapTotalBytes > 0 ? <Reading label="Swap" value={formatBytesOf(memory.swapUsedBytes, memory.swapTotalBytes)} /> : null}
         </Meter>
       </div>
       {fans.length > 0 ? (
@@ -124,11 +124,6 @@ function Readings({ host, sample, history, now }: { host: HostLive; sample: Host
   );
 }
 
-/** portal-hostd leaves the clocks out while every core is idle (an idle core's clock means nothing). */
-function idleClock(mhz: number | null, usage: number | null): string {
-  return mhz === null && usage !== null ? "idle" : formatClock(mhz);
-}
-
 /** A block of readings under a headline usage percentage and its bar. */
 function Meter({ title, percent, children }: { title: string; percent: number | null; children: ReactNode }) {
   return (
@@ -138,19 +133,20 @@ function Meter({ title, percent, children }: { title: string; percent: number | 
         <span className="font-mono text-18 leading-6 font-medium tabular-nums">{formatPercent(percent)}</span>
       </div>
       <Progress value={percent === null ? 0 : Math.min(100, Math.max(0, percent))} aria-label={`${title} usage`} />
-      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-12">{children}</dl>
+      <dl className="flex flex-col gap-1 text-12">{children}</dl>
     </section>
   );
 }
 
+/** One row; each label takes only its own width, and a value too long for the row moves under it, right-aligned. */
 function Reading({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <>
+    <div className="flex flex-wrap items-baseline justify-between gap-x-3">
       <dt className="text-muted-foreground">{label}</dt>
-      <dd className="text-right font-mono break-words tabular-nums" title={hint}>
+      <dd className="ml-auto text-right font-mono tabular-nums" title={hint}>
         {value}
       </dd>
-    </>
+    </div>
   );
 }
 
