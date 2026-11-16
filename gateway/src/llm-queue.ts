@@ -1,12 +1,14 @@
 // Concurrency limiter for LLM requests: at most `maxConcurrency` in flight overall and
 // `maxPerUser` per user. Waiters are served first come, first served; a waiter whose user is at
-// their own limit does not hold up other users queued behind it.
+// their own limit does not hold up other users queued behind it. While paused (an engine update
+// restarts the LLM server), nothing new is granted: requests wait here instead of failing.
 
 /** Gives the slot back. Safe to call more than once. */
 export type ReleaseSlot = () => void;
 
 interface Waiter {
   userId: number;
+  since: number;
   grant: (release: ReleaseSlot) => void;
 }
 
@@ -14,6 +16,7 @@ export class LlmQueue {
   readonly maxConcurrency: number;
   readonly maxPerUser: number;
   #inFlight = 0;
+  #paused = false;
   readonly #inFlightByUser = new Map<number, number>();
   readonly #waiting: Waiter[] = [];
 
@@ -28,6 +31,26 @@ export class LlmQueue {
 
   get queued(): number {
     return this.#waiting.length;
+  }
+
+  get paused(): boolean {
+    return this.#paused;
+  }
+
+  /** Holds every new request in the queue until resume(); requests in flight carry on. */
+  pause(): void {
+    this.#paused = true;
+  }
+
+  resume(): void {
+    if (!this.#paused) return;
+    this.#paused = false;
+    this.#dispatch();
+  }
+
+  /** Who waits, and since when (epoch ms), in queue order. */
+  waiting(): Array<{ userId: number; since: number }> {
+    return this.#waiting.map(({ userId, since }) => ({ userId, since }));
   }
 
   inFlightFor(userId: number): number {
@@ -52,6 +75,7 @@ export class LlmQueue {
       };
       const waiter: Waiter = {
         userId,
+        since: Date.now(),
         grant: (release) => {
           signal?.removeEventListener("abort", onAbort);
           resolve(release);
@@ -64,6 +88,7 @@ export class LlmQueue {
   }
 
   #dispatch(): void {
+    if (this.#paused) return;
     for (let i = 0; i < this.#waiting.length && this.#inFlight < this.maxConcurrency; ) {
       const waiter = this.#waiting[i]!;
       if (this.inFlightFor(waiter.userId) >= this.maxPerUser) {

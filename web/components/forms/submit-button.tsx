@@ -21,13 +21,7 @@ export function SubmitButton({ children, pendingLabel, icon, disabled, pending: 
   const status = useFormStatus();
   const pending = dispatched ?? status.pending;
   return (
-    <Button
-      type="submit"
-      disabled={pending || disabled}
-      data-pending={pending ? "" : undefined}
-      aria-busy={pending || undefined}
-      {...props}
-    >
+    <Button type="submit" disabled={pending || disabled} aria-busy={pending || undefined} {...props}>
       {pending ? <Spinner aria-hidden="true" /> : icon}
       {pending && pendingLabel ? pendingLabel : children}
     </Button>

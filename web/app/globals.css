@@ -2,6 +2,64 @@
 @import "tw-animate-css";
 @import "./theme.css" layer(base);
 
+/* The theme's class on <html> (app/layout.tsx), not prefers-color-scheme: the portal follows its own setting,
+   as the Web Shell does. */
+@custom-variant dark (&:where(.theme-dark, .theme-dark *));
+
+/* The state variants the radix-nova components use (data-open:, data-checked:, ...), as the `shadcn` package's
+   tailwind.css defines them. Copied rather than imported, which would add the whole shadcn CLI as a dependency. */
+@custom-variant data-open {
+  &:where([data-state="open"]),
+  &:where([data-open]:not([data-open="false"])) {
+    @slot;
+  }
+}
+@custom-variant data-closed {
+  &:where([data-state="closed"]),
+  &:where([data-closed]:not([data-closed="false"])) {
+    @slot;
+  }
+}
+@custom-variant data-checked {
+  &:where([data-state="checked"]),
+  &:where([data-checked]:not([data-checked="false"])) {
+    @slot;
+  }
+}
+@custom-variant data-unchecked {
+  &:where([data-state="unchecked"]),
+  &:where([data-unchecked]:not([data-unchecked="false"])) {
+    @slot;
+  }
+}
+@custom-variant data-selected {
+  &:where([data-selected="true"]) {
+    @slot;
+  }
+}
+@custom-variant data-disabled {
+  &:where([data-disabled="true"]),
+  &:where([data-disabled]:not([data-disabled="false"])) {
+    @slot;
+  }
+}
+@custom-variant data-active {
+  &:where([data-state="active"]),
+  &:where([data-active]:not([data-active="false"])) {
+    @slot;
+  }
+}
+@custom-variant data-horizontal {
+  &:where([data-orientation="horizontal"]) {
+    @slot;
+  }
+}
+@custom-variant data-vertical {
+  &:where([data-orientation="vertical"]) {
+    @slot;
+  }
+}
+
 /* Only the theme's colours and radii exist as utilities: no Tailwind palette or radius scale behind them. */
 @theme {
   --color-*: initial;
@@ -14,12 +72,17 @@
   /* Dialog overlays (bg-black/10: the backdrop barely dims, on purpose). */
   --color-black: #000;
 
-  /* 900px, where the workspace top bar starts to show in full (bar: and max-bar:). At their widest (two
-     agents, "Admin connected") its controls take about 845px before the user's name gets any room, so below
-     this a menu button holds them. In rem, like Tailwind's own breakpoints, so the variants sort with them. */
-  --breakpoint-bar: 56.25rem;
+  /* The Web Shell's radius scale (6px base): 4 menu items, 6 buttons and inputs, 10 cards and dialogs, pills. */
+  --radius: 6px;
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: 1rem;
+  --radius-4xl: 2rem;
 
-  /* Type scale in use: size / line-height. lib/utils.ts tells tailwind-merge about it. */
+  /* The portal's own sizes besides Tailwind's (text-xs 12, text-sm 14, text-base 16): size / line-height.
+     lib/utils.ts tells tailwind-merge about them. */
   --text-11: 11px;
   --text-11--line-height: 16px;
   --text-12: 12px;
@@ -63,26 +126,29 @@
   --color-border-soft: var(--border-soft);
   --color-border-faint: var(--border-faint);
   --color-border-solid: var(--border-solid);
-  --color-info: var(--info);
+  --color-brand: var(--brand);
+  --color-brand-soft: var(--brand-soft);
+  --color-brand-2: var(--brand-2);
   --color-success: var(--success);
   --color-warning: var(--warning);
   --color-danger: var(--danger);
   --color-attention: var(--attention);
+  --color-info: var(--info);
   --color-idle: var(--idle);
-
-  --radius-sm: calc(var(--radius) - 2px);
-  --radius-md: var(--radius);
-  --radius-lg: calc(var(--radius) + 2px);
-  --radius-xl: calc(var(--radius) + 4px);
-  --radius-3xl: calc(var(--radius) + 8px);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-canvas: var(--canvas);
 }
 
 @layer base {
-  /* As in shadcn/ui: a bare `border` draws the theme's border colour. */
+  /* As in the radix-nova style: a bare `border` draws the theme's border colour. */
   * {
-    @apply border-border;
+    @apply border-border outline-ring/50;
   }
-  /* Nav-style focus (links, tabs, icon buttons). Controls draw a border plus a 3px ring instead. */
+  /* Nav-style focus (links, tabs). Controls draw a border plus a 3px ring instead. */
   :focus-visible {
     outline: 2px solid var(--ring);
     outline-offset: 2px;
@@ -92,23 +158,27 @@
   select:focus-visible {
     outline: none;
   }
+  /* Tailwind v4 gives buttons the default cursor; the Web Shell's controls show the hand. */
+  button:not(:disabled, [aria-disabled="true"]),
+  [role="button"]:not(:disabled, [aria-disabled="true"]) {
+    cursor: pointer;
+  }
   ::selection {
     background: var(--selection);
   }
 }
 
-/* Inside a Table that stacks (components/ui/table.tsx), below the breakpoint it names: its rows are then blocks
-   of labelled lines instead of table rows. */
-@custom-variant stacked {
-  @media (width < theme(--breakpoint-lg)) {
-    &:is([data-stacked="lg"] *) {
-      @slot;
-    }
+/* Reduced motion: no entrance, exit or hover animation. A spinner turns slower instead of stopping, so pending
+   work still reads as pending. */
+@media (prefers-reduced-motion: reduce) {
+  *:not([data-slot="spinner"]),
+  ::before,
+  ::after {
+    animation: none !important;
+    transition: none !important;
   }
-  @media (width < theme(--breakpoint-xl)) {
-    &:is([data-stacked="xl"] *) {
-      @slot;
-    }
+  [data-slot="spinner"] {
+    animation-duration: 2.4s;
   }
 }
 
@@ -124,7 +194,7 @@
   }
 }
 
-/* Uppercase section and card labels (12px/600, .04em, muted). */
+/* Uppercase section labels (12px/600, .04em, muted). */
 @utility label-caps {
   font-size: 12px;
   line-height: 16px;
@@ -134,12 +204,9 @@
   color: var(--muted-foreground);
 }
 
-/* Activity dot pulse: a soft ring that breathes around the dot. */
+/* Activity dot pulse: a soft ring that breathes around the dot (off under reduced motion, above). */
 @utility activity-pulse {
   animation: activity-pulse 1.6s ease-in-out infinite;
-  @media (prefers-reduced-motion: reduce) {
-    animation: none;
-  }
 }
 
 @keyframes activity-pulse {

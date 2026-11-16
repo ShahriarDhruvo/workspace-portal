@@ -1,5 +1,6 @@
 // The workspace iframe's address. Pure; unit tested.
 import type { AgentKind } from "@portal/db";
+import type { Theme } from "./theme.ts";
 
 /** What the server tells the page about the workspace it shows (see lib/workspace-frame.ts). */
 export interface AgentFrame {
@@ -15,22 +16,24 @@ export interface AgentFrame {
  * only sees the portal session when the iframe uses exactly that hostname.
  *
  * - Qwen Code (the Web Shell):
- *   - `?theme=dark`: the Web Shell reads `?theme=` at boot (it beats the shell's own saved choice), so it
- *     always opens in the same dark style as the portal.
+ *   - `?theme=`: the portal's theme. The Web Shell reads it at boot and it beats the shell's own saved choice,
+ *     so the iframe always matches the portal (a theme switch changes the address, which reloads the iframe).
  *   - `#token=…`: the Web Shell reads its bearer token from `#token=` (a fragment never reaches a server or a
  *     Referer). It is the session-bound workspace token; the gateway swaps it for the container's real token,
  *     which never leaves the server.
- * - DeepSeek Harness: the root, with no token. dsh authenticates by cookie, which the gateway injects.
+ * - DeepSeek Harness: the root, with no token and no theme. dsh authenticates by cookie, which the gateway
+ *   injects, and has no theme parameter.
  */
 export function agentFrameUrl(
   location: Pick<Location, "protocol" | "hostname">,
   frame: AgentFrame,
   agent: AgentKind,
+  theme: Theme,
 ): string {
   const origin = `${location.protocol}//${location.hostname}:${frame.port}`;
   switch (agent) {
     case "qwen":
-      return `${origin}/?theme=dark#token=${encodeURIComponent(frame.token)}`;
+      return `${origin}/?theme=${theme}#token=${encodeURIComponent(frame.token)}`;
     case "dsh":
       return `${origin}/`;
   }

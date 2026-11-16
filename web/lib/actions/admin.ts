@@ -5,7 +5,7 @@ import { refresh, revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { displayName, sessions, users, writeAudit, type SessionContext, type User } from "@portal/db";
 import { getDb } from "../db";
-import { describeError, endSessionsInBackground, gateway, openWorkspaceInBackground, releaseInBackground, toApiError } from "../gateway";
+import { attachWorkspaceInBackground, describeError, endSessionsInBackground, gateway, releaseInBackground, toApiError } from "../gateway";
 import { clearLoginFailures } from "../login-throttle";
 import { generateTemporaryPassword } from "../password-generator";
 import { hashPassword } from "../passwords";
@@ -238,7 +238,7 @@ export async function deleteUser(_previous: ActionState, formData: FormData): Pr
   });
   // An admin session viewing this user falls back to its own workspace.
   revalidateSessionViews();
-  redirect("/admin");
+  redirect("/admin/users");
 }
 
 async function disconnectSession(sessionId: string): Promise<void> {
@@ -278,26 +278,26 @@ async function leaveViewedWorkspace(session: SessionContext): Promise<void> {
   revalidateSessionViews();
 }
 
-/** "My workspace": the admin's own workspace, after leaving any other the session is viewing. */
+/** "My workspace": Home, with the admin's own workspace, after leaving any other the session is viewing. */
 export async function openMyWorkspace(): Promise<void> {
   const session = await requireAdmin();
   await leaveViewedWorkspace(session);
-  redirect("/workspace");
+  redirect("/");
 }
 
 /** Points the admin's session at a user's workspace (the gateway routes the iframe by session target). */
 export async function openWorkspace(formData: FormData): Promise<void> {
   const session = await requireAdmin();
   const id = userIdSchema.safeParse(formData.get("userId"));
-  if (!id.success) redirect("/admin");
+  if (!id.success) redirect("/admin/users");
   if (id.data === session.user.id) {
-    // /workspace would still show the viewed workspace until the session leaves it.
+    // Home would still show the viewed workspace until the session leaves it.
     await leaveViewedWorkspace(session);
-    redirect("/workspace");
+    redirect("/");
   }
   const db = getDb();
   const user = db.select({ id: users.id }).from(users).where(eq(users.id, id.data)).get();
-  if (!user) redirect("/admin");
+  if (!user) redirect("/admin/users");
 
   if (session.session.actingAsUserId !== user.id) {
     const previous = session.target.id;
@@ -319,13 +319,13 @@ export async function openWorkspace(formData: FormData): Promise<void> {
     releaseInBackground([previous]);
     revalidateSessionViews();
   }
-  // A stopped workspace with more than one agent enabled waits for the admin's choice on the viewing page.
-  openWorkspaceInBackground(user.id);
+  // A stopped workspace stays stopped: the viewing page offers Start, which launches the user's harness.
+  attachWorkspaceInBackground(user.id);
   redirect(`/admin/users/${user.id}/workspace`);
 }
 
 export async function exitWorkspace(): Promise<void> {
   const session = await requireAdmin();
   await leaveViewedWorkspace(session);
-  redirect("/admin");
+  redirect("/admin/users");
 }

@@ -13,6 +13,7 @@
 import { eq } from "drizzle-orm";
 import {
   countSessionsUsingWorkspace,
+  users,
   workspaces,
   writeAudit,
   type AgentKind,
@@ -108,14 +109,6 @@ export class AgentMismatchError extends Error {
   }
 }
 
-/** No agent was named and the workspace has never run one. */
-export class AgentRequiredError extends Error {
-  constructor() {
-    super("Choose an agent to start.");
-    this.name = "AgentRequiredError";
-  }
-}
-
 /** The agent asked for is not enabled on this install (WORKSPACE_AGENTS). */
 export class AgentUnavailableError extends Error {
   constructor(agent: AgentKind) {
@@ -125,7 +118,7 @@ export class AgentUnavailableError extends Error {
 }
 
 /** Why a start was refused before anything happened. */
-export type StartRefusal = CapacityError | DeletingError | AgentMismatchError | AgentRequiredError | AgentUnavailableError;
+export type StartRefusal = CapacityError | DeletingError | AgentMismatchError | AgentUnavailableError;
 
 /** The container could not be stopped, so nothing was deleted. */
 export class StopError extends Error {
@@ -456,9 +449,10 @@ export class WorkspaceManager {
 
   /**
    * Starts the workspace with `agent` unless it is already starting or running. Without `agent`: the
-   * agent it ran last, else the only enabled one, else AgentRequiredError. One agent at a time:
-   * asking for another one while it runs is refused. Refused too while its data is being deleted.
-   * See StartAttempt for when capacity is decided.
+   * agent the user chose in Settings (users.agent) when it is enabled, else the first enabled one.
+   * One agent at a time: asking for another one while it runs is refused; a start without an agent
+   * attaches to whatever runs. Refused too while its data is being deleted. See StartAttempt for
+   * when capacity is decided.
    */
   requestStart(userId: number, agent?: AgentKind): StartAttempt {
     const existing = this.#entries.get(userId);
@@ -471,10 +465,8 @@ export class WorkspaceManager {
       return { ok: true, done: existing.starting ?? Promise.resolve(this.info(userId)) };
     }
 
-    const enabled = this.#config.workspace.agents;
-    const kind = agent ?? existing?.kind ?? (enabled.length === 1 ? enabled[0]! : null);
-    if (kind === null) return { ok: false, error: new AgentRequiredError() };
-    if (!enabled.includes(kind)) return { ok: false, error: new AgentUnavailableError(kind) };
+    const kind = agent ?? this.preferredAgent(userId);
+    if (!this.#config.workspace.agents.includes(kind)) return { ok: false, error: new AgentUnavailableError(kind) };
 
     const slot = this.#reserveSlot(userId);
     if (!slot.ok) return { ok: false, error: new CapacityError(this.#config.maxRunning) };
@@ -502,6 +494,23 @@ export class WorkspaceManager {
     };
     done.then(clear, clear);
     return { ok: true, done };
+  }
+
+  /** The agent a start without one uses: the user's choice (Settings) if enabled, else the first enabled agent. */
+  preferredAgent(userId: number): AgentKind {
+    const enabled = this.#config.workspace.agents;
+    const chosen = this.#db.select({ agent: users.agent }).from(users).where(eq(users.id, userId)).get()?.agent ?? null;
+    return chosen !== null && enabled.includes(chosen) ? chosen : enabled[0]!;
+  }
+
+  /**
+   * A session has just started using the workspace (sign-in, an admin opening it): if it is starting or running, a
+   * stop that waited for the agent to finish is off. Never starts anything; a stopped workspace waits for a Start.
+   */
+  attach(userId: number): WorkspaceInfo {
+    const entry = this.#entries.get(userId);
+    if (entry && !entry.stopping && !entry.deleting && (entry.starting || isActive(entry))) entry.stopPending = false;
+    return this.info(userId);
   }
 
   /** Like requestStart, but rejects with the StartRefusal or a StartError. */

@@ -7,11 +7,11 @@ import { Readable } from "node:stream";
 import { text } from "node:stream/consumers";
 import { llmUsage, openDatabase, users } from "@portal/db";
 import {
+  extractTimings,
   extractUsage,
   JsonUsageParser,
   recordUsage,
   SseUsageParser,
-  usageDay,
   usageParserFor,
   usageTap,
   type UsageParser,
@@ -113,11 +113,6 @@ test("usageTap passes the stream through unchanged", async () => {
   assert.deepEqual(parser.usage, { promptTokens: 12, completionTokens: 34 });
 });
 
-test("usageDay is the local calendar day", () => {
-  assert.equal(usageDay(new Date(2026, 0, 5, 23, 59)), "2026-01-05");
-  assert.equal(usageDay(new Date(2026, 10, 18, 0, 1)), "2026-11-18");
-});
-
 test("recordUsage upserts one row per user and day", () => {
   const db = openDatabase(path.join(fs.mkdtempSync(path.join(os.tmpdir(), "gateway-usage-")), "db.sqlite"));
   const now = Date.now();
@@ -136,4 +131,38 @@ test("recordUsage upserts one row per user and day", () => {
     { userId: user.id, day: "2026-11-08", requests: 3, promptTokens: 11, completionTokens: 7 },
     { userId: user.id, day: "2026-11-09", requests: 1, promptTokens: 7, completionTokens: 7 },
   ]);
+});
+
+test("the SSE parser reports streamed tokens and the engine's closing timings to its observer", () => {
+  const seen = { tokens: 0, timings: [] as unknown[] };
+  const parser = new SseUsageParser({ token: () => seen.tokens++, timings: (timings) => seen.timings.push(timings) });
+  const events = [
+    '{"choices":[{"delta":{"role":"assistant","content":null}}]}', // the opening role delta is no token
+    '{"choices":[{"delta":{"content":""}}]}',
+    '{"choices":[{"delta":{"reasoning_content":"Let"}}]}',
+    '{"choices":[{"delta":{"content":" me"}}]}',
+    '{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{"}}]}}]}',
+    '{"choices":[],"usage":{"prompt_tokens":9,"completion_tokens":3},"timings":{"cache_n":4,"prompt_n":5,"prompt_ms":12.5,"prompt_per_second":400,"predicted_n":3,"predicted_ms":150,"predicted_per_second":20}}',
+  ];
+  const stream = events.map((data) => `data: ${data}\n\n`).join("") + "data: [DONE]\n\n";
+  // Split mid-event, as the network does.
+  parser.write(Buffer.from(stream.slice(0, 77)));
+  parser.write(Buffer.from(stream.slice(77)));
+  parser.end();
+  assert.equal(seen.tokens, 3);
+  assert.deepEqual(seen.timings, [{ promptTokens: 5, cachedTokens: 4, promptMs: 12.5, generatedTokens: 3, generationMs: 150 }]);
+  assert.deepEqual(parser.usage, { promptTokens: 9, completionTokens: 3 });
+});
+
+test("extractTimings needs the engine's token counts and durations", () => {
+  assert.equal(extractTimings({ timings: { prompt_n: 1, prompt_ms: 1, predicted_n: 1 } }), null);
+  assert.equal(extractTimings({ timings: { prompt_n: -1, prompt_ms: 1, predicted_n: 1, predicted_ms: 1 } }), null);
+  assert.equal(extractTimings({ usage: {} }), null);
+  assert.deepEqual(extractTimings({ timings: { prompt_n: 1, prompt_ms: 2, predicted_n: 3, predicted_ms: 4 } }), {
+    promptTokens: 1,
+    cachedTokens: 0,
+    promptMs: 2,
+    generatedTokens: 3,
+    generationMs: 4,
+  });
 });

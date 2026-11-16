@@ -4,7 +4,7 @@ import { and, eq, ne } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import { countSessionsUsingWorkspace, sessions, users, writeAudit, type PortalDb, type SessionContext } from "@portal/db";
 import { getDb } from "../db";
-import { endSessionsInBackground, gateway, openWorkspaceInBackground } from "../gateway";
+import { attachWorkspaceInBackground, endSessionsInBackground, gateway } from "../gateway";
 import { clearLoginFailures, lockRemaining, lockoutMessage, pruneLoginAttempts, reserveLoginAttempt } from "../login-throttle";
 import { hashPassword, verifyPassword } from "../passwords";
 import { clearSessionCookie, cookieSessionId, getSession, requireUser, startSession } from "../session";
@@ -84,10 +84,10 @@ export async function login(_previous: LoginState, formData: FormData): Promise<
   await startSession(user.id);
   db.update(users).set({ lastLoginAt: now }).where(eq(users.id, user.id)).run();
   writeAudit(db, { action: "login", actorUserId: user.id });
-  // Picks up a workspace still running (another device, a task finishing after sign-out); a stopped one
-  // starts here only if there is no agent to choose.
-  openWorkspaceInBackground(user.id);
-  redirect(user.mustChangePassword ? "/change-password" : "/workspace");
+  // Picks up a workspace still running (another device, a task finishing after sign-out); a stopped one waits
+  // for Start on Home.
+  attachWorkspaceInBackground(user.id);
+  redirect(user.mustChangePassword ? "/change-password" : "/");
 }
 
 export async function signOut(): Promise<void> {
@@ -114,6 +114,8 @@ const SIGN_OUT_STATUS_TIMEOUT_MS = 1_500;
 
 export interface ChangePasswordState {
   fieldErrors: FieldErrors;
+  /** When the password was last changed from this form (Settings, which stays on the page). */
+  changedAt?: number;
 }
 
 export async function changePassword(_previous: ChangePasswordState, formData: FormData): Promise<ChangePasswordState> {
@@ -128,6 +130,7 @@ export async function changePassword(_previous: ChangePasswordState, formData: F
 
   const db = getDb();
   const passwordHash = await hashPassword(newPassword);
+  const forced = session.user.mustChangePassword;
   // Every other session of this account is signed out; this one carries on.
   const deleted = db.transaction(() => {
     db.update(users)
@@ -138,5 +141,7 @@ export async function changePassword(_previous: ChangePasswordState, formData: F
     return deleteSessions(db, and(eq(sessions.userId, session.user.id), ne(sessions.id, session.session.id)));
   });
   endSessionsInBackground(deleted);
-  redirect("/workspace");
+  // The forced change at first sign-in leads on to Home; a change from Settings stays there and says so.
+  if (forced) redirect("/");
+  return { fieldErrors: {}, changedAt: Date.now() };
 }

@@ -15,6 +15,13 @@ export function formatBytes(bytes: number): string {
   return `${value.toFixed(digits)} ${BYTE_UNITS[unit]}`;
 }
 
+const compactCount = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
+
+/** A count in a few characters: 950, "12.3K", "4.1M". */
+export function formatCount(count: number): string {
+  return compactCount.format(Math.max(0, count));
+}
+
 /** Compact duration: "45s", "12m", "3h 5m", "2d 4h". */
 export function formatDuration(totalSeconds: number): string {
   const s = Math.max(0, Math.floor(totalSeconds));
@@ -48,21 +55,29 @@ export function initials(firstName: string, lastName: string): string {
   return (first + last).toLocaleUpperCase();
 }
 
-/** Plain-words reason for a stopped workspace, completing "Your workspace was stopped …". */
-export function stopReasonText(reason: string | null, idleTimeoutMinutes: number): string | null {
+/**
+ * Plain-words reason for a stopped workspace, completing "It was stopped …". `viewer` is who reads it: the
+ * workspace's owner, or someone else (an administrator).
+ */
+export function stopReasonText(
+  reason: string | null,
+  idleTimeoutMinutes: number,
+  viewer: "owner" | "other" = "other",
+): string | null {
   switch (reason) {
     case "idle":
       return `after ${idleTimeoutMinutes} ${idleTimeoutMinutes === 1 ? "minute" : "minutes"} without activity`;
     case "admin":
       return "by the administrator";
     case "user":
-      return "to switch agents";
+      // The owner's own Stop: on the workspace page it can only have come from elsewhere.
+      return viewer === "owner" ? "from another tab or device" : "by its owner";
     case "deactivated":
       return "because the account was deactivated";
     case "capacity":
       return "to free resources";
     case "logout":
-      return "because you signed out";
+      return viewer === "owner" ? "because you signed out" : "because its owner signed out";
     case "error":
       return "because it ran into an error";
     default:
@@ -138,5 +153,31 @@ export function summarizeWorkspace(info: WorkspaceInfo | null, idleTimeoutMinute
       return { tone: "warning", label: "Stopping", detail: null, title: null };
     case "error":
       return { tone: "danger", label: "Error", detail: null, title: info.lastError };
+  }
+}
+
+export interface WorkspaceState {
+  tone: "info" | "warning" | "danger" | "idle";
+  label: "Stopped" | "Starting" | "Running" | "Stopping" | "Error";
+  /** While running: whether the agent is working or idle. */
+  activity: "working" | "idle" | null;
+  /** Something is under way (starting, stopping, working): the status dot breathes. */
+  pulse: boolean;
+}
+
+/** The workspace's state in a word, for Home's workspace card and the workspace bar's status pill. */
+export function workspaceState(info: Pick<WorkspaceInfo, "status" | "ready" | "busy">): WorkspaceState {
+  switch (info.status) {
+    case "stopped":
+      return { tone: "idle", label: "Stopped", activity: null, pulse: false };
+    case "starting":
+      return { tone: "warning", label: "Starting", activity: null, pulse: true };
+    case "running":
+      if (!info.ready) return { tone: "warning", label: "Starting", activity: null, pulse: true };
+      return { tone: "info", label: "Running", activity: info.busy ? "working" : "idle", pulse: info.busy };
+    case "stopping":
+      return { tone: "warning", label: "Stopping", activity: null, pulse: true };
+    case "error":
+      return { tone: "danger", label: "Error", activity: null, pulse: false };
   }
 }

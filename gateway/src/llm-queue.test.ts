@@ -101,3 +101,26 @@ test("releasing twice frees only one slot", async () => {
   assert.equal(queue.inFlight, 1);
   assert.equal(queue.inFlightFor(1), 1);
 });
+
+test("paused: nothing new is granted until resume, requests in flight carry on, waiters are listed", async () => {
+  const queue = new LlmQueue(2, 2);
+  const first = await queue.acquire(1);
+  queue.pause();
+  assert.equal(queue.paused, true);
+  let granted = false;
+  const waiting = queue.acquire(2).then((release) => {
+    granted = true;
+    return release;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(granted, false, "a free slot is not handed out while paused");
+  assert.deepEqual(queue.waiting().map((waiter) => waiter.userId), [2]);
+  first();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(granted, false, "nor when one is given back");
+  queue.resume();
+  (await waiting)();
+  assert.equal(granted, true);
+  assert.equal(queue.inFlight, 0);
+  assert.deepEqual(queue.waiting(), []);
+});

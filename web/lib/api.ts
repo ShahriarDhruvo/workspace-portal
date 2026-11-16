@@ -1,5 +1,6 @@
 import "server-only";
 import type { SessionContext } from "@portal/db";
+import { startingAgent } from "./agent-choice";
 import { GatewayError, gateway, toApiError } from "./gateway";
 import type { ApiError, WorkspaceInfo, WorkspaceStatusResponse } from "./gateway-types";
 import { checkApiAccess } from "./request-guards";
@@ -32,12 +33,19 @@ export async function apiSession(options: { admin?: boolean } = {}): Promise<Ses
 
 /**
  * The answer of the routes under /api/workspace: the gateway's view of the session's workspace once `pending`
- * (a read, start or stop) settles, whose workspace it is, and the agents this install offers.
+ * (a read, start or stop) settles, whose workspace it is, the agents this install offers and the one a start
+ * would launch (the owner's harness).
  */
 export async function workspaceResponse(pending: Promise<WorkspaceInfo>, session: SessionContext): Promise<Response> {
   try {
     const [info, agents] = await Promise.all([pending, gateway.agents()]);
-    return json({ ...info, targetUserId: session.target.id, actingAs: session.actingAs, agents } satisfies WorkspaceStatusResponse);
+    return json({
+      ...info,
+      targetUserId: session.target.id,
+      actingAs: session.actingAs,
+      agents,
+      nextAgent: startingAgent(session.target.agent, agents),
+    } satisfies WorkspaceStatusResponse);
   } catch (error) {
     return gatewayErrorResponse(error);
   }

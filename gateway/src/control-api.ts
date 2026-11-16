@@ -16,16 +16,23 @@ import type { AgentVersions } from "./agent-versions.ts";
 import { driverFor } from "./agents/index.ts";
 import type { Config } from "./config.ts";
 import { SESSION_DISCONNECTED, type ConnectionRegistry } from "./connections.ts";
+import {
+  EngineJobRunningError,
+  EngineRequestError,
+  EngineUnavailableError,
+  type EngineUpdater,
+} from "./engine-updater.ts";
 import { readHostStats } from "./host-stats.ts";
+import { HostdError } from "./hostd.ts";
 import { HttpError, readJsonBody, sendError, sendJson, splitTarget } from "./http-util.ts";
 import { ImageInUseError, ImageNotFoundError } from "./image-builder.ts";
+import { TooManyViewersError, type LiveHub } from "./live.ts";
 import type { LlmQueue } from "./llm-queue.ts";
 import type { Logger } from "./log.ts";
 import { RegistryError } from "./npm-registry.ts";
 import type { SessionCache } from "./session-cache.ts";
 import {
   AgentMismatchError,
-  AgentRequiredError,
   AgentUnavailableError,
   CapacityError,
   DeletingError,
@@ -40,7 +47,9 @@ export interface ControlDeps {
   manager: WorkspaceManager;
   versions: AgentVersions;
   updater: AgentUpdater;
+  engine: EngineUpdater;
   llm: LlmQueue;
+  live: LiveHub;
   sessions: SessionCache;
   connections: ConnectionRegistry;
   log: Logger;
@@ -51,7 +60,10 @@ const MAX_BODY_BYTES = 16 * 1024;
 const STOP_REASONS = ["admin", "user", "deactivated", "deleted"] as const;
 type StopReason = (typeof STOP_REASONS)[number];
 
-type Handler = (deps: ControlDeps, req: IncomingMessage, params: string[]) => Promise<unknown> | unknown;
+/** A handler that wrote the response itself (an event stream) returns this. */
+const RESPONDED = Symbol("responded");
+
+type Handler = (deps: ControlDeps, req: IncomingMessage, params: string[], res: ServerResponse) => Promise<unknown> | unknown;
 
 interface Route {
   method: "GET" | "POST" | "DELETE";
@@ -62,7 +74,30 @@ interface Route {
 const ROUTES: Route[] = [
   { method: "GET", pattern: /^\/control\/health$/, handler: () => ({ ok: true }) },
   { method: "GET", pattern: /^\/control\/stats$/, handler: (deps) => readHostStats(deps.config, deps.manager, deps.llm) },
+  {
+    method: "GET",
+    pattern: /^\/control\/live$/,
+    handler: (deps, _req, _params, res) => {
+      try {
+        deps.live.serve(res);
+      } catch (error) {
+        if (error instanceof TooManyViewersError) throw new HttpError(429, "too_many_viewers", error.message);
+        throw error;
+      }
+      return RESPONDED;
+    },
+  },
   { method: "GET", pattern: /^\/control\/agents$/, handler: (deps) => ({ agents: agentList(deps.config, deps.versions) }) },
+  {
+    // For deploy/install.sh and update-image.sh: answers at once (no registry or hostd call).
+    method: "GET",
+    pattern: /^\/control\/updates\/running$/,
+    handler: (deps) => {
+      const agent = ["building", "verifying"].includes(deps.updater.job()?.phase ?? "");
+      const engine = deps.engine.snapshot()?.finishedAt === null;
+      return { running: agent || engine, agent, engine };
+    },
+  },
   {
     method: "GET",
     pattern: /^\/control\/agents\/versions$/,
@@ -110,6 +145,41 @@ const ROUTES: Route[] = [
       return { ok: true };
     },
   },
+  {
+    method: "GET",
+    pattern: /^\/control\/engine$/,
+    handler: (deps, req) => deps.engine.overview({ refresh: new URLSearchParams(splitTarget(req.url ?? "").search).get("refresh") === "1" }),
+  },
+  {
+    method: "POST",
+    pattern: /^\/control\/engine\/update$/,
+    handler: async (deps, req) => {
+      const { version, actorUserId } = objectBody(await readJsonBody(req, MAX_BODY_BYTES));
+      if (typeof version !== "string" || version.length > 64) throw new HttpError(400, "invalid_version", "version must be a release version, like 0.34.0.");
+      const actor = actorParam(actorUserId);
+      if (actor !== null) requireUser(deps.db, actor, "actorUserId");
+      return engineCall(() => deps.engine.startUpdate({ version, actorUserId: actor }));
+    },
+  },
+  {
+    method: "POST",
+    pattern: /^\/control\/engine\/rollback$/,
+    handler: async (deps, req) => {
+      const actor = actorParam(objectBody(await readJsonBody(req, MAX_BODY_BYTES)).actorUserId);
+      if (actor !== null) requireUser(deps.db, actor, "actorUserId");
+      return engineCall(() => deps.engine.startRollback({ actorUserId: actor }));
+    },
+  },
+  { method: "POST", pattern: /^\/control\/engine\/cancel$/, handler: async (deps) => ({ cancelled: await deps.engine.cancel() }) },
+  { method: "POST", pattern: /^\/control\/engine\/restart-now$/, handler: (deps) => ({ ok: deps.engine.restartNow() }) },
+  {
+    method: "DELETE",
+    pattern: /^\/control\/engine\/images\/([^/]+)$/,
+    handler: async (deps, _req, [digest]) => {
+      await engineCall(() => deps.engine.removeImage(decodeParam(digest)));
+      return { ok: true };
+    },
+  },
   { method: "GET", pattern: /^\/control\/workspaces$/, handler: (deps) => ({ workspaces: deps.manager.list() }) },
   { method: "GET", pattern: /^\/control\/workspaces\/([^/]+)$/, handler: (deps, _req, [id]) => deps.manager.info(userIdParam(id)) },
   {
@@ -122,7 +192,6 @@ const ROUTES: Route[] = [
       try {
         return await deps.manager.start(userId, agent);
       } catch (error) {
-        if (error instanceof AgentRequiredError) throw new HttpError(400, "agent_required", error.message);
         if (error instanceof AgentUnavailableError) throw new HttpError(400, "agent_unavailable", error.message);
         if (error instanceof AgentMismatchError) throw new HttpError(409, "agent_mismatch", error.message);
         if (error instanceof CapacityError) throw new HttpError(409, "capacity", error.message);
@@ -142,6 +211,11 @@ const ROUTES: Route[] = [
       deps.sessions.invalidateUser(userId);
       return deps.manager.stop(userId, reason, actorUserId);
     },
+  },
+  {
+    method: "POST",
+    pattern: /^\/control\/workspaces\/([^/]+)\/attach$/,
+    handler: (deps, _req, [id]) => deps.manager.attach(userIdParam(id)),
   },
   {
     method: "POST",
@@ -201,7 +275,8 @@ async function handle(deps: ControlDeps, expected: Buffer, req: IncomingMessage,
     const allow = matches.map((m) => m.route.method).join(", ");
     return sendError(res, 405, "method_not_allowed", `Use ${allow}.`, { allow });
   }
-  sendJson(res, 200, await found.route.handler(deps, req, found.match!.slice(1)));
+  const body = await found.route.handler(deps, req, found.match!.slice(1), res);
+  if (body !== RESPONDED) sendJson(res, 200, body);
 }
 
 function digest(value: string): Buffer {
@@ -266,6 +341,26 @@ function actorParam(actorUserId: unknown): number | null {
   if (actorUserId === undefined || actorUserId === null) return null;
   if (!(Number.isSafeInteger(actorUserId) && (actorUserId as number) > 0)) throw new HttpError(400, "invalid_actor", "actorUserId must be a positive integer.");
   return actorUserId as number;
+}
+
+/** Runs an engine action, turning its refusals into API errors. */
+async function engineCall<T>(action: () => Promise<T>): Promise<T> {
+  try {
+    return await action();
+  } catch (error) {
+    if (error instanceof EngineUnavailableError) throw new HttpError(503, "engine_unavailable", error.message);
+    if (error instanceof EngineJobRunningError) throw new HttpError(409, "engine_job_running", error.message);
+    if (error instanceof EngineRequestError) {
+      const status = { invalid_version: 400, invalid_digest: 400, version_not_found: 404 }[error.code] ?? 409;
+      throw new HttpError(status, error.code, error.message);
+    }
+    if (error instanceof HostdError) {
+      // hostd's own refusals (the running image, a job it runs) are the admin's to see; the rest is a fault.
+      if (error.status === 409 || error.status === 404) throw new HttpError(error.status, error.code, error.message);
+      throw new HttpError(502, "hostd_failed", `portal-hostd on the LLM server: ${error.message}`);
+    }
+    throw error;
+  }
 }
 
 /** A JSON object body, or none (an empty object). */

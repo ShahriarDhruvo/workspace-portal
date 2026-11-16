@@ -1,0 +1,23 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { stopNeedsConfirm, stopWarnings } from "./workspace-stop.ts";
+
+const quiet = { busy: false, connections: { owner: 0, admin: 0 } };
+
+test("a stop asks first when the agent works, someone else has the workspace open, or an admin does", () => {
+  assert.equal(stopNeedsConfirm(stopWarnings(quiet, false)), false, "nothing to interrupt: it stops at once");
+  assert.deepEqual(stopWarnings({ ...quiet, busy: true }, false), { busy: true, openElsewhere: false, admin: false });
+  assert.deepEqual(stopWarnings({ ...quiet, connections: { owner: 0, admin: 1 } }, false), {
+    busy: false,
+    openElsewhere: false,
+    admin: true,
+  });
+  assert.equal(stopNeedsConfirm(stopWarnings({ ...quiet, busy: true }, true)), true);
+});
+
+test("the workspace page's own session doesn't count as open elsewhere; on Home or Settings every session does", () => {
+  const openOnce = { ...quiet, connections: { owner: 1, admin: 0 } };
+  assert.equal(stopWarnings(openOnce, true).openElsewhere, false, "the workspace page itself");
+  assert.equal(stopWarnings(openOnce, false).openElsewhere, true, "Home: a workspace tab is open somewhere");
+  assert.equal(stopWarnings({ ...quiet, connections: { owner: 2, admin: 0 } }, true).openElsewhere, true);
+});

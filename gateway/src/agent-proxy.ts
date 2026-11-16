@@ -17,7 +17,6 @@ import {
   PORTAL_PATH_PREFIX,
   START_PATH,
   capacityPage,
-  chooseAgentPage,
   errorPage,
   otherWorkspacePage,
   signedOutPage,
@@ -26,7 +25,7 @@ import {
   unreachablePage,
 } from "./pages.ts";
 import { createWsRelay } from "./ws-relay.ts";
-import { AgentRequiredError, CapacityError, type StartRefusal } from "./workspaces.ts";
+import { CapacityError, type StartRefusal } from "./workspaces.ts";
 
 /**
  * The path as a lenient router might see it: percent-decoded, backslashes and repeated slashes
@@ -199,19 +198,18 @@ function handlePortalPath(
   });
 }
 
-/** Starts the agent the workspace ran last; the choice of agent itself is made in the portal. */
+/** Starts the user's agent (the one chosen in the portal's Settings). */
 function startAndRespond(deps: AgentDeps, res: ServerResponse, userId: number, host: HostParts, onStarted: () => void): void {
   deps.manager.touch(userId);
   const attempt = deps.manager.requestStart(userId);
-  if (!attempt.ok) return sendPage(res, 503, refusalPage(deps, host, attempt.error), framing(deps, host));
+  if (!attempt.ok) return sendPage(res, 503, refusalPage(deps, attempt.error), framing(deps, host));
   // Failures are recorded on the workspace; the starting page's next reload shows them.
   attempt.done.catch(() => undefined);
   onStarted();
 }
 
-function refusalPage(deps: AgentDeps, host: HostParts, error: StartRefusal): string {
+function refusalPage(deps: AgentDeps, error: StartRefusal): string {
   if (error instanceof CapacityError) return capacityPage(deps.config.maxRunning);
-  if (error instanceof AgentRequiredError) return chooseAgentPage(`//${host.hostname}:${deps.config.webPort}/workspace`);
   return errorPage(error.message, null);
 }
 

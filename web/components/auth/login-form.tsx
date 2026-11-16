@@ -19,7 +19,6 @@ export function LoginForm() {
         <FormField
           label="Username"
           name="username"
-          variant="login"
           placeholder="ada.lovelace"
           autoComplete="username"
           autoCapitalize="none"
@@ -34,7 +33,6 @@ export function LoginForm() {
           label="Password"
           name="password"
           type="password"
-          variant="login"
           placeholder="Your password"
           autoComplete="current-password"
           required

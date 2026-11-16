@@ -108,15 +108,25 @@ agent_version_set() { # agent version
   }
 }
 
-# True while the admin console builds an agent update (the gateway's control API reports a job in its
-# building or verifying phase). A gateway that doesn't answer runs no update. The secret goes to curl
-# on stdin (-H @-), not on its command line, which every user on the host can read.
+# GETs a gateway control API path. The secret goes to curl on stdin (-H @-), not on its command line,
+# which every user on the host can read.
+control_get() { # path
+  curl -fsS --max-time 20 -H @- "http://127.0.0.1:$(env_get CONTROL_PORT)$1" \
+    <<<"Authorization: Bearer $(env_get GATEWAY_CONTROL_SECRET)" 2>/dev/null
+}
+
+# True while the admin console runs an update: an agent image build (a job building or verifying), or
+# an LLM engine update (downloading, holding the LLM queue, or restarting the engine; a gateway restart
+# would let the held requests through to an engine that is going down). A gateway that doesn't answer
+# runs no update.
 console_update_running() {
-  local secret
-  secret=$(env_get GATEWAY_CONTROL_SECRET)
-  curl -fsS --max-time 20 -H @- "http://127.0.0.1:$(env_get CONTROL_PORT)/control/agents/versions" \
-    <<<"Authorization: Bearer $secret" 2>/dev/null |
-    grep -Eq '"phase": *"(building|verifying)"'
+  local answer
+  if answer=$(control_get /control/updates/running); then
+    grep -Eq '"running": *true' <<<"$answer"
+  else
+    # A gateway from before that route: only agent updates existed.
+    control_get /control/agents/versions | grep -Eq '"phase": *"(building|verifying)"'
+  fi
 }
 
 # Sets ENABLED_AGENTS to the agents WORKSPACE_AGENTS enables, and dies on an unknown one. (Run in

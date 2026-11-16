@@ -1,5 +1,6 @@
 import "server-only";
 import { gateway, toApiError } from "./gateway";
+import type { AdminEngine } from "./engine-types";
 import type { AdminAgents, AdminOverview } from "./gateway-types";
 
 /** Workspaces and host stats for the admin dashboard; whatever the gateway can't provide is null. */
@@ -19,5 +20,14 @@ export async function loadAdminAgents(options: { refresh?: boolean } = {}): Prom
     return { versions: await gateway.agentVersions(options), error: null };
   } catch (error) {
     return { versions: null, error: toApiError(error) };
+  }
+}
+
+/** The LLM engine's versions and update job for the Updates page; null with the error when the gateway can't say. */
+export async function loadAdminEngine(options: { refresh?: boolean } = {}): Promise<AdminEngine> {
+  try {
+    return { engine: await gateway.engine(options), error: null };
+  } catch (error) {
+    return { engine: null, error: toApiError(error) };
   }
 }

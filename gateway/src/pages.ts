@@ -126,15 +126,6 @@ export function otherWorkspacePage(portalUrl: string): string {
   });
 }
 
-/** The workspace has never run an agent: the user picks one in the portal (the gateway doesn't guess). */
-export function chooseAgentPage(portalWorkspaceUrl: string): string {
-  return render({
-    title: "Choose an agent",
-    text: "Pick the agent for your workspace in the portal; it starts from there.",
-    action: `<a class="button" href="${escapeHtml(portalWorkspaceUrl)}" target="_top">Go to the portal</a>`,
-  });
-}
-
 function escapeHtml(text: string): string {
   return text.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
 }

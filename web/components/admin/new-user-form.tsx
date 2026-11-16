@@ -28,7 +28,7 @@ function NewUserForm({ onAnother }: { onAnother: () => void }) {
 
   if (state.status === "created") {
     return (
-      <Card variant="outline" className="px-4">
+      <Card className="px-4">
         <CardTitle className="flex items-center gap-2">
           <span className="inline-flex size-6 items-center justify-center rounded-full bg-success/14 text-success">
             <CheckIcon />
@@ -43,7 +43,7 @@ function NewUserForm({ onAnother }: { onAnother: () => void }) {
         <SecretValue value={state.temporaryPassword} />
         <div className="flex flex-wrap justify-end gap-2">
           <Button asChild variant="ghost">
-            <Link href="/admin">Back to users</Link>
+            <Link href="/admin/users">Back to users</Link>
           </Button>
           <Button asChild variant="outline">
             <Link href={`/admin/users/${state.user.id}`}>View user</Link>
@@ -59,7 +59,7 @@ function NewUserForm({ onAnother }: { onAnother: () => void }) {
   const errors = state.status === "invalid" ? state.fieldErrors : {};
   const values = state.status === "invalid" ? state.values : undefined;
   return (
-    <Card variant="outline" className="px-4">
+    <Card className="px-4">
       <form action={action} className="flex flex-col gap-6">
         <FieldGroup>
           <NameFields values={values} errors={errors} autoFocus />
@@ -98,7 +98,7 @@ function NewUserForm({ onAnother }: { onAnother: () => void }) {
         </FieldGroup>
         <div className="flex justify-end gap-2 border-t border-border-faint pt-4">
           <Button asChild variant="ghost">
-            <Link href="/admin">Cancel</Link>
+            <Link href="/admin/users">Cancel</Link>
           </Button>
           <SubmitButton pendingLabel="Creating…">Create user</SubmitButton>
         </div>

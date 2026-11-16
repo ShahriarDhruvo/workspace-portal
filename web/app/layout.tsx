@@ -1,5 +1,8 @@
 import type { Metadata, Viewport } from "next";
+import { cookies } from "next/headers";
 import type { ReactNode } from "react";
+import { parseTheme, THEME_CANVAS, THEME_COOKIE, themeBootStyle, themeClass, type Theme } from "@/lib/theme";
+import { ThemeProvider } from "@/components/common/theme";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import "./globals.css";
 
@@ -9,23 +12,28 @@ export const metadata: Metadata = {
   robots: { index: false, follow: false },
 };
 
-// Dark only, like the Web Shell in the workspace iframe: the OS colour scheme is ignored.
-export const viewport: Viewport = {
-  themeColor: "#0d0d0d",
-  colorScheme: "dark",
-};
+/** The theme saved in the portal_theme cookie (dark unless it says light; the OS colour scheme is ignored). */
+async function savedTheme(): Promise<Theme> {
+  return parseTheme((await cookies()).get(THEME_COOKIE)?.value);
+}
 
-// Paints the dark canvas (--canvas in app/theme.css) before any stylesheet loads, so there is never a white flash.
-const BOOT_STYLE = "html{background:#0d0d0d;color-scheme:dark}";
+export async function generateViewport(): Promise<Viewport> {
+  const theme = await savedTheme();
+  return { themeColor: THEME_CANVAS[theme], colorScheme: theme };
+}
 
-export default function RootLayout({ children }: { children: ReactNode }) {
+export default async function RootLayout({ children }: { children: ReactNode }) {
+  const theme = await savedTheme();
   return (
-    <html lang="en">
+    <html lang="en" className={themeClass(theme)} style={{ colorScheme: theme }}>
       <head>
-        <style dangerouslySetInnerHTML={{ __html: BOOT_STYLE }} />
+        {/* Paints the theme's canvas before any stylesheet loads, so there is never a flash of the other one. */}
+        <style dangerouslySetInnerHTML={{ __html: themeBootStyle(theme) }} />
       </head>
       <body>
-        <TooltipProvider>{children}</TooltipProvider>
+        <ThemeProvider theme={theme}>
+          <TooltipProvider>{children}</TooltipProvider>
+        </ThemeProvider>
       </body>
     </html>
   );

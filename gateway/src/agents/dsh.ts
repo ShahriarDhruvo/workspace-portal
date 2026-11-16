@@ -94,6 +94,7 @@ export const dshDriver: AgentDriver = {
       serviceBaseUrl: serviceBaseUrl(config),
       browser: config.workspace.browser,
       reader: config.reader.url !== "",
+      defaultEffort: config.workspace.defaultEffort,
     });
     const catalog = fitDshModels(portalModels(rendered));
     return { [DSH_PATCH_FILE]: renderDshPatch({ catalog, serviceBaseUrl: serviceBaseUrl(config), browser: config.workspace.browser }) };

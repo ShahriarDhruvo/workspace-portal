@@ -1,7 +1,6 @@
 import "server-only";
 import { after } from "next/server";
 import type { AgentKind } from "@portal/db";
-import { startOnOpen } from "./agent-choice";
 import { config } from "./config";
 import type {
   AgentInfo,
@@ -10,9 +9,9 @@ import type {
   AgentVersionsOverview,
   ApiError,
   HostStats,
-  StartRequest,
   WorkspaceInfo,
 } from "./gateway-types";
+import type { EngineOverview, EngineUpdateJob } from "./engine-types";
 import type { DeletedSessions } from "./session-store";
 
 // Client for the gateway control API (docs/ARCHITECTURE.md, "Gateway control API").
@@ -87,7 +86,7 @@ async function call<T>(
   return payload as T;
 }
 
-/** Why the portal stops a workspace: an admin's Stop, the user's own (to switch agents), deactivation, deletion. */
+/** Why the portal stops a workspace: an admin's Stop, the user's own Stop (or restart), deactivation, deletion. */
 export type StopReason = "admin" | "user" | "deactivated" | "deleted";
 
 export const gateway = {
@@ -99,18 +98,21 @@ export const gateway = {
   getWorkspace: (userId: number, timeoutMs?: number) =>
     call<WorkspaceInfo>("GET", `/control/workspaces/${userId}`, timeoutMs ? { timeoutMs } : {}),
   /**
-   * Creates and starts the container with `request.agent` (default: see StartRequest), then returns (status
-   * "starting"); poll getWorkspace until ready. An already starting or running workspace just returns its
-   * state, or 409 `agent_mismatch` if it runs another agent. 409 `capacity` when every slot is busy.
+   * Creates and starts the container with the user's harness (their choice in Settings while it is enabled, else
+   * the first enabled agent), then returns (status "starting"); poll getWorkspace until ready. An already
+   * starting or running workspace just returns its state, whatever its agent, and calls off a pending stop.
+   * 409 `capacity` when every slot is busy.
    */
-  start: (userId: number, request: StartRequest = {}, timeoutMs = START_TIMEOUT_MS) =>
-    call<WorkspaceInfo>("POST", `/control/workspaces/${userId}/start`, { body: request, timeoutMs }),
+  start: (userId: number, timeoutMs = START_TIMEOUT_MS) =>
+    call<WorkspaceInfo>("POST", `/control/workspaces/${userId}/start`, { body: {}, timeoutMs }),
   /** The gateway writes the `workspace_stopped` audit entry, attributed to `actorUserId`. */
   stop: (userId: number, reason: StopReason, actorUserId?: number) =>
     call<WorkspaceInfo>("POST", `/control/workspaces/${userId}/stop`, {
       body: { reason, actorUserId },
       timeoutMs: STOP_TIMEOUT_MS,
     }),
+  /** A session started using the workspace: calls off a pending stop if it is starting or running. Never starts it. */
+  attach: (userId: number) => call<WorkspaceInfo>("POST", `/control/workspaces/${userId}/attach`),
   /** Stops the workspace only if no session uses it any more. */
   release: (userId: number) =>
     call<WorkspaceInfo>("POST", `/control/workspaces/${userId}/release`, { timeoutMs: STOP_TIMEOUT_MS }),
@@ -137,6 +139,24 @@ export const gateway = {
     call<{ ok: true }>("DELETE", `/control/agents/${agent}/images/${encodeURIComponent(version)}`, {
       timeoutMs: IMAGE_REMOVE_TIMEOUT_MS,
     }),
+  /**
+   * The LLM engine: what runs, its releases and their notes, and the running or last update job
+   * (docs/ARCHITECTURE.md, "LLM engine updates"). `refresh` asks the registry and GitHub again.
+   */
+  engine: ({ refresh = false }: { refresh?: boolean } = {}) =>
+    call<EngineOverview>("GET", `/control/engine${refresh ? "?refresh=1" : ""}`, { timeoutMs: REGISTRY_TIMEOUT_MS }),
+  /** Starts updating the engine to an exact release (resolved to its digest first). The gateway audits the outcome. */
+  updateEngine: (version: string, actorUserId: number) =>
+    call<EngineUpdateJob>("POST", "/control/engine/update", { body: { version, actorUserId }, timeoutMs: REGISTRY_TIMEOUT_MS }),
+  /** Starts going back to the image that ran before the last change. */
+  rollbackEngine: (actorUserId: number) => call<EngineUpdateJob>("POST", "/control/engine/rollback", { body: { actorUserId } }),
+  /** false: too late (restarting or finished). */
+  cancelEngineUpdate: () => call<{ cancelled: boolean }>("POST", "/control/engine/cancel"),
+  /** Ends the drain: restarts even though requests still run (they are cut off). false: not draining. */
+  restartEngineNow: () => call<{ ok: boolean }>("POST", "/control/engine/restart-now"),
+  /** Refused for the image the engine runs and while a job runs. */
+  removeEngineImage: (digest: string) =>
+    call<{ ok: true }>("DELETE", `/control/engine/images/${encodeURIComponent(digest)}`, { timeoutMs: IMAGE_REMOVE_TIMEOUT_MS }),
 };
 
 // The one place that turns failures into words: toApiError for people (JSON routes, pages, dialogs),
@@ -167,24 +187,12 @@ export function afterResponse(label: string, task: () => Promise<unknown>): void
 }
 
 /**
- * A session has just started using this workspace (sign-in, an admin opening it). Without waiting for it,
- * attaches to the workspace if it is starting or running (which calls off a pending stop), and starts a stopped
- * one only when a single agent is enabled; otherwise the workspace page lets the person choose (startOnOpen).
- * The short timeout only bounds this request; the page polls the status and shows capacity or other errors itself.
+ * A session has just started using this workspace (sign-in, an admin opening it). Without waiting for it, attaches
+ * to the workspace: a starting or running one's pending stop is off. A stopped workspace stays stopped: starting it
+ * is always the person's Start button.
  */
-export function openWorkspaceInBackground(userId: number): void {
-  afterResponse(`start workspace ${userId}`, async () => {
-    const [info, agents] = await Promise.all([gateway.getWorkspace(userId), gateway.agents()]);
-    const request = startOnOpen(info, agents);
-    if (!request) return;
-    try {
-      await gateway.start(userId, request, DEFAULT_TIMEOUT_MS);
-    } catch (error) {
-      // A timeout only means the start takes longer than we wait; capacity is shown by the page.
-      if (error instanceof GatewayError && (error.code === "timeout" || error.code === "capacity")) return;
-      throw error;
-    }
-  });
+export function attachWorkspaceInBackground(userId: number): void {
+  afterResponse(`attach workspace ${userId}`, () => gateway.attach(userId));
 }
 
 /** Releases workspaces whose sessions just ended (each stops only if nothing else uses it). */

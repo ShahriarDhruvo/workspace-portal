@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds a workspace image for an agent version and switches the portal to it. The admin console
-# (Admin > Agents) does the same without a shell, except for the isolation check this script runs at
+# (Admin > Updates) does the same without a shell, except for the isolation check this script runs at
 # the end (deploy/verify-isolation.sh needs root on the host: after a console update, run it yourself).
 # This script is for the command line and for when the portal itself is down.
 #
@@ -20,7 +20,7 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 cd "$ROOT"
 require_root
-console_busy="the admin console is updating an agent right now (Admin > Agents): wait for it to finish, or cancel it there"
+console_busy="the admin console is running an update right now (Admin > Updates): wait for it to finish, or cancel it there"
 console_update_running && die "$console_busy"
 
 usage="usage: $0 <agent> [<version>] [--refresh]   or   $0 --refresh   (agents: ${AGENTS[*]})"

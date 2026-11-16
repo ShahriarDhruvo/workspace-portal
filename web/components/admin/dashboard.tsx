@@ -4,15 +4,17 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import type { AgentKind } from "@portal/db";
+import { startingAgent } from "@/lib/agent-choice";
 import { fetchJson } from "@/lib/fetch-json";
 import { agentLabel, summarizeWorkspace } from "@/lib/format";
 import type { AdminOverview, WorkspaceInfo } from "@/lib/gateway-types";
 import type { UserSummary } from "@/lib/user-summary";
-import { Avatar } from "@/components/brand";
+import { UserAvatar } from "@/components/brand";
 import { StatusDot } from "@/components/common/status-dot";
 import { LocalTime } from "@/components/local-time";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -22,7 +24,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { EditIcon, EllipsisIcon, KeyIcon, StopIcon, TrashIcon, UserCheckIcon, UserXIcon } from "@/components/ui/icons";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { HostStats } from "./host-stats";
 import { OpenWorkspaceForm } from "./open-workspace-form";
 import { ServiceIssue } from "./service-issue";
 import { UserDialog, type DialogUser, type UserDialogKind } from "./user-dialogs";
@@ -36,10 +37,12 @@ interface DashboardProps {
   idleTimeoutMinutes: number;
   /** AGENT_NAMES, which this client component can't import from @portal/db. */
   agentNames: Readonly<Record<AgentKind, string>>;
+  /** The enabled agents in display order; null when the gateway can't say. */
+  enabledAgents: ReadonlyArray<{ id: AgentKind }> | null;
 }
 
-/** Host stats and the users table, with workspace state refreshed every 5 s. */
-export function AdminDashboard({ users, initialOverview, currentAdminId, idleTimeoutMinutes, agentNames }: DashboardProps) {
+/** The users table, with workspace state refreshed every 5 s. */
+export function UsersDashboard({ users, initialOverview, currentAdminId, idleTimeoutMinutes, agentNames, enabledAgents }: DashboardProps) {
   const router = useRouter();
   const [overview, setOverview] = useState(initialOverview);
 
@@ -63,42 +66,40 @@ export function AdminDashboard({ users, initialOverview, currentAdminId, idleTim
   return (
     <div className="flex flex-col gap-6">
       {overview.error ? <ServiceIssue message={overview.error.message}>Workspace status may be out of date.</ServiceIssue> : null}
-      <section aria-labelledby="host-heading" className="flex flex-col gap-2">
-        <h2 id="host-heading" className="label-caps">
-          Host
-        </h2>
-        <HostStats stats={overview.stats} />
-      </section>
       <section aria-labelledby="users-heading" className="flex flex-col gap-2">
         <h2 id="users-heading" className="label-caps">
           Users <span className="tabular-nums">({users.length})</span>
         </h2>
-        <Table stacked="xl">
-          <TableHeader>
-            <TableRow>
-              {["Name", "Username", "Role", "Account", "Workspace", "Agent", "Last sign-in"].map((heading) => (
-                <TableHead key={heading} scope="col">
-                  {heading}
+        {/* The table scrolls sideways inside its card on narrow screens; the page itself never does. */}
+        <Card className="gap-0 py-0">
+          <Table className="[&_tr>*:first-child]:pl-4 [&_tr>*:last-child]:pr-4">
+            <TableHeader>
+              <TableRow>
+                {["Name", "Username", "Role", "Account", "Workspace", "Harness", "Last sign-in"].map((heading) => (
+                  <TableHead key={heading} scope="col" className="h-9 text-12 text-muted-foreground">
+                    {heading}
+                  </TableHead>
+                ))}
+                <TableHead scope="col">
+                  <span className="sr-only">Actions</span>
                 </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {users.map((user) => (
+                <UserRow
+                  key={user.id}
+                  user={user}
+                  isSelf={user.id === currentAdminId}
+                  workspace={overview.workspaces ? (workspaces.get(user.id) ?? null) : undefined}
+                  idleTimeoutMinutes={idleTimeoutMinutes}
+                  agentNames={agentNames}
+                  nextAgent={enabledAgents ? startingAgent(user.agent, enabledAgents) : user.agent}
+                />
               ))}
-              <TableHead scope="col">
-                <span className="sr-only">Actions</span>
-              </TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {users.map((user) => (
-              <UserRow
-                key={user.id}
-                user={user}
-                isSelf={user.id === currentAdminId}
-                workspace={overview.workspaces ? (workspaces.get(user.id) ?? null) : undefined}
-                idleTimeoutMinutes={idleTimeoutMinutes}
-                agentNames={agentNames}
-              />
-            ))}
-          </TableBody>
-        </Table>
+            </TableBody>
+          </Table>
+        </Card>
       </section>
     </div>
   );
@@ -111,44 +112,44 @@ interface UserRowProps {
   workspace: WorkspaceInfo | null | undefined;
   idleTimeoutMinutes: number;
   agentNames: Readonly<Record<AgentKind, string>>;
+  /** The harness the workspace starts with next (the saved choice while enabled, else the default). */
+  nextAgent: AgentKind | null;
 }
 
-function UserRow({ user, isSelf, workspace, idleTimeoutMinutes, agentNames }: UserRowProps) {
+function UserRow({ user, isSelf, workspace, idleTimeoutMinutes, agentNames, nextAgent }: UserRowProps) {
   const summary = workspace === undefined ? null : summarizeWorkspace(workspace, idleTimeoutMinutes);
   const running = workspace?.status === "running" || workspace?.status === "starting";
-  const agent = workspace ? agentLabel(workspace, agentNames) : null;
+  // A running workspace shows its agent and version; a stopped one, the harness it starts with next.
+  const agent = running && workspace ? agentLabel(workspace, agentNames) : nextAgent ? agentNames[nextAgent] : null;
 
   return (
     <TableRow>
       <TableCell>
-        {/* A long name wraps: 2px down, its first line is level with the 24px avatar. */}
+        {/* A long name is cut short (in full in its tooltip) rather than widening the table. */}
         <Link
           href={`/admin/users/${user.id}`}
-          className="hit-area relative flex min-w-0 items-start gap-2 rounded-sm font-medium text-foreground"
+          className="hit-area relative flex min-w-0 items-center gap-2 rounded-sm font-medium text-foreground"
         >
-          <Avatar initials={user.initials} />
-          <span className="mt-0.5 min-w-24 wrap-anywhere">{user.name}</span>
-          {isSelf ? (
-            <Badge variant="outline" className="mt-0.5">
-              You
-            </Badge>
-          ) : null}
+          <UserAvatar initials={user.initials} />
+          <span className="max-w-56 truncate" title={user.name}>
+            {user.name}
+          </span>
+          {isSelf ? <Badge variant="outline">You</Badge> : null}
         </Link>
       </TableCell>
-      <TableCell label="Username" className="text-muted-foreground">
+      <TableCell className="text-muted-foreground">
         {user.username}
       </TableCell>
-      <TableCell label="Role">{user.role === "admin" ? <Badge>Admin</Badge> : <Badge variant="outline">User</Badge>}</TableCell>
-      <TableCell label="Account">
-        {user.active ? <Badge variant="success">Active</Badge> : <Badge variant="neutral">Deactivated</Badge>}
+      <TableCell>{user.role === "admin" ? <Badge>Admin</Badge> : <Badge variant="outline">User</Badge>}</TableCell>
+      <TableCell>
+        {user.active ? <Badge variant="success">Active</Badge> : <Badge variant="secondary">Deactivated</Badge>}
       </TableCell>
-      <TableCell label="Workspace" title={summary?.title ?? undefined}>
+      <TableCell title={summary?.title ?? undefined}>
         {summary ? (
-          <span className="flex flex-wrap items-center gap-x-1">
+          <span className="flex items-center gap-x-1">
             <span className="flex items-center gap-1.5 text-foreground">
               <StatusDot tone={summary.tone} pulse={summary.label === "Working"} />
               {summary.label}
-              {/* With the label, so that facts that wrap to a line of their own don't start with the dot. */}
               {summary.detail ? <span className="text-muted-foreground">·</span> : null}
             </span>
             {summary.detail ? <span className="text-muted-foreground">{summary.detail}</span> : null}
@@ -157,21 +158,23 @@ function UserRow({ user, isSelf, workspace, idleTimeoutMinutes, agentNames }: Us
           <span className="text-muted-foreground">Unknown</span>
         )}
       </TableCell>
-      <TableCell label="Agent" className={running ? "text-foreground" : "text-muted-foreground"}>
-        {/* The version moves under the name before either breaks. */}
-        <span className="flex flex-wrap items-baseline gap-x-1.5">
-          <span className="whitespace-nowrap">{agent ?? "—"}</span>
-          {agent && workspace?.agentVersion ? (
+      <TableCell
+        className={running ? "text-foreground" : "text-muted-foreground"}
+        title={running ? undefined : user.agent ? "Chosen in Settings; starts with the next Start" : "The default; starts with the next Start"}
+      >
+        <span className="flex items-baseline gap-x-1.5">
+          <span>{agent ?? "—"}</span>
+          {agent && running && workspace?.agentVersion ? (
             <span className="font-mono text-12 text-muted-foreground">{workspace.agentVersion}</span>
           ) : null}
         </span>
       </TableCell>
-      <TableCell label="Last sign-in" className="text-muted-foreground">
+      <TableCell className="text-muted-foreground">
         {user.lastLoginAt ? <LocalTime at={user.lastLoginAt} relative /> : "Never"}
       </TableCell>
-      <TableCell className="w-0 stacked:w-auto">
+      <TableCell className="w-0">
         <div className="flex items-center justify-end gap-1 pointer-coarse:gap-2">
-          <OpenWorkspaceForm userId={user.id} label="Open" />
+          <OpenWorkspaceForm userId={user.id} />
           <UserActions user={{ ...user, busy: workspace?.busy ?? false }} isSelf={isSelf} running={running} active={user.active} />
         </div>
       </TableCell>
@@ -194,7 +197,7 @@ function UserActions({ user, isSelf, running, active }: { user: DialogUser; isSe
     <>
       <DropdownMenu modal={false}>
         <DropdownMenuTrigger asChild>
-          <Button ref={triggerRef} type="button" variant="muted" size="icon" aria-label={`Actions for ${user.name}`}>
+          <Button ref={triggerRef} type="button" variant="ghost" size="icon-sm" aria-label={`Actions for ${user.name}`}>
             <EllipsisIcon />
           </Button>
         </DropdownMenuTrigger>
@@ -211,7 +214,7 @@ function UserActions({ user, isSelf, running, active }: { user: DialogUser; isSe
           </DropdownMenuItem>
           {isSelf ? (
             <DropdownMenuItem asChild>
-              <Link href="/change-password">
+              <Link href="/settings#password">
                 <KeyIcon />
                 Change password
               </Link>

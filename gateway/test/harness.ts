@@ -31,6 +31,7 @@ import { ConnectionRegistry } from "../src/connections.ts";
 import { createControlServer, type ControlDeps } from "../src/control-api.ts";
 import { BEARER_SUBPROTOCOL_PREFIX } from "../src/headers.ts";
 import { LlmQueue } from "../src/llm-queue.ts";
+import { LlmRequests } from "../src/llm-requests.ts";
 import type { Logger } from "../src/log.ts";
 import type { ReaderBackend } from "../src/reader.ts";
 import { ReleaseCache } from "../src/release-cache.ts";
@@ -38,7 +39,24 @@ import type { SearchBackend, SearchQuery } from "../src/search-mcp.ts";
 import { createServiceServer, type ServiceDeps } from "../src/service-api.ts";
 import { SessionCache } from "../src/session-cache.ts";
 import { WorkspaceManager, type WorkspaceInfo } from "../src/workspaces.ts";
-import { closeServer, FakeImageBuilder, FakeRegistry, FakeRuntime, listenLocal, LLM_KEY, startFakeLlm, type FakeUpstream } from "./fakes.ts";
+import { EngineReleases } from "../src/engine-releases.ts";
+import { EngineUpdater } from "../src/engine-updater.ts";
+import { HostMonitor } from "../src/host-monitor.ts";
+import { LiveHub, userNames } from "../src/live.ts";
+import { LlmMonitor } from "../src/llm-monitor.ts";
+import {
+  closeServer,
+  FakeEngineHost,
+  FakeEngineRegistry,
+  FakeImageBuilder,
+  FakeNotes,
+  FakeRegistry,
+  FakeRuntime,
+  listenLocal,
+  LLM_KEY,
+  startFakeLlm,
+  type FakeUpstream,
+} from "./fakes.ts";
 
 export const MIN = 60_000;
 export const CONTROL_SECRET = "control-secret-for-tests-0123456789";
@@ -143,6 +161,8 @@ export interface GatewayOptions {
   reader?: ReaderBackend;
   /** The search backend; by default a stub that answers "results for <query>". */
   search?: SearchBackend;
+  /** The LLM server's portal-hostd; null = not set up. By default a fake engine at 0.31.0 that ends each job at the next status call. */
+  engineHost?: FakeEngineHost | null;
 }
 
 export interface Gateway {
@@ -156,6 +176,11 @@ export interface Gateway {
   registry: FakeRegistry;
   updater: AgentUpdater;
   llmQueue: LlmQueue;
+  llmRequests: LlmRequests;
+  engineHost: FakeEngineHost | null;
+  engineRegistry: FakeEngineRegistry;
+  engine: EngineUpdater;
+  live: LiveHub;
   connections: ConnectionRegistry;
   sessionCache: SessionCache;
   manager: WorkspaceManager;
@@ -275,6 +300,7 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
   for (const kind of AGENT_KINDS) builder.install(kind, versions.current(kind));
   const registry = new FakeRegistry();
   const llmQueue = new LlmQueue(config.llm.maxConcurrency, config.llm.maxConcurrencyPerUser);
+  const llmRequests = new LlmRequests({ now: () => clock.now });
   const connections = new ConnectionRegistry(() => clock.now);
   const sessionCache = new SessionCache((hash) => loadSessionContext(db, hash));
   let manager = new WorkspaceManager({ config, db, runtime, versions, llm: llmQueue, connections, log, now: () => clock.now });
@@ -292,9 +318,44 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
     buildTimeoutMs: options.buildTimeoutMs,
   });
 
+  const engineHost = options.engineHost === undefined ? new FakeEngineHost() : options.engineHost;
+  const engineRegistry = new FakeEngineRegistry();
+  const engine = new EngineUpdater({
+    config,
+    host: engineHost,
+    releases: new EngineReleases({ registry: engineRegistry, notes: new FakeNotes(), notesRepo: config.engine.releaseNotesRepo, now: () => clock.now }),
+    queue: llmQueue,
+    db,
+    log,
+    now: () => clock.now,
+    pollMs: 5,
+  });
+  const live = new LiveHub({
+    config,
+    db,
+    get manager() {
+      return manager;
+    },
+    llm: new LlmMonitor({
+      upstreamUrl: config.llm.upstreamUrl,
+      apiKey: config.llm.apiKey,
+      queue: llmQueue,
+      requests: llmRequests,
+      names: (ids) => userNames(db, ids),
+      log,
+      now: () => clock.now,
+    }),
+    hosts: {
+      portal: new HostMonitor({ role: "portal", config: config.hostd.portal, log }),
+      llm: new HostMonitor({ role: "llm", config: config.hostd.llm, log }),
+    },
+    log,
+    now: () => clock.now,
+  });
+
   const agentDeps: AgentDeps = { config, manager, sessions: sessionCache, connections, log };
-  const controlDeps: ControlDeps = { config, db, manager, versions, updater, llm: llmQueue, sessions: sessionCache, connections, log };
-  const serviceDeps: ServiceDeps = { config, db, manager, llm: llmQueue, log, search, reader: options.reader, resolveCaller: () => caller.userId };
+  const controlDeps: ControlDeps = { config, db, manager, versions, updater, engine, llm: llmQueue, live, sessions: sessionCache, connections, log };
+  const serviceDeps: ServiceDeps = { config, db, manager, llm: llmQueue, requests: llmRequests, log, search, reader: options.reader, resolveCaller: () => caller.userId };
   const createAgentServer = createAgentServerFactory(agentDeps);
   const control = createControlServer(controlDeps);
   const service = createServiceServer(serviceDeps);
@@ -320,6 +381,11 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
     registry,
     updater,
     llmQueue,
+    llmRequests,
+    engineHost,
+    engineRegistry,
+    engine,
+    live,
     connections,
     sessionCache,
     get manager() {
@@ -427,6 +493,8 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
       for (const socket of sockets) socket.terminate();
       updater.shutdown();
       await updater.settled();
+      engine.shutdown();
+      live.close();
       manager.shutdown();
       await Promise.all(Object.values(ids).map((userId) => manager.stop(userId, "test_end")));
       for (const id of [...runtime.containers.keys()]) await runtime.removeContainer(id);

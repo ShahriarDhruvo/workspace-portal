@@ -72,7 +72,10 @@ test("defaults match .env.example", () => {
     maxConcurrentPerUser: 2,
   });
   assert.ok(config.reader.trustedHosts.includes("github.com") && config.reader.trustedHosts.includes("docs.rs"));
+  assert.deepEqual(config.hostd, { portal: { url: "", token: "" }, llm: { url: "", token: "" } }, "not set up without tokens");
+  assert.deepEqual(config.engine, { releaseNotesRepo: "gufo-org/gufo", drainMs: 15 * 60_000 });
   assert.deepEqual(config.workspace, {
+    defaultEffort: "low",
     agents: ["qwen", "dsh"],
     defaultVersions: { qwen: "0.27.0", dsh: "0.2.2-rc.1" },
     network: "workspace-portal-ws",
@@ -238,4 +241,31 @@ test("the workspace port range must fit and must not overlap the gateway's other
   // The base itself and base + count are not workspace ports.
   const edges = loadConfig({ ...secrets, WEB_PORT: "3100", CONTROL_PORT: "3300" });
   assert.deepEqual([edges.webPort, edges.controlPort], [3100, 3300]);
+});
+
+test("portal-hostd: a token sets a host up; the portal's address defaults to this machine, the LLM server's is required", () => {
+  const token = "t".repeat(64);
+  assert.deepEqual(loadConfig({ ...secrets, HOSTD_PORTAL_TOKEN: token }).hostd.portal, { url: "http://127.0.0.1:9180", token });
+  assert.deepEqual(loadConfig({ ...secrets, HOSTD_LLM_URL: "http://192.168.10.14:9180/", HOSTD_LLM_TOKEN: token }).hostd.llm, {
+    url: "http://192.168.10.14:9180",
+    token,
+  });
+  assert.deepEqual(loadConfig({ ...secrets, HOSTD_LLM_URL: "http://192.168.10.14:9180" }).hostd.llm, { url: "", token: "" }, "no token: not set up");
+  assert.deepEqual(loadConfig({ ...secrets, HOSTD_PORTAL_URL: "off", HOSTD_PORTAL_TOKEN: token }).hostd.portal, { url: "", token: "" });
+  assert.deepEqual(problems({ ...secrets, HOSTD_LLM_TOKEN: token }), ["HOSTD_LLM_TOKEN is set, so HOSTD_LLM_URL must be the http:// address of that portal-hostd"]);
+  assert.deepEqual(problems({ ...secrets, HOSTD_PORTAL_TOKEN: "short" }), ["HOSTD_PORTAL_TOKEN must be the portal-hostd token: at least 32 characters, no spaces"]);
+  assert.deepEqual(problems({ ...secrets, HOSTD_LLM_URL: "ftp://x", HOSTD_LLM_TOKEN: token }), [
+    'HOSTD_LLM_URL must be an http(s) URL (got "ftp://x")',
+    "HOSTD_LLM_TOKEN is set, so HOSTD_LLM_URL must be the http:// address of that portal-hostd",
+  ]);
+});
+
+test("ENGINE_RELEASE_NOTES_REPO names a GitHub repository or none; ENGINE_DRAIN_MINUTES is at least one", () => {
+  assert.equal(loadConfig({ ...secrets, ENGINE_RELEASE_NOTES_REPO: "none" }).engine.releaseNotesRepo, "");
+  assert.equal(loadConfig({ ...secrets, ENGINE_RELEASE_NOTES_REPO: "ggml-org/llama.cpp" }).engine.releaseNotesRepo, "ggml-org/llama.cpp");
+  assert.deepEqual(problems({ ...secrets, ENGINE_RELEASE_NOTES_REPO: "https://github.com/x/y" }), [
+    'ENGINE_RELEASE_NOTES_REPO must be a GitHub repository such as gufo-org/gufo, or none (got "https://github.com/x/y")',
+  ]);
+  assert.equal(loadConfig({ ...secrets, ENGINE_DRAIN_MINUTES: "2" }).engine.drainMs, 120_000);
+  assert.deepEqual(problems({ ...secrets, ENGINE_DRAIN_MINUTES: "0" }), ['ENGINE_DRAIN_MINUTES must be an integer >= 1 (got "0")']);
 });

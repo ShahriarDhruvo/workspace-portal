@@ -23,7 +23,6 @@ import { FormField } from "@/components/forms/form-field";
 import { SubmitButton } from "@/components/forms/submit-button";
 import {
   AlertDialog,
-  AlertDialogBody,
   AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
@@ -35,7 +34,6 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
-  DialogBody,
   DialogClose,
   DialogContent,
   DialogDescription,
@@ -202,22 +200,20 @@ function UpdateConfirmForm({ agent, copy, onDone }: { agent: AgentVersionInfo; c
   useOnDone(state, onDone);
   const problem = formProblem(state);
   return (
-    <form action={action}>
-      <AlertDialogBody>
-        <input type="hidden" name="agent" value={agent.id} />
-        <input type="hidden" name="version" value={copy.version} />
-        {copy.rebuild ? <input type="hidden" name="rebuild" value="on" /> : null}
-        <AlertDialogDescription asChild>
-          <div className="flex flex-col gap-2">{copy.body}</div>
-        </AlertDialogDescription>
-        {problem ? <FormError>{problem}</FormError> : null}
-        <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <SubmitButton size="sm" className="max-w-full min-w-16 shrink" pendingLabel={copy.pending}>
-            <span className="truncate">{copy.confirm}</span>
-          </SubmitButton>
-        </AlertDialogFooter>
-      </AlertDialogBody>
+    <form action={action} className="grid gap-4">
+      <input type="hidden" name="agent" value={agent.id} />
+      <input type="hidden" name="version" value={copy.version} />
+      {copy.rebuild ? <input type="hidden" name="rebuild" value="on" /> : null}
+      <AlertDialogDescription asChild>
+        <div className="flex flex-col gap-2">{copy.body}</div>
+      </AlertDialogDescription>
+      {problem ? <FormError>{problem}</FormError> : null}
+      <AlertDialogFooter>
+        <AlertDialogCancel>Cancel</AlertDialogCancel>
+        <SubmitButton className="max-w-full min-w-16 shrink" pendingLabel={copy.pending}>
+          <span className="truncate">{copy.confirm}</span>
+        </SubmitButton>
+      </AlertDialogFooter>
     </form>
   );
 }
@@ -311,104 +307,101 @@ function ChangeVersionForm({ agent, onDone }: { agent: AgentVersionInfo; onDone:
   const note = channel ? workNote : agent.channels.length === 0 ? NO_CHANNELS : null;
 
   return (
-    <form onSubmit={submit}>
-      <DialogBody>
-        <input type="hidden" name="agent" value={agent.id} />
-        {/* The version the channel names on screen, not the channel: see the top of this file. */}
-        {channel ? <input type="hidden" name="version" value={channel.version} /> : null}
-        <DialogDescription>
-          Makes the chosen version the one new workspaces start with; an older one rolls back. A version whose image
-          is on this server switches in seconds; any other is built here first (a few minutes, loading its CPU).
-          Running workspaces keep theirs until they restart.
-        </DialogDescription>
-        <FieldGroup className="gap-4">
-          <Field>
-            <FieldLabel htmlFor={ids.select}>Version</FieldLabel>
-            <Select
-              value={choice}
-              onValueChange={(value) => {
-                typingNext.current = value === SPECIFIC;
-                setChoice(value);
+    <form onSubmit={submit} className="grid gap-4">
+      <input type="hidden" name="agent" value={agent.id} />
+      {/* The version the channel names on screen, not the channel: see the top of this file. */}
+      {channel ? <input type="hidden" name="version" value={channel.version} /> : null}
+      <DialogDescription>
+        Makes the chosen version the one new workspaces start with; an older one rolls back. A version whose image
+        is on this server switches in seconds; any other is built here first (a few minutes, loading its CPU).
+        Running workspaces keep theirs until they restart.
+      </DialogDescription>
+      <FieldGroup className="gap-4">
+        <Field>
+          <FieldLabel htmlFor={ids.select}>Version</FieldLabel>
+          <Select
+            value={choice}
+            onValueChange={(value) => {
+              typingNext.current = value === SPECIFIC;
+              setChoice(value);
+            }}
+          >
+            <SelectTrigger id={ids.select} className="w-full" autoFocus aria-describedby={note ? ids.note : undefined}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent
+              position="popper"
+              onCloseAutoFocus={(event) => {
+                if (!typingNext.current || !versionInput.current) return;
+                typingNext.current = false;
+                event.preventDefault();
+                versionInput.current.focus();
               }}
             >
-              <SelectTrigger id={ids.select} className="w-full" autoFocus aria-describedby={note ? ids.note : undefined}>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent
-                position="popper"
-                onCloseAutoFocus={(event) => {
-                  if (!typingNext.current || !versionInput.current) return;
-                  typingNext.current = false;
-                  event.preventDefault();
-                  versionInput.current.focus();
-                }}
-              >
-                {agent.channels.map((option) => (
-                  <SelectItem key={option.tag} value={option.tag}>
-                    <span className="shrink-0">{option.tag}</span>
-                    <span className="min-w-0 break-all text-muted-foreground">
-                      {option.version}
-                      {option.version === agent.current ? " (current)" : ""}
-                    </span>
-                  </SelectItem>
-                ))}
-                {agent.channels.length > 0 ? <SelectSeparator /> : null}
-                <SelectItem value={SPECIFIC}>Specific version…</SelectItem>
-              </SelectContent>
-            </Select>
-            {note ? <FieldDescription id={ids.note}>{note}</FieldDescription> : null}
-          </Field>
-          {channel ? null : (
-            <FormField
-              ref={versionInput}
-              label="Version number"
-              name="version"
-              placeholder="e.g. 0.27.4"
-              value={typed}
-              onChange={(event) => setTyped(event.target.value)}
-              hint={[`A version of ${agent.packageName} published on npm.`, workNote].filter(Boolean).join(" ")}
-              error={versionError}
-              autoComplete="off"
-              autoCapitalize="none"
-              spellCheck={false}
-              mono
-            />
-          )}
-          <Field orientation="horizontal">
-            <Checkbox
-              id={ids.rebuild}
-              name="rebuild"
-              checked={rebuild}
-              onCheckedChange={(checked) => setRebuild(checked === true)}
-              aria-describedby={`${ids.rebuild}-hint`}
-            />
-            <FieldContent>
-              <FieldLabel htmlFor={ids.rebuild}>Rebuild from scratch</FieldLabel>
-              <FieldDescription id={`${ids.rebuild}-hint`}>
-                Builds the image even if it is on this server, without the build cache: system packages (Chromium,
-                security fixes) are fetched fresh too. Slower.
-              </FieldDescription>
-            </FieldContent>
-          </Field>
-        </FieldGroup>
-        {problem ? <FormError>{problem}</FormError> : null}
-        <DialogFooter>
-          <DialogClose asChild>
-            <Button type="button" variant="outline" size="sm">
-              Cancel
-            </Button>
-          </DialogClose>
-          <SubmitButton
-            size="sm"
-            className="max-w-full min-w-16 shrink"
-            pending={pending}
-            pendingLabel="Starting…"
-            disabled={work === "none"}
-          >
-            <span className="truncate">{confirm}</span>
-          </SubmitButton>
-        </DialogFooter>
-      </DialogBody>
+              {agent.channels.map((option) => (
+                <SelectItem key={option.tag} value={option.tag}>
+                  <span className="shrink-0">{option.tag}</span>
+                  <span className="min-w-0 break-all text-muted-foreground">
+                    {option.version}
+                    {option.version === agent.current ? " (current)" : ""}
+                  </span>
+                </SelectItem>
+              ))}
+              {agent.channels.length > 0 ? <SelectSeparator /> : null}
+              <SelectItem value={SPECIFIC}>Specific version…</SelectItem>
+            </SelectContent>
+          </Select>
+          {note ? <FieldDescription id={ids.note}>{note}</FieldDescription> : null}
+        </Field>
+        {channel ? null : (
+          <FormField
+            ref={versionInput}
+            label="Version number"
+            name="version"
+            placeholder="e.g. 0.27.4"
+            value={typed}
+            onChange={(event) => setTyped(event.target.value)}
+            hint={[`A version of ${agent.packageName} published on npm.`, workNote].filter(Boolean).join(" ")}
+            error={versionError}
+            autoComplete="off"
+            autoCapitalize="none"
+            spellCheck={false}
+            mono
+          />
+        )}
+        <Field orientation="horizontal">
+          <Checkbox
+            id={ids.rebuild}
+            name="rebuild"
+            checked={rebuild}
+            onCheckedChange={(checked) => setRebuild(checked === true)}
+            aria-describedby={`${ids.rebuild}-hint`}
+          />
+          <FieldContent>
+            <FieldLabel htmlFor={ids.rebuild}>Rebuild from scratch</FieldLabel>
+            <FieldDescription id={`${ids.rebuild}-hint`}>
+              Builds the image even if it is on this server, without the build cache: system packages (Chromium,
+              security fixes) are fetched fresh too. Slower.
+            </FieldDescription>
+          </FieldContent>
+        </Field>
+      </FieldGroup>
+      {problem ? <FormError>{problem}</FormError> : null}
+      <DialogFooter>
+        <DialogClose asChild>
+          <Button type="button" variant="outline">
+            Cancel
+          </Button>
+        </DialogClose>
+        <SubmitButton
+          className="max-w-full min-w-16 shrink"
+          pending={pending}
+          pendingLabel="Starting…"
+          disabled={work === "none"}
+        >
+          <span className="truncate">{confirm}</span>
+        </SubmitButton>
+      </DialogFooter>
     </form>
   );
 }
@@ -440,22 +433,20 @@ function RemoveImageForm({ agent, image, onDone }: { agent: AgentVersionInfo; im
   const [state, action] = useActionState(removeAgentImage, IDLE);
   useOnDone(state, onDone);
   return (
-    <form action={action}>
-      <AlertDialogBody>
-        <input type="hidden" name="agent" value={agent.id} />
-        <input type="hidden" name="version" value={image.version} />
-        <AlertDialogDescription>
-          Remove the {agent.name} <span className="text-foreground">{image.version}</span> image ({formatBytes(image.sizeBytes)})
-          from this server? Switching back to {image.version} later builds it again.
-        </AlertDialogDescription>
-        {state.status === "error" ? <FormError>{state.message}</FormError> : null}
-        <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <SubmitButton variant="destructive" size="sm" className="min-w-16" pendingLabel="Removing…">
-            Remove
-          </SubmitButton>
-        </AlertDialogFooter>
-      </AlertDialogBody>
+    <form action={action} className="grid gap-4">
+      <input type="hidden" name="agent" value={agent.id} />
+      <input type="hidden" name="version" value={image.version} />
+      <AlertDialogDescription>
+        Remove the {agent.name} <span className="text-foreground">{image.version}</span> image ({formatBytes(image.sizeBytes)})
+        from this server? Switching back to {image.version} later builds it again.
+      </AlertDialogDescription>
+      {state.status === "error" ? <FormError>{state.message}</FormError> : null}
+      <AlertDialogFooter>
+        <AlertDialogCancel>Cancel</AlertDialogCancel>
+        <SubmitButton variant="destructive" className="min-w-16" pendingLabel="Removing…">
+          Remove
+        </SubmitButton>
+      </AlertDialogFooter>
     </form>
   );
 }

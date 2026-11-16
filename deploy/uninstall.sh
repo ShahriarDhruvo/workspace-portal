@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Removes Workspace Portal from this host: the stack, every workspace container, the workspace
-# network, the firewall unit and rules, the images and the SELinux label rule.
+# network, the firewall unit and rules, portal-hostd, the images and the SELinux label rule.
 # User data (PORTAL_DATA_DIR) is kept unless --purge-data is given.
 #
 #   sudo bash deploy/uninstall.sh                 keep the data directory
@@ -47,6 +47,9 @@ elif command -v ufw >/dev/null && ufw status | grep -q "Status: active"; then
     ufw delete allow from "$source" to any port "${range/-/:}" proto tcp >/dev/null 2>&1 || true
   done
 fi
+
+log "removing portal-hostd (the live server readings)"
+bash hostd/install.sh uninstall >/dev/null 2>&1 || warn "could not remove portal-hostd; see: sudo bash hostd/install.sh uninstall"
 
 log "removing images"
 docker image ls --format '{{.Repository}}:{{.Tag}}' | grep '^workspace-portal/' | xargs -r docker image rm >/dev/null 2>&1 || true

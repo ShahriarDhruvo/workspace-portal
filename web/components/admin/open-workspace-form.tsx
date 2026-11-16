@@ -5,7 +5,7 @@ import { RightUpIcon } from "@/components/ui/icons";
 
 /**
  * Points the admin's session at this user's workspace and goes there. For the admin's own row it leaves
- * any workspace the session is viewing and goes to /workspace.
+ * any workspace the session is viewing and goes to Home.
  */
 export function OpenWorkspaceForm({
   userId,

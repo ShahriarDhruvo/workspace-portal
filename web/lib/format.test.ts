@@ -4,12 +4,14 @@ import { AGENT_NAMES } from "@portal/db";
 import {
   agentLabel,
   formatBytes,
+  formatCount,
   formatDuration,
   formatRelative,
   formatVersion,
   initials,
   stopReasonText,
   summarizeWorkspace,
+  workspaceState,
 } from "./format.ts";
 import type { WorkspaceInfo } from "./gateway-types.ts";
 
@@ -46,8 +48,10 @@ test("stop reasons in plain words", () => {
   assert.equal(stopReasonText("idle", 30), "after 30 minutes without activity");
   assert.equal(stopReasonText("admin", 30), "by the administrator");
   assert.equal(stopReasonText("capacity", 30), "to free resources");
-  assert.equal(stopReasonText("logout", 30), "because you signed out");
-  assert.equal(stopReasonText("user", 30), "to switch agents");
+  assert.equal(stopReasonText("logout", 30), "because its owner signed out");
+  assert.equal(stopReasonText("logout", 30, "owner"), "because you signed out");
+  assert.equal(stopReasonText("user", 30), "by its owner");
+  assert.equal(stopReasonText("user", 30, "owner"), "from another tab or device");
   assert.equal(stopReasonText("sessions_expired", 30), null, "never sent by the gateway");
   assert.equal(stopReasonText("something_new", 30), null);
   assert.equal(stopReasonText(null, 30), null);
@@ -101,4 +105,23 @@ test("agentLabel names the running agent, or the last one once stopped", () => {
   assert.equal(agentLabel({ status: "error", agent: "qwen" }, AGENT_NAMES), "last: Qwen Code");
   assert.equal(agentLabel({ status: "stopped", agent: null }, AGENT_NAMES), null, "never started");
   assert.equal(agentLabel(null, AGENT_NAMES), null, "no workspace row");
+});
+
+test("workspaceState: a word for each status; running splits into working and idle, and starts once ready", () => {
+  const at = (status: WorkspaceInfo["status"], ready = false, busy = false) => workspaceState({ status, ready, busy });
+  assert.deepEqual(at("stopped"), { tone: "idle", label: "Stopped", activity: null, pulse: false });
+  assert.deepEqual(at("starting"), { tone: "warning", label: "Starting", activity: null, pulse: true });
+  assert.deepEqual(at("running"), { tone: "warning", label: "Starting", activity: null, pulse: true }, "not ready yet");
+  assert.deepEqual(at("running", true), { tone: "info", label: "Running", activity: "idle", pulse: false });
+  assert.deepEqual(at("running", true, true), { tone: "info", label: "Running", activity: "working", pulse: true });
+  assert.deepEqual(at("stopping"), { tone: "warning", label: "Stopping", activity: null, pulse: true });
+  assert.deepEqual(at("error"), { tone: "danger", label: "Error", activity: null, pulse: false });
+});
+
+test("formatCount keeps counts short", () => {
+  assert.equal(formatCount(0), "0");
+  assert.equal(formatCount(950), "950");
+  assert.equal(formatCount(12_345), "12.3K");
+  assert.equal(formatCount(4_100_000), "4.1M");
+  assert.equal(formatCount(-3), "0");
 });

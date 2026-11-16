@@ -105,6 +105,9 @@ export const userIdSchema = z.coerce.number().int().positive();
 
 const agentKindSchema = z.enum(AGENT_KINDS, "Unknown agent.");
 
+/** A harness choice in Settings: an agent kind. Whether this install enables it is the action's check. */
+export const harnessSchema = z.object({ agent: agentKindSchema });
+
 /** Said for a missing or malformed version, empty included. */
 const AGENT_VERSION_ERROR = "Enter a version like 0.27.4.";
 

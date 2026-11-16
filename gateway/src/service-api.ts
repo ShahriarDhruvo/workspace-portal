@@ -12,6 +12,7 @@ import { forward, type ForwardResult } from "./forward.ts";
 import { endToEndHeaders, llmRequestHeaders } from "./headers.ts";
 import { createStreamingServer, remoteAddress, sendError, sendJson, splitTarget } from "./http-util.ts";
 import type { LlmQueue, ReleaseSlot } from "./llm-queue.ts";
+import type { LlmRequestHandle, LlmRequests } from "./llm-requests.ts";
 import type { Logger } from "./log.ts";
 import type { ReaderBackend } from "./reader.ts";
 import { createLimiter, handleSearchMcp, type PageReader, type SearchBackend } from "./search-mcp.ts";
@@ -24,6 +25,8 @@ export interface ServiceDeps {
   db: PortalDb;
   manager: WorkspaceManager;
   llm: LlmQueue;
+  /** Where each generation request reports its progress, for the admin's live view. */
+  requests: LlmRequests;
   log: Logger;
   /** Web search for the MCP tool (SearXNG in production). */
   search: SearchBackend;
@@ -235,6 +238,7 @@ async function proxyLlm(
   deps.manager.noteAgentActivity(userId);
 
   let release: ReleaseSlot = () => undefined;
+  const progress: LlmRequestHandle | null = generation ? deps.requests.begin(userId) : null;
   if (generation) {
     const hangUp = new AbortController();
     const onClose = (): void => hangUp.abort();
@@ -242,14 +246,17 @@ async function proxyLlm(
     try {
       release = await deps.llm.acquire(userId, hangUp.signal);
     } catch {
+      progress?.finish(false);
       return; // the workspace hung up while queued
     } finally {
       res.off("close", onClose);
     }
     if (req.socket.destroyed) {
       release();
+      progress?.finish(false);
       return;
     }
+    progress?.forwarded();
   }
 
   // What the model is shown in this request (the user's messages, tool output) it may then open with
@@ -267,7 +274,7 @@ async function proxyLlm(
 
   const started = Date.now();
   const tapped: { parser: UsageParser | null } = { parser: null };
-  let result: ForwardResult;
+  let result: ForwardResult | null = null;
   try {
     result = await forward(req, res, {
       url: new URL(`${deps.config.llm.upstreamUrl}${pathname.slice("/llm".length)}${search}`),
@@ -276,7 +283,7 @@ async function proxyLlm(
       observeBody: collector?.observe,
       responseHeaders: (incoming) => endToEndHeaders(incoming.headers),
       tap: (incoming) => {
-        tapped.parser = generation ? usageParserFor(incoming.headers) : null;
+        tapped.parser = generation ? usageParserFor(incoming.headers, progress) : null;
         return tapped.parser ? usageTap(tapped.parser) : null;
       },
       onError: (error, response) => {
@@ -287,6 +294,7 @@ async function proxyLlm(
   } finally {
     release();
     deps.manager.noteAgentActivity(userId);
+    progress?.finish(result !== null && result.outcome === "completed" && result.status !== null && result.status >= 200 && result.status < 300);
   }
 
   const usage = tapped.parser?.usage ?? null;

@@ -21,6 +21,9 @@ import {
   type SweepResult,
   type WorkspaceImageSummary,
 } from "../src/image-builder.ts";
+import type { NotesClient, RegistryClient, ReleaseNotes } from "../src/engine-releases.ts";
+import type { EngineHost } from "../src/engine-updater.ts";
+import { HostdError, type EngineJob, type EngineStatus } from "../src/hostd.ts";
 import { parseWorkspaceImage, STAGING_REPOSITORY, workspaceImage } from "../src/image-names.ts";
 import { RegistryError, type NpmRegistry } from "../src/npm-registry.ts";
 import { userPaths } from "../src/paths.ts";
@@ -841,7 +844,9 @@ export async function startFakeLlm(): Promise<FakeUpstream> {
       res.end(JSON.stringify({ choices: [{ message: { content: "hi" } }], usage: { prompt_tokens: 11, completion_tokens: 22 } }));
       return;
     }
+    // Like llama.cpp's server: an empty role delta at once, a token per event, timings at the end.
     res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write('data: {"choices":[{"delta":{"role":"assistant","content":null}}],"usage":null}\n\n');
     res.write('data: {"choices":[{"delta":{"content":"he"}}],"usage":null}\n\n');
     if (body.hold) return; // keeps generating until the client hangs up
     await delay(150);
@@ -849,7 +854,9 @@ export async function startFakeLlm(): Promise<FakeUpstream> {
     await delay(20);
     res.write('data: {"choices":[],"usage":{"prompt_tok');
     await delay(20);
-    res.write('ens":12,"completion_tokens":34}}\n\ndata: [DONE]\n\n');
+    res.write(
+      'ens":12,"completion_tokens":34},"timings":{"cache_n":2,"prompt_n":10,"prompt_ms":20,"predicted_n":34,"predicted_ms":170}}\n\ndata: [DONE]\n\n',
+    );
     res.end();
   });
   const port = await listenLocal(server);
@@ -867,4 +874,173 @@ export async function startFakeLlm(): Promise<FakeUpstream> {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// ------------------------------------------------------------------ LLM engine (portal-hostd)
+
+export const ENGINE_REPOSITORY = "ghcr.io/gufo-org/toolboxes/gufo-runtime";
+
+/** A digest for a version: sha256 of its name. */
+export function engineDigest(version: string): string {
+  return `sha256:${createHash("sha256").update(version).digest("hex")}`;
+}
+
+/**
+ * The LLM server's portal-hostd as the engine updater sees it: a quadlet image, local images, and one
+ * job at a time that ends after `jobPolls` status calls. `failApply` makes the next apply fail (and
+ * roll back, like hostd).
+ */
+export class FakeEngineHost implements EngineHost {
+  version: string;
+  previous: string | null = null;
+  local = new Set<string>();
+  jobPolls = 1;
+  failPull: string | null = null;
+  failApply: string | null = null;
+  offline = false;
+  readonly calls: string[] = [];
+  #job: EngineJob | null = null;
+  #pollsLeft = 0;
+  #finishJob: (() => void) | null = null;
+  #nextId = 1;
+
+  constructor(version = "0.31.0") {
+    this.version = version;
+    this.local.add(version);
+  }
+
+  async status(): Promise<EngineStatus> {
+    if (this.offline) throw new HostdError(null, "unreachable", "http://llm:9180: connect ECONNREFUSED");
+    if (this.#job?.phase === "running" && --this.#pollsLeft <= 0) this.#finishJob?.();
+    const image = (version: string): string => `${ENGINE_REPOSITORY}@${engineDigest(version)}`;
+    return {
+      unit: "gufo.service",
+      quadlet: "/home/llm/.config/containers/systemd/gufo.container",
+      repository: ENGINE_REPOSITORY,
+      image: image(this.version),
+      digest: engineDigest(this.version),
+      version: this.version,
+      revision: null,
+      state: "active",
+      subState: "running",
+      ready: true,
+      buildInfo: `${this.version} (abc1234)`,
+      previous: this.previous === null ? null : { image: image(this.previous), digest: engineDigest(this.previous), version: this.previous },
+      images: [...this.local].map((version) => ({
+        id: version,
+        digest: engineDigest(version),
+        version,
+        revision: null,
+        createdAt: null,
+        sizeBytes: 1e9,
+        current: version === this.version,
+        previous: version === this.previous,
+      })),
+      job: this.#job && { ...this.#job, log: [...this.#job.log] },
+    };
+  }
+
+  async pull(image: string): Promise<EngineJob> {
+    this.calls.push(`pull ${image}`);
+    const version = this.#versionOf(image);
+    return this.#start("pull", image, null, () => {
+      if (this.failPull !== null) return this.failPull;
+      this.local.add(version);
+      return null;
+    });
+  }
+
+  async apply(image: string, version: string | null): Promise<EngineJob> {
+    this.calls.push(`apply ${image} ${version}`);
+    const target = this.#versionOf(image);
+    if (!this.local.has(target)) throw new HostdError(409, "not_pulled", "The image is not on this server.");
+    return this.#start("apply", image, version, () => {
+      if (this.failApply !== null) {
+        const error = this.failApply;
+        this.failApply = null;
+        this.#job!.rolledBack = true;
+        return error;
+      }
+      this.previous = this.version;
+      this.version = target;
+      return null;
+    });
+  }
+
+  async rollback(): Promise<EngineJob> {
+    this.calls.push("rollback");
+    if (this.previous === null) throw new HostdError(409, "no_previous", "There is no previous image.");
+    const target = this.previous;
+    return this.#start("rollback", null, target, () => {
+      this.previous = this.version;
+      this.version = target;
+      return null;
+    });
+  }
+
+  async cancel(): Promise<boolean> {
+    this.calls.push("cancel");
+    if (this.#job?.phase !== "running" || this.#job.kind !== "pull") return false;
+    this.#job.phase = "cancelled";
+    this.#job.finishedAt = Date.now();
+    return true;
+  }
+
+  async removeImage(digest: string): Promise<void> {
+    this.calls.push(`rmi ${digest}`);
+    const version = [...this.local].find((v) => engineDigest(v) === digest);
+    if (version === undefined) throw new HostdError(404, "not_found", "No such image.");
+    if (version === this.version) throw new HostdError(409, "image_current", "The engine runs this image.");
+    this.local.delete(version);
+  }
+
+  #versionOf(image: string): string {
+    const digest = image.split("@")[1];
+    return ["0.30.0", "0.31.0", "0.32.0", "0.33.0", "0.34.0", "0.35.0"].find((v) => engineDigest(v) === digest) ?? "unknown";
+  }
+
+  #start(kind: EngineJob["kind"], image: string | null, version: string | null, finish: () => string | null): EngineJob {
+    if (this.#job?.phase === "running") throw new HostdError(409, "job_running", "A job is running.");
+    const job: EngineJob = { id: String(this.#nextId++), kind, image, version, phase: "running", step: `${kind}ing`, log: [`${kind} started`], startedAt: Date.now(), finishedAt: null, error: null, rolledBack: false };
+    this.#job = job;
+    this.#pollsLeft = this.jobPolls;
+    this.#finishJob = () => {
+      const error = finish();
+      job.phase = error === null ? "succeeded" : "failed";
+      job.error = error;
+      job.log.push(error === null ? `${kind} done` : `${kind} failed: ${error}`);
+      job.finishedAt = Date.now();
+    };
+    return { ...job, log: [...job.log] };
+  }
+}
+
+/** A registry with the given versions (and latest = the newest). */
+export class FakeEngineRegistry implements RegistryClient {
+  versions = ["0.30.0", "0.31.0", "0.32.0", "0.33.0", "0.34.0"];
+  failing = false;
+  calls = 0;
+
+  async tags(): Promise<string[]> {
+    this.calls++;
+    if (this.failing) throw new Error("ghcr.io answered 503");
+    return [...this.versions, "latest", "edge", "sha-abc1234"];
+  }
+
+  async digest(_repository: string, tag: string): Promise<string | null> {
+    if (this.failing) throw new Error("ghcr.io answered 503");
+    if (tag === "latest") return engineDigest(this.versions.at(-1)!);
+    return this.versions.includes(tag) ? engineDigest(tag) : null;
+  }
+}
+
+export class FakeNotes implements NotesClient {
+  calls = 0;
+  async notes(): Promise<Map<string, ReleaseNotes>> {
+    this.calls++;
+    return new Map([
+      ["0.34.0", { title: "v0.34.0", url: "https://github.com/gufo-org/gufo/releases/tag/v0.34.0", publishedAt: 0, body: "### ⚠ BREAKING CHANGES\n\n* audio", breaking: true }],
+      ["0.33.0", { title: "v0.33.0", url: "https://github.com/gufo-org/gufo/releases/tag/v0.33.0", publishedAt: 0, body: "### Features", breaking: false }],
+    ]);
+  }
 }

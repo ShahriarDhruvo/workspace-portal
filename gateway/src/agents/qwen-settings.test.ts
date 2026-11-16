@@ -283,3 +283,65 @@ test("mergeSettings merges objects deeply, replaces everything else, and ignores
   assert.equal(({} as { polluted?: boolean }).polluted, undefined, "Object.prototype is untouched");
   assert.equal((out.a as { polluted?: boolean }).polluted, undefined);
 });
+
+// ------------------------------------------------------------------ default reasoning effort
+
+const REASONING = (efforts: string[], defaultEffort: string) => ({ reasoning: { profile: "openai-effort", efforts, defaultEffort } });
+const EFFORT_MODELS: AdminQwenConfig = {
+  settings: {},
+  systemDefaults: {
+    model: { name: "big" },
+    modelProviders: {
+      openai: [
+        { id: "small", capabilities: REASONING(["medium", "xhigh"], "xhigh") },
+        { id: "big", capabilities: REASONING(["low", "medium", "xhigh"], "xhigh") },
+        { id: "plain" },
+      ],
+    },
+  },
+  systemDefaultsFile: DEFAULTS_FILE,
+};
+
+const EFFORT_ALL: AdminQwenConfig = {
+  ...EFFORT_MODELS,
+  systemDefaults: {
+    ...EFFORT_MODELS.systemDefaults,
+    modelProviders: { openai: [{ id: "big", capabilities: REASONING(["low", "medium", "xhigh"], "xhigh") }, { id: "plain" }] },
+  },
+};
+
+test("defaultEffort: every new session starts there (system scope) when every model offers it", () => {
+  const rendered = renderQwenSettings({ admin: EFFORT_ALL, serviceBaseUrl: SERVICE, browser: false, defaultEffort: "low" });
+  // System scope beats the user's own saved pick, so a pick lasts for one session only.
+  assert.equal((rendered.settings.model as SettingsObject).reasoningEffort, "low");
+  assert.equal((rendered.settings.model as SettingsObject).catalogRefresh, false, "merged with the forced keys");
+  const [big, plain] = (rendered.systemDefaults.modelProviders as SettingsObject).openai as SettingsObject[];
+  assert.deepEqual((big!.capabilities as SettingsObject).reasoning, { profile: "openai-effort", efforts: ["low", "medium", "xhigh"], defaultEffort: "low" });
+  assert.equal(plain!.capabilities, undefined, "a model without efforts is left alone");
+});
+
+test("defaultEffort: with a model that lacks it, each model that offers it defaults to it, and nothing is forced", () => {
+  const rendered = renderQwenSettings({ admin: EFFORT_MODELS, serviceBaseUrl: SERVICE, browser: false, defaultEffort: "low" });
+  // A session-wide "low" would also apply after a switch to "small", which doesn't offer it.
+  assert.equal((rendered.settings.model as SettingsObject).reasoningEffort, undefined);
+  const byId = Object.fromEntries(
+    ((rendered.systemDefaults.modelProviders as SettingsObject).openai as SettingsObject[]).map((entry) => [entry.id, entry]),
+  );
+  assert.deepEqual((byId.big!.capabilities as SettingsObject).reasoning, { profile: "openai-effort", efforts: ["low", "medium", "xhigh"], defaultEffort: "low" });
+  assert.deepEqual((byId.small!.capabilities as SettingsObject).reasoning, { profile: "openai-effort", efforts: ["medium", "xhigh"], defaultEffort: "xhigh" }, "a model without it keeps its own");
+
+  // System scope's model list replaces system-defaults' (as Qwen Code merges them), and decides.
+  const listed: AdminQwenConfig = {
+    ...EFFORT_MODELS,
+    settings: { modelProviders: { openai: [{ id: "big", capabilities: REASONING(["low"], "low") }] } },
+  };
+  const fromSettings = renderQwenSettings({ admin: listed, serviceBaseUrl: SERVICE, browser: false, defaultEffort: "low" });
+  assert.equal((fromSettings.settings.model as SettingsObject).reasoningEffort, "low");
+});
+
+test("defaultEffort: unset leaves the admin's settings as they are", () => {
+  const untouched = renderQwenSettings({ admin: EFFORT_MODELS, serviceBaseUrl: SERVICE, browser: false, defaultEffort: null });
+  assert.equal((untouched.settings.model as SettingsObject).reasoningEffort, undefined);
+  const big = ((untouched.systemDefaults.modelProviders as SettingsObject).openai as SettingsObject[]).find((entry) => entry.id === "big")!;
+  assert.equal(((big.capabilities as SettingsObject).reasoning as SettingsObject).defaultEffort, "xhigh");
+});

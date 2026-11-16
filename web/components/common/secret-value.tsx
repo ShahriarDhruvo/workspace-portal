@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { CheckIcon, CopyIcon } from "@/components/ui/icons";
 
 /** Copies `value`; says "Copied" (or "Select and copy" if the browser refused) for two seconds. */
-function CopyButton({ value }: { value: string }) {
+export function CopyButton({ value }: { value: string }) {
   const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
 
   useEffect(() => {

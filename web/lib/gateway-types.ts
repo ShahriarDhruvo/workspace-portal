@@ -2,7 +2,7 @@
 // Type-only module: safe to import from client components.
 import type { AgentKind, WorkspaceStatus } from "@portal/db";
 
-/** GET /control/agents: one of the agents enabled on this install (the chooser's cards, in display order). */
+/** GET /control/agents: one of the agents enabled on this install (Settings' choices, in display order). */
 export interface AgentInfo {
   id: AgentKind;
   /** Display name, as in AGENT_NAMES. */
@@ -10,15 +10,6 @@ export interface AgentInfo {
   description: string;
   /** The version in the workspace image, e.g. "0.27.0". */
   version: string;
-}
-
-/** Body of POST /control/workspaces/:id/start and of POST /api/workspace/start. */
-export interface StartRequest {
-  /**
-   * Omitted: attach to whatever is starting or running; otherwise start the only agent enabled, or with several
-   * the workspace's last one (400 `agent_required` if it never ran one).
-   */
-  agent?: AgentKind;
 }
 
 export interface WorkspaceInfo {
@@ -61,7 +52,6 @@ export interface HostStats {
   idleTimeoutMinutes: number;
   memTotalBytes: number;
   memAvailableBytes: number;
-  loadAvg: [number, number, number];
   cpus: number;
   llm: { inFlight: number; queued: number; maxConcurrency: number };
 }
@@ -172,8 +162,13 @@ export interface WorkspaceStatusResponse extends WorkspaceInfo {
   targetUserId: number;
   /** True when an admin is viewing someone else's workspace. */
   actingAs: boolean;
-  /** The agents enabled on this install, in display order: what the page offers when nothing runs. */
+  /** The agents enabled on this install, in display order. */
   agents: AgentInfo[];
+  /**
+   * The agent a start would launch: the workspace owner's choice in Settings while it is enabled, else the first
+   * enabled agent; null when none is enabled.
+   */
+  nextAgent: AgentKind | null;
 }
 
 /** GET (and POST, refreshing) /api/admin/agents. `versions` is null when the gateway could not provide it. */

@@ -1,13 +1,11 @@
 "use client";
 
 import * as React from "react";
-import { ScrollArea as ScrollAreaPrimitive } from "radix-ui";
 import { cn } from "@/lib/utils";
+import { ScrollArea as ScrollAreaPrimitive } from "radix-ui";
 
-// shadcn/ui ScrollArea: a scrolling region with thin overlay scrollbars (a rounded thumb in the border colour),
-// for lists inside a fixed-height panel. Page-level scrollbars are styled in app/theme.css instead.
-// `viewportProps` reach the element that scrolls: a ref (to follow new output at the bottom), or a tabIndex and a
-// label so the keyboard can scroll it.
+// shadcn/ui ScrollArea, radix-nova style, as the registry has it plus one portal tweak: `viewportProps`, passed
+// to the scrolling viewport (a ref, onScroll, a label), for a log that follows its end while scrolled there.
 
 function ScrollArea({
   className,
@@ -23,7 +21,7 @@ function ScrollArea({
         data-slot="scroll-area-viewport"
         {...viewportProps}
         className={cn(
-          "size-full rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-1",
+          "size-full rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1",
           viewportProps?.className,
         )}
       >
@@ -43,16 +41,18 @@ function ScrollBar({
   return (
     <ScrollAreaPrimitive.ScrollAreaScrollbar
       data-slot="scroll-area-scrollbar"
+      data-orientation={orientation}
       orientation={orientation}
       className={cn(
-        "flex touch-none p-px transition-colors select-none",
-        orientation === "vertical" && "h-full w-2.5 border-l border-l-transparent",
-        orientation === "horizontal" && "h-2.5 flex-col border-t border-t-transparent",
+        "flex touch-none p-px transition-colors select-none data-horizontal:h-2.5 data-horizontal:flex-col data-horizontal:border-t data-horizontal:border-t-transparent data-vertical:h-full data-vertical:w-2.5 data-vertical:border-l data-vertical:border-l-transparent",
         className,
       )}
       {...props}
     >
-      <ScrollAreaPrimitive.ScrollAreaThumb data-slot="scroll-area-thumb" className="relative flex-1 rounded-full bg-border" />
+      <ScrollAreaPrimitive.ScrollAreaThumb
+        data-slot="scroll-area-thumb"
+        className="relative flex-1 rounded-full bg-border"
+      />
     </ScrollAreaPrimitive.ScrollAreaScrollbar>
   );
 }

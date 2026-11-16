@@ -9,7 +9,6 @@ import { FormField } from "@/components/forms/form-field";
 import { SubmitButton } from "@/components/forms/submit-button";
 import {
   AlertDialog,
-  AlertDialogBody,
   AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
@@ -89,7 +88,7 @@ export function UserDialogButton({
       <Button
         ref={button}
         type="button"
-        variant={danger ? "destructive-outline" : "outline"}
+        variant={danger ? "destructive" : "outline"}
         size="sm"
         onClick={() => {
           setShown(kind);
@@ -263,39 +262,36 @@ function ActionForm(props: ActionFormProps) {
 
   if (password && renderPassword) {
     return (
-      <AlertDialogBody>
+      <div className="grid gap-4">
         {renderPassword(password)}
         <AlertDialogFooter>
-          <Button type="button" size="sm" className="min-w-16" autoFocus onClick={onDone}>
+          <Button type="button" className="min-w-16" autoFocus onClick={onDone}>
             Done
           </Button>
         </AlertDialogFooter>
-      </AlertDialogBody>
+      </div>
     );
   }
 
   return (
-    <form action={formAction}>
-      <AlertDialogBody>
-        <input type="hidden" name="userId" value={user.id} />
-        <AlertDialogDescription asChild>
-          <div className="flex flex-col gap-2">{description}</div>
-        </AlertDialogDescription>
-        {fields}
-        {state.status === "error" ? <FormError>{state.message}</FormError> : null}
-        <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <SubmitButton
-            variant={danger ? "destructive" : "default"}
-            size="sm"
-            className="min-w-16"
-            pendingLabel={pendingLabel}
-            disabled={blocked}
-          >
-            {confirmLabel}
-          </SubmitButton>
-        </AlertDialogFooter>
-      </AlertDialogBody>
+    <form action={formAction} className="grid gap-4">
+      <input type="hidden" name="userId" value={user.id} />
+      <AlertDialogDescription asChild>
+        <div className="flex flex-col gap-2">{description}</div>
+      </AlertDialogDescription>
+      {fields}
+      {state.status === "error" ? <FormError>{state.message}</FormError> : null}
+      <AlertDialogFooter>
+        <AlertDialogCancel>Cancel</AlertDialogCancel>
+        <SubmitButton
+          variant={danger ? "destructive" : "default"}
+          className="min-w-16"
+          pendingLabel={pendingLabel}
+          disabled={blocked}
+        >
+          {confirmLabel}
+        </SubmitButton>
+      </AlertDialogFooter>
     </form>
   );
 }

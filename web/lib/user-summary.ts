@@ -1,4 +1,4 @@
-import { displayName, type User } from "@portal/db";
+import { displayName, type AgentKind, type User } from "@portal/db";
 import { initials } from "./format";
 
 /** The serializable slice of a user that client components get (never the password hash). */
@@ -12,6 +12,8 @@ export interface UserSummary {
   mustChangePassword: boolean;
   createdAt: number;
   lastLoginAt: number | null;
+  /** The harness chosen in Settings; null: the install's default. */
+  agent: AgentKind | null;
 }
 
 export function toUserSummary(user: User): UserSummary {
@@ -25,5 +27,6 @@ export function toUserSummary(user: User): UserSummary {
     mustChangePassword: user.mustChangePassword,
     createdAt: user.createdAt,
     lastLoginAt: user.lastLoginAt,
+    agent: user.agent,
   };
 }

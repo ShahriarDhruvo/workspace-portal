@@ -1,9 +1,11 @@
 import { cn } from "@/lib/utils";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 
 /**
- * Workspace Portal's own mark: a rounded square in the primary grey with a "W" in the on-primary colour.
- * Monochrome on purpose, so it sits in the Web Shell's neutral chrome without borrowing anyone's logo or
- * brand colour. app/icon.svg is a standalone file that can't read the theme, so it repeats the two values.
+ * Workspace Portal's own mark: a rounded square in the primary colour with a "W" in the on-primary colour.
+ * Monochrome on purpose, so it sits in the Web Shell's neutral chrome in either theme without borrowing anyone's
+ * logo or brand colour. app/icon.svg is a standalone file that can't read the theme, so it repeats the dark
+ * theme's two values.
  */
 export function PortalMark({ size = 22 }: { size?: number }) {
   return (
@@ -22,21 +24,15 @@ export function PortalMark({ size = 22 }: { size?: number }) {
 }
 
 /**
- * The mark and the name. In a top bar, `compact` names the breakpoint from which the bar shows all its controls:
- * from there up to `lg`, and on phones, the bar has no room for the name and only the mark shows (the name stays
- * for screen readers).
+ * The mark and the name. In a top bar, `compact` drops the name (kept for screen readers) below the width where
+ * the bar has room for it.
  */
-export function Brand({ size = "md", compact }: { size?: "md" | "lg"; compact?: "md" | "bar" }) {
+export function Brand({ size = "md", compact = false }: { size?: "md" | "lg"; compact?: boolean }) {
   return (
     <span className="flex shrink-0 items-center gap-2">
       <PortalMark size={size === "lg" ? 26 : 22} />
       <span
-        className={cn(
-          size === "lg" ? "text-18 leading-5 font-medium" : "text-14 font-semibold",
-          compact && "max-sm:sr-only",
-          compact === "md" && "md:max-lg:sr-only",
-          compact === "bar" && "bar:max-lg:sr-only",
-        )}
+        className={cn(size === "lg" ? "text-18 leading-5 font-medium" : "text-14 font-semibold", compact && "max-sm:sr-only")}
       >
         Workspace Portal
       </span>
@@ -44,27 +40,21 @@ export function Brand({ size = "md", compact }: { size?: "md" | "lg"; compact?: 
   );
 }
 
-export function Avatar({ initials, size = "sm" }: { initials: string; size?: "sm" | "lg" }) {
+/** A person's initials in a shadcn/ui Avatar (no photos in the portal), hidden from screen readers. */
+export function UserAvatar({ initials, size = "sm" }: { initials: string; size?: "sm" | "lg" }) {
   return (
-    <span
-      aria-hidden="true"
-      className={cn(
-        "inline-flex shrink-0 items-center justify-center rounded-full bg-muted font-medium text-muted-foreground",
-        size === "lg" ? "size-10 text-14" : "size-6 text-11",
-      )}
-    >
-      {/* Trimmed to the cap height so the capitals sit in the optical centre of the circle. */}
-      <span className="block [text-box:trim-both_cap_alphabetic]">{initials}</span>
-    </span>
+    <Avatar size={size} aria-hidden="true">
+      <AvatarFallback className="font-medium">{initials}</AvatarFallback>
+    </Avatar>
   );
 }
 
 /** Avatar plus full name, on the right of the top bars where they show in full. Cut short, the name is in its tooltip. */
-export function UserChip({ name, initials }: { name: string; initials: string }) {
+export function UserChip({ name, initials, nameClassName }: { name: string; initials: string; nameClassName?: string }) {
   return (
     <span className="flex min-w-0 items-center gap-2 text-13 text-foreground">
-      <Avatar initials={initials} />
-      <span className="truncate" title={name}>
+      <UserAvatar initials={initials} />
+      <span className={cn("truncate", nameClassName)} title={name}>
         {name}
       </span>
     </span>

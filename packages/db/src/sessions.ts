@@ -107,7 +107,11 @@ export type AuditAction =
   | "workspace_error"
   | "agent_updated"
   | "agent_update_failed"
-  | "agent_image_removed";
+  | "agent_image_removed"
+  | "agent_preference_changed"
+  | "engine_updated"
+  | "engine_update_failed"
+  | "engine_image_removed";
 
 export function writeAudit(
   db: PortalDb,

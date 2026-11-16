@@ -23,8 +23,8 @@ export default async function ViewWorkspacePage({ params }: PageProps<"/admin/us
   const id = userIdSchema.safeParse((await params).id);
   if (!id.success) notFound();
   const isSelf = id.data === session.user.id;
-  // While the session views someone else's workspace, /workspace shows theirs, not the admin's own.
-  if (isSelf && !session.actingAs) redirect("/workspace");
+  // The admin's own workspace is on Home (while the session views someone else's, it explains how to get back).
+  if (isSelf && !session.actingAs) redirect("/");
   const user = getDb().select().from(users).where(eq(users.id, id.data)).get();
   if (!user) notFound();
 
@@ -37,7 +37,7 @@ export default async function ViewWorkspacePage({ params }: PageProps<"/admin/us
     return (
       <OpenPanel
         viewer={{ name: viewerName, initials: viewerInitials }}
-        back={{ href: "/admin", label: "Users" }}
+        back={{ href: "/admin/users", label: "Users" }}
         title={`Your session is viewing ${displayName(session.target)}'s workspace`}
         open={<OpenWorkspaceForm userId={user.id} label="Open my workspace" variant="default" size="default" />}
       >
@@ -54,8 +54,9 @@ export default async function ViewWorkspacePage({ params }: PageProps<"/admin/us
         title={`You are not viewing ${name}'s workspace`}
         open={<OpenWorkspaceForm userId={user.id} variant="default" size="default" />}
       >
-        Opening it points your session at their workspace, starts it if needed, and is recorded in the audit log.{" "}
-        {user.firstName} sees an &ldquo;Admin connected&rdquo; notice while you are in it.
+        Opening it points your session at their workspace and is recorded in the audit log. A stopped workspace
+        stays stopped until you press Start, which launches {user.firstName}&apos;s harness. {user.firstName} sees an
+        &ldquo;Admin connected&rdquo; notice while you are in it.
       </OpenPanel>
     );
   }
@@ -87,8 +88,8 @@ function OpenPanel(props: {
         <BackLink href={props.back.href}>{props.back.label}</BackLink>
         <Card>
           <CardHeader>
-            <CardTitle asChild>
-              <h1>{props.title}</h1>
+            <CardTitle>
+              <h1 className="text-16">{props.title}</h1>
             </CardTitle>
             <CardDescription>{props.children}</CardDescription>
           </CardHeader>

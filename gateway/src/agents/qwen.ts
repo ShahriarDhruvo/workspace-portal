@@ -145,6 +145,7 @@ export const qwenDriver: AgentDriver = {
       serviceBaseUrl: serviceBaseUrl(config),
       browser: config.workspace.browser,
       reader: config.reader.url !== "",
+      defaultEffort: config.workspace.defaultEffort,
     });
     return {
       "settings.json": `${JSON.stringify(rendered.settings, null, 2)}\n`,

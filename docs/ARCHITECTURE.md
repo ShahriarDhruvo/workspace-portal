@@ -12,6 +12,8 @@ Browser ──▶ :3100+N          gateway agent port  user N's workspace: sessi
                              gateway 172.29.0.1:4001  service API (LLM proxy + search/read MCP), called by workspaces only
                              searxng 127.0.0.1:8888   search engine, called by the gateway only (network "workspace-portal-searxng")
                              reader  127.0.0.1:4003   page reader, called by the gateway only (network "workspace-portal-reader")
+                             portal-hostd 127.0.0.1:9180  this server's live readings (systemd service, not a container)
+                             LLM server: portal-hostd :9180 (portal server's IP only)  its readings + LLM engine updates
                                     │ Docker API (/var/run/docker.sock)
               ┌─────────────────────┼─────────────────────┐
            wp-ws-1               wp-ws-2        …       wp-ws-N      (one agent each: qwen serve :4170 or dsh :3080, uid 200000+N)
@@ -34,6 +36,15 @@ Browser ──▶ :3100+N          gateway agent port  user N's workspace: sessi
     start and lists the differences.
 * The LLM server is external; on the test server it is another machine on the LAN. Only the gateway talks to
   it.
+* `portal-hostd` (`hostd/`, see `hostd/README.md`) is a small Python service, one per server, outside Docker.
+  * It reports its host's live readings (CPU, GPU, memory and its bandwidth, power, fans) and samples only
+    while a client streams them. On the LLM server it also updates the LLM engine (a rootless Podman quadlet)
+    on the gateway's request. Bearer token (`HOSTD_PORTAL_TOKEN`, `HOSTD_LLM_TOKEN`); the gateway is its only
+    client.
+  * The portal server's binds 127.0.0.1 (`deploy/install.sh` installs it and generates its token). The LLM
+    server's listens on its LAN address, opened in firewalld for the portal server's address only
+    (`hostd/install.sh llm --portal <ip>` prints the two `.env` lines). Workspaces, the reader and SearXNG
+    must not reach either (`verify-isolation.sh` checks).
 * `searxng` is the search engine behind `web_search`: the upstream SearXNG image at the release pinned in
   `searxng/Dockerfile`, with `searxng/settings.yml` copied into the image.
   * It runs as uid 977 (the image's own user) with no capabilities, no volumes, a read-only root and one
@@ -109,13 +120,18 @@ scripts read `.env` through `deploy/lib.sh` (`env_get`), falling back to `.env.e
 | `READER_USER_AGENT` | `Mozilla/5.0 (compatible; WorkspacePortalReader/1.0)` | reader | What the reader calls itself |
 | `READER_PORT` / `READER_SUBNET` / `READER_BRIDGE` | `4003` / `172.30.250.0/28` / `br-wreader` | compose, firewall | The reader's loopback port and network |
 | `READER_DNS_1` / `READER_DNS_2` | `1.1.1.1` / `9.9.9.9` | compose, firewall | The reader's DNS servers; the only DNS the firewall lets it reach |
-| `WORKSPACE_AGENTS` | `qwen,dsh` | gateway, deploy scripts | The agents users choose from when their workspace starts (`qwen` Qwen Code, `dsh` DeepSeek Harness), in display order. With one, it starts without asking |
+| `WORKSPACE_AGENTS` | `qwen,dsh` | gateway, deploy scripts | The agents users pick from in Settings (`qwen` Qwen Code, `dsh` DeepSeek Harness), in display order. The first is the default for users who haven't picked one (and for a pick that is no longer enabled) |
 | `QWEN_CODE_VERSION` / `DSH_VERSION` | `0.27.0` / `0.2.2-rc.1` | gateway, deploy scripts | The agents' default versions, what a fresh install builds. The current version (the admin's choice, in `config/agent-versions.env`; see Agent versions and updates) selects the per-user image `workspace-portal/workspace:qwen-<version>` / `:dsh-<version>`, built from the `qwen` / `dsh` target of `workspace-image/Dockerfile` |
 | `WORKSPACE_IMAGE_CONTEXT` | `/app/workspace-image` | gateway | Build context of the agent updates: the project's `workspace-image/`, which `docker-compose.yml` mounts read-only there, so edits apply to the next console build. Not passed by `docker-compose.yml`: by default the gateway finds `workspace-image/` next to its code, in the container and in a development checkout alike. Set it only for another layout |
 | `WORKSPACE_NETWORK` / `_SUBNET` / `_GATEWAY_IP` / `_IP_RANGE` / `_BRIDGE` | `workspace-portal-ws` / `172.29.0.0/16` / `172.29.0.1` / `172.29.128.0/17` / `br-wportal` | gateway, firewall | The gateway creates the network at startup |
 | `WORKSPACE_UID_BASE` | `200000` | gateway | User N's workspace runs as uid/gid `base + N` |
 | `WORKSPACE_MEMORY` / `_CPUS` / `_PIDS` / `_SHM` / `_TMP` | `3g` / `4` / `1024` / `1g` / `1g` | gateway | Per-container limits; `_TMP` sizes the tmpfs `/tmp` |
 | `WORKSPACE_BROWSER` | `true` | gateway | Adds the Playwright MCP server (headless Chromium in the workspace) |
+| `DEFAULT_REASONING_EFFORT` | `low` | gateway | The reasoning effort every new agent session starts with (`none` … `max`, for the models that offer it); `model` keeps each model's own default. See Agent settings rendering |
+| `HOSTD_PORTAL_URL` / `HOSTD_PORTAL_TOKEN` | `http://127.0.0.1:9180` / generated by the installer | gateway, installer | This server's portal-hostd. No token or `off`: not set up |
+| `HOSTD_LLM_URL` / `HOSTD_LLM_TOKEN` | empty | gateway | The LLM server's portal-hostd (readings and engine updates); both printed by `hostd/install.sh llm`. Empty: not set up |
+| `ENGINE_RELEASE_NOTES_REPO` | `gufo-org/gufo` | gateway | GitHub repository whose releases are the engine's release notes in Admin > Updates; `none` for none |
+| `ENGINE_DRAIN_MINUTES` | `15` | gateway | How long an engine update waits for running LLM requests before it restarts the engine anyway |
 | `MAX_RUNNING_WORKSPACES` | `4` | gateway | Running-container cap |
 | `IDLE_TIMEOUT_MINUTES` | `30` | both | Idle stop; also the approval timeout of `qwen serve` (dsh has none: see Busy and idle) |
 | `MAX_BUSY_HOURS` | `24` | gateway | Work stops counting as activity this long after a person last used the workspace (0 = never) |
@@ -123,7 +139,8 @@ scripts read `.env` through `deploy/lib.sh` (`env_get`), falling back to `.env.e
 | `FIREWALL_ALLOW_SOURCE` | detected | installer | Sources allowed to reach `WEB_PORT` and the agent ports in firewalld/ufw: default the LAN of the default route, plus `100.64.0.0/10` when `tailscale0` exists |
 
 Config validation: the agent port range must end below 65536, and `WEB_PORT`, `CONTROL_PORT` and
-`SERVICE_PORT` must lie outside it.
+`SERVICE_PORT` must lie outside it. A portal-hostd token must be at least 32 characters without spaces, and
+needs its URL.
 
 ## Data directory
 
@@ -156,13 +173,19 @@ and migrations are safe to run concurrently.
 `workspaces.agent` (migration 2) is the agent of the current or last run (`qwen` | `dsh`, null before the
 first start). A container started before agents existed has no agent label and counts as `qwen`.
 
+`users.agent` (migration 3) is the agent the user picked in Settings (`qwen` | `dsh`); null = the
+install's default, the first of `WORKSPACE_AGENTS`.
+
 Ownership:
-* web writes `users`, `sessions`, `login_attempts`, and `audit_log` (user and admin actions).
+* web writes `users`, `sessions`, `login_attempts`, and `audit_log` (user and admin actions, among them
+  `agent_preference_changed` with `{ from, to }`, agent kinds or null for the default).
 * gateway writes `workspaces`, `llm_usage`, and `audit_log` (`workspace_started` with `{ agent, version }`,
   `workspace_stopped`, `workspace_error`, `agent_updated` with `{ agent, from, to, rebuild }`,
-  `agent_update_failed` with `{ agent, version, error }`, error "Cancelled" for a cancellation). The audit
-  `actorUserId` is the one given to `/stop` or `/update`; otherwise it is null. Web writes
-  `agent_image_removed` (`{ agent, version }`) after the gateway removed an image.
+  `agent_update_failed` with `{ agent, version, error }`, error "Cancelled" for a cancellation,
+  `engine_updated` with `{ kind: "update" | "rollback", from, to }`, `engine_update_failed` with
+  `{ kind, from, to, error, rolledBack }`). The audit `actorUserId` is the one given to `/stop`, `/update`
+  or `/rollback`; otherwise it is null. Web writes `agent_image_removed` (`{ agent, version }`) and
+  `engine_image_removed` (`{ version, digest }`) after the gateway removed an image.
 * gateway only reads `users` and `sessions` (`loadSessionContext`, `countSessionsUsingWorkspace`).
 
 ## Sessions and cookies
@@ -230,15 +253,24 @@ Errors: `{ "error": "<code>", "message": "<human text>" }` with a 4xx/5xx status
 ```
 GET  /control/health                         → { ok: true }
 GET  /control/stats                          → HostStats
+GET  /control/live                           → text/event-stream: the admin's live view (see Live view)
 GET  /control/agents                         → { agents: AgentInfo[] }   (the enabled agents, in WORKSPACE_AGENTS order; version = the current one)
 GET  /control/agents/versions[?refresh=1]    → AgentVersionsOverview   (refresh=1 asks the npm registry again)
 POST /control/agents/:agent/update           → AgentUpdateJob  body { version: string, rebuild?: boolean, actorUserId?: number }; see Agent versions and updates
 POST /control/agents/update/cancel           → { cancelled: boolean }  (false: no job, or too late to cancel)
 DELETE /control/agents/:agent/images/:version → { ok: true }
+GET  /control/engine[?refresh=1]             → EngineOverview   (refresh=1 asks the registry and GitHub again); see LLM engine updates
+POST /control/engine/update                  → EngineUpdateJob  body { version: "X.Y.Z", actorUserId?: number }
+POST /control/engine/rollback                → EngineUpdateJob  body { actorUserId?: number }
+GET  /control/updates/running               → { running, agent, engine: boolean }  an agent build or an engine update is under way (answers at once; for the deploy scripts)
+POST /control/engine/cancel                  → { cancelled: boolean }  (only while downloading or draining)
+POST /control/engine/restart-now             → { ok: boolean }  ends the drain: restart even though requests still run
+DELETE /control/engine/images/:digest        → { ok: true }
 GET  /control/workspaces                     → { workspaces: WorkspaceInfo[] }   (every user that has a row)
 GET  /control/workspaces/:userId             → WorkspaceInfo (status "stopped" if no row)
-POST /control/workspaces/:userId/start       → WorkspaceInfo   body { agent?: AgentKind } (or none); see below
+POST /control/workspaces/:userId/start       → WorkspaceInfo   body { agent?: AgentKind } (or none: the user's agent); see below
 POST /control/workspaces/:userId/stop        → WorkspaceInfo   body { reason?: "admin" | "user" | "deactivated" | "deleted" (default "admin"), actorUserId?: number }; immediate, even while working
+POST /control/workspaces/:userId/attach      → WorkspaceInfo   a session started using it: a starting or running workspace's pending stop is off; never starts one
 POST /control/workspaces/:userId/release     → WorkspaceInfo   no session uses it any more: stop now, or once the agent's work is done (stopPending)
 POST /control/sessions/:sessionId/disconnect → { closed: number }  closes that session's open agent connections and presence
 DELETE /control/workspaces/:userId/data      → { ok: true }    stops the container and deletes the user's data directory; 500 {error:"stop_failed"} (nothing deleted) if the container can't be removed
@@ -246,14 +278,14 @@ DELETE /control/workspaces/:userId/data      → { ok: true }    stops the conta
 
 **One agent at a time.** A workspace runs one agent (one container), chosen when it starts:
 
-* Stopped or error: start `agent`; without one, the agent it ran last; without that, the only enabled
-  agent; with several and no history, 400 `agent_required` (the user chooses in the portal).
+* Stopped or error: start `agent`; without one (the web app never names one), the user's agent from
+  Settings (`users.agent`) when it is enabled, else the first of `WORKSPACE_AGENTS`.
 * Starting or running: with the same agent or none named, its state is returned and `stopPending`
   cleared. Naming the other agent is 409 `agent_mismatch` ("<name> is already running in this workspace.
-  Stop it to switch."). Switching means stopping first (the user's own stop has reason `user`).
-* 400 `unknown_agent` (not an agent kind), 400 `agent_unavailable` (not in `WORKSPACE_AGENTS`, also
-  when that is the last-used one), 409 `capacity` (the cap is reached and nothing can be evicted),
-  409 `deleting` (its data is being deleted).
+  Stop it to switch."). A new pick in Settings applies at the next start.
+* 400 `unknown_agent` (not an agent kind), 400 `agent_unavailable` (an agent named that is not in
+  `WORKSPACE_AGENTS`), 409 `capacity` (the cap is reached and nothing can be evicted), 409 `deleting`
+  (its data is being deleted).
 
 Start returns as soon as the container is created and started (`status: "starting"`, `ready: false`).
 The agent boots in the background (up to 90 s). The caller polls `GET /control/workspaces/:userId` until
@@ -267,15 +299,25 @@ mid-body). Image removal errors: 400 `unknown_agent`, `invalid_version`; 404 `no
 `image_current` (the current version's image), `image_in_use` (a container uses it), `update_running` (a job
 is updating that agent).
 
+Engine errors: 400 `invalid_version` (not X.Y.Z), `invalid_digest`, `invalid_actor`; 404
+`version_not_found` (the registry has no such tag), `not_found` (no such local image); 409 `already_current`,
+`no_previous` (nothing to roll back to), `engine_job_running` (one job at a time), `image_current`,
+`job_running` (portal-hostd's own refusals); 429 `too_many_viewers` (the live view, 8 at once); 502
+`hostd_failed`; 503 `engine_unavailable` (no portal-hostd for the LLM server, it can't be reached, or it
+controls no engine).
+
 Other error codes:
-* 400: `invalid_user_id`, `invalid_reason`, `invalid_actor`, `invalid_json`, `bad_request`, `agent_required`,
-  `unknown_agent`, `agent_unavailable`, `invalid_version`.
+* 400: `invalid_user_id`, `invalid_reason`, `invalid_actor`, `invalid_json`, `bad_request`,
+  `unknown_agent`, `agent_unavailable`, `invalid_version`, `invalid_digest`.
 * 404: `user_not_found`, `not_found`, `version_not_found`.
 * 405: `method_not_allowed`.
 * 401: `unauthorized`.
-* 409: `capacity`, `deleting`, `agent_mismatch`, `update_running`, `image_current`, `image_in_use`.
+* 409: `capacity`, `deleting`, `agent_mismatch`, `update_running`, `image_current`, `image_in_use`,
+  `already_current`, `no_previous`, `engine_job_running`, `job_running`.
+* 429: `too_many_viewers`.
 * 500: `start_failed`, `stop_failed`, `internal`.
-* 502: `registry_unreachable`.
+* 502: `registry_unreachable`, `hostd_failed`.
+* 503: `engine_unavailable`.
 
 ```ts
 type AgentKind = "qwen" | "dsh";   // @portal/db AGENT_KINDS; display names in AGENT_NAMES
@@ -300,7 +342,7 @@ type WorkspaceInfo = {
 };
 type HostStats = {
   running: number; maxRunning: number; idleTimeoutMinutes: number;
-  memTotalBytes: number; memAvailableBytes: number; loadAvg: [number, number, number]; cpus: number;
+  memTotalBytes: number; memAvailableBytes: number; cpus: number;   // this server, from the gateway's /proc
   llm: { inFlight: number; queued: number; maxConcurrency: number };
 };
 type AgentVersionsOverview = {
@@ -406,6 +448,100 @@ use: containers labelled `workspace-portal.verify`, every `workspace-portal/work
 those: an image that also has a workspace tag, as a gateway stopped mid-promote leaves it, keeps that), and
 untagged images labelled `workspace-portal.agent` (`workspace-image/Dockerfile` labels each agent stage: an
 old build whose tag a rebuild moved while a workspace still used it). It logs what it removed.
+
+## Live view (`GET /control/live`)
+
+Admin > Overview opens it through the web app (`/api/admin/live`). Server-sent events: `init` once, then
+`frame` every 500 ms. Everything behind it runs only while at least one viewer is connected (at most 8):
+
+* **Server readings** (`host-monitor.ts`): one event stream per portal-hostd (`GET /v1/stream`), opened at
+  the first viewer, closed 15 s after the last left, reconnecting with backoff (1 s doubling to 15 s). The
+  last minute of readings is kept for a new viewer's charts. A host is `off` (no token), `connecting`,
+  `online` or `offline` (with the error).
+* **LLM sessions** (`llm-monitor.ts`, `llm-requests.ts`): every 500 ms `GET LLM_UPSTREAM_URL/slots`
+  (llama.cpp's server and engines derived from it, such as gufo; about 2 KB, prompt text not included)
+  gives each engine session's prompt progress and generated-token count. The gateway's own record of each
+  generation request (user, queued, forwarded, first token, tokens streamed, the engine's closing `timings`)
+  says whose it is: the engine numbers requests in arrival order and the gateway forwards them in order, so
+  new sessions are paired, in task order, with the oldest unpaired requests forwarded before the session
+  was first seen.
+  * Read = prompt tokens read per second of wall-clock time since the session was admitted (what the person
+    waits, the engine's time shared among sessions). Write = generated tokens per second over the last 3 s.
+    Totals add up the sessions still reading (Read) and those writing (Write).
+  * Recent finished requests show the engine's own figures (`timings`: compute time only).
+  * A server without `/slots` (another engine): the rows come from the gateway alone (Write from the
+    streamed tokens; Read only for finished requests). `503` = the engine is loading; no answer = offline.
+  * Cost: the response stream is read for token usage anyway; the record adds a counter per event.
+
+```ts
+type LiveInit = { frameMs: 500; history: { portal: HostSample[]; llm: HostSample[] }; llmHistory: Array<{ t; readTps; writeTps }> };
+type LiveFrame = {
+  t: number;                                       // gateway time, for "since" values
+  hosts: { portal: HostLive; llm: HostLive };      // HostLive = { role, state, error, info: HostInfo | null, sample: HostSample | null }
+  llm: {
+    engine: "ready" | "loading" | "offline" | "unknown"; sessionsReported: boolean; engineSessions: number | null;
+    maxConcurrency: number; inFlight: number; queued: number; paused: boolean;   // paused: an engine update holds new requests
+    sessions: Array<{ slot: number | null; userId: number | null; userName: string | null; phase: "preparing" | "reading" | "writing";
+                      promptTokens; cachedTokens; processedTokens: number | null; generatedTokens: number;
+                      readTps: number | null; writeTps: number | null; startedAt: number }>;
+    waiting: Array<{ userId; userName; since; stage: "portal" | "engine" }>;   // portal: the gateway's queue; engine: no free engine session
+    totals: { readTps: number; writeTps: number };
+    recent: Array<{ userId; userName; finishedAt; durationMs; ttftMs; promptTokens; cachedTokens; generatedTokens; readTps; writeTps; ok }>;
+  };
+  workspaces: { maxRunning: number; memoryLimitBytes: number;
+                list: Array<{ userId; userName; status; agent; agentVersion; busy; busyReason; memoryBytes; llmInFlight; open; startedAt }> };
+};
+```
+
+`HostInfo` and `HostSample` are portal-hostd's (`hostd/README.md`; TypeScript in `gateway/src/hostd.ts`).
+
+## LLM engine updates
+
+Admin > Updates updates or rolls back the LLM engine on the LLM server (`engine-updater.ts`), through that
+server's portal-hostd, which owns the engine's Podman quadlet (`hostd/README.md`).
+
+* **Versions** (`engine-releases.ts`): the stable `X.Y.Z` tags of the engine image's repository (the
+  quadlet's `Image=` repository, as portal-hostd reports it), newest 8, from its registry (Docker Registry
+  v2 with the anonymous token challenge, as ghcr.io and Docker Hub use), each with its digest (`HEAD` of the
+  manifest), which one `latest` points at, and its release notes from `ENGINE_RELEASE_NOTES_REPO`'s GitHub
+  releases (anonymous, 60 requests an hour). Cached 10 minutes; a failed check keeps the last list, reports
+  the error and is retried after a minute.
+* **An update** (one job at a time):
+  1. `pulling`: the version's digest is resolved from the registry at once, and portal-hostd pulls
+     `<repository>@<digest>` while the engine keeps serving. Cancellable.
+  2. `draining`: the gateway's LLM queue grants nothing new (requests wait in the queue; they don't fail),
+     and the job waits until no request is in flight, for at most `ENGINE_DRAIN_MINUTES`, or until the admin
+     says "Restart now". Cancellable (the queue opens again; nothing changed).
+  3. `restarting`: portal-hostd writes the new image into the quadlet, restarts the engine and checks that it
+     answers `/ready` with the new version in `/props`; if not, it writes the old quadlet back and restarts
+     that (`rolledBack`).
+  4. The queue opens again in every case; the held requests go to the engine that now runs.
+* **A rollback**: draining and restarting, with the image that ran before the last change (portal-hostd
+  keeps the previous quadlet; a second rollback swaps back again).
+* Audited `engine_updated` / `engine_update_failed` (cancellations too, error "Cancelled."). A gateway
+  that stops during a job records it failed; portal-hostd finishes what it was doing on its own.
+* The deploy scripts refuse to run while a job is downloading, draining or restarting
+  (`console_update_running`).
+
+```ts
+type EngineOverview = {
+  state: "off" | "offline" | "no_engine" | "ok"; error: string | null;
+  engine: EngineStatus | null;                     // portal-hostd's GET /v1/engine (hostd/README.md)
+  releases: { repository: string; releases: Array<{ version: string; digest: string | null; latest: boolean;
+              notes: { title; url; publishedAt; body /* markdown */; breaking: boolean } | null }>;
+              checkedAt: number | null; error: string | null } | null;
+  job: EngineUpdateJob | null;                     // the running job, else the last since the gateway started
+  drainMinutes: number;
+};
+type EngineUpdateJob = {
+  id: string; kind: "update" | "rollback"; fromVersion: string | null; toVersion: string | null; image: string | null;
+  stage: "pulling" | "draining" | "restarting" | "succeeded" | "failed" | "cancelled";
+  step: string; log: string[];                     // the gateway's notes and portal-hostd's job logs, last 400 lines
+  startedAt: number; finishedAt: number | null; error: string | null; rolledBack: boolean;
+  drain: { since: number; deadline: number; inFlight: number } | null;
+  cancellable: boolean; actorUserId: number | null;
+};
+```
 
 ## Agent ports (AGENT_BIND:AGENT_PORT_BASE+1 … +COUNT-1)
 
@@ -622,6 +758,12 @@ is system-defaults < user < workspace < system.
   * With `WORKSPACE_BROWSER=true`, `mcpServers.browser` runs `playwright-mcp --headless --isolated
     --no-sandbox` with the image's Chromium and output in `/workspace/.browser`. Otherwise
     `mcpServers.browser` is removed.
+* **Default effort** (`DEFAULT_REASONING_EFFORT`, default `low`; `model` turns this off). Every model in
+  either file whose `capabilities.reasoning.efforts` offers it gets it as its `defaultEffort`, and when the
+  default model (`model.name`, from the list settings.json's replaces system-defaults.json's with) offers it,
+  settings.json gets `model.reasoningEffort`. That is the system scope, which beats the user scope where
+  Qwen Code saves a pick: a person can change the effort within a session, and the next session starts at
+  the default again. DeepSeek Harness takes its default effort from the same rendered settings.
 * Merging is deep for objects; arrays are replaced, and `__proto__`/`constructor`/`prototype` keys are ignored.
 * A parse error is an `AgentConfigError` naming the file.
 
@@ -778,22 +920,30 @@ For each running workspace, it computes a verdict, re-checks the agent state bef
 | Route | Who | Purpose |
 |---|---|---|
 | `/login` | anyone | Username + password. A username locks for 15 min after 5 failures in 15 min. `?working=1` explains a deferred stop |
-| `/change-password` | signed in | Forced when `must_change_password` |
-| `/workspace` | signed in | Top bar (full name, workspace status, the running agent, "Switch agent" when more than one is enabled, "Admin connected" pill, Sign out) + iframe on `:AGENT_PORT_BASE+target.id`. Stopped or failed (with `lastError`): the agent chooser |
-| `/admin` | admin | Users table, host stats, workspace status (Working / Idle / Stopped, stop pending), its agent ("last: …" when stopped) and actions |
-| `/admin/users/new`, `/admin/users/[id]` | admin | Create / edit (names, active, reset password, delete); the user page shows the workspace's agent |
-| `/admin/users/[id]/workspace` | admin | Red banner "Viewing <name>'s workspace · Exit" + iframe on that user's port; the agent chooser when that workspace is stopped |
-| `/admin/agents` | admin | Each enabled agent: current version against the latest release and its release channels, which versions running workspaces use, the images on the server (use, rebuild, remove). Update, roll back or rebuild behind a confirmation; the running job's step and build log live, with Cancel; the last outcome until dismissed (per browser). See Agent versions and updates |
+| `/` (Home) | signed in | The workspace card: status, harness and version, Start / Open workspace / Stop, why it stopped, the idle rule, "Harness: X · Change in Settings"; then the user's LLM usage today (`llm_usage`). Polls every 2 s while something changes, else every 5 s |
+| `/workspace` | signed in | Slim top bar (status pill, harness, "Admin connected", Stop, menu) + iframe on `:AGENT_PORT_BASE+target.id`. Nothing starts by itself: a stopped workspace shows Start and Home. Stop asks first only when the agent is working, the workspace is open elsewhere or an admin is in it (`web/lib/workspace-stop.ts`), then goes to `/` |
+| `/settings` | signed in | Account (read-only), Harness (radio cards, saved at once; "Restart now" when the running one differs), Appearance (dark / light), Password (`#password`) |
+| `/change-password` | signed in | Only the forced change (`must_change_password`); otherwise redirects to `/settings#password` |
+| `/admin` (Overview) | admin | Live (GET `/api/admin/live`, frames every 500 ms while the tab is visible): LLM sessions with total Read and Write tok/s (the selected one charted over the last minute) and Running / Waiting / Recent tables; the LLM server and portal server cards (power draw, CPU, GPU, memory with free GiB and %, bandwidth, fans); the running workspaces |
+| `/admin/users` | admin | Users table: role, account, workspace status (Working / Idle / Stopped, stop pending), the harness (the running agent and version, or the one the next Start launches), last sign-in, Open workspace and the actions menu |
+| `/admin/users/new`, `/admin/users/[id]` | admin | Create / edit (names, active, reset password, delete); the user page shows the workspace and the harness it starts with |
+| `/admin/users/[id]/workspace` | admin | Red banner "Viewing <name>'s workspace · Exit" + iframe on that user's port. A stopped workspace shows Start (the user's harness); there is no Stop here (the users table has it) |
+| `/admin/updates` | admin | The LLM engine, Qwen Code and DeepSeek Harness, one card each: the current version, its state and one main action; the running job inline (stage, log, Cancel, and "Restart now" while the engine drains); other versions, images on the server and release notes folded away. See Agent versions and updates, and LLM engine updates. `/admin/agents` redirects here |
 | `/admin/audit` | admin | Audit log |
 
-The admin pages read the gateway on the server and then poll admin-only JSON routes for live data:
-`GET /api/admin/overview` (the dashboard) and `GET /api/admin/agents` (`loadAdminAgents`: the gateway's
-`AgentVersionsOverview` or its error). "Check for updates" is `POST /api/admin/agents`, which asks the gateway with
-`refresh=1` (the npm registry again, not the cache); a POST so that it gets the same-origin check of the
-state-changing routes, and a workspace page the admin has open can't make the server query npm in a loop.
-The Agents page polls every 2 s while a job builds or verifies, else every 30 s, and at once after each action.
-Its actions are server actions (`web/lib/actions/agents.ts`) that pass the admin as `actorUserId`; removing an
-image audits `agent_image_removed` in the web app (the gateway audits the updates).
+The admin pages read the gateway on the server and then follow admin-only routes for live data:
+`GET /api/admin/live` (the Overview: the gateway's `/control/live` event stream passed through; the session is
+checked again every 30 s and the stream ends when it no longer holds), `GET /api/admin/overview` (the users
+table, every 5 s), `GET /api/admin/agents` and `GET /api/admin/engine` (the Updates page). "Check for updates"
+is a POST to those two, which asks the gateway with `refresh=1` (the registries again, not the cache); a POST so
+that it gets the same-origin check of the state-changing routes, and a workspace page the admin has open can't
+make the server query a registry in a loop. The Updates page polls every second while a job runs, else less
+often, and at once after each action. Its actions are server actions (`web/lib/actions/agents.ts`,
+`web/lib/actions/engine.ts`) that pass the admin as `actorUserId`; removing an image audits
+`agent_image_removed` / `engine_image_removed` in the web app (the gateway audits the updates).
+
+The theme is the `portal_theme` cookie (`dark`, the default, or `light`), read by the root layout so the first
+paint is right; the Qwen Code iframe gets it as `?theme=` (DeepSeek Harness has no theme parameter).
 
 **Ending a session** always has two halves (`endSessionsInBackground` in `web/lib/gateway.ts`): deleting the
 row stops new requests, and after the response the web app calls `disconnect` for each deleted session (its
@@ -807,22 +957,22 @@ open terminals and streams would stay up otherwise) and `release` for each works
   3. Verify (argon2id; a dummy verification for unknown usernames).
   4. End the session this browser's cookie still names, if any (an admin's open view of someone's workspace
      is audited as left with reason `signed_out`). Create the new session.
-  5. Open the workspace (`openWorkspaceInBackground`, rules in `web/lib/agent-choice.ts`): if it is starting
-     or running, attach to it (`start` without an agent, which also clears `stopPending`); if it is stopped and
-     only one agent is enabled, start that one; otherwise start nothing, and the workspace page asks which agent
-     to start. Then redirect to `/change-password` if required, else `/workspace`.
+  5. Attach to the workspace (`attachWorkspaceInBackground`): if it is starting or running, `POST
+     /control/workspaces/:id/attach`, which only calls off a pending stop and never starts anything. A stopped
+     workspace waits for the user's Start. Then redirect to `/change-password` if required, else `/`.
 * Sign out: end the session, clear the cookie, and redirect to `/login`, with `?working=1` when the workspace
   stays up to finish its work.
 * Change password: end the account's other sessions; this one carries on.
 * Admin "Open workspace": set `acting_as_user_id`, write the audit entry, `disconnect` this session (its old
-  token dies with the target change), open the target's workspace as at sign-in (a stopped one waits for the
-  admin to choose its agent, preselecting the user's last one), then redirect.
-* Choosing an agent and switching: the page calls `POST /api/workspace/start` with `{agent}`. "Switch agent"
-  (own workspace only, when more than one agent is enabled) warns when the agent is working or the workspace is
-  open elsewhere, then calls `POST /api/workspace/stop` (reason `user`, 403 while an admin views someone else's
-  workspace) and shows the chooser. A 409 `agent_mismatch` (another tab chose differently) shows the gateway's
-  message and attaches to what runs. The `/api/workspace/*` routes check same-origin and the session, and
-  answer with the workspace's state, whose workspace it is, and the enabled agents.
+  token dies with the target change), attach to the target's workspace as at sign-in (a stopped one waits for
+  the admin's Start), then redirect.
+* Start and Stop: Start is `POST /api/workspace/start` with no body; the gateway launches the user's harness
+  (users.agent while enabled, else the first enabled agent). Stop is `POST /api/workspace/stop` (reason `user`,
+  403 while an admin views someone else's workspace). Saving a harness in Settings (`saveHarness`) writes
+  `users.agent` and audits `agent_preference_changed {from, to}`; a running workspace keeps its agent until
+  "Restart now" (`restartWorkspace`: stop, then start) or its next start. The `/api/workspace/*` routes check
+  same-origin and the session, and answer with the workspace's state, whose workspace it is, the enabled agents
+  and `nextAgent` (what the next Start launches).
 * Leaving a viewed workspace (`leaveViewedWorkspace`): clear `acting_as_user_id`, audit
   `admin_exited_workspace`, `disconnect`, `release` the target. It runs on "Exit", on "My workspace" in the admin
   header, and when the admin opens their own workspace from the dashboard or their user page (audit reason

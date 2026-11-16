@@ -1,35 +1,38 @@
 import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
-import { Slot } from "radix-ui";
 import { cn } from "@/lib/utils";
+import { Slot } from "radix-ui";
 
-// shadcn/ui Button in the Web Shell's proportions: 32px (default), 28px (sm), 44px (lg, the auth card) or a
-// 28px square (icon); a light-grey primary; focus as a border plus a 3px ring. Destructive actions are a red
-// tint or a red outline, never solid red. `asChild` puts the styles on the child, e.g. a Next <Link>.
-// A pending form (SubmitButton) sets data-pending: a wait cursor over a less faded look than disabled.
-// On touch screens the sizes stay and the hit area grows to 40px (hit-area, app/globals.css).
+// shadcn/ui Button, radix-nova style (the Qwen Code Web Shell's own), as the registry has it plus one portal
+// tweak: `relative hit-area`, which grows what a finger can hit to 40px on touch screens without changing the
+// look (app/globals.css).
 
 const buttonVariants = cva(
-  "hit-area relative inline-flex shrink-0 cursor-pointer items-center justify-center gap-1.5 border border-transparent font-medium whitespace-nowrap select-none outline-none transition-[color,background-color,border-color,box-shadow] focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 active:translate-y-px disabled:cursor-not-allowed disabled:opacity-50 disabled:active:translate-y-0 data-pending:cursor-wait data-pending:opacity-70 [&_svg]:pointer-events-none [&_svg]:shrink-0",
+  "group/button relative hit-area inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
   {
     variants: {
       variant: {
         default: "bg-primary text-primary-foreground hover:bg-primary/80",
-        outline: "border-input bg-input/30 text-foreground hover:bg-input/50 aria-expanded:bg-input/50",
-        ghost: "text-foreground hover:bg-accent/50 aria-expanded:bg-accent/50",
-        /** Icon buttons (dialog close, row menus, dismiss): a muted glyph, a solid fill on hover, nav-style focus. */
-        muted:
-          "text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:border-transparent focus-visible:ring-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-solid focus-visible:outline-ring aria-expanded:bg-accent aria-expanded:text-foreground",
-        destructive: "bg-destructive/20 text-destructive hover:bg-destructive/30",
-        "destructive-outline": "border-destructive text-destructive hover:bg-destructive/10",
-        /** On a danger-toned notice strip (the viewing banner): an outline in the strip's tone. */
-        banner: "border-danger/20 text-danger hover:bg-danger/20",
+        outline:
+          "border-border bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
+        secondary:
+          "bg-secondary text-secondary-foreground hover:bg-[color-mix(in_oklch,var(--secondary),var(--foreground)_5%)] aria-expanded:bg-secondary aria-expanded:text-secondary-foreground",
+        ghost:
+          "hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:hover:bg-muted/50",
+        destructive:
+          "bg-destructive/10 text-destructive hover:bg-destructive/20 focus-visible:border-destructive/40 focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:hover:bg-destructive/30 dark:focus-visible:ring-destructive/40",
+        link: "text-primary underline-offset-4 hover:underline",
       },
       size: {
-        default: "h-8 rounded-md px-2.5 text-14",
-        sm: "h-7 rounded-md px-3 text-12 [&_svg]:size-3.5",
-        lg: "h-11 rounded-xl px-2.5 text-16",
-        icon: "size-7 rounded-sm",
+        default: "h-8 gap-1.5 px-2.5 has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2",
+        xs: "h-6 gap-1 rounded-[min(var(--radius-md),10px)] px-2 text-xs in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3",
+        sm: "h-7 gap-1 rounded-[min(var(--radius-md),12px)] px-2.5 text-[0.8rem] in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3.5",
+        lg: "h-9 gap-1.5 px-2.5 has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2",
+        icon: "size-8",
+        "icon-xs":
+          "size-6 rounded-[min(var(--radius-md),10px)] in-data-[slot=button-group]:rounded-lg [&_svg:not([class*='size-'])]:size-3",
+        "icon-sm": "size-7 rounded-[min(var(--radius-md),12px)] in-data-[slot=button-group]:rounded-lg",
+        "icon-lg": "size-9",
       },
     },
     defaultVariants: {

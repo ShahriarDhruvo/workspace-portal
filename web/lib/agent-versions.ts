@@ -11,8 +11,8 @@ import type {
 } from "./gateway-types.ts";
 
 /** Poll intervals: a running job's log and step move every few seconds; otherwise little changes. */
-export const ACTIVE_POLL_MS = 2_000;
-export const IDLE_POLL_MS = 30_000;
+export const ACTIVE_POLL_MS = 1_000;
+export const IDLE_POLL_MS = 15_000;
 
 /** Still building or verifying: it holds the one job slot, and it can be cancelled. */
 export function isJobActive(job: Pick<AgentUpdateJob, "phase"> | null): boolean {
@@ -46,6 +46,24 @@ export function versionStatus(agent: Pick<AgentVersionInfo, "current" | "latest"
   if (agent.latest === agent.current) return { tone: "success", label: "Up to date" };
   // Ahead of latest (a version from the next channel, say), or not comparable: say what latest is.
   return { tone: "neutral", label: `Latest: ${agent.latest}` };
+}
+
+export interface AgentStatus {
+  label: string;
+  variant: "success" | "warning" | "info" | "secondary";
+  /** A job runs for this agent: the badge shows a spinner. */
+  pending: boolean;
+}
+
+/** The badge beside the agent's title on the Updates page; "Update to X.Y.Z" beside the version names the release. */
+export function agentStatus(
+  agent: Pick<AgentVersionInfo, "id" | "current" | "latest" | "updateAvailable">,
+  job: Pick<AgentUpdateJob, "agent" | "phase"> | null,
+): AgentStatus {
+  if (job && isJobActive(job) && job.agent === agent.id) return { label: "Updating…", variant: "info", pending: true };
+  const status = versionStatus(agent);
+  if (status.tone === "warning") return { label: "Update available", variant: "warning", pending: false };
+  return { label: status.label, variant: status.tone === "neutral" ? "secondary" : status.tone, pending: false };
 }
 
 /** Said when the admin console (or update-image.sh) moved the agent off the version .env names. */
@@ -156,6 +174,17 @@ const PHASE_LABELS: Record<UpdatePhase, string> = {
 
 export function phaseLabel(phase: UpdatePhase): string {
   return PHASE_LABELS[phase];
+}
+
+/**
+ * Where a running job is, for its Progress bar (halfway through the current step): a build, then the version check;
+ * a switch to an image on the server only checks.
+ */
+export function agentJobStep(job: Pick<AgentUpdateJob, "phase" | "reuse">): { index: number; count: number; progress: number } {
+  const phases: UpdatePhase[] = job.reuse ? ["verifying"] : ["building", "verifying"];
+  const found = phases.indexOf(job.phase);
+  const index = found === -1 ? phases.length : found + 1;
+  return { index, count: phases.length, progress: isJobActive(job) ? Math.round(((index - 0.5) / phases.length) * 100) : 100 };
 }
 
 /**

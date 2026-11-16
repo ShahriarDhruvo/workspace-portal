@@ -20,6 +20,8 @@ import {
   updateBlocker,
   updateWork,
   versionStatus,
+  agentStatus,
+  agentJobStep,
 } from "./agent-versions.ts";
 import type { AgentUpdateJob, AgentVersionInfo, AgentVersionsOverview } from "./gateway-types.ts";
 
@@ -258,4 +260,17 @@ test("gateway errors in words: version problems belong to the version field", ()
   assert.deepEqual(agentActionError("cancel", { error: "unreachable", message: "The workspace service is not reachable." }), {
     message: "The workspace service is not reachable.",
   });
+});
+
+test("the Updates page's agent badge and job steps", () => {
+  const agent = { id: "qwen" as const, current: "0.27.0", latest: "0.27.4", updateAvailable: true };
+  assert.deepEqual(agentStatus(agent, null), { label: "Update available", variant: "warning", pending: false });
+  assert.deepEqual(agentStatus({ ...agent, latest: "0.27.0", updateAvailable: false }, null), { label: "Up to date", variant: "success", pending: false });
+  assert.deepEqual(agentStatus(agent, { agent: "qwen", phase: "building" }), { label: "Updating…", variant: "info", pending: true });
+  assert.equal(agentStatus(agent, { agent: "dsh", phase: "building" }).label, "Update available");
+  assert.equal(agentStatus({ ...agent, latest: null, updateAvailable: false }, null).variant, "secondary");
+  assert.deepEqual(agentJobStep({ phase: "building", reuse: false }), { index: 1, count: 2, progress: 25 });
+  assert.deepEqual(agentJobStep({ phase: "verifying", reuse: false }), { index: 2, count: 2, progress: 75 });
+  assert.deepEqual(agentJobStep({ phase: "verifying", reuse: true }), { index: 1, count: 1, progress: 50 });
+  assert.equal(agentJobStep({ phase: "succeeded", reuse: false }).progress, 100);
 });

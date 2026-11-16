@@ -31,6 +31,12 @@ export interface WorkspaceConfig {
   tmpBytes: number;
   /** Offer the headless browser (Playwright MCP); it can only open pages served inside the workspace. */
   browser: boolean;
+  /**
+   * The reasoning effort every new agent session starts with, for models that offer it
+   * (DEFAULT_REASONING_EFFORT; null = "model": the admin's defaultEffort). A person may change it within
+   * a session; the next session starts here again.
+   */
+  defaultEffort: string | null;
 }
 
 export interface SearchConfig {
@@ -45,6 +51,20 @@ export interface SearchConfig {
   fallbackBelow: number;
   /** How long an answer is reused for the same search; 0 turns the cache off. */
   cacheMs: number;
+}
+
+/** A server's portal-hostd (hostd/): live hardware readings, and on the LLM server engine updates. */
+export interface HostdConfig {
+  /** "" = not set up: the admin console shows how to set it up. */
+  url: string;
+  token: string;
+}
+
+export interface EngineConfig {
+  /** The GitHub repository (owner/name) whose releases hold the engine's release notes; "" = none. */
+  releaseNotesRepo: string;
+  /** An engine update waits this long for running LLM requests to finish before it restarts the engine anyway. */
+  drainMs: number;
 }
 
 export type ReaderPolicy = "shown" | "any";
@@ -115,6 +135,8 @@ export interface Config {
   search: SearchConfig;
   reader: ReaderConfig;
   workspace: WorkspaceConfig;
+  hostd: { portal: HostdConfig; llm: HostdConfig };
+  engine: EngineConfig;
   maxRunning: number;
   idleTimeoutMs: number;
   /**
@@ -136,7 +158,12 @@ export class ConfigError extends Error {
 }
 
 const MIN_SECRET_LENGTH = 16;
+/** portal-hostd refuses shorter tokens. */
+const MIN_HOSTD_TOKEN_LENGTH = 32;
 export const MIB = 1024 * 1024;
+/** The effort tiers Qwen Code knows (capabilities.reasoning.efforts); "none" turns thinking off. */
+const REASONING_EFFORTS: readonly string[] = ["none", "low", "medium", "high", "xhigh", "max"];
+
 /** Workspace UIDs stay clear of system and human accounts and below the 32-bit limit. */
 const MIN_UID_BASE = 100_000;
 
@@ -226,6 +253,15 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
       shmBytes: read.byteSize("WORKSPACE_SHM", "1g"),
       tmpBytes: read.byteSize("WORKSPACE_TMP", "1g"),
       browser: read.bool("WORKSPACE_BROWSER", true),
+      defaultEffort: read.effort("DEFAULT_REASONING_EFFORT", "low"),
+    },
+    hostd: {
+      portal: read.hostd("HOSTD_PORTAL", "http://127.0.0.1:9180"),
+      llm: read.hostd("HOSTD_LLM", ""),
+    },
+    engine: {
+      releaseNotesRepo: read.githubRepo("ENGINE_RELEASE_NOTES_REPO", "gufo-org/gufo"),
+      drainMs: read.int("ENGINE_DRAIN_MINUTES", 15, 1) * 60_000,
     },
     maxRunning: read.int("MAX_RUNNING_WORKSPACES", 4, 1),
     idleTimeoutMs: read.int("IDLE_TIMEOUT_MINUTES", 30, 1) * 60_000,
@@ -386,6 +422,42 @@ class EnvReader {
       return fallback.split(",").filter(isAgentKind);
     }
     return [...new Set(items.filter(isAgentKind))];
+  }
+
+  /**
+   * A portal-hostd address and its token, from <prefix>_URL and <prefix>_TOKEN. Without a token, or with
+   * the URL "off", it is not set up; a token needs an address.
+   */
+  hostd(prefix: string, fallbackUrl: string): HostdConfig {
+    const urlName = `${prefix}_URL`;
+    const tokenName = `${prefix}_TOKEN`;
+    const raw = this.nonEmpty(urlName, fallbackUrl);
+    const token = this.string(tokenName, "");
+    if (token === "" || raw.toLowerCase() === "off") return { url: "", token: "" };
+    const url = raw === "" ? "" : this.httpUrl(urlName, fallbackUrl);
+    if (url === "") this.problems.push(`${tokenName} is set, so ${urlName} must be the http:// address of that portal-hostd`);
+    if (token.length < MIN_HOSTD_TOKEN_LENGTH || /\s/.test(token)) {
+      this.problems.push(`${tokenName} must be the portal-hostd token: at least ${MIN_HOSTD_TOKEN_LENGTH} characters, no spaces`);
+    }
+    return { url, token };
+  }
+
+  /** A GitHub repository as owner/name, or "" for none ("none" or empty). */
+  githubRepo(name: string, fallback: string): string {
+    const raw = this.nonEmpty(name, fallback);
+    if (raw.toLowerCase() === "none") return "";
+    if (/^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9._-]+$/.test(raw)) return raw;
+    this.problems.push(`${name} must be a GitHub repository such as gufo-org/gufo, or none (got "${raw}")`);
+    return fallback;
+  }
+
+  /** A reasoning effort tier, or "model" (null): leave the models' own default. */
+  effort(name: string, fallback: string): string | null {
+    const raw = this.nonEmpty(name, fallback).toLowerCase();
+    if (raw === "model") return null;
+    if (REASONING_EFFORTS.includes(raw)) return raw;
+    this.problems.push(`${name} must be one of ${REASONING_EFFORTS.join(", ")} or "model" (got "${raw}")`);
+    return fallback;
   }
 
   /** An npm-style version, as used in image tags (versions.ts). */

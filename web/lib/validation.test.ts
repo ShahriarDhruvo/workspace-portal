@@ -6,6 +6,7 @@ import {
   changePasswordSchema,
   fieldErrors,
   formText,
+  harnessSchema,
   loginSchema,
   newUserSchema,
   normalizeName,
@@ -115,5 +116,13 @@ test("agent images are named by exact versions only", () => {
     const parsed = agentImageSchema.safeParse({ agent: "qwen", version });
     assert.equal(parsed.success, false, version);
     assert.deepEqual(fieldErrors(parsed.error!), { version: "Enter a version like 0.27.4." }, version);
+  }
+});
+
+test("a harness choice is one of the agent kinds", () => {
+  assert.deepEqual(harnessSchema.parse({ agent: "qwen" }), { agent: "qwen" });
+  assert.deepEqual(harnessSchema.parse({ agent: "dsh" }), { agent: "dsh" });
+  for (const agent of ["", "QWEN", "claude", null, undefined, 1]) {
+    assert.equal(harnessSchema.safeParse({ agent }).success, false, String(agent));
   }
 });

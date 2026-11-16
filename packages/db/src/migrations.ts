@@ -79,4 +79,10 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE workspaces ADD COLUMN agent TEXT CHECK (agent IN ('qwen', 'dsh'));
   UPDATE workspaces SET agent = 'qwen' WHERE container_id IS NOT NULL OR started_at IS NOT NULL;
   `,
+  // 3: each user picks the agent their workspace starts with (Settings); null = the install's default, the first
+  // agent of WORKSPACE_AGENTS. Existing users keep the agent their workspace ran last.
+  `
+  ALTER TABLE users ADD COLUMN agent TEXT CHECK (agent IN ('qwen', 'dsh'));
+  UPDATE users SET agent = (SELECT agent FROM workspaces WHERE workspaces.user_id = users.id);
+  `,
 ];

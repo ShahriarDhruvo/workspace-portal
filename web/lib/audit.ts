@@ -20,6 +20,10 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   agent_updated: "Agent updated",
   agent_update_failed: "Agent update failed",
   agent_image_removed: "Agent image removed",
+  agent_preference_changed: "Changed harness",
+  engine_updated: "LLM engine updated",
+  engine_update_failed: "LLM engine update failed",
+  engine_image_removed: "LLM engine image removed",
 };
 
 function isKnownAction(action: string): action is AuditAction {
@@ -36,12 +40,18 @@ const DETAIL_LABELS: Record<string, string> = {
   middleName: "Middle name",
   lastName: "Last name",
   error: "Error",
-  // Agent updates (written by the gateway) and image removals: agent, from/to or version, rebuild.
+  // Agent updates (written by the gateway) and image removals: agent, from/to or version, rebuild. A harness
+  // change (Settings) has from/to as agents.
   agent: "Agent",
   from: "From",
   to: "To",
   version: "Version",
   rebuild: "From scratch",
+  // LLM engine updates (written by the gateway) and image removals: kind (update or rollback), from/to or
+  // version, rolledBack, digest.
+  kind: "Type",
+  rolledBack: "Rolled back",
+  digest: "Digest",
 };
 
 function humanize(key: string): string {
@@ -49,10 +59,26 @@ function humanize(key: string): string {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-/** `workspace_stopped` is written by the gateway: with the admin as actor for Stop/deactivate, without one for idle/logout stops. */
-export function auditActionLabel(action: string, hasActor: boolean): string {
+/**
+ * `workspace_stopped` is written by the gateway: with the admin as actor for Stop/deactivate, without one for
+ * idle/logout stops. An update the admin cancelled is written as failed with the error "Cancelled" (agents) or
+ * "Cancelled." (the engine): it reads as cancelled.
+ */
+export function auditActionLabel(action: string, hasActor: boolean, details: string | null = null): string {
   if (action === "workspace_stopped" && hasActor) return "Stopped workspace";
+  if ((action === "agent_update_failed" || action === "engine_update_failed") && wasCancelled(details)) {
+    return action === "agent_update_failed" ? "Agent update cancelled" : "LLM engine update cancelled";
+  }
   return isKnownAction(action) ? ACTION_LABELS[action] : humanize(action);
+}
+
+function wasCancelled(details: string | null): boolean {
+  try {
+    const error = (JSON.parse(details ?? "null") as { error?: unknown } | null)?.error;
+    return typeof error === "string" && /^Cancelled\.?$/.test(error);
+  } catch {
+    return false;
+  }
 }
 
 function formatValue(value: unknown): string {
@@ -78,9 +104,12 @@ export function auditActorFallback(action: string): string {
   return SELF_SERVICE_ACTIONS.has(action) ? "Deleted user" : "System";
 }
 
+/** Keys that hold an agent: `agent`, and from/to of a harness change (an agent update's are versions). */
+const AGENT_KEYS = new Set(["agent", "from", "to"]);
+
 /** Agents by name ("Qwen Code", not "qwen"); everything else as formatValue has it. */
 function formatDetail(key: string, value: unknown): string {
-  return key === "agent" && isAgentKind(value) ? AGENT_NAMES[value] : formatValue(value);
+  return AGENT_KEYS.has(key) && isAgentKind(value) ? AGENT_NAMES[value] : formatValue(value);
 }
 
 /** Renders the JSON `details` column as "Key: value · Key: value". */

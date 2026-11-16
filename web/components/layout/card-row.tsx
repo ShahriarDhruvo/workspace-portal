@@ -1,17 +1,19 @@
 import type { ReactNode } from "react";
+import { Item, ItemActions, ItemContent, ItemDescription, ItemTitle } from "@/components/ui/item";
 
 /**
- * A settings row inside an outline Card: title and explanation on the left, controls on the right, rows split
- * by 50% separators. The controls wrap under the text on narrow screens.
+ * A settings row inside a Card (a shadcn/ui Item): title and explanation on the left, controls on the right,
+ * rows split by soft rules. The controls wrap under the text on narrow screens.
  */
 export function CardRow({ title, children, action }: { title: ReactNode; children?: ReactNode; action?: ReactNode }) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 border-b border-border-faint px-3.5 py-3 last:border-b-0">
-      <div className="flex min-w-0 flex-1 basis-64 flex-col gap-0.5">
-        <div className="text-14 font-medium">{title}</div>
-        {children ? <div className="text-13 wrap-anywhere text-muted-foreground">{children}</div> : null}
-      </div>
-      {action ? <div className="flex shrink-0 items-center gap-2">{action}</div> : null}
-    </div>
+    <Item className="gap-x-6 gap-y-3 rounded-none border-0 border-b border-border-faint px-4 py-3 last:border-b-0">
+      <ItemContent className="min-w-0 basis-64 gap-0.5">
+        <ItemTitle className="line-clamp-none">{title}</ItemTitle>
+        {/* A paragraph: phrasing content only (lines of a list as block spans). */}
+        {children ? <ItemDescription className="line-clamp-none text-13 wrap-anywhere">{children}</ItemDescription> : null}
+      </ItemContent>
+      {action ? <ItemActions className="shrink-0">{action}</ItemActions> : null}
+    </Item>
   );
 }

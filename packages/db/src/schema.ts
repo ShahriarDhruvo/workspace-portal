@@ -38,6 +38,8 @@ export const users = sqliteTable(
     role: text("role", { enum: ROLES }).notNull().default("user"),
     active: integer("active", { mode: "boolean" }).notNull().default(true),
     mustChangePassword: integer("must_change_password", { mode: "boolean" }).notNull().default(false),
+    /** The agent this user's workspace starts with (Settings); null = the install's default (first of WORKSPACE_AGENTS). */
+    agent: text("agent", { enum: AGENT_KINDS }),
     createdAt: integer("created_at").notNull(),
     updatedAt: integer("updated_at").notNull(),
     lastLoginAt: integer("last_login_at"),

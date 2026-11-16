@@ -87,6 +87,11 @@ export interface RenderOptions {
   browser: boolean;
   /** The portal has a page reader, so its MCP server also offers read_page. Default: no. */
   reader?: boolean;
+  /**
+   * The reasoning effort every new session starts with (DEFAULT_REASONING_EFFORT), for each model that
+   * offers it; null keeps the admin's defaultEffort. See withDefaultEffort.
+   */
+  defaultEffort?: string | null;
 }
 
 export interface RenderedSettings {
@@ -103,7 +108,7 @@ export interface RenderedSettings {
  * an AgentConfigError.
  */
 export function renderQwenSettings(options: RenderOptions): RenderedSettings {
-  const { admin, serviceBaseUrl, browser, reader = false } = options;
+  const { admin, serviceBaseUrl, browser, reader = false, defaultEffort = null } = options;
 
   const defaults = mergeSettings({}, admin.systemDefaults);
   const openai = gatewayProviders(defaults.modelProviders, serviceBaseUrl);
@@ -165,7 +170,39 @@ export function renderQwenSettings(options: RenderOptions): RenderedSettings {
   }
   settings.mcpServers = servers;
 
-  return { settings, systemDefaults: defaults };
+  return defaultEffort === null ? { settings, systemDefaults: defaults } : withDefaultEffort({ settings, systemDefaults: defaults }, defaultEffort);
+}
+
+/**
+ * Every new session starts at `effort`, while a person can still pick another one inside a session.
+ * The Web Shell saves a pick to the user's own settings (model.reasoningEffort, user scope) and builds
+ * each new session from the merged settings, so the effort goes into the system scope, which beats the
+ * user's: their pick lasts for that session only. Each model that offers the effort also gets it as its
+ * defaultEffort, which the Web Shell shows as the default and DeepSeek Harness starts its sessions with
+ * (its own picks never stick: the portal's patch owns its default model row). A model without that
+ * effort keeps the admin's default. The session-wide key (which also applies after a switch to another model) is
+ * set only when every model that lists efforts offers this one; otherwise each model's defaultEffort does the job.
+ */
+function withDefaultEffort(rendered: RenderedSettings, effort: string): RenderedSettings {
+  const { settings, systemDefaults } = rendered;
+  const lists = [settings, systemDefaults].map((scope) => asObject(scope.modelProviders).openai).filter(Array.isArray);
+  for (const list of lists) {
+    for (const entry of (list as unknown[]).filter(isPlainObject)) {
+      const capabilities = asObject(entry.capabilities);
+      const reasoning = asObject(capabilities.reasoning);
+      if (!Array.isArray(reasoning.efforts) || !reasoning.efforts.includes(effort)) continue;
+      entry.capabilities = { ...capabilities, reasoning: { ...reasoning, defaultEffort: effort } };
+    }
+  }
+  // As Qwen Code resolves them: system scope's list replaces system-defaults'.
+  const providers = ((lists[0] ?? lists[1] ?? []) as unknown[]).filter(isPlainObject);
+  const listed = providers
+    .map((entry) => asObject(asObject(entry.capabilities).reasoning).efforts)
+    .filter((efforts): efforts is unknown[] => Array.isArray(efforts));
+  if (listed.length > 0 && listed.every((efforts) => efforts.includes(effort))) {
+    settings.model = { ...asObject(settings.model), reasoningEffort: effort };
+  }
+  return rendered;
 }
 
 /**

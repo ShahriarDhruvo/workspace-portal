@@ -124,6 +124,11 @@ upstream() { # url label
 }
 upstream "$(env_get LLM_UPSTREAM_URL)" "the-LLM-server"
 upstream "$(searxng_url)" "SearXNG"
+# portal-hostd (server readings, engine updates) is the gateway's to ask, never a workspace's.
+for hostd in HOSTD_PORTAL HOSTD_LLM; do
+  url=$(env_get "${hostd}_URL")
+  if [[ -n $(env_get "${hostd}_TOKEN") && -n $url && ${url,,} != off ]]; then upstream "$url" "the-${hostd#HOSTD_}-portal-hostd"; fi
+done
 ROUTER=$(ip -4 route show default | awk '{print $3; exit}')
 if [[ -n $ROUTER ]]; then add_closed "$ROUTER" 80 "the-router"; fi
 add_closed 1.1.1.1 443 "the-internet"
@@ -282,7 +287,7 @@ public_web_address() { # "ip port label"
 }
 for target in "${closed[@]}"; do
   case $target in
-    *the-LLM-server-directly) public_web_address "$target" || inside+=("$target") ;;
+    *the-LLM-server-directly | *portal-hostd-directly) public_web_address "$target" || inside+=("$target") ;;
     *another-workspace) inside+=("$target") ;;
   esac
 done

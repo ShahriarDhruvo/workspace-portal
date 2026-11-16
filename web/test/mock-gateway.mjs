@@ -3,8 +3,10 @@
 // workspace port per user (AGENT_PORT_BASE + id) that resolves the portal_session cookie like the real proxy,
 // refuses sessions using another workspace, and shows whose workspace it is and which agent runs there. Like
 // the real gateway, start answers at once with "starting", and the workspace turns "running" and ready startMs
-// later. A workspace runs one agent at a time: start takes `{agent}` (without one: the only agent enabled, else
-// the last one used, else 400 agent_required), and refuses another agent while one runs (409 agent_mismatch).
+// later. A workspace runs one agent at a time. A start without `{agent}` (what the portal sends) attaches to a
+// workspace that is starting or running, else launches the user's harness (users.agent, chosen in Settings) if
+// enabled, else the first enabled agent; a start naming another agent while one runs is refused (409
+// agent_mismatch). POST /control/workspaces/:id/attach only calls off a pending stop, as on the gateway.
 //
 //   PORTAL_DATA_DIR=... GATEWAY_CONTROL_SECRET=... CONTROL_PORT=4002 AGENT_PORT_BASE=3100 AGENT_PORT_COUNT=20 \
 //   MOCK_AGENTS=qwen,dsh node test/mock-gateway.mjs
@@ -31,10 +33,13 @@
 // DeepSeek Harness lockdown that doesn't fit), POST /__mock/agents/drop-image?agent=dsh&version=0.2.2-rc.1 (an image
 // gone from Docker, e.g. the current one), POST /__mock/registry?down=1|0&known=0 (the npm registry unreachable;
 // known=0: it never answered, so channels and latest are unknown).
+// The live view (GET /control/live) and LLM engine updates (/control/engine...) are simulated in mock-live.mjs, with
+// its hooks POST /__mock/live?... and POST /__mock/engine?... (see there).
 import crypto from "node:crypto";
 import http from "node:http";
 import path from "node:path";
 import Database from "better-sqlite3";
+import { createMockLive } from "./mock-live.mjs";
 
 const env = process.env;
 const controlPort = Number(env.CONTROL_PORT || 4002);
@@ -87,11 +92,27 @@ const db = new Database(path.join(env.PORTAL_DATA_DIR || "/srv/workspace-portal"
 });
 db.pragma("busy_timeout = 5000");
 
+/** The agent a start without one launches, like the gateway's: users.agent if enabled, else the first enabled. */
+function preferredAgent(userId) {
+  const chosen = db.prepare("SELECT agent FROM users WHERE id = ?").get(userId)?.agent ?? null;
+  return chosen !== null && settings.agents.includes(chosen) ? chosen : (settings.agents[0] ?? null);
+}
+
 /** @type {Map<number, any>} */
 const workspaces = new Map();
 const log = [];
 /** Control API calls with their JSON bodies, for tests that check what the portal asked for. */
 const calls = [];
+const live = createMockLive({
+  workspaces: () => [...workspaces.keys()].map(info),
+  userName: (id) => {
+    const row = db.prepare("SELECT first_name, middle_name, last_name FROM users WHERE id = ?").get(id);
+    return row ? [row.first_name, row.middle_name, row.last_name].filter(Boolean).join(" ") : null;
+  },
+  maxRunning: () => settings.maxRunning,
+  memoryLimitBytes: 2304 * 1024 ** 2,
+  audit: auditAgent,
+});
 
 function info(userId) {
   const w = workspaces.get(userId);
@@ -160,6 +181,7 @@ async function control(req, res, url) {
     log.push(`${req.method} ${url.pathname}${url.search}`);
     if (parts[1] === "log") return send(res, 200, { log, calls });
     if (parts[1] === "agents") return send(res, 200, agentHook(parts[2], url.searchParams));
+    if (parts[1] === "live" || parts[1] === "engine") return send(res, 200, live.hook(parts[1], url.searchParams));
     if (parts[1] === "registry") {
       if (url.searchParams.has("down")) registry.setDown(url.searchParams.get("down") === "1");
       if (url.searchParams.get("known") === "0") registry.forget();
@@ -198,6 +220,12 @@ async function control(req, res, url) {
 
   if (parts[1] === "health") return send(res, 200, { ok: true });
   if (parts[1] === "agents") return agentRoutes(req, res, url, parts.slice(2));
+  if (parts[1] === "live" || parts[1] === "engine") {
+    const body = req.method === "POST" ? await readBody(req) : null;
+    if (body) calls.push({ method: req.method, path: url.pathname, body });
+    const answer = await live.route(req.method, parts, body, res);
+    return answer && send(res, answer[0], answer[1]);
+  }
   if (parts[1] === "stats") {
     const running = [...workspaces.values()].filter((w) => w.status === "running").length;
     return send(res, 200, {
@@ -206,7 +234,6 @@ async function control(req, res, url) {
       idleTimeoutMinutes: settings.idleTimeoutMinutes,
       memTotalBytes: 128 * 1024 ** 3,
       memAvailableBytes: 97.3 * 1024 ** 3,
-      loadAvg: [0.42, 0.37, 0.31],
       cpus: 32,
       llm: { inFlight: 1, queued: 0, maxConcurrency: 3 },
     });
@@ -226,6 +253,12 @@ async function control(req, res, url) {
   const body = await readBody(req);
   calls.push({ method: req.method, path: url.pathname, body });
   if (body === null) return send(res, 400, { error: "invalid_json", message: "The body must be a JSON object." });
+  if (action === "attach") {
+    // Like the gateway: a starting or running workspace's pending stop is off; never starts one.
+    const w = workspaces.get(id);
+    if (isActive(w)) w.stopPending = false;
+    return send(res, 200, info(id));
+  }
   if (action === "stop") {
     const reason = body.reason ?? "admin";
     if (!STOP_REASONS.includes(reason)) return send(res, 400, { error: "invalid_reason", message: `Unknown reason "${reason}".` });
@@ -263,9 +296,9 @@ async function control(req, res, url) {
       // Someone is using it again: a stop that waited for the agent to finish is off.
       workspaces.set(id, { ...current, stopPending: false });
     } else {
-      // No agent named: the only one enabled, else the last one used.
-      const agent = requested ?? (settings.agents.length === 1 ? settings.agents[0] : current?.agent);
-      if (!agent) return send(res, 400, { error: "agent_required", message: "Choose an agent to start." });
+      // No agent named: the user's harness from Settings while it is enabled, else the first enabled agent.
+      const agent = requested ?? preferredAgent(id);
+      if (!agent) return send(res, 400, { error: "agent_unavailable", message: "No agent is enabled on this server." });
       if (!settings.agents.includes(agent)) return unavailable(agent);
       const running = [...workspaces.values()].filter(isActive).length;
       if (running >= settings.maxRunning) {

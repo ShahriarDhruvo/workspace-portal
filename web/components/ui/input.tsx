@@ -1,29 +1,21 @@
 import * as React from "react";
-import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
-// shadcn/ui Input as the Web Shell draws it: 32px, 6px radius, a white/15% border over a white/4.5% fill,
-// placeholders in the subtle tone. Focus turns the border grey and adds a 3px ring; aria-invalid turns it red.
-// The "login" variant is the auth card's 44px, 10px-radius monospace input. On touch screens: 16px text, so
-// mobile browsers don't zoom in on focus, and 40px tall, for a finger.
+// shadcn/ui Input, radix-nova style, with two portal tweaks: placeholders in the subtle tone (Qwen's own muted
+// grey; the portal's light muted-foreground is darker, for readable descriptions), and 40px tall on touch screens.
 
-const inputVariants = cva(
-  "w-full min-w-0 border border-input bg-input/30 px-2.5 text-14 text-foreground outline-none transition-[color,border-color,box-shadow] placeholder:text-subtle-foreground pointer-coarse:text-16 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 disabled:cursor-not-allowed disabled:opacity-50",
-  {
-    variants: {
-      variant: {
-        default: "h-8 rounded-md pointer-coarse:h-10",
-        login: "h-11 rounded-xl font-mono",
-      },
-    },
-    defaultVariants: {
-      variant: "default",
-    },
-  },
-);
-
-function Input({ className, type, variant, ...props }: React.ComponentProps<"input"> & VariantProps<typeof inputVariants>) {
-  return <input type={type} data-slot="input" className={cn(inputVariants({ variant }), className)} {...props} />;
+function Input({ className, type, ...props }: React.ComponentProps<"input">) {
+  return (
+    <input
+      type={type}
+      data-slot="input"
+      className={cn(
+        "h-8 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-base transition-colors outline-none file:inline-flex file:h-6 file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-subtle-foreground pointer-coarse:h-10 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:cursor-not-allowed disabled:bg-input/50 disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 md:text-sm dark:bg-input/30 dark:disabled:bg-input/80 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40",
+        className,
+      )}
+      {...props}
+    />
+  );
 }
 
 export { Input };

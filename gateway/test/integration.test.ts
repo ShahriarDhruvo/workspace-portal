@@ -536,7 +536,7 @@ test("control API: health, stats, workspaces, errors", async () => {
   assert.equal(stats.maxRunning, 2);
   assert.equal(stats.idleTimeoutMinutes, 30);
   assert.ok((stats.memTotalBytes as number) > 0 && (stats.memAvailableBytes as number) > 0);
-  assert.equal((stats.loadAvg as number[]).length, 3);
+  assert.equal(stats.loadAvg, undefined, "no load average (the live view has the real readings)");
   assert.ok((stats.cpus as number) >= 1);
   assert.deepEqual(stats.llm, { inFlight: 0, queued: 0, maxConcurrency: 2 });
 
@@ -762,6 +762,11 @@ test("the LLM proxy streams, swaps the key and records usage", async () => {
   assert.equal(g.llm.requests.at(-1)!.url, "/v1/chat/completions?trace=1");
   assert.ok(streamed.endsWith("data: [DONE]\n\n"));
   assert.ok(timeline.length >= 2 && timeline.at(-1)!.at - timeline[0]!.at >= 100, "chunks are not buffered");
+  // The admin's live view saw the request: its tokens (not the empty role delta) and the engine's timings.
+  const seen = g.llmRequests.recent()[0]!;
+  assert.deepEqual(pick(seen, ["userId", "ok", "ttftMs", "queueMs"]), { userId: alice, ok: true, ttftMs: 0, queueMs: 0 });
+  assert.deepEqual(seen.timings, { promptTokens: 10, cachedTokens: 2, promptMs: 20, generatedTokens: 34, generationMs: 170 });
+  assert.deepEqual(g.llmRequests.active(), []);
 
   const plain = await request(g.ports.service, {
     method: "POST",
@@ -798,6 +803,8 @@ test("a workspace that hangs up frees its LLM slot and the upstream request", as
   await firstChunk;
   assert.equal(g.llmQueue.inFlight, 1);
   assert.equal(g.info(alice).llmInFlight, 1);
+  await waitFor(() => g.llmRequests.active()[0]?.tokens === 1, "the live view to count the first token");
+  const recentBefore = g.llmRequests.recent().length;
   assert.deepEqual(pick(g.info(alice), ["busy", "busyReason", "idleSeconds"]), { busy: true, busyReason: "llm", idleSeconds: 0 }, "waiting on the LLM is work");
 
   // Per-user limit is 1: a second request from alice queues behind the first.
@@ -805,6 +812,7 @@ test("a workspace that hangs up frees its LLM slot and the upstream request", as
   queued.on("error", () => undefined);
   queued.end(JSON.stringify({ stream: false }));
   await waitFor(() => g.llmQueue.queued === 1, "the second request to queue");
+  assert.deepEqual(g.llmRequests.active().map((entry) => entry.forwardedAt === null), [false, true], "one running, one waiting in the gateway");
   queued.destroy();
   await waitFor(() => g.llmQueue.queued === 0, "the queued request to leave the queue");
 
@@ -812,6 +820,9 @@ test("a workspace that hangs up frees its LLM slot and the upstream request", as
   await waitFor(() => g.llmQueue.inFlight === 0, "the slot to be released");
   await waitFor(() => g.llm.abandoned === abandonedBefore + 1, "the upstream request to be aborted");
   assert.equal(g.info(alice).busy, false);
+  assert.deepEqual(g.llmRequests.active(), []);
+  assert.equal(g.llmRequests.recent().length, recentBefore + 1, "a request that never left the gateway is not listed");
+  assert.equal(g.llmRequests.recent()[0]!.ok, false);
 });
 
 test("the service API refuses unknown callers and odd paths", async () => {
@@ -876,7 +887,7 @@ test("the LLM proxy only offers generation, embeddings and the model list", asyn
 });
 
 test("agent and service servers wait at most a minute for request headers, and never time out a request", () => {
-  const service = createServiceServer({ config: g.config, db: g.db, manager: g.manager, llm: g.llmQueue, log: g.log, search: g.searches as never });
+  const service = createServiceServer({ config: g.config, db: g.db, manager: g.manager, llm: g.llmQueue, requests: g.llmRequests, log: g.log, search: g.searches as never });
   for (const server of [g.createAgentServer(), service]) {
     assert.equal(server.headersTimeout, 60_000, "a client that never finishes its headers is dropped (slowloris)");
     assert.equal(server.requestTimeout, 0, "uploads, event streams and generations take as long as they take");
@@ -1108,13 +1119,21 @@ test("signing out while the agent works leaves the workspace running until the w
     gw.db.delete(sessions).where(eq(sessions.userId, alice)).run();
     assert.equal((await release()).stopPending, true);
     gw.tokens.alice = gw.addSession(alice);
-    const back = json<WorkspaceInfo>(await gw.control("POST", `/control/workspaces/${alice}/start`));
+    const back = json<WorkspaceInfo>(await gw.control("POST", `/control/workspaces/${alice}/attach`));
     assert.deepEqual(pick(back, ["status", "stopPending"]), { status: "running", stopPending: false }, "signing in again cancels the stop");
     gw.runtime.qwenFor(alice).health.activePrompts = 0;
     await gw.manager.refreshSamples();
     await gw.manager.reap();
     assert.equal(gw.info(alice).status, "running");
     assert.equal(gw.runtime.startsFor(alice).length, 2);
+  }));
+
+test("attach never starts a stopped workspace", () =>
+  withGateway({}, async (gw) => {
+    const { alice } = gw.ids;
+    const info = json<WorkspaceInfo>(await gw.control("POST", `/control/workspaces/${alice}/attach`));
+    assert.equal(info.status, "stopped");
+    assert.equal(gw.runtime.startsFor(alice).length, 0);
   }));
 
 test("an unanswered approval counts as work until qwen serve declines it, however long nobody looks", () =>
@@ -1336,7 +1355,7 @@ test("the service API knows a workspace by its container's address, also once Do
   withGateway({}, async (gw) => {
     const { alice, bob } = gw.ids;
     // The real caller lookup (the shared harness server takes the caller from gw.caller instead).
-    const service = createServiceServer({ config: gw.config, db: gw.db, manager: gw.manager, llm: gw.llmQueue, log: gw.log, search: { search: async () => "" } });
+    const service = createServiceServer({ config: gw.config, db: gw.db, manager: gw.manager, llm: gw.llmQueue, requests: gw.llmRequests, log: gw.log, search: { search: async () => "" } });
     const port = await listenLocal(service);
     try {
       const requests = (userId: number): number => gw.db.select().from(llmUsage).where(eq(llmUsage.userId, userId)).get()?.requests ?? 0;

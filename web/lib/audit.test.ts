@@ -51,3 +51,30 @@ test("agent updates and image removals name the agent and versions", () => {
     "free text keeps its underscores",
   );
 });
+
+test("a harness change names the agents; a first choice comes from nothing", () => {
+  assert.equal(auditActionLabel("agent_preference_changed", true), "Changed harness");
+  assert.equal(formatAuditDetails(JSON.stringify({ from: "qwen", to: "dsh" })), "From: Qwen Code · To: DeepSeek Harness");
+  assert.equal(formatAuditDetails(JSON.stringify({ from: null, to: "qwen" })), "From: — · To: Qwen Code");
+});
+
+test("LLM engine updates, failures and image removals", () => {
+  assert.equal(auditActionLabel("engine_updated", true), "LLM engine updated");
+  assert.equal(auditActionLabel("engine_update_failed", false), "LLM engine update failed");
+  assert.equal(auditActionLabel("engine_update_failed", true, '{"kind":"update","error":"Cancelled."}'), "LLM engine update cancelled");
+  assert.equal(auditActionLabel("agent_update_failed", true, '{"agent":"qwen","error":"Cancelled"}'), "Agent update cancelled");
+  assert.equal(auditActionLabel("agent_update_failed", true, '{"agent":"qwen","error":"Cancelled by a restart"}'), "Agent update failed");
+  assert.equal(auditActionLabel("engine_image_removed", true), "LLM engine image removed");
+  assert.equal(
+    formatAuditDetails(JSON.stringify({ kind: "rollback", from: "0.34.0", to: "0.31.0" })),
+    "Type: rollback · From: 0.34.0 · To: 0.31.0",
+  );
+  assert.equal(
+    formatAuditDetails(JSON.stringify({ version: "0.34.0", error: "Not ready after 120 s", rolledBack: true })),
+    "Version: 0.34.0 · Error: Not ready after 120 s · Rolled back: yes",
+  );
+  assert.equal(
+    formatAuditDetails(JSON.stringify({ version: "0.31.0", digest: "sha256:9a6e" })),
+    "Version: 0.31.0 · Digest: sha256:9a6e",
+  );
+});

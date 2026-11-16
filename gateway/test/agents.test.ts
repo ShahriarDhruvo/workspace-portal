@@ -1,9 +1,9 @@
-// The choice of agent: which one a start runs, one at a time per workspace, and how the control
-// API and the agent ports present it. Uses the same in-process gateway as integration.test.ts with
+// Which agent a start runs (the user's choice from Settings), one at a time per workspace, and how
+// the control API and the agent ports present it. Uses the same in-process gateway as integration.test.ts with
 // both agents enabled.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { workspaces } from "@portal/db";
+import { users, workspaces } from "@portal/db";
 import { eq } from "drizzle-orm";
 import { json, MIN, startGateway, type Gateway, type GatewayOptions } from "./harness.ts";
 import { driverFor } from "../src/agents/index.ts";
@@ -32,34 +32,29 @@ test("GET /control/agents lists the enabled agents in display order, with their 
     });
   }));
 
-test("a fresh workspace with two agents needs a choice; the choice is remembered for later starts", () =>
+test("a start without an agent runs the user's choice from Settings, else the first enabled agent", () =>
   withGateway(BOTH, async (g) => {
-    const { alice } = g.ids;
-    const refused = await start(g, alice);
-    assert.equal(refused.status, 400);
-    assert.equal(json<{ error: string }>(refused).error, "agent_required");
-    assert.equal(g.runtime.starts.length, 0);
-
-    // The agent port doesn't guess either: it sends the user to the portal to choose.
-    const page = await g.navigate(g.tokens.alice, alice);
-    assert.equal(page.status, 503);
-    assert.ok(page.body.includes("Choose an agent"), page.body);
-    assert.equal(g.runtime.starts.length, 0);
-
-    const started = json<WorkspaceInfo>(await start(g, alice, { agent: "qwen" }));
+    const { alice, bob } = g.ids;
+    // No choice saved: the install's default, the first of WORKSPACE_AGENTS.
+    const started = json<WorkspaceInfo>(await start(g, alice));
     assert.equal(started.agent, "qwen");
     assert.equal(g.runtime.startsFor(alice)[0]!.options.agent, "qwen");
     await g.waitReady(alice);
     assert.equal(g.workspaceRow(alice)?.agent, "qwen", "persisted");
     assert.deepEqual(g.auditActions(alice).find((entry) => entry.action === "workspace_started")?.details, { agent: "qwen", version: "0.27.0" });
 
+    // A saved choice wins, on the control API and on a page load of the agent port alike.
+    g.db.update(users).set({ agent: "dsh" }).where(eq(users.id, bob)).run();
+    const page = await g.navigate(g.tokens.bob, bob);
+    assert.ok(page.body.includes("Starting your workspace"), page.body);
+    await g.waitReady(bob);
+    assert.equal(g.runtime.startsFor(bob)[0]!.options.agent, "dsh");
+
+    // Changing the choice applies from the next start; a start without an agent attaches to what runs.
+    g.db.update(users).set({ agent: "dsh" }).where(eq(users.id, alice)).run();
+    assert.equal(json<WorkspaceInfo>(await start(g, alice)).agent, "qwen");
     await g.manager.stop(alice, "user");
-    assert.equal(g.info(alice).agent, "qwen", "a stopped workspace still names the agent it ran last");
-    // Without a choice, the next start (a page load on the agent port, or the portal) runs the same agent.
-    const reload = await g.navigate(g.tokens.alice, alice);
-    assert.ok(reload.body.includes("Starting your workspace"), reload.body);
-    await g.waitReady(alice);
-    assert.equal(g.runtime.startsFor(alice).at(-1)!.options.agent, "qwen");
+    assert.equal(json<WorkspaceInfo>(await start(g, alice)).agent, "dsh");
   }));
 
 test("one agent at a time: asking for the other one while it runs is refused, the same one is fine", () =>
@@ -110,24 +105,26 @@ test("start body validation: unknown and disabled agents", () =>
     assert.equal(started.agent, "qwen");
   }));
 
-test("an agent that was disabled after its last run needs a new choice", () =>
+test("a saved choice that is no longer enabled falls back to the first enabled agent", () =>
   withGateway({ env: { WORKSPACE_AGENTS: "qwen" } }, async (g) => {
     const { alice } = g.ids;
-    // A workspace that last ran dsh, on an install that now only offers Qwen Code (read at boot).
+    g.db.update(users).set({ agent: "dsh" }).where(eq(users.id, alice)).run();
     g.db.insert(workspaces).values({ userId: alice, status: "stopped", agent: "dsh", updatedAt: Date.now() }).run();
     g.manager.shutdown();
     const restarted = new WorkspaceManager({ config: g.config, db: g.db, runtime: g.runtime, versions: g.versions, llm: g.llmQueue, connections: g.connections, log: g.log, now: () => g.clock.now });
     await restarted.init();
     g.useManager(restarted);
 
-    assert.equal(g.info(alice).agent, "dsh");
-    const reply = await start(g, alice);
+    assert.equal(g.info(alice).agent, "dsh", "the last run is still reported");
+    assert.equal(json<WorkspaceInfo>(await start(g, alice)).agent, "qwen");
+    // Naming a disabled agent explicitly is still refused.
+    await g.manager.stop(alice, "user");
+    const reply = await start(g, alice, { agent: "dsh" });
     assert.equal(reply.status, 400);
     assert.equal(json<{ error: string }>(reply).error, "agent_unavailable");
-    assert.equal(json<WorkspaceInfo>(await start(g, alice, { agent: "qwen" })).agent, "qwen");
   }));
 
-test("the user may stop their own workspace (reason \"user\"), e.g. to switch agents", () =>
+test("the user may stop their own workspace (reason \"user\")", () =>
   withGateway(BOTH, async (g) => {
     const { alice } = g.ids;
     await g.startReady(alice, "qwen");

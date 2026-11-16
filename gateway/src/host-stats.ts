@@ -11,20 +11,17 @@ export interface HostStats {
   idleTimeoutMinutes: number;
   memTotalBytes: number;
   memAvailableBytes: number;
-  loadAvg: [number, number, number];
   cpus: number;
   llm: { inFlight: number; queued: number; maxConcurrency: number };
 }
 
 export function readHostStats(config: Config, manager: WorkspaceManager, llm: LlmQueue): HostStats {
-  const [one = 0, five = 0, fifteen = 0] = os.loadavg();
   return {
     running: manager.runningCount(),
     maxRunning: config.maxRunning,
     idleTimeoutMinutes: config.idleTimeoutMs / 60_000,
     memTotalBytes: os.totalmem(),
     memAvailableBytes: memAvailable(),
-    loadAvg: [one, five, fifteen],
     cpus: os.cpus().length,
     llm: { inFlight: llm.inFlight, queued: llm.queued, maxConcurrency: llm.maxConcurrency },
   };

@@ -13,8 +13,15 @@ import { ConnectionRegistry } from "./connections.ts";
 import { createControlServer } from "./control-api.ts";
 import { DockerImageBuilder } from "./docker-image-builder.ts";
 import { DockerRuntime, isSupportedDockerVersion, MIN_DOCKER_VERSION_TEXT } from "./docker-runtime.ts";
+import { createNotesClient, createRegistryClient, EngineReleases } from "./engine-releases.ts";
+import { createEngineHost, EngineUpdater } from "./engine-updater.ts";
+import { HostMonitor } from "./host-monitor.ts";
+import { HostdClient } from "./hostd.ts";
 import { listen } from "./listen.ts";
+import { LiveHub, userNames } from "./live.ts";
+import { LlmMonitor } from "./llm-monitor.ts";
 import { LlmQueue } from "./llm-queue.ts";
+import { LlmRequests } from "./llm-requests.ts";
 import { createLogger, type Logger } from "./log.ts";
 import { createNpmRegistry } from "./npm-registry.ts";
 import { createReaderBackend, withPageCache } from "./reader.ts";
@@ -50,11 +57,11 @@ async function main(log: Logger): Promise<void> {
   });
 
   const runtime = new DockerRuntime(config);
-  const engine = await runtime.engineVersion();
-  if (!isSupportedDockerVersion(engine)) {
+  const dockerVersion = await runtime.engineVersion();
+  if (!isSupportedDockerVersion(dockerVersion)) {
     log.error(
-      `Docker Engine ${engine || "(unknown version)"} is not supported: ${MIN_DOCKER_VERSION_TEXT} or later is required, because older engines let containers on internal networks resolve outside names (CVE-2024-29018)`,
-      { version: engine, minimum: MIN_DOCKER_VERSION_TEXT },
+      `Docker Engine ${dockerVersion || "(unknown version)"} is not supported: ${MIN_DOCKER_VERSION_TEXT} or later is required, because older engines let containers on internal networks resolve outside names (CVE-2024-29018)`,
+      { version: dockerVersion, minimum: MIN_DOCKER_VERSION_TEXT },
     );
     process.exit(1);
   }
@@ -73,6 +80,7 @@ async function main(log: Logger): Promise<void> {
   }
 
   const llm = new LlmQueue(config.llm.maxConcurrency, config.llm.maxConcurrencyPerUser);
+  const requests = new LlmRequests();
   const connections = new ConnectionRegistry();
   const sessions = new SessionCache((tokenHash) => loadSessionContext(db, tokenHash));
   const manager = new WorkspaceManager({ config, db, runtime, versions, llm, connections, log });
@@ -93,6 +101,33 @@ async function main(log: Logger): Promise<void> {
   // leaves its staging image (and maybe a version-check container) behind.
   await updater.sweep();
 
+  // The admin's live view and engine updates, through each server's portal-hostd.
+  const hosts = {
+    portal: new HostMonitor({ role: "portal", config: config.hostd.portal, log }),
+    llm: new HostMonitor({ role: "llm", config: config.hostd.llm, log }),
+  };
+  const llmMonitor = new LlmMonitor({
+    upstreamUrl: config.llm.upstreamUrl,
+    apiKey: config.llm.apiKey,
+    queue: llm,
+    requests,
+    names: (ids) => userNames(db, ids),
+    log,
+  });
+  const live = new LiveHub({ config, db, manager, llm: llmMonitor, hosts, log });
+  const engine = new EngineUpdater({
+    config,
+    host: config.hostd.llm.token === "" ? null : createEngineHost(new HostdClient(config.hostd.llm)),
+    releases: new EngineReleases({ registry: createRegistryClient(), notes: createNotesClient(), notesRepo: config.engine.releaseNotesRepo }),
+    queue: llm,
+    db,
+    log,
+  });
+  log.info("server readings", {
+    portal: config.hostd.portal.url || "not set up (HOSTD_PORTAL_TOKEN)",
+    llm: config.hostd.llm.url || "not set up (HOSTD_LLM_URL, HOSTD_LLM_TOKEN)",
+  });
+
   const search = createSearxngBackend({
     baseUrl: config.search.url,
     authorization: config.search.authorization,
@@ -106,9 +141,9 @@ async function main(log: Logger): Promise<void> {
     config.reader.url === ""
       ? null
       : withPageCache(createReaderBackend({ baseUrl: config.reader.url, timeoutMs: config.reader.timeoutMs }), { ttlMs: config.reader.cacheMs });
-  const control = createControlServer({ config, db, manager, versions, updater, llm, sessions, connections, log });
+  const control = createControlServer({ config, db, manager, versions, updater, engine, llm, live, sessions, connections, log });
   const createAgentServer = createAgentServerFactory({ config, manager, sessions, connections, log });
-  const service = createServiceServer({ config, db, manager, llm, log, search, reader });
+  const service = createServiceServer({ config, db, manager, llm, requests, log, search, reader });
   const servers: http.Server[] = [control, service];
 
   await listen(control, { host: "127.0.0.1", port: config.controlPort });
@@ -148,9 +183,13 @@ async function main(log: Logger): Promise<void> {
       server.closeIdleConnections();
     }
     connections.closeAll(1001, "gateway restarting");
+    live.close();
+    hosts.portal.close();
+    hosts.llm.close();
     manager.shutdown();
     // Records a running update as failed now (audited before the database closes below).
     updater.shutdown();
+    engine.shutdown();
     setTimeout(() => {
       db.$client.close();
       process.exit(0);

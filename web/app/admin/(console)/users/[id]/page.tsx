@@ -2,10 +2,11 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { eq } from "drizzle-orm";
-import { AGENT_NAMES, displayName, users } from "@portal/db";
+import { AGENT_NAMES, displayName, users, type AgentKind } from "@portal/db";
+import { startingAgent } from "@/lib/agent-choice";
 import { config } from "@/lib/config";
 import { getDb } from "@/lib/db";
-import { agentLabel, initials, summarizeWorkspace } from "@/lib/format";
+import { initials, summarizeWorkspace } from "@/lib/format";
 import { gateway, toApiError } from "@/lib/gateway";
 import type { WorkspaceInfo } from "@/lib/gateway-types";
 import { requireAdmin } from "@/lib/session";
@@ -14,7 +15,7 @@ import { BackLink } from "@/components/admin/back-link";
 import { OpenWorkspaceForm } from "@/components/admin/open-workspace-form";
 import { ProfileForm } from "@/components/admin/profile-form";
 import { UserDialogButton } from "@/components/admin/user-dialogs";
-import { Avatar } from "@/components/brand";
+import { UserAvatar } from "@/components/brand";
 import { StatusDot } from "@/components/common/status-dot";
 import { CardRow } from "@/components/layout/card-row";
 import { Section } from "@/components/layout/section";
@@ -22,6 +23,17 @@ import { LocalTime } from "@/components/local-time";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+
+/**
+ * The harness the user's workspace starts with: their choice in Settings, else the first enabled agent (null when
+ * the gateway can't say which), and the one running when it differs.
+ */
+function harnessText(saved: AgentKind | null, next: AgentKind | null, workspace: WorkspaceInfo | null): string {
+  const running = workspace && (workspace.status === "starting" || workspace.status === "running") ? workspace.agent : null;
+  const starts = next ?? saved;
+  const choice = starts ? `${AGENT_NAMES[starts]}${saved ? "" : " (the default; not chosen in Settings)"}` : "The first harness enabled";
+  return running && running !== starts ? `${choice} · running now: ${AGENT_NAMES[running]}` : choice;
+}
 
 function loadUser(id: string) {
   const parsed = userIdSchema.safeParse(id);
@@ -48,6 +60,8 @@ export default async function UserPage({ params }: PageProps<"/admin/users/[id]"
   } catch (error) {
     workspaceError = toApiError(error).message;
   }
+  const enabled = await gateway.agents().catch(() => null);
+  const nextAgent = enabled ? startingAgent(user.agent, enabled) : null;
   const summary = workspace ? summarizeWorkspace(workspace, config.idleTimeoutMinutes) : null;
   // Both in words here: the users table keeps the second (why it stopped, the last error) in a tooltip.
   const workspaceFacts = summary ? [summary.detail, summary.title].filter((fact) => fact !== null) : [];
@@ -57,16 +71,16 @@ export default async function UserPage({ params }: PageProps<"/admin/users/[id]"
   return (
     <div className="mx-auto flex w-full max-w-[880px] flex-col gap-6">
       <div className="flex flex-col gap-3">
-        <BackLink href="/admin">Users</BackLink>
+        <BackLink href="/admin/users">Users</BackLink>
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div className="flex min-w-0 items-center gap-3">
-            <Avatar initials={initials(user.firstName, user.lastName)} size="lg" />
+            <UserAvatar initials={initials(user.firstName, user.lastName)} size="lg" />
             <div className="flex min-w-0 flex-col gap-1">
               <h1 className="text-18 font-semibold wrap-anywhere">{name}</h1>
               <div className="flex flex-wrap items-center gap-2 text-13 text-muted-foreground">
                 <span className="font-mono text-12 break-all">{user.username}</span>
                 {user.role === "admin" ? <Badge>Admin</Badge> : <Badge variant="outline">User</Badge>}
-                {user.active ? <Badge variant="success">Active</Badge> : <Badge variant="neutral">Deactivated</Badge>}
+                {user.active ? <Badge variant="success">Active</Badge> : <Badge variant="secondary">Deactivated</Badge>}
                 {user.mustChangePassword ? <Badge variant="warning">Temporary password</Badge> : null}
               </div>
             </div>
@@ -76,13 +90,13 @@ export default async function UserPage({ params }: PageProps<"/admin/users/[id]"
       </div>
 
       <Section title="Profile" description="Shown everywhere as first, middle and last name.">
-        <Card variant="outline" className="gap-0 py-0">
+        <Card className="gap-0 py-0">
           <ProfileForm userId={user.id} firstName={user.firstName} middleName={user.middleName} lastName={user.lastName} />
         </Card>
       </Section>
 
       <Section title="Workspace">
-        <Card variant="outline" className="gap-0 py-0">
+        <Card className="gap-0 py-0">
           <CardRow
             title={
               summary ? (
@@ -98,26 +112,28 @@ export default async function UserPage({ params }: PageProps<"/admin/users/[id]"
           >
             {summary
               ? workspaceFacts.length > 0
-                ? workspaceFacts.map((fact) => <p key={fact}>{fact}</p>)
-                : "Starts when the user signs in or opens it."
+                ? workspaceFacts.map((fact) => (
+                    <span key={fact} className="block">
+                      {fact}
+                    </span>
+                  ))
+                : "It starts when the user presses Start on their Home page."
               : workspaceError}
           </CardRow>
-          {workspace ? (
-            <CardRow title="Agent">
-              {agentLabel(workspace, AGENT_NAMES) ?? "None yet: chosen when the workspace first starts."}
-            </CardRow>
-          ) : null}
+          <CardRow title="Harness">
+            {harnessText(user.agent, nextAgent, workspace)}
+          </CardRow>
         </Card>
       </Section>
 
       <Section title="Account">
-        <Card variant="outline" className="gap-0 py-0">
+        <Card className="gap-0 py-0">
           {isSelf ? (
             <CardRow
               title="Password"
               action={
                 <Button asChild variant="outline" size="sm">
-                  <Link href="/change-password">Change password</Link>
+                  <Link href="/settings#password">Change password</Link>
                 </Button>
               }
             >

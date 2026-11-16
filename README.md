@@ -7,12 +7,16 @@ driven by a model you host.
 
 - Username/password sign-in. One admin creates the users (first, middle and last name).
 - **One container per user**, shared by all of that user's sign-ins (two browsers, two devices: same workspace).
-- **One agent at a time.** When the workspace isn't running, the user chooses Qwen Code or DeepSeek Harness
-  and can switch later; both work on the same files.
+- **One harness per user.** Each user picks Qwen Code or DeepSeek Harness in Settings (Qwen Code by default)
+  and presses Start; both work on the same files. Every new session starts at low reasoning effort; the user
+  can raise it inside that session.
 - It starts when the user opens it. It stops when the user signs out, or after 30 minutes without use, **but
   never while the agent is working**. A long task keeps running after the user leaves, and the workspace stops
   once the task is done.
 - The admin sees every workspace's state and can open any of them, even while the user is in it.
+- **Live monitoring and updates** for the admin: both servers' CPU, GPU, memory, bandwidth and power twice a
+  second, every LLM session's read and write speed, and one-click updates of the agents and of the LLM engine
+  (gufo), with automatic rollback.
 - **Locked down by default:** a workspace can reach one address, the portal's gateway, which gives it the
   model, web search and a reader for public web pages. It has no internet access of its own, can't reach
   your LAN or other workspaces, and has nothing mounted except the user's own files.
@@ -38,6 +42,7 @@ driven by a model you host.
 - [The page reader](#the-page-reader)
 - [The agents: Qwen Code and DeepSeek Harness](#the-agents-qwen-code-and-deepseek-harness)
 - [Agent settings for all workspaces](#agent-settings-for-all-workspaces)
+- [Server monitoring and LLM engine updates](#server-monitoring-and-llm-engine-updates)
 - [Updating the portal](#updating-the-portal)
 - [Updating the workspace images](#updating-the-workspace-images)
 - [Using it](#using-it)
@@ -377,17 +382,18 @@ checks it on the live install.
 
 ## The agents: Qwen Code and DeepSeek Harness
 
-`WORKSPACE_AGENTS` in `.env` lists the agents users choose from, in the order they are shown:
+`WORKSPACE_AGENTS` in `.env` lists the agents users can pick in Settings, in the order they are shown. The
+first one is the default for users who haven't picked one:
 
 ```sh
 WORKSPACE_AGENTS=qwen,dsh        # both (the default); qwen = Qwen Code, dsh = DeepSeek Harness
-# WORKSPACE_AGENTS=qwen          # only Qwen Code: workspaces start without asking
+# WORKSPACE_AGENTS=qwen          # only Qwen Code
 QWEN_CODE_VERSION=0.27.0         # the default versions (see "Updating the workspace images")
 DSH_VERSION=0.2.2-rc.1
 ```
 
 After a change, run `sudo bash deploy/install.sh`, which builds the image of a newly added agent. A workspace
-still running an agent you removed keeps it until it stops; after that, its user chooses again.
+still running an agent you removed keeps it until it stops; its next start uses the first enabled agent.
 
 Both agents run in the same locked-down container with the same limits and see the same `/workspace` and
 home directory, so switching agents keeps the user's files. Each keeps its own history: Qwen Code in
@@ -439,6 +445,10 @@ portal and in `docker compose logs gateway`.
 
 Users keep their own Qwen Code settings, chats and memory in their home directory, which survives restarts.
 
+**Reasoning effort.** Every model starts at `DEFAULT_REASONING_EFFORT` (`low` unless set in `.env`) in every
+new session, whatever a user picked last time; a user who raises it does so for that session only. A
+`model.reasoningEffort` in your `settings.json` (system scope) wins over this default.
+
 ### DeepSeek Harness
 
 DeepSeek Harness takes its models from the same files (see [Connect the model](#connect-the-model)), with
@@ -454,6 +464,46 @@ the user's own settings, so the UI shows those settings as read-only:
   the models, the default model and the MCP servers.
 
 Users keep their own sessions, settings and skills in `~/.dsh` and `~/.agents`.
+
+## Server monitoring and LLM engine updates
+
+A small daemon, `portal-hostd` (Python standard library only, in `hostd/`), runs on each server. It reads the
+hardware only while an admin has the Overview open, and costs about 1 ms of CPU per reading. On the LLM server
+it also updates the engine container (the gufo quadlet) when the admin asks. Details:
+[hostd/README.md](hostd/README.md).
+
+- **Portal server:** `deploy/install.sh` installs it and its token by itself. It listens on 127.0.0.1 only.
+- **LLM server:** install it there once, from a copy of this repository:
+
+  ```sh
+  git clone <this repository> workspace-portal
+  sudo bash workspace-portal/hostd/install.sh llm --portal PORTAL_IP
+  ```
+
+  It opens its port (9180) to the portal's address only and prints two lines. Add them to the portal's `.env`
+  and restart the stack:
+
+  ```sh
+  HOSTD_LLM_URL=http://LLM_SERVER_IP:9180
+  HOSTD_LLM_TOKEN=...
+  ```
+
+  ```sh
+  sudo docker compose up -d
+  ```
+
+**Admin > Overview** then shows, twice a second: each server's total power draw, CPU and GPU usage, clocks,
+temperatures and power, memory used and free (GiB and %), memory bandwidth and fans; every LLM session with its
+read speed (prompt tokens per second) and write speed (answer tokens per second), with the totals charted over
+the last minute; the requests waiting; the last finished requests with the engine's own timings; and the running
+workspaces. Readings a machine can't provide show "—".
+
+**Admin > Updates > LLM engine** lists the engine's releases with their notes ("Breaking changes" marked) and
+updates it in three steps: download the new image, wait for running LLM requests to finish (new ones wait in
+the portal's queue, they don't fail; up to `ENGINE_DRAIN_MINUTES`, 15, or "Restart now"), then restart the
+engine and check that it reports the new version. If it doesn't come up, the previous version is restored by
+itself. Roll back and removing old images are there too. Without `HOSTD_LLM_*` the page says how to set it up;
+updating by hand on the LLM server still works as before.
 
 ## Updating the portal
 
@@ -481,6 +531,9 @@ What this does not update:
 
 - **The agents.** Qwen Code and DeepSeek Harness stay at the versions chosen in the admin console (see
   [Updating the workspace images](#updating-the-workspace-images)).
+- **portal-hostd on the LLM server.** After a `git pull` there, run its installer again (`sudo bash
+  hostd/install.sh llm --portal PORTAL_IP`); it keeps its token and restarts only if something changed. The
+  portal server's copy is updated by `deploy/install.sh`.
 - **Debian packages inside the images**, Chromium among them. The base images are pinned by digest, so a
   build repeats itself. `sudo bash deploy/update-image.sh --refresh` rebuilds the workspace images with
   today's packages; the pins of the other images move with the repository.
@@ -503,7 +556,7 @@ with the tools and Chromium) and tagged `workspace-portal/workspace:<agent>-<ver
 last chosen in the admin console or with `update-image.sh` (kept in `PORTAL_DATA_DIR/config/agent-versions.env`),
 else `QWEN_CODE_VERSION` and `DSH_VERSION` from `.env`, the defaults.
 
-**In the admin console** (Admin > Agents), each agent shows its current version, the latest release and its
+**In the admin console** (Admin > Updates), each agent shows its current version, the latest release and its
 other release channels on npm (next, preview, nightly, ...), and its images on the server. Choose a version or a
 channel to update to: the gateway builds that image on the server, checks that it really contains that version
 (`qwen --version` or `dsh --version`, in a container without network) and makes it the current version. The
@@ -565,14 +618,15 @@ an update in the admin console, run `sudo bash deploy/verify-isolation.sh` yours
 
 1. **Admin → New user** creates an account with a one-time temporary password. The user chooses their own at
    first sign-in.
-2. Signing in opens the workspace. If it isn't running, the user chooses an agent (Qwen Code or DeepSeek
-   Harness; the last one used is preselected), the container starts in a few seconds, and the agent's UI
-   appears. With a single agent enabled it starts right away. The page loads it from that user's own port
-   (`3100 + user id`), which must be reachable.
-3. **One container per user, one agent at a time.** More sign-ins (another tab, browser or device) attach to
-   the same container and see the same sessions live. **Switch agent** in the top bar stops the workspace
-   (it warns if the agent is working or the workspace is open elsewhere) and shows the choice again; files
-   are kept.
+2. Signing in opens **Home**: the workspace's state and one button. **Start** launches the user's harness
+   (chosen in **Settings**, Qwen Code by default) in a few seconds and opens it; **Open workspace** goes back to
+   a running one. The page loads the agent from that user's own port (`3100 + user id`), which must be
+   reachable. **Stop** (in the workspace's bar or on Home) asks first only if the agent is working or the
+   workspace is open elsewhere, then returns to Home.
+3. **One container per user, one harness.** More sign-ins (another tab, browser or device) attach to the same
+   container and see the same sessions live. Changing the harness in Settings applies at the next Start, or
+   right away with **Restart now**; files are kept. Settings also holds the password and the dark or light
+   theme.
 4. **When it stops:**
    - after `IDLE_TIMEOUT_MINUTES` (30) without use, when nothing is running;
    - soon after the user signs out on every device, when nothing is running;
@@ -586,10 +640,12 @@ an update in the admin console, run `sudo bash deploy/verify-isolation.sh` yours
    - an approval prompt nobody answers doesn't keep the workspace up: Qwen Code declines it after
      `IDLE_TIMEOUT_MINUTES`; a DeepSeek Harness turn that only waits for an answer doesn't count as work;
    - after `MAX_BUSY_HOURS` (24) without anyone using the workspace, work no longer keeps it running.
-5. **Admin console:** see every workspace (running, working, idle time, memory, agent and its version), and
-   open, stop, deactivate, reset or delete any user. Opening a user's workspace shows them an "Admin connected"
-   notice and is audit-logged. Opening a stopped one asks the admin which agent to start, preselecting the
-   user's last. Admin > Agents updates, rolls back or rebuilds each agent (see "Updating the workspace images").
+5. **Admin console:** **Overview** is the live view of both servers, the LLM sessions and the running
+   workspaces (see [Server monitoring](#server-monitoring-and-llm-engine-updates)). **Users** lists everyone with
+   their workspace and harness; open, stop, deactivate, reset or delete any user there. Opening a user's
+   workspace shows them an "Admin connected" notice and is audit-logged; a stopped one waits for the admin's
+   Start, which launches that user's harness. **Updates** updates, rolls back or rebuilds each agent and updates
+   the LLM engine (see "Updating the workspace images").
 6. When all `MAX_RUNNING_WORKSPACES` slots are taken, a new start replaces the workspace that has been idle
    longest (over 5 minutes, and never a working one). If there is none, the user sees "try again".
 
@@ -623,6 +679,7 @@ docker compose logs --tail 50 searxng reader                   # the search engi
 docker ps --filter label=workspace-portal.workspace=1 \
   --format '{{.Names}} {{.Label "workspace-portal.agent"}} {{.Status}}'   # running workspaces and their agents
 sudo bash deploy/verify-isolation.sh                           # prove a workspace reaches only the gateway
+systemctl status portal-hostd                                  # the monitoring daemon (on each server)
 sudo nft list table inet workspace_portal                      # the firewall rules (workspaces, SearXNG, reader)
 docker compose exec web node scripts/reset-admin-password.mjs  # forgot the admin password: prints a temporary one
 ```

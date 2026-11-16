@@ -14,7 +14,7 @@ require_root
 # Not while the admin console runs an agent update: the image rebuild below would race it, and `docker
 # compose up` (which recreates a changed gateway) would abandon it. A gateway that isn't running (a first
 # install) answers nothing, so this passes.
-console_update_running && die "the admin console is updating an agent right now (Admin > Agents): wait for it to finish, or cancel it there; then run this again"
+console_update_running && die "the admin console is running an update right now (Admin > Updates): wait for it to finish, or cancel it there; then run this again"
 command -v docker >/dev/null || die "docker is not installed"
 docker compose version >/dev/null 2>&1 || die "the docker compose plugin is not installed"
 command -v nft >/dev/null || die "nftables (the nft command) is not installed: dnf install nftables / apt install nftables"
@@ -37,6 +37,7 @@ chown "$OWNER": "$ENV_FILE"
 set_if_missing() { env_value "$ENV_FILE" "$1" >/dev/null || env_set "$1" "$2"; }
 set_if_missing GATEWAY_CONTROL_SECRET "$(openssl rand -hex 32)"
 set_if_missing ADMIN_PASSWORD "$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20)"
+set_if_missing HOSTD_PORTAL_TOKEN "$(openssl rand -hex 32)"
 
 # Settings from earlier versions: image tags are now derived from the agent versions, users choose
 # between the agents in WORKSPACE_AGENTS, and the models are defined in Qwen Code's
@@ -190,6 +191,26 @@ elif command -v ufw >/dev/null && ufw status | grep -q "Status: active"; then
   done
 fi
 
+# ---------------------------------------------------------------- portal-hostd
+# This server's live readings for Admin > Overview (hostd/README.md); before the stack starts, so the
+# gateway finds it at once. It listens on loopback only. The token goes on stdin, not the command line.
+HOSTD_PORTAL_URL=$(env_get HOSTD_PORTAL_URL)
+if [[ ${HOSTD_PORTAL_URL,,} == off ]]; then
+  HOSTD_STATE="off (HOSTD_PORTAL_URL=off)"
+elif [[ $HOSTD_PORTAL_URL =~ ^http://127\.0\.0\.1:([0-9]+)/?$ ]]; then
+  log "installing portal-hostd (live server readings)"
+  bash hostd/install.sh portal --token-stdin --port "${BASH_REMATCH[1]}" <<<"$(env_get HOSTD_PORTAL_TOKEN)"
+  HOSTD_STATE="this server: portal-hostd on ${HOSTD_PORTAL_URL}"
+else
+  warn "HOSTD_PORTAL_URL (${HOSTD_PORTAL_URL}) is not http://127.0.0.1:<port>, so portal-hostd is not installed here; set it so, or to off"
+  HOSTD_STATE="this server: ${HOSTD_PORTAL_URL} (not installed by this script)"
+fi
+if [[ -n $(env_get HOSTD_LLM_TOKEN) ]]; then
+  HOSTD_STATE="${HOSTD_STATE}; LLM server: $(env_get HOSTD_LLM_URL)"
+else
+  HOSTD_STATE="${HOSTD_STATE}; LLM server: not set up (README: \"Server monitoring and LLM engine updates\")"
+fi
+
 # ---------------------------------------------------------------- start
 # SearXNG and the page reader are published on loopback ports. A program that already holds one
 # would stop the stack halfway through its start: most likely a SearXNG installed by hand for an
@@ -256,6 +277,7 @@ cat <<DONE
 $(for agent in "${ENABLED_AGENTS[@]}"; do printf '    Agent:      %s %s\n' "$(agent_name "$agent")" "$(agent_version "$agent")"; done)
     Models:     ${PORTAL_DATA_DIR}/config/qwen (deploy/qwen-config.sh; used by every agent)
     Web:        web_search through ${SEARCH_STATE}; page reader ${READER_STATE}
+    Monitoring: ${HOSTD_STATE}
 
   Check the workspace isolation at any time:  sudo bash deploy/verify-isolation.sh
 

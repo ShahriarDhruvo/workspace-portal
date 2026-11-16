@@ -10,7 +10,7 @@ export default async function NewUserPage() {
   await requireAdmin();
   return (
     <div className="mx-auto flex w-full max-w-[720px] flex-col gap-6">
-      <BackLink href="/admin">Users</BackLink>
+      <BackLink href="/admin/users">Users</BackLink>
       <PageHeading title="New user">
         New accounts are regular users with a temporary password they change at first sign-in.
       </PageHeading>

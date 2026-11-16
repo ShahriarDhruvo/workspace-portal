@@ -1,12 +1,13 @@
 import { cn } from "@/lib/utils";
 
-export type DotTone = "success" | "warning" | "danger" | "idle";
+export type DotTone = "success" | "warning" | "danger" | "info" | "idle";
 
 /** Text colour too, so the pulse ring (drawn in currentColor) matches the dot. */
 const DOT_TONES: Record<DotTone, string> = {
   success: "bg-success text-success",
   warning: "bg-warning text-warning",
   danger: "bg-danger text-danger",
+  info: "bg-info text-info",
   idle: "bg-idle text-idle",
 };
 

@@ -8,6 +8,7 @@ import { requireAdmin } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { PageHeading } from "@/components/layout/page-heading";
 import { LocalTime } from "@/components/local-time";
+import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 export const metadata: Metadata = { title: "Audit log" };
@@ -37,61 +38,57 @@ export default async function AuditPage() {
   return (
     <>
       <PageHeading title="Audit log">The latest {LIMIT} entries, newest first.</PageHeading>
-      <Table stacked="lg">
-        <TableHeader>
-          <TableRow>
-            {["Time", "Actor", "Action", "Target", "Details"].map((heading) => (
-              <TableHead key={heading} scope="col">
-                {heading}
-              </TableHead>
-            ))}
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {entries.length === 0 ? (
-            <TableRow className="hover:bg-transparent">
-              <TableCell colSpan={5} className="py-10 text-center text-muted-foreground stacked:py-7">
-                Nothing has been recorded yet.
-              </TableCell>
+      {/* The table scrolls sideways inside its card on narrow screens; the page itself never does. */}
+      <Card className="gap-0 py-0">
+        <Table className="[&_tr>*:first-child]:pl-4 [&_tr>*:last-child]:pr-4">
+          <TableHeader>
+            <TableRow>
+              {["Time", "Actor", "Action", "Target", "Details"].map((heading) => (
+                <TableHead key={heading} scope="col" className="h-9 text-12 text-muted-foreground">
+                  {heading}
+                </TableHead>
+              ))}
             </TableRow>
-          ) : null}
-          {entries.map((entry) => {
-            const subject = entry.target ? displayName(entry.target) : auditDetailsSubject(entry.details);
-            const details = formatAuditDetails(entry.details);
-            return (
-              <TableRow key={entry.id}>
-                <TableCell label="Time" className="align-top whitespace-nowrap text-muted-foreground tabular-nums">
-                  <LocalTime at={entry.at} />
-                </TableCell>
-                <TableCell label="Actor" className="align-top wrap-anywhere">
-                  {entry.actor ? (
-                    displayName(entry.actor)
-                  ) : (
-                    <span className="text-muted-foreground">{auditActorFallback(entry.action)}</span>
-                  )}
-                </TableCell>
-                <TableCell label="Action" className="align-top font-medium whitespace-nowrap">
-                  {auditActionLabel(entry.action, entry.actor !== null)}
-                </TableCell>
-                {/* A stacked row leaves out the lines that say nothing. */}
-                <TableCell label="Target" className={cn("align-top wrap-anywhere", !subject && "stacked:hidden")}>
-                  {subject ? (
-                    <span className={cn(!entry.target && "text-muted-foreground")}>{subject}</span>
-                  ) : (
-                    <span className="text-muted-foreground">—</span>
-                  )}
-                </TableCell>
-                <TableCell
-                  label="Details"
-                  className={cn("align-top wrap-anywhere text-muted-foreground stacked:col-span-full", !details && "stacked:hidden")}
-                >
-                  {details}
+          </TableHeader>
+          <TableBody>
+            {entries.length === 0 ? (
+              <TableRow className="hover:bg-transparent">
+                <TableCell colSpan={5} className="py-10 text-center text-muted-foreground">
+                  Nothing has been recorded yet.
                 </TableCell>
               </TableRow>
-            );
-          })}
-        </TableBody>
-      </Table>
+            ) : null}
+            {entries.map((entry) => {
+              const subject = entry.target ? displayName(entry.target) : auditDetailsSubject(entry.details);
+              const details = formatAuditDetails(entry.details);
+              return (
+                <TableRow key={entry.id}>
+                  <TableCell className="align-top text-muted-foreground tabular-nums">
+                    <LocalTime at={entry.at} />
+                  </TableCell>
+                  <TableCell className="max-w-56 truncate align-top">
+                    {entry.actor ? (
+                      displayName(entry.actor)
+                    ) : (
+                      <span className="text-muted-foreground">{auditActorFallback(entry.action)}</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="align-top font-medium">{auditActionLabel(entry.action, entry.actor !== null, entry.details)}</TableCell>
+                  <TableCell className="max-w-56 truncate align-top">
+                    {subject ? (
+                      <span className={cn(!entry.target && "text-muted-foreground")}>{subject}</span>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </TableCell>
+                  {/* The one column that wraps, at a readable width: details can be long (an error message). */}
+                  <TableCell className="min-w-72 align-top whitespace-normal wrap-anywhere text-muted-foreground">{details}</TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </Card>
     </>
   );
 }

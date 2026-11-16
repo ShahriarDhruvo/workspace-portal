@@ -3,13 +3,19 @@
 import { useActionState } from "react";
 import { changePassword, type ChangePasswordState } from "@/lib/actions/auth";
 import { PASSWORD_MIN_LENGTH } from "@/lib/limits";
+import { cn } from "@/lib/utils";
 import { FormField } from "@/components/forms/form-field";
 import { SubmitButton } from "@/components/forms/submit-button";
 import { FieldGroup } from "@/components/ui/field";
+import { CheckIcon } from "@/components/ui/icons";
 
 const INITIAL: ChangePasswordState = { fieldErrors: {} };
 
-/** `temporary`: the current password is the one an administrator issued (the forced change at first sign-in). */
+/**
+ * `temporary`: the forced change at first sign-in, on its own screen, where the current password is the one an
+ * administrator issued; it leads on to Home. Otherwise the Password section of Settings, which stays put and
+ * says when the change is done.
+ */
 export function ChangePasswordForm({ username, temporary }: { username: string; temporary: boolean }) {
   const [state, action] = useActionState(changePassword, INITIAL);
   const errors = state.fieldErrors;
@@ -22,18 +28,16 @@ export function ChangePasswordForm({ username, temporary }: { username: string; 
           label="Current password"
           name="currentPassword"
           type="password"
-          variant="login"
           placeholder={temporary ? "The temporary password" : "Your current password"}
           autoComplete="current-password"
           required
-          autoFocus
+          autoFocus={temporary}
           error={errors.currentPassword}
         />
         <FormField
           label="New password"
           name="newPassword"
           type="password"
-          variant="login"
           placeholder="Choose a new password"
           autoComplete="new-password"
           required
@@ -45,16 +49,23 @@ export function ChangePasswordForm({ username, temporary }: { username: string; 
           label="Confirm new password"
           name="confirmPassword"
           type="password"
-          variant="login"
           placeholder="The new password again"
           autoComplete="new-password"
           required
           error={errors.confirmPassword}
         />
       </FieldGroup>
-      <SubmitButton size="lg" className="w-full" pendingLabel="Saving…">
-        Change password
-      </SubmitButton>
+      <div className={cn("flex flex-wrap items-center gap-x-4 gap-y-2", !temporary && "justify-end")}>
+        {state.changedAt ? (
+          <p key={state.changedAt} role="status" className="flex items-center gap-1.5 text-13 text-success">
+            <CheckIcon className="shrink-0" />
+            Password changed. Your other sessions were signed out.
+          </p>
+        ) : null}
+        <SubmitButton size={temporary ? "lg" : "default"} className={cn(temporary && "w-full")} pendingLabel="Saving…">
+          Change password
+        </SubmitButton>
+      </div>
     </form>
   );
 }

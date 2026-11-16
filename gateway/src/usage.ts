@@ -1,10 +1,12 @@
 // Token usage of LLM responses, read from a copy of the stream as it passes through: the `usage`
 // object of a JSON body, or of the last SSE event that carries one. Recorded per user and day.
+// The SSE parser also reports each streamed token and the engine's closing `timings` to an optional
+// observer (llm-requests.ts, for the admin's live view of running requests).
 import type { IncomingHttpHeaders } from "node:http";
 import { StringDecoder } from "node:string_decoder";
 import { Transform, type TransformCallback } from "node:stream";
 import { sql } from "drizzle-orm";
-import { llmUsage, type PortalDb } from "@portal/db";
+import { llmUsage, usageDay, type PortalDb } from "@portal/db";
 import { MIB } from "./config.ts";
 
 export interface TokenUsage {
@@ -33,14 +35,52 @@ export interface UsageParser {
   readonly usage: TokenUsage | null;
 }
 
+/** The engine's own account of a finished request (llama.cpp-style `timings` in the last event). */
+export interface EngineTimings {
+  /** Prompt tokens the engine processed (not served from its prompt cache). */
+  promptTokens: number;
+  /** Prompt tokens served from the engine's prompt cache. */
+  cachedTokens: number;
+  promptMs: number;
+  generatedTokens: number;
+  generationMs: number;
+}
+
+/** Sees the stream of one response as it passes. Its methods must not throw. */
+export interface StreamObserver {
+  /** An event that carries generated output: text, reasoning or a tool call (one token per event). */
+  token(): void;
+  timings(timings: EngineTimings): void;
+}
+
+/** An event that streams output: a non-empty content or reasoning delta, or a tool call. */
+const TOKEN_EVENT = /"(?:reasoning_)?content":"(?!")|"tool_calls":\[/;
+
+/** Reads the engine's `timings` object (llama.cpp's server and engines derived from it). */
+export function extractTimings(payload: unknown): EngineTimings | null {
+  if (!isRecord(payload) || !isRecord(payload.timings)) return null;
+  const { timings } = payload;
+  const promptTokens = tokenCount(timings.prompt_n);
+  const generatedTokens = tokenCount(timings.predicted_n);
+  const promptMs = duration(timings.prompt_ms);
+  const generationMs = duration(timings.predicted_ms);
+  if (promptTokens === null || generatedTokens === null || promptMs === null || generationMs === null) return null;
+  return { promptTokens, cachedTokens: tokenCount(timings.cache_n) ?? 0, promptMs, generatedTokens, generationMs };
+}
+
 /** Server-sent events: tracks the usage of the last `data:` event that has one. */
 export class SseUsageParser implements UsageParser {
   usage: TokenUsage | null = null;
+  readonly #observer: StreamObserver | null;
   readonly #decoder = new StringDecoder("utf8");
   #line = "";
   #data: string[] = [];
   #dataChars = 0;
   #skipLine = false;
+
+  constructor(observer: StreamObserver | null = null) {
+    this.#observer = observer;
+  }
 
   write(chunk: Buffer): void {
     this.#feed(this.#decoder.write(chunk));
@@ -95,6 +135,15 @@ export class SseUsageParser implements UsageParser {
     const data = this.#dataChars <= MAX_EVENT_CHARS ? this.#data.join("\n") : "";
     this.#data = [];
     this.#dataChars = 0;
+    if (data === "") return;
+    const observer = this.#observer;
+    if (observer !== null) {
+      if (TOKEN_EVENT.test(data)) observer.token();
+      if (data.includes('"timings"')) {
+        const timings = extractTimings(parseJson(data));
+        if (timings) observer.timings(timings);
+      }
+    }
     if (!data.includes('"usage"')) return;
     const usage = extractUsage(parseJson(data));
     if (usage) this.usage = usage;
@@ -120,11 +169,11 @@ export class JsonUsageParser implements UsageParser {
 }
 
 /** Picks a parser from the response headers; null for bodies usage can't be read from. */
-export function usageParserFor(headers: IncomingHttpHeaders): UsageParser | null {
+export function usageParserFor(headers: IncomingHttpHeaders, observer: StreamObserver | null = null): UsageParser | null {
   const encoding = headers["content-encoding"];
   if (encoding !== undefined && encoding.toLowerCase() !== "identity") return null;
   const type = (headers["content-type"] ?? "").toLowerCase();
-  if (type.includes("text/event-stream")) return new SseUsageParser();
+  if (type.includes("text/event-stream")) return new SseUsageParser(observer);
   if (type.includes("json")) return new JsonUsageParser();
   return null;
 }
@@ -141,12 +190,6 @@ export function usageTap(parser: UsageParser): Transform {
       callback();
     },
   });
-}
-
-/** YYYY-MM-DD in the gateway's local time zone. */
-export function usageDay(date: Date): string {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
 /** Adds one request (and its tokens, when known) to the user's row for the day. */
@@ -168,6 +211,10 @@ export function recordUsage(db: PortalDb, userId: number, usage: TokenUsage | nu
 
 function tokenCount(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function duration(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

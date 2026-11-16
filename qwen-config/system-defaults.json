@@ -15,7 +15,7 @@
         "name": "Qwen3.8 Flash-Next",
         "description": "Local model through the Workspace Portal",
         "capabilities": {
-          "reasoning": { "profile": "openai-effort", "efforts": ["low", "medium", "xhigh"], "defaultEffort": "xhigh" }
+          "reasoning": { "profile": "openai-effort", "efforts": ["low", "medium", "xhigh"], "defaultEffort": "low" }
         },
         "generationConfig": {
           "timeout": 3600000,

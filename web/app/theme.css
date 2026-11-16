@@ -1,67 +1,110 @@
 /*
- * Workspace Portal design tokens, matched to the default (dark) theme of the Qwen Code Web Shell that runs
- * in the workspace iframe, so the portal chrome and the iframe read as one product.
+ * Workspace Portal design tokens: the effective colours of the Qwen Code Web Shell (0.27.x) that runs in the
+ * workspace iframe, in both of its themes, so the portal chrome and the iframe read as one product.
  *
- * The Web Shell is a shadcn/ui app in its neutral dark theme, so the portal uses shadcn/ui's semantic colour
- * variables (--background, --primary, --muted-foreground, ...) as its one colour vocabulary, set to the
- * effective colours measured in the running Web Shell: neutral greys on a near-black canvas, 1px white/10%
- * borders, a light-grey primary, 6px base radius, 14px system UI text. A few portal extensions cover what
- * shadcn/ui has no name for (status tones, the subtle text tone, softer border strengths).
+ * The Web Shell is a shadcn/ui app (radix-nova style). Its dark theme is shadcn's neutral palette, its light
+ * theme Qwen's own hex values; the portal uses the same shadcn/ui semantic variables (--background, --primary,
+ * --muted-foreground, ...), set to what the running Web Shell shows. A few portal extensions cover what
+ * shadcn/ui has no name for: status tones, the brand blue, the subtle text tone, softer border strengths.
  *
- * Dark only, like the Web Shell's default: it ignores prefers-color-scheme, and so does the portal.
- * app/globals.css maps these variables to Tailwind utilities (bg-background, text-muted-foreground, ...).
+ * Dark is the default, as in the Web Shell; neither follows prefers-color-scheme. The root layout puts
+ * `theme-dark` or `theme-light` on <html> from the `portal_theme` cookie (lib/theme.ts), and the `dark:` variant
+ * of app/globals.css keys off `theme-dark`. app/globals.css maps these variables to Tailwind utilities.
  */
 
-:root {
+:root,
+.theme-dark {
   color-scheme: dark;
 
   /* -- shadcn/ui semantic colours */
-  --background: #0a0a0a;                /* page bodies, auth screen, iframe backdrop */
+  --background: #0a0a0a;                /* page bodies, top bars, the iframe backdrop */
   --foreground: #fafafa;
-  --card: #171717;                      /* cards, data tables, the auth card */
+  --card: #171717;                      /* cards and tables */
   --card-foreground: #fafafa;
-  --popover: #171717;                   /* menus and dialogs: solid panels, no blur */
+  --popover: #171717;                   /* menus, dialogs, tooltips: solid panels */
   --popover-foreground: #fafafa;
-  --primary: #e5e5e5;                   /* a light-grey primary, never a brand colour (dialogs use --foreground) */
+  --primary: #e5e5e5;                   /* a light-grey primary, never a brand colour */
   --primary-foreground: #171717;
   --secondary: #262626;
   --secondary-foreground: #fafafa;
-  --muted: #262626;                     /* code and secret wells, avatars, the auth card footer at 50% */
-  --muted-foreground: #a1a1a1;          /* descriptions, section labels, table headers, icons */
-  --accent: #262626;                    /* menu item focus, icon button hover; ghost and row hover at 50% */
+  --muted: #262626;                     /* hover fills, avatars, card and dialog footers at 50% */
+  --muted-foreground: #a1a1a1;          /* descriptions, labels, table headers, icons */
+  --accent: #262626;                    /* menu item focus, icon button hover */
   --accent-foreground: #fafafa;
-  /* Destructive controls (a tint or an outline, never solid red) and invalid inputs. The status tone for
-     error text and banners is --danger: the Web Shell draws the two in different reds. */
-  --destructive: #ff6467;
-  --border: rgb(255 255 255 / 10%);     /* 1px everywhere: cards, headers, tables, menus, dialogs */
-  --input: rgb(255 255 255 / 15%);      /* input and outline-button borders; their fill is input/30, hover input/50 */
+  --destructive: #ff6467;               /* destructive buttons and menu items (a tint, never solid), invalid inputs */
+  --border: rgb(255 255 255 / 10%);
+  --input: rgb(255 255 255 / 15%);      /* input and outline-button borders; their fill is input/30 */
   --ring: #737373;                      /* focus: a control's border plus a 3px ring at 50%, or a nav outline */
 
   /* -- Portal extensions */
-  --subtle-foreground: #808598;         /* hints, placeholders, field descriptions */
-  --border-soft: color-mix(in srgb, var(--border) 74%, transparent);  /* status cards and stat tiles */
-  --border-faint: color-mix(in srgb, var(--border) 50%, transparent); /* table row separators */
-  --border-solid: #2a2a2a;              /* the dialog header rule */
-  --info: #6785ff;                      /* host meters below the warning level */
-  /* Status tones (text, badges, dots, banners; tints of themselves at 8-20%). The attention icon on state
-     cards is its own amber. */
+  --subtle-foreground: #a1a1a1;         /* placeholders: Qwen's own muted grey in both themes */
+  --border-soft: color-mix(in srgb, var(--border) 74%, transparent);
+  --border-faint: color-mix(in srgb, var(--border) 50%, transparent);
+  --border-solid: #2a2a2a;              /* an opaque rule, where a translucent one would stack */
+  /* Brand (Qwen's agent-blue and agent-purple): links, live indicators, chart series. */
+  --brand: #6785ff;                     /* agent-blue-500 */
+  --brand-soft: #2f3f88;                /* agent-blue-200 */
+  --brand-2: #bcacfe;                   /* agent-purple-300, a second chart series */
+  /* Status tones (text, badges, dots; tints of themselves at 8-20%). */
   --success: #48bb78;
   --warning: #ecc94b;
   --danger: #fc8181;
   --attention: #fbbf24;
+  --info: #6785ff;                      /* running, and meters below the warning level */
   --idle: #808598;
-
-  /* -- Shape: 6px base. 4 small/menu items, 6 buttons/inputs/menus, 8 rows and choice cards, 10 cards and
-        dialogs, 14 tables and the auth card, pills for badges (globals.css derives the scale). */
-  --radius: 6px;
+  /* Chart series (shadcn/ui Chart), in this order. Declared once: they follow the theme's own tokens. */
+  --chart-1: var(--brand);
+  --chart-2: var(--brand-2);
+  --chart-3: var(--success);
+  --chart-4: var(--warning);
+  --chart-5: var(--muted-foreground);
 
   /* -- Page chrome */
-  --canvas: #0d0d0d;                    /* html/body, theme-color, pre-paint background (app/layout.tsx) */
+  --canvas: #0d0d0d;                    /* html/body, theme-color, the pre-paint background (lib/theme.ts) */
   --selection: rgb(0 128 255 / 30%);
-  /* Scrollbars: 8px with a 2px track-coloured border, so about 4px of thumb shows. */
-  --scrollbar-size: 8px;
   --scrollbar-thumb: #3a3a3a;
   --scrollbar-thumb-hover: #525252;
+}
+
+.theme-light {
+  color-scheme: light;
+
+  --background: #ffffff;
+  --foreground: #0a0a0b;
+  --card: #ffffff;
+  --card-foreground: #0a0a0b;
+  --popover: #ffffff;
+  --popover-foreground: #0a0a0b;
+  --primary: #151517;
+  --primary-foreground: #fafafa;
+  --secondary: #f3f3f5;
+  --secondary-foreground: #747476;
+  --muted: #f3f3f5;
+  /* Qwen's light muted grey (#a3a3a5) is too faint for body descriptions: they take its secondary grey, and
+     the faint grey is left to placeholders (--subtle-foreground). */
+  --muted-foreground: #747476;
+  --accent: #f3f3f5;
+  --accent-foreground: #151517;
+  --destructive: #e7000b;
+  --border: #e3e4e6;
+  --input: #e5e5e5;
+  --ring: #a3a3a5;
+
+  --subtle-foreground: #a3a3a5;
+  --border-solid: #e3e4e6;
+  --brand: #0033ff;
+  --brand-soft: #cdd7ff;
+  --brand-2: #7755fe;
+  --success: #1f7a3a;
+  --warning: #9a6a00;
+  --danger: #c0362c;
+  --attention: #9a6a00;
+  --info: #335cff;
+  --idle: #808598;
+
+  --canvas: #ffffff;
+  --scrollbar-thumb: #c7c9cc;
+  --scrollbar-thumb-hover: #aeb1b5;
 }
 
 /* ---- Base rules mirroring the Web Shell -------------------------------------------------------- */
@@ -86,7 +129,8 @@ textarea {
   font-family: inherit;
 }
 
-/* Chrome ignores ::-webkit-scrollbar wherever the standard properties are set, so those are Firefox-only. */
+/* Scrollbars: 8px with a 2px transparent border, so about 4px of thumb shows. Chrome ignores
+   ::-webkit-scrollbar wherever the standard properties are set, so those are Firefox-only. */
 @supports not selector(::-webkit-scrollbar) {
   * {
     scrollbar-width: thin;
@@ -94,8 +138,8 @@ textarea {
   }
 }
 ::-webkit-scrollbar {
-  width: var(--scrollbar-size);
-  height: var(--scrollbar-size);
+  width: 8px;
+  height: 8px;
 }
 ::-webkit-scrollbar-track,
 ::-webkit-scrollbar-corner {

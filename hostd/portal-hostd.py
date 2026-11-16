@@ -1,0 +1,1741 @@
+#!/usr/bin/python3
+"""portal-hostd: live hardware readings of this host for the workspace portal's gateway and, in the llm role,
+LLM engine (rootless Podman quadlet) updates through the engine user's own systemd manager.
+
+Python 3.11+ standard library only. Configuration comes from the environment (systemd
+EnvironmentFile=/etc/portal-hostd/hostd.conf); the bearer token from $CREDENTIALS_DIRECTORY/token
+(systemd LoadCredential) or $HOSTD_TOKEN_FILE. See README.md for the API and the data sources.
+
+Cost model: nothing is sampled while nobody watches (all threads block without timeouts). While a
+stream is open, one shared sampler thread reads every source once per interval through file
+descriptors that stay open (os.pread), and perf counters are read as one group per PMU.
+"""
+
+import glob
+import hmac
+import http.server
+import json
+import os
+import pwd
+import re
+import secrets
+import signal
+import socket
+import socketserver
+import stat
+import struct
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from collections import deque
+
+API_VERSION = 1
+DEFAULT_PORT = 9180
+MAX_CONNECTIONS = 16
+MAX_STREAMS = 4
+MAX_BODY = 4096
+HEADER_TIMEOUT = 10.0
+KEEPALIVE_AFTER_SAMPLE = 5.0
+PERF_LINGER = 30.0
+FAN_PERIOD = 3.0
+BUSY_PCT = 1.0          # a logical CPU counts as busy (for clock averages) above this usage
+PING_EVERY = 15.0
+STATUS_CACHE = 5.0
+
+
+def log(msg):
+    print(msg, file=sys.stderr, flush=True)
+
+
+def now_ms():
+    return int(time.time() * 1000)
+
+
+# --------------------------------------------------------------------------------------------- files
+
+class Fs:
+    """Paths under an optional ROOT prefix, so tests can point the daemon at fixture trees."""
+
+    def __init__(self, root=''):
+        self.root = root.rstrip('/')
+
+    def p(self, path):
+        return self.root + path
+
+    def text(self, path, default=None):
+        try:
+            with open(self.p(path), 'rb') as f:
+                return f.read().decode('utf-8', 'replace')
+        except OSError:
+            return default
+
+    def int(self, path, default=None):
+        t = self.text(path)
+        try:
+            return int(t.strip(), 0) if t is not None else default
+        except ValueError:
+            return default
+
+    def glob(self, pattern):
+        n = len(self.root)
+        return [g[n:] for g in sorted(glob.glob(self.p(pattern)))]
+
+    def exists(self, path):
+        return os.path.exists(self.p(path))
+
+    def readlink(self, path):
+        try:
+            return os.readlink(self.p(path))
+        except OSError:
+            return None
+
+
+class Src:
+    """A file kept open and re-read with pread at offset 0 (sysfs/procfs regenerate on every read)."""
+
+    __slots__ = ('path', 'fd', 'size')
+
+    def __init__(self, path, size=4096):
+        self.path, self.fd, self.size = path, None, size
+
+    def read(self):
+        for attempt in (0, 1):
+            try:
+                if self.fd is None:
+                    self.fd = os.open(self.path, os.O_RDONLY | os.O_CLOEXEC)
+                data = os.pread(self.fd, self.size, 0)
+                if len(data) < self.size:
+                    return data
+                parts = [data]
+                off = len(data)
+                while True:
+                    more = os.pread(self.fd, 65536, off)
+                    if not more:
+                        return b''.join(parts)
+                    parts.append(more)
+                    off += len(more)
+            except OSError:
+                self.close()
+                if attempt:
+                    return None
+        return None
+
+    def int(self):
+        data = self.read()
+        try:
+            return int(data) if data else None
+        except ValueError:
+            return None
+
+    def close(self):
+        if self.fd is not None:
+            try:
+                os.close(self.fd)
+            except OSError:
+                pass
+            self.fd = None
+
+
+# ---------------------------------------------------------------------------------------------- perf
+
+class PerfUnavailable(Exception):
+    pass
+
+
+_SYSCALL_NR = {'x86_64': 298, 'aarch64': 241}
+_libc = None
+
+
+def perf_event_open(type_, config, config1, config2, cpu, group_fd):
+    global _libc
+    import ctypes
+    nr = _SYSCALL_NR.get(os.uname().machine)
+    if nr is None:
+        raise OSError(38, 'perf_event_open: unsupported architecture')
+    if _libc is None:
+        _libc = ctypes.CDLL(None, use_errno=True)
+        _libc.syscall.restype = ctypes.c_long
+    # struct perf_event_attr, PERF_ATTR_SIZE_VER1 (72 bytes): read_format = GROUP|TOTAL_TIME_ENABLED|RUNNING
+    attr = struct.pack('<IIQQQQQIIQQ', type_, 72, config, 0, 0, 8 | 1 | 2, 0, 0, 0, config1, config2)
+    buf = ctypes.create_string_buffer(attr, 72)
+    fd = _libc.syscall(ctypes.c_long(nr), buf, ctypes.c_int(-1), ctypes.c_int(cpu), ctypes.c_int(group_fd),
+                       ctypes.c_ulong(8))  # PERF_FLAG_FD_CLOEXEC
+    if fd < 0:
+        err = ctypes.get_errno()
+        raise OSError(err, os.strerror(err))
+    return fd
+
+
+def pmu_dir(pmu):
+    return '/sys/bus/event_source/devices/' + pmu
+
+
+def pmu_encode(fs, pmu, spec):
+    """'event=0x1f,umask=0xffe' -> {'config':..,'config1':..,'config2':..} using <pmu>/format/* bit layouts."""
+    regs = {'config': 0, 'config1': 0, 'config2': 0}
+    for item in filter(None, (s.strip() for s in spec.split(','))):
+        key, _, val = item.partition('=')
+        v = int(val, 0) if val else 1
+        if key in regs:
+            regs[key] |= v
+            continue
+        fmt = fs.text(pmu_dir(pmu) + '/format/' + key)
+        if fmt is None:
+            raise PerfUnavailable(f'{pmu}: no format field {key}')
+        reg, _, ranges = fmt.strip().partition(':')
+        if reg not in regs:
+            raise PerfUnavailable(f'{pmu}: unsupported format register {reg}')
+        for r in ranges.split(','):
+            lo, _, hi = r.partition('-')
+            lo = int(lo)
+            hi = int(hi) if hi else lo
+            width = hi - lo + 1
+            regs[reg] |= (v & ((1 << width) - 1)) << lo
+            v >>= width
+        if v:
+            raise PerfUnavailable(f'{pmu}: value too wide for {key}')
+    return regs
+
+
+def pmu_event(fs, pmu, name):
+    """Named event from <pmu>/events/<name> -> (spec string, scale)."""
+    spec = fs.text(pmu_dir(pmu) + '/events/' + name)
+    if spec is None:
+        raise PerfUnavailable(f'{pmu}: no event {name}')
+    sc = fs.text(pmu_dir(pmu) + '/events/' + name + '.scale')
+    try:
+        scale = float(sc) if sc else 1.0
+    except ValueError:
+        scale = 1.0
+    return spec.strip(), scale
+
+
+class PerfGroup:
+    """One perf group (all events on one PMU), read with a single read() syscall."""
+
+    def __init__(self, fs, pmu, events):
+        # events: list of (label, spec, factor); factor converts a count into the reported unit
+        base = pmu_dir(pmu)
+        t = fs.int(base + '/type')
+        if t is None:
+            raise PerfUnavailable(f'no PMU {pmu}')
+        mask = (fs.text(base + '/cpumask') or '').strip()
+        m = re.match(r'(\d+)', mask)
+        self.pmu, self.type, self.cpu = pmu, t, int(m.group(1)) if m else 0
+        self.labels = [e[0] for e in events]
+        self.factors = [e[2] for e in events]
+        self.configs = [pmu_encode(fs, pmu, e[1]) for e in events]
+        self.fds = []
+
+    def open(self):
+        if self.fds:
+            return True
+        try:
+            for c in self.configs:
+                fd = perf_event_open(self.type, c['config'], c['config1'], c['config2'], self.cpu,
+                                     self.fds[0] if self.fds else -1)
+                self.fds.append(fd)
+            return True
+        except OSError:
+            self.close()
+            return False
+
+    def read(self):
+        """-> (time_enabled_ns, time_running_ns, [counts]) or None."""
+        if not self.fds:
+            return None
+        n = len(self.fds)
+        try:
+            b = os.read(self.fds[0], 24 + 8 * n)
+            nr, en, ru = struct.unpack_from('<QQQ', b)
+            return en, ru, list(struct.unpack_from(f'<{nr}Q', b, 24))
+        except (OSError, struct.error):
+            return None
+
+    def close(self):
+        for fd in reversed(self.fds):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        self.fds = []
+
+
+def perf_rates(group, prev, cur, dt):
+    """Per-event rates (count*factor per second), corrected for multiplexing; None when unknown."""
+    if group is None or prev is None or cur is None or not dt or dt <= 0:
+        return None
+    den, run = cur[0] - prev[0], cur[1] - prev[1]
+    if run <= 0 or len(cur[2]) != len(prev[2]):
+        return None
+    corr = den / run if den > run else 1.0
+    return [max(0, c - p) * corr * f / dt for p, c, f in zip(prev[2], cur[2], group.factors)]
+
+
+# ---------------------------------------------------------------------------------------- gpu_metrics
+
+GM_V3_SIZE = 264
+
+
+def decode_gpu_metrics(b):
+    """struct gpu_metrics_v3_0 (kgd_pp_interface.h, format 3 content 0, natural alignment, 264 bytes).
+    Returns None for any other revision. Temperatures are centi-degrees C, powers mW, clocks MHz."""
+    if not b or len(b) < GM_V3_SIZE:
+        return None
+    size, fmt, content = struct.unpack_from('<HBB', b, 0)
+    if (fmt, content) != (3, 0) or size < GM_V3_SIZE:
+        return None
+    u16 = lambda off: struct.unpack_from('<H', b, off)[0]
+    u32 = lambda off: struct.unpack_from('<I', b, off)[0]
+    v16 = lambda off: (lambda x: None if x == 0xFFFF else x)(u16(off))
+    v32 = lambda off: (lambda x: None if x == 0xFFFFFFFF else x)(u32(off))
+    return {
+        'temperature_gfx': v16(4), 'temperature_soc': v16(6),
+        'average_gfx_activity': v16(42), 'average_vcn_activity': v16(44),
+        'average_dram_reads': v16(94), 'average_dram_writes': v16(96),
+        'average_socket_power': v32(112), 'average_apu_power': v32(120), 'average_gfx_power': v32(124),
+        'average_all_core_power': v32(132),
+        'average_gfxclk_frequency': v16(174), 'average_fclk_frequency': v16(182), 'average_uclk_frequency': v16(186),
+        'current_core_maxfreq': v16(222), 'current_gfx_maxfreq': v16(224),
+        'throttle': struct.unpack_from('<7I', b, 228),
+    }
+
+
+# ------------------------------------------------------------------------------------------- devices
+
+def pci_name(fs, vendor, device):
+    """Device name from pci.ids (vendor/device as 4-digit lowercase hex), or None. Streams the 1.3 MB
+    file line by line so it never sits in memory (pymalloc would keep the RSS)."""
+    try:
+        f = open(fs.p('/usr/share/hwdata/pci.ids'), encoding='utf-8', errors='replace')
+    except OSError:
+        return None
+    with f:
+        in_vendor = False
+        for line in f:
+            if not line.strip() or line.startswith('#'):
+                continue
+            if line[0] != '\t':
+                if in_vendor:
+                    return None
+                in_vendor = line[:4].lower() == vendor
+            elif in_vendor and line[1] != '\t' and line[1:5].lower() == device:
+                return line[5:].strip()
+    return None
+
+
+def gpu_display_name(fs, card_dev, kind, cpu_model):
+    vendor = (fs.text(card_dev + '/vendor') or '').strip().lower().replace('0x', '')
+    device = (fs.text(card_dev + '/device') or '').strip().lower().replace('0x', '')
+    name = pci_name(fs, vendor, device) if vendor and device else None
+    fallback = 'AMD GPU' if kind == 'amdgpu' else 'Intel GPU'
+    if not name:
+        return fallback
+    inner = re.search(r'\[(.+)\]', name)
+    choices = [c.strip() for c in inner.group(1).split('/')] if inner else []
+    # APUs: the CPU brand string names the exact iGPU ("... w/ Radeon 8060S"); prefer it when pci.ids agrees
+    m = re.search(r'\bw/\s*(.+)$', cpu_model or '')
+    if m and m.group(1).strip():
+        cand = m.group(1).strip()
+        last = cand.split()[-1]
+        if cand.lower() in name.lower() or re.search(r'(?<![\w])' + re.escape(last) + r'(?![\w])', name, re.I):
+            return cand
+    if len(choices) == 1:
+        name = choices[0]
+    if kind == 'i915' and not name.lower().startswith('intel'):
+        name = 'Intel ' + name
+    return name
+
+
+class AmdGpu:
+    kind = 'amdgpu'
+
+    def __init__(self, fs, dev):
+        self.dev = dev
+        self.metrics = Src(fs.p(dev + '/gpu_metrics'), 1024)
+        self.vram_used = Src(fs.p(dev + '/mem_info_vram_used'), 64)
+        self.vram_total = fs.int(dev + '/mem_info_vram_total')
+        gm = decode_gpu_metrics(self.metrics.read())
+        self.ok = gm is not None
+        self.max_mhz = gm['current_gfx_maxfreq'] if gm else None
+        if not self.max_mhz:
+            levels = re.findall(r'(\d+)\s*Mhz', fs.text(dev + '/pp_dpm_sclk') or '', re.I)
+            self.max_mhz = max(map(int, levels)) if levels else None
+
+    def read(self):
+        return decode_gpu_metrics(self.metrics.read()) if self.ok else None
+
+
+class IntelGpu:
+    kind = 'i915'
+
+    def __init__(self, fs, card):
+        self.act = Src(fs.p(card + '/gt_act_freq_mhz'), 64)
+        rc6 = card + '/power/rc6_residency_ms'
+        if not fs.exists(rc6):
+            rc6 = card + '/gt/gt0/rc6_residency_ms'
+        self.rc6 = Src(fs.p(rc6), 64) if fs.exists(rc6) else None
+        self.max_mhz = fs.int(card + '/gt_RP0_freq_mhz') or fs.int(card + '/gt_max_freq_mhz')
+
+
+class EcFans:
+    """Fans of the Sixunited AXB35 EC driver (ec_su_axb35). Each read is an EC transaction (~3 ms, sleeps)."""
+
+    def __init__(self, fs):
+        self.fans = []
+        for d in fs.glob('/sys/class/ec_su_axb35/fan[0-9]*'):
+            n = re.search(r'fan(\d+)$', d)
+            if not n or not fs.exists(d + '/rpm'):
+                continue
+            duty = Src(fs.p(d + '/duty'), 64) if fs.exists(d + '/duty') else None
+            self.fans.append(('Fan ' + n.group(1), Src(fs.p(d + '/rpm'), 64), duty))
+        self.fans.sort(key=lambda f: int(f[0].split()[1]))
+
+    def read(self):
+        return [{'label': label, 'rpm': rpm.int(), 'duty': duty.int() if duty else None}
+                for label, rpm, duty in self.fans]
+
+    def empty(self):
+        return [{'label': label, 'rpm': None, 'duty': None} for label, _, _ in self.fans]
+
+
+# ---------------------------------------------------------------------------------------------- host
+
+def r1(x):
+    return None if x is None else round(x, 1)
+
+
+def r2(x):
+    return None if x is None else round(x, 2)
+
+
+class Host:
+    def __init__(self, fs, role, interval_ms, engine_unit=None, name=None):
+        self.fs, self.role, self.interval_ms, self.engine_unit = fs, role, interval_ms, engine_unit
+        self.name = name or socket.gethostname().split('.')[0]
+        self.stat = Src(fs.p('/proc/stat'), 65536)
+        self.meminfo = Src(fs.p('/proc/meminfo'), 8192)
+        self.ncpu = self._count_cpus()
+        self.freq = [Src(fs.p(f'/sys/devices/system/cpu/cpu{i}/cpufreq/scaling_cur_freq'), 64)
+                     for i in range(self.ncpu)]
+        self.cpu_model, self.cores, self.threads = self._cpuinfo()
+        # amd-pstate(-epp): for a CPU without a fresh APERF/MPERF tick sample (idle >20 ms) the kernel reports
+        # policy->cur, which is scaling_min_freq, instead of a measurement. Treat exactly that value as unknown.
+        drv = (fs.text('/sys/devices/system/cpu/cpu0/cpufreq/scaling_driver') or '').strip()
+        self.freq_fallback = [fs.int(f'/sys/devices/system/cpu/cpu{i}/cpufreq/scaling_min_freq')
+                              for i in range(self.ncpu)] if drv.startswith('amd-pstate') else None
+        maxes = [fs.int(f'/sys/devices/system/cpu/cpu{i}/cpufreq/cpuinfo_max_freq') for i in range(self.ncpu)]
+        maxes = [m for m in maxes if m]
+        self.cpu_max_mhz = max(maxes) // 1000 if maxes else None
+        self.cpu_temp = self._cpu_temp()
+        self.gpu, self.gpu_name = self._gpu()
+        self.fans = EcFans(fs)
+        self.groups = {}       # name -> PerfGroup (defined; opened while the sampler runs)
+        self._define_perf()
+        self.perf_ok = self._probe_perf()
+        self.perf_open = False
+        self.perf_gen = 0
+
+    # -- detection
+    def _count_cpus(self):
+        data = self.fs.text('/proc/stat') or ''
+        n = len(re.findall(r'^cpu\d+\s', data, re.M))
+        return n or (os.cpu_count() or 1)
+
+    def _cpuinfo(self):
+        data = self.fs.text('/proc/cpuinfo') or ''
+        model = None
+        cores = set()
+        threads = 0
+        phys = core = None
+        for line in data.splitlines() + ['']:
+            k, _, v = line.partition(':')
+            k, v = k.strip(), v.strip()
+            if k == 'processor':
+                threads += 1
+            elif k == 'model name' and model is None:
+                model = v
+            elif k == 'physical id':
+                phys = v
+            elif k == 'core id':
+                core = v
+            elif not line.strip() and core is not None:
+                cores.add((phys, core))
+                phys = core = None
+        threads = threads or self.ncpu
+        return model, len(cores) or threads, threads
+
+    def _cpu_temp(self):
+        fs = self.fs
+        for h in fs.glob('/sys/class/hwmon/hwmon*'):
+            name = (fs.text(h + '/name') or '').strip()
+            if name == 'k10temp' and fs.exists(h + '/temp1_input'):
+                return Src(fs.p(h + '/temp1_input'), 64)
+            if name == 'coretemp':
+                for lab in fs.glob(h + '/temp*_label'):
+                    if (fs.text(lab) or '').strip().startswith('Package id'):
+                        return Src(fs.p(lab[:-len('_label')] + '_input'), 64)
+        for z in fs.glob('/sys/class/thermal/thermal_zone*'):
+            if (fs.text(z + '/type') or '').strip() == 'x86_pkg_temp':
+                return Src(fs.p(z + '/temp'), 64)
+        return None
+
+    def _gpu(self):
+        fs = self.fs
+        for card in fs.glob('/sys/class/drm/card*'):
+            if not re.search(r'/card\d+$', card):
+                continue
+            drv = os.path.basename(fs.readlink(card + '/device/driver') or '')
+            if drv == 'amdgpu' and fs.exists(card + '/device/gpu_metrics'):
+                g = AmdGpu(fs, card + '/device')
+                if g.ok:
+                    return g, gpu_display_name(fs, card + '/device', 'amdgpu', self.cpu_model)
+            if drv == 'i915' and fs.exists(card + '/gt_act_freq_mhz'):
+                return IntelGpu(fs, card), gpu_display_name(fs, card + '/device', 'i915', self.cpu_model)
+        return None, None
+
+    def _define_perf(self):
+        fs = self.fs
+        try:  # Strix Halo data fabric: DRAM channels 0,4,8,12 (of 16) per direction, 64 B per beat, x4
+            ev = [(f'rd{n}', f'event={0x1f + 0x40 * n},umask=0xffe', 256.0) for n in (0, 4, 8, 12)]
+            ev += [(f'wr{n}', f'event={0x1f + 0x40 * n},umask=0x7ff', 256.0) for n in (0, 4, 8, 12)]
+            if self.gpu is not None and self.gpu.kind == 'amdgpu':
+                self.groups['df'] = PerfGroup(fs, 'amd_df', ev)
+        except PerfUnavailable:
+            pass
+        try:  # Intel client IMC: free-running 64-byte line counters
+            self.groups['imc'] = PerfGroup(fs, 'uncore_imc', [
+                ('rd', pmu_event(fs, 'uncore_imc', 'data_reads')[0], 64.0),
+                ('wr', pmu_event(fs, 'uncore_imc', 'data_writes')[0], 64.0)])
+        except PerfUnavailable:
+            pass
+        if self.gpu is None or self.gpu.kind != 'amdgpu':
+            evs = []
+            for label, name in (('pkg', 'energy-pkg'), ('ram', 'energy-ram'),
+                                ('cores', 'energy-cores'), ('gpu', 'energy-gpu')):
+                try:
+                    spec, scale = pmu_event(fs, 'power', name)
+                    evs.append((label, spec, scale))
+                except PerfUnavailable:
+                    pass
+            if any(e[0] == 'pkg' for e in evs):
+                try:
+                    self.groups['rapl'] = PerfGroup(fs, 'power', evs)
+                except PerfUnavailable:
+                    pass
+        if self.gpu is not None and self.gpu.kind == 'i915':
+            try:
+                self.groups['i915'] = PerfGroup(fs, 'i915', [('rcs0', pmu_event(fs, 'i915', 'rcs0-busy')[0], 1.0)])
+            except PerfUnavailable:
+                pass
+
+    def _probe_perf(self):
+        ok = {}
+        for name, g in list(self.groups.items()):
+            ok[name] = g.open()
+            g.close()
+            if not ok[name]:
+                del self.groups[name]
+        return bool(ok) and any(ok.values())
+
+    def open_perf(self):
+        if not self.perf_open:
+            for g in self.groups.values():
+                g.open()
+            self.perf_open = True
+            self.perf_gen += 1
+
+    def close_perf(self):
+        for g in self.groups.values():
+            g.close()
+        self.perf_open = False
+
+    # -- static info
+    def sources(self):
+        gpu_busy = None
+        if self.gpu is not None:
+            gpu_busy = 'activity' if self.gpu.kind == 'amdgpu' else (
+                'pmu' if 'i915' in self.groups else ('awake' if self.gpu.rc6 else None))
+        power = 'socket' if (self.gpu is not None and self.gpu.kind == 'amdgpu') else (
+            'rapl' if 'rapl' in self.groups else None)
+        bw = 'amd_df' if 'df' in self.groups else ('uncore_imc' if 'imc' in self.groups else None)
+        return {'perf': self.perf_ok, 'bandwidth': bw, 'power': power, 'gpuBusy': gpu_busy}
+
+    def info(self):
+        osr = self.fs.text('/etc/os-release') or ''
+        m = re.search(r'^PRETTY_NAME="?(.*?)"?$', osr, re.M)
+        src = self.sources()
+        power_label = {'socket': 'APU socket power', 'rapl': 'CPU package + DRAM (RAPL)'}.get(src['power'])
+        return {
+            'hostd': API_VERSION,
+            'hostname': self.name,
+            'role': self.role,
+            'os': m.group(1) if m else None,
+            'kernel': (self.fs.text('/proc/sys/kernel/osrelease') or os.uname().release).strip(),
+            'intervalMs': self.interval_ms,
+            'cpu': {'model': self.cpu_model, 'cores': self.cores, 'threads': self.threads, 'maxMhz': self.cpu_max_mhz},
+            'gpu': {'name': self.gpu_name, 'maxMhz': self.gpu.max_mhz} if self.gpu is not None else None,
+            'memory': {'totalBytes': self._meminfo().get('MemTotal', 0) * 1024},
+            'sources': src,
+            'power': {'label': power_label} if power_label else None,
+            'engine': {'unit': self.engine_unit} if self.engine_unit else None,
+        }
+
+    # -- readings
+    def _meminfo(self):
+        out = {}
+        for line in (self.meminfo.read() or b'').decode('ascii', 'replace').splitlines():
+            k, _, v = line.partition(':')
+            f = v.split()
+            if f:
+                try:
+                    out[k] = int(f[0])
+                except ValueError:
+                    pass
+        return out
+
+    def _stat(self):
+        agg, per = None, {}
+        for line in (self.stat.read() or b'').decode('ascii', 'replace').splitlines():
+            if not line.startswith('cpu'):
+                continue
+            f = line.split()
+            try:
+                v = [int(x) for x in f[1:9]]
+            except ValueError:
+                continue
+            v += [0] * (8 - len(v))
+            pair = (sum(v), v[3] + v[4])
+            if f[0] == 'cpu':
+                agg = pair
+            else:
+                per[int(f[0][3:])] = pair
+        return agg, per
+
+    def read(self):
+        raw = {'mono': time.monotonic(), 't': now_ms(), 'gen': self.perf_gen}
+        raw['agg'], raw['per'] = self._stat()
+        raw['freq'] = [s.int() for s in self.freq]
+        raw['mem'] = self._meminfo()
+        raw['temp'] = self.cpu_temp.int() if self.cpu_temp else None
+        g = self.gpu
+        if g is not None and g.kind == 'amdgpu':
+            raw['gm'] = g.read()
+            raw['vram'] = g.vram_used.int()
+        elif g is not None:
+            raw['act'] = g.act.int()
+            raw['rc6'] = g.rc6.int() if g.rc6 else None
+        for name, grp in self.groups.items():
+            raw['perf_' + name] = grp.read()
+        return raw
+
+    def compute(self, prev, cur, fans=None):
+        if prev is not None and prev.get('gen') != cur.get('gen'):
+            prev = None
+        dt = cur['mono'] - prev['mono'] if prev else None
+        n = self.ncpu
+
+        # CPU usage and clocks
+        usage = None
+        core_usage = [None] * n
+        if prev and prev['agg'] and cur['agg']:
+            dtot, didle = cur['agg'][0] - prev['agg'][0], cur['agg'][1] - prev['agg'][1]
+            usage = r1(100.0 * (dtot - didle) / dtot) if dtot > 0 else None
+            for i in range(n):
+                a, b = prev['per'].get(i), cur['per'].get(i)
+                if a and b and b[0] > a[0]:
+                    core_usage[i] = r1(min(100.0, max(0.0, 100.0 * ((b[0] - a[0]) - (b[1] - a[1])) / (b[0] - a[0]))))
+        core_mhz = [None] * n
+        wsum = wmhz = 0.0
+        peak = None
+        for i in range(n):
+            f = cur['freq'][i] if i < len(cur['freq']) else None
+            u = core_usage[i]
+            if f and self.freq_fallback and f == self.freq_fallback[i]:
+                f = None
+            if f and u is not None and u > BUSY_PCT:
+                mhz = round(f / 1000)
+                core_mhz[i] = mhz
+                wsum += u
+                wmhz += u * mhz
+                peak = mhz if peak is None else max(peak, mhz)
+        cpu_mhz = round(wmhz / wsum) if wsum > 0 else None
+        temp = r2(cur['temp'] / 1000.0) if cur.get('temp') is not None else None
+
+        # perf-based rates
+        def rates(name):
+            grp = self.groups.get(name)
+            return perf_rates(grp, prev.get('perf_' + name) if prev else None, cur.get('perf_' + name), dt)
+
+        rapl = rates('rapl')
+        rapl_d = dict(zip(self.groups['rapl'].labels, rapl)) if rapl else {}
+
+        cpu_power = gpu_block = None
+        watts = None
+        parts = {'gpu': None, 'cpu': None, 'dram': None}
+        throttling = None
+        g = self.gpu
+        if g is not None and g.kind == 'amdgpu':
+            gm = cur.get('gm')
+            if gm:
+                act = gm['average_gfx_activity']
+                gpu_block = {
+                    'usage': act if act is not None and act <= 100 else None,
+                    'mhz': gm['average_gfxclk_frequency'],
+                    'tempC': r2(gm['temperature_gfx'] / 100.0) if gm['temperature_gfx'] is not None else None,
+                    'powerW': r2(gm['average_gfx_power'] / 1000.0) if gm['average_gfx_power'] is not None else None,
+                }
+                cpu_power = r2(gm['average_all_core_power'] / 1000.0) if gm['average_all_core_power'] is not None else None
+                watts = r2(gm['average_socket_power'] / 1000.0) if gm['average_socket_power'] is not None else None
+                parts = {'gpu': gpu_block['powerW'], 'cpu': cpu_power, 'dram': None}
+                pg = prev.get('gm') if prev else None
+                if pg:
+                    throttling = any(c > p for p, c in zip(pg['throttle'], gm['throttle']))
+            else:
+                gpu_block = {'usage': None, 'mhz': None, 'tempC': None, 'powerW': None}
+            gpu_block['memUsedBytes'] = cur.get('vram')
+            gpu_block['memTotalBytes'] = g.vram_total
+        elif g is not None:
+            busy = None
+            i915 = rates('i915')
+            if i915:
+                busy = r1(min(100.0, i915[0] / 1e9 * 100.0))
+            elif prev and cur.get('rc6') is not None and prev.get('rc6') is not None and dt:
+                idle_ms = cur['rc6'] - prev['rc6']
+                busy = r1(min(100.0, max(0.0, 100.0 - 100.0 * idle_ms / (dt * 1000.0))))
+            gpu_block = {'usage': busy, 'mhz': cur.get('act'), 'tempC': temp,
+                         'powerW': r2(rapl_d.get('gpu')), 'memUsedBytes': None, 'memTotalBytes': None}
+        if g is None or g.kind != 'amdgpu':
+            cpu_power = r2(rapl_d.get('cores'))
+            if 'pkg' in rapl_d:
+                watts = r2(rapl_d['pkg'] + rapl_d.get('ram', 0.0))
+            parts = {'gpu': r2(rapl_d.get('gpu')), 'cpu': cpu_power, 'dram': r2(rapl_d.get('ram'))}
+
+        bw = rates('df')
+        if bw:
+            read_bps, write_bps = int(sum(bw[:4])), int(sum(bw[4:]))
+        else:
+            imc = rates('imc')
+            read_bps, write_bps = (int(imc[0]), int(imc[1])) if imc else (None, None)
+
+        mem = cur['mem']
+        total = mem.get('MemTotal', 0) * 1024
+        avail = mem.get('MemAvailable', 0) * 1024
+        gpu_bytes = mem['GPUActive'] * 1024 if ('GPUActive' in mem and g is not None and g.kind == 'amdgpu') else None
+        return {
+            't': cur['t'],
+            'cpu': {'usage': usage, 'mhz': cpu_mhz, 'mhzPeak': peak, 'tempC': temp, 'powerW': cpu_power,
+                    'coreUsage': core_usage, 'coreMhz': core_mhz},
+            'gpu': gpu_block,
+            'memory': {'totalBytes': total, 'availableBytes': avail, 'usedBytes': max(0, total - avail),
+                       'gpuBytes': gpu_bytes,
+                       'swapTotalBytes': mem.get('SwapTotal', 0) * 1024,
+                       'swapUsedBytes': max(0, mem.get('SwapTotal', 0) - mem.get('SwapFree', 0)) * 1024,
+                       'readBps': read_bps, 'writeBps': write_bps},
+            'power': {'watts': watts, 'parts': parts},
+            'fans': fans if fans is not None else self.fans.empty(),
+            'throttling': throttling,
+        }
+
+
+# ------------------------------------------------------------------------------------------- sampler
+
+class Sampler:
+    """One shared sampling thread; runs only while a stream is open or for a few seconds after /v1/sample."""
+
+    def __init__(self, host, interval_s, keepalive=KEEPALIVE_AFTER_SAMPLE, perf_linger=PERF_LINGER,
+                 fan_period=FAN_PERIOD, max_streams=MAX_STREAMS):
+        self.host, self.interval = host, interval_s
+        self.keepalive, self.perf_linger, self.fan_period, self.max_streams = keepalive, perf_linger, fan_period, max_streams
+        self.cond = threading.Condition()
+        self.streams = 0
+        self.keep_until = 0.0
+        self.latest = None
+        self.latest_mono = 0.0
+        self.seq = 0
+        self.fan_values = None
+        self.stopping = False
+        self.samples_taken = 0
+        self._thread = threading.Thread(target=self._run, name='sampler', daemon=True)
+        self._fan_thread = threading.Thread(target=self._fans, name='fans', daemon=True) if host.fans.fans else None
+
+    def start(self):
+        self._thread.start()
+        if self._fan_thread:
+            self._fan_thread.start()
+
+    def stop(self):
+        with self.cond:
+            self.stopping = True
+            self.cond.notify_all()
+
+    def _active(self):
+        return self.streams > 0 or time.monotonic() < self.keep_until
+
+    def add_stream(self):
+        with self.cond:
+            if self.streams >= self.max_streams:
+                return False
+            self.streams += 1
+            self.cond.notify_all()
+            return True
+
+    def remove_stream(self):
+        with self.cond:
+            self.streams = max(0, self.streams - 1)
+            self.cond.notify_all()
+
+    def touch(self):
+        with self.cond:
+            self.keep_until = max(self.keep_until, time.monotonic() + self.keepalive)
+            self.cond.notify_all()
+
+    def wait_newer(self, seq, timeout):
+        """Newest sample with a sequence number above seq -> (seq, sample), or (seq, None) on timeout."""
+        deadline = time.monotonic() + timeout
+        with self.cond:
+            while (self.seq <= seq or self.latest is None) and not self.stopping:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    return seq, None
+                self.cond.wait(left)
+            return (self.seq, self.latest) if self.latest is not None else (seq, None)
+
+    def current(self, timeout=3.0):
+        """A fresh sample for /v1/sample: the latest if recent, else the next one."""
+        self.touch()
+        with self.cond:
+            fresh = self.latest is not None and time.monotonic() - self.latest_mono < 1.5 * self.interval
+            if fresh:
+                return self.latest
+            seq = self.seq
+        return self.wait_newer(seq, timeout)[1]
+
+    def _run(self):
+        prev = None
+        while True:
+            with self.cond:
+                idle_since = None
+                while not self._active() and not self.stopping:
+                    prev = None
+                    self.latest = None
+                    if self.host.perf_open:
+                        t = time.monotonic()
+                        if idle_since is None:
+                            idle_since = t
+                        left = idle_since + self.perf_linger - t
+                        if left <= 0:
+                            self.host.close_perf()
+                            continue
+                        self.cond.wait(left)
+                    else:
+                        self.cond.wait()
+                if self.stopping:
+                    return
+            t0 = time.monotonic()
+            try:
+                self.host.open_perf()
+                cur = self.host.read()
+                sample = self.host.compute(prev, cur, self.fan_values)
+                prev = cur
+            except Exception as e:  # never let one bad reading kill the sampler
+                log(f'sampler: {type(e).__name__}: {e}')
+                sample = None
+            with self.cond:
+                if sample is not None:
+                    self.latest, self.latest_mono = sample, time.monotonic()
+                    self.seq += 1
+                    self.samples_taken += 1
+                    self.cond.notify_all()
+                deadline = t0 + self.interval
+                while not self.stopping:
+                    left = deadline - time.monotonic()
+                    if left <= 0:
+                        break
+                    self.cond.wait(left)
+
+    def _fans(self):
+        while True:
+            with self.cond:
+                while not self._active() and not self.stopping:
+                    self.fan_values = None
+                    self.cond.wait()
+                if self.stopping:
+                    return
+            values = self.host.fans.read()
+            with self.cond:
+                self.fan_values = values
+                deadline = time.monotonic() + self.fan_period
+                while not self.stopping and self._active():
+                    left = deadline - time.monotonic()
+                    if left <= 0:
+                        break
+                    self.cond.wait(left)
+
+
+# -------------------------------------------------------------------------------------------- engine
+
+IMAGE_RE = re.compile(r'^(?P<repo>[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+)?'
+                      r'(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)+)@(?P<digest>sha256:[0-9a-f]{64})$')
+DIGEST_RE = re.compile(r'^sha256:[0-9a-f]{64}$')
+VERSION_RE = re.compile(r'^\d+\.\d+\.\d+$')
+IMAGE_LINE_RE = re.compile(r'^(\s*Image\s*=\s*)(.*?)(\s*)$')
+DOC_VERSION_RE = re.compile(r'/v(\d+\.\d+\.\d+)/')
+
+
+class ApiError(Exception):
+    def __init__(self, status, code, message):
+        super().__init__(message)
+        self.status, self.code, self.message = status, code, message
+
+
+class StepError(Exception):
+    pass
+
+
+def repository_of(image):
+    ref = image.split('@', 1)[0]
+    last = ref.rsplit('/', 1)
+    if ':' in last[-1]:
+        ref = ref[:len(ref) - len(last[-1])] + last[-1].split(':', 1)[0]
+    return ref
+
+
+def quadlet_image(text):
+    """-> (index of the Image= line, value); StepError unless exactly one Image= line."""
+    hits = [(i, IMAGE_LINE_RE.match(line.rstrip('\r\n')))
+            for i, line in enumerate(text.splitlines(keepends=True))
+            if re.match(r'^\s*Image\s*=', line)]
+    if len(hits) != 1:
+        raise StepError(f'quadlet must contain exactly one Image= line (found {len(hits)})')
+    i, m = hits[0]
+    return i, m.group(2)
+
+
+def quadlet_rewrite(text, image, version):
+    """Only the Image= value changes (plus a /vX.Y.Z/ Documentation= segment when version is given)."""
+    idx, _ = quadlet_image(text)
+    lines = text.splitlines(keepends=True)
+    line = lines[idx]
+    body = line.rstrip('\r\n')
+    ending = line[len(body):]
+    m = IMAGE_LINE_RE.match(body)
+    lines[idx] = m.group(1) + image + m.group(3) + ending
+    if version:
+        for i, l in enumerate(lines):
+            if re.match(r'^\s*Documentation\s*=', l):
+                lines[i] = DOC_VERSION_RE.sub('/v' + version + '/', l)
+    return ''.join(lines)
+
+
+def doc_version(text):
+    for line in text.splitlines():
+        if re.match(r'^\s*Documentation\s*=', line):
+            m = DOC_VERSION_RE.search(line)
+            if m:
+                return m.group(1)
+    return None
+
+
+def atomic_write(path, data, mode=None):
+    d, base = os.path.split(path)
+    if mode is None:
+        try:
+            mode = stat.S_IMODE(os.stat(path).st_mode)
+        except OSError:
+            mode = 0o644
+    fd, tmp = tempfile.mkstemp(prefix='.' + base + '.', suffix='.hostd-tmp', dir=d)
+    try:
+        with os.fdopen(fd, 'wb') as f:
+            f.write(data)
+            f.flush()
+            os.fchmod(f.fileno(), mode)
+            os.fsync(f.fileno())
+        os.rename(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    try:
+        dfd = os.open(d, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except OSError:
+        pass
+
+
+class Runner:
+    """Runs systemctl --user directly and podman only inside the engine user's systemd manager."""
+
+    PODMAN = ['systemd-run', '--user', '--wait', '--pipe', '--quiet', '--collect']
+
+    def podman(self, args, unit=None):
+        return self.PODMAN + ([f'--unit={unit}'] if unit else []) + ['podman'] + list(args)
+
+    def run(self, argv, timeout):
+        try:
+            p = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, timeout=timeout)
+            return p.returncode, p.stdout.decode('utf-8', 'replace'), p.stderr.decode('utf-8', 'replace')
+        except subprocess.TimeoutExpired:
+            return 124, '', f'timed out after {timeout:.0f} s'
+        except OSError as e:
+            return 127, '', str(e)
+
+    def stream(self, argv, on_line, timeout):
+        try:
+            p = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        except OSError as e:
+            on_line(str(e))
+            return 127
+        killer = threading.Timer(timeout, p.kill)
+        killer.daemon = True
+        killer.start()
+        try:
+            buf = b''
+            while True:
+                chunk = p.stdout.read1(4096) if hasattr(p.stdout, 'read1') else p.stdout.read(4096)
+                if not chunk:
+                    break
+                buf += chunk
+                *lines, buf = re.split(rb'[\r\n]', buf)
+                for line in lines:
+                    if line.strip():
+                        on_line(line.decode('utf-8', 'replace').rstrip())
+            if buf.strip():
+                on_line(buf.decode('utf-8', 'replace').rstrip())
+            return p.wait()
+        finally:
+            killer.cancel()
+
+
+class Job:
+    def __init__(self, kind, image, version):
+        self.id = secrets.token_hex(3)
+        self.kind, self.image, self.version = kind, image, version
+        self.phase, self.step = 'running', 'Starting'
+        self.log = deque(maxlen=200)
+        self.started_at, self.finished_at = now_ms(), None
+        self.error, self.rolled_back = None, False
+        self.cancel_requested = False
+        self.lock = threading.Lock()
+
+    def add(self, line):
+        with self.lock:
+            self.log.append(time.strftime('%H:%M:%S ') + line)
+
+    def set_step(self, step):
+        self.step = step
+        self.add(step)
+
+    def to_json(self):
+        with self.lock:
+            return {'id': self.id, 'kind': self.kind, 'image': self.image, 'version': self.version,
+                    'phase': self.phase, 'step': self.step, 'log': list(self.log),
+                    'startedAt': self.started_at, 'finishedAt': self.finished_at,
+                    'error': self.error, 'rolledBack': self.rolled_back}
+
+
+class Engine:
+    def __init__(self, unit, quadlet, url, state_dir, runner=None, ready_timeout=600.0, restart_timeout=900.0,
+                 poll=2.0, http_timeout=2.0, pull_timeout=3600.0):
+        self.unit, self.quadlet, self.url = unit, quadlet, url.rstrip('/')
+        self.stem = unit[:-len('.service')] if unit.endswith('.service') else unit
+        self.prev_path = os.path.join(state_dir, self.stem + '.container.prev')
+        self.state_dir = state_dir
+        self.runner = runner or Runner()
+        self.ready_timeout, self.restart_timeout = ready_timeout, restart_timeout
+        self.poll, self.http_timeout, self.pull_timeout = poll, http_timeout, pull_timeout
+        self.lock = threading.Lock()
+        self.job = None
+        self._images_cache = (0.0, None)
+        self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+    # -- helpers
+    def _read_quadlet(self):
+        try:
+            with open(self.quadlet, 'rb') as f:
+                return f.read().decode('utf-8', 'surrogateescape')
+        except OSError as e:
+            raise StepError(f'cannot read {self.quadlet}: {e.strerror}')
+
+    def _current(self):
+        text = self._read_quadlet()
+        _, image = quadlet_image(text)
+        return text, image
+
+    def _http(self, path):
+        try:
+            with self._opener.open(self.url + path, timeout=self.http_timeout) as r:
+                return r.status, r.read(65536)
+        except urllib.error.HTTPError as e:
+            return e.code, b''
+        except (OSError, ValueError):
+            return None, b''
+
+    def ready(self):
+        return self._http('/ready')[0] == 200
+
+    def build_info(self):
+        st, body = self._http('/props')
+        if st != 200:
+            return None
+        try:
+            v = json.loads(body).get('build_info')
+            return v if isinstance(v, str) else None
+        except (ValueError, AttributeError):
+            return None
+
+    def unit_state(self):
+        rc, out, _ = self.runner.run(['systemctl', '--user', 'show', self.unit, '-p', 'ActiveState', '-p', 'SubState'], 15)
+        props = dict(line.partition('=')[::2] for line in out.splitlines() if '=' in line)
+        state = props.get('ActiveState', '') if rc == 0 else ''
+        if state not in ('active', 'activating', 'deactivating', 'inactive', 'failed'):
+            state = 'unknown'
+        return state, (props.get('SubState') or None) if rc == 0 else None
+
+    def images(self, repository, fresh=False):
+        """Local images of repository, deduplicated by ID, newest first (podman listing cached 5 s)."""
+        t, cached = self._images_cache
+        if fresh or cached is None or time.monotonic() - t > STATUS_CACHE:
+            rc, out, err = self.runner.run(self.runner.podman(['images', '--format', 'json']), 60)
+            if rc != 0:
+                raise StepError(f'podman images failed: {err.strip() or rc}')
+            try:
+                cached = json.loads(out or '[]') or []
+            except ValueError:
+                raise StepError('podman images returned invalid JSON')
+            self._images_cache = (time.monotonic(), cached)
+        seen, result = set(), []
+        for im in cached:
+            iid = im.get('Id') or im.get('ID') or ''
+            if iid in seen:
+                continue
+            refs = list(im.get('RepoDigests') or [])
+            digests = [r.split('@', 1)[1] for r in refs if r.startswith(repository + '@')]
+            names = im.get('Names') or im.get('RepoTags') or []
+            if not digests and not any(n.startswith(repository + ':') or n.startswith(repository + '@') for n in names):
+                continue
+            seen.add(iid)
+            labels = im.get('Labels') or {}
+            rev = labels.get('org.gufo.engine.revision') or labels.get('org.opencontainers.image.revision')
+            created = im.get('Created')
+            # RepoDigests is sorted and, for a multi-arch image, also holds the platform manifest digest;
+            # podman's Digest field is the one the image was pulled by (the index digest a quadlet names).
+            primary = im.get('Digest')
+            result.append({'id': iid[:12], 'fullId': iid, 'digests': digests,
+                           'digest': primary if primary in digests else (digests[0] if digests else None),
+                           'version': labels.get('org.opencontainers.image.version') or None,
+                           'revision': None if not rev or rev == 'unknown' else rev,
+                           'createdAt': int(created) * 1000 if isinstance(created, (int, float)) else None,
+                           'sizeBytes': im.get('Size')})
+        result.sort(key=lambda x: x['createdAt'] or 0, reverse=True)
+        return result
+
+    def image_exists(self, image):
+        rc, _, _ = self.runner.run(self.runner.podman(['image', 'exists', image]), 60)
+        return rc == 0
+
+    def _previous_image(self):
+        try:
+            with open(self.prev_path, 'rb') as f:
+                text = f.read().decode('utf-8', 'surrogateescape')
+            return text, quadlet_image(text)[1]
+        except (OSError, StepError):
+            return None, None
+
+    # -- status
+    def status(self):
+        job = self.job
+        job_json = job.to_json() if job else None  # snapshot first: a finished job implies the quadlet below is final
+        text, image = self._current()
+        repo = repository_of(image)
+        cur_digest = image.split('@', 1)[1] if '@' in image else None
+        prev_text, prev_image = self._previous_image()
+        prev_digest = prev_image.split('@', 1)[1] if prev_image and '@' in prev_image else None
+        try:
+            imgs = self.images(repo)
+        except StepError as e:
+            log(f'engine: {e}')
+            imgs = []
+        cur_img = next((i for i in imgs if cur_digest and cur_digest in i['digests']), None)
+        prev_img = next((i for i in imgs if prev_digest and prev_digest in i['digests']), None)
+        out_images = []
+        for i in imgs:
+            digest = cur_digest if cur_img is i else (prev_digest if prev_img is i else i['digest'])
+            out_images.append({'id': i['id'], 'digest': digest, 'version': i['version'], 'revision': i['revision'],
+                               'createdAt': i['createdAt'], 'sizeBytes': i['sizeBytes'],
+                               'current': cur_img is i, 'previous': prev_img is i and cur_img is not i})
+        state, sub = self.unit_state()
+        ready = self.ready()
+        previous = None
+        if prev_image:
+            previous = {'image': prev_image, 'digest': prev_digest,
+                        'version': (prev_img or {}).get('version') or doc_version(prev_text)}
+        return {'unit': self.unit, 'quadlet': self.quadlet, 'repository': repo, 'image': image,
+                'digest': cur_digest if cur_img else None,
+                'version': cur_img['version'] if cur_img else None,
+                'revision': cur_img['revision'] if cur_img else None,
+                'state': state, 'subState': sub, 'ready': ready,
+                'buildInfo': self.build_info() if ready else None,
+                'previous': previous, 'images': out_images,
+                'job': job_json}
+
+    # -- jobs
+    def _validate(self, image):
+        if not isinstance(image, str) or not IMAGE_RE.match(image):
+            raise ApiError(400, 'invalid_image', 'image must be <repository>@sha256:<64 hex>')
+        try:
+            _, current = self._current()
+        except StepError as e:
+            raise ApiError(500, 'quadlet_invalid', str(e))
+        if IMAGE_RE.match(image).group('repo') != repository_of(current):
+            raise ApiError(400, 'wrong_repository', f'repository must be {repository_of(current)}')
+
+    def _start(self, job, target):
+        with self.lock:
+            if self.job is not None and self.job.phase == 'running':
+                raise ApiError(409, 'job_running', 'another engine job is running')
+            self.job = job
+            snapshot = job.to_json()
+        threading.Thread(target=self._wrap, args=(job, target), name='job-' + job.id, daemon=True).start()
+        return snapshot
+
+    def _busy(self):
+        with self.lock:
+            if self.job is not None and self.job.phase == 'running':
+                raise ApiError(409, 'job_running', 'another engine job is running')
+
+    def _wrap(self, job, target):
+        try:
+            target(job)
+        except StepError as e:
+            job.add(f'failed: {e}')
+            job.phase, job.error = 'failed', str(e)
+        except Exception as e:
+            job.add(f'internal error: {type(e).__name__}: {e}')
+            job.phase, job.error = 'failed', f'internal error: {e}'
+        finally:
+            self._images_cache = (0.0, None)
+            job.finished_at = now_ms()
+            if job.phase == 'running':
+                job.phase = 'succeeded'
+
+    def start_pull(self, image):
+        self._validate(image)
+        self._busy()
+        return self._start(Job('pull', image, None), lambda job: self._pull(job, image))
+
+    def _pull(self, job, image):
+        job.set_step(f'Pulling {image}')
+        rc = self.runner.stream(self.runner.podman(['pull', image], unit=f'portal-hostd-{job.id}'), job.add,
+                                self.pull_timeout)
+        if rc < 0:  # our timeout killed systemd-run; stop the transient unit as well
+            self.runner.run(['systemctl', '--user', 'stop', f'portal-hostd-{job.id}.service'], 60)
+        if job.cancel_requested:
+            job.phase, job.step, job.error = 'cancelled', 'Cancelled', 'cancelled by request'
+            job.add('cancelled')
+        elif rc != 0:
+            job.phase, job.error = 'failed', f'podman pull exited with status {rc}'
+            job.add(job.error)
+        elif not self.image_exists(image):
+            job.phase, job.error = 'failed', 'pull finished but the image is not present'
+        else:
+            job.set_step('Pulled')
+
+    def cancel(self):
+        job = self.job
+        if job is None or job.phase != 'running' or job.kind != 'pull':
+            return {'cancelled': False}
+        job.cancel_requested = True
+        rc, _, err = self.runner.run(['systemctl', '--user', 'stop', f'portal-hostd-{job.id}.service'], 60)
+        if rc != 0:
+            job.cancel_requested = False
+            job.add(f'cancel failed: {err.strip()}')
+            return {'cancelled': False}
+        return {'cancelled': True}
+
+    def start_apply(self, image, version):
+        self._validate(image)
+        if version is not None and (not isinstance(version, str) or not VERSION_RE.match(version)):
+            raise ApiError(400, 'invalid_version', 'version must be X.Y.Z or null')
+        self._busy()
+        if not self.image_exists(image):
+            raise ApiError(409, 'not_pulled', 'pull the image first')
+        return self._start(Job('apply', image, version), lambda job: self._apply(job, image, version, True))
+
+    def start_rollback(self):
+        self._busy()
+        prev_text, prev_image = self._previous_image()
+        try:
+            _, current = self._current()
+        except StepError as e:
+            raise ApiError(500, 'quadlet_invalid', str(e))
+        if not prev_image or prev_image == current:
+            raise ApiError(409, 'no_previous', 'no saved previous engine image')
+        if not self.image_exists(prev_image):
+            raise ApiError(409, 'not_pulled', f'the previous image {prev_image} is no longer local')
+        version = doc_version(prev_text)
+        return self._start(Job('rollback', prev_image, version),
+                           lambda job: self._apply(job, prev_image, version, False))
+
+    def _restart_and_verify(self, job, version, check_version):
+        job.set_step('Reloading systemd')
+        rc, _, err = self.runner.run(['systemctl', '--user', 'daemon-reload'], 120)
+        if rc != 0:
+            raise StepError(f'daemon-reload failed: {err.strip() or rc}')
+        job.set_step(f'Restarting {self.unit}')
+        rc, _, err = self.runner.run(['systemctl', '--user', 'restart', self.unit], self.restart_timeout)
+        if rc != 0:
+            raise StepError(f'restart failed: {err.strip() or rc}')
+        job.set_step('Waiting for /ready')
+        deadline = time.monotonic() + self.ready_timeout
+        while not self.ready():
+            if time.monotonic() > deadline:
+                raise StepError(f'/ready did not answer 200 within {self.ready_timeout:.0f} s')
+            time.sleep(self.poll)
+        if check_version and version:
+            job.set_step('Checking version')
+            info = self.build_info()
+            if not info or not info.startswith(version + ' '):
+                raise StepError(f'build_info is {info!r}, expected it to start with "{version} "')
+            job.add(f'build_info {info}')
+
+    def _apply(self, job, image, version, check_version):
+        job.set_step('Checking image')
+        if not self.image_exists(image):
+            raise StepError('image is not local')
+        try:
+            text = self._read_quadlet()
+            quadlet_image(text)
+        except StepError as e:
+            job.phase, job.error = 'failed', str(e)
+            job.add(str(e))
+            return
+        job.set_step('Saving current quadlet')
+        os.makedirs(self.state_dir, exist_ok=True)
+        try:
+            with open(self.prev_path, 'rb') as f:
+                saved_prev = f.read()
+        except FileNotFoundError:
+            saved_prev = None
+        atomic_write(self.prev_path, text.encode('utf-8', 'surrogateescape'), 0o600)
+        try:
+            job.set_step('Writing quadlet')
+            atomic_write(self.quadlet, quadlet_rewrite(text, image, version).encode('utf-8', 'surrogateescape'))
+            self._restart_and_verify(job, version, check_version)
+        except (StepError, OSError) as e:
+            job.add(f'failed: {e}')
+            job.set_step('Rolling back')
+            try:
+                atomic_write(self.quadlet, text.encode('utf-8', 'surrogateescape'))
+                self._restart_and_verify(job, None, False)
+                job.rolled_back = True
+                job.error = str(e)
+                job.add('rolled back to the previous quadlet')
+            except (StepError, OSError) as e2:
+                job.error = f'{e}; rollback failed too: {e2}'
+                job.add(f'rollback failed: {e2}')
+            # The new image never took over, so the previous version on record stays what it was (a later
+            # Roll back still reaches it).
+            try:
+                if saved_prev is None:
+                    os.remove(self.prev_path)
+                else:
+                    atomic_write(self.prev_path, saved_prev, 0o600)
+            except OSError as e3:
+                job.add(f'could not restore the saved previous quadlet: {e3}')
+            job.phase = 'failed'
+            return
+        job.set_step('Done')
+
+    def delete_image(self, digest):
+        if not isinstance(digest, str) or not DIGEST_RE.match(digest):
+            raise ApiError(400, 'invalid_image', 'digest must be sha256:<64 hex>')
+        self._busy()
+        try:
+            _, current = self._current()
+        except StepError as e:
+            raise ApiError(500, 'quadlet_invalid', str(e))
+        repo = repository_of(current)
+        cur_digest = current.split('@', 1)[1] if '@' in current else None
+        try:
+            imgs = self.images(repo, fresh=True)
+        except StepError as e:
+            raise ApiError(503, 'podman_failed', str(e))
+        target = next((i for i in imgs if digest in i['digests']), None)
+        if target is None:
+            raise ApiError(404, 'not_found', 'no such local image of the engine repository')
+        current_img = next((i for i in imgs if cur_digest and cur_digest in i['digests']), None)
+        if digest == cur_digest or (current_img is not None and current_img['fullId'] == target['fullId']):
+            raise ApiError(409, 'image_current', 'this is the engine image in use')
+        rc, out, err = self.runner.run(self.runner.podman(['rmi', f'{repo}@{digest}']), 300)
+        self._images_cache = (0.0, None)
+        if rc != 0:
+            raise ApiError(409, 'rmi_failed', (err or out).strip()[-500:] or f'podman rmi exited with {rc}')
+        return {'ok': True}
+
+
+# ---------------------------------------------------------------------------------------------- http
+
+class _DeadlineReader:
+    """Wraps rfile so the request line + headers (+ body) must arrive within HEADER_TIMEOUT in total."""
+
+    def __init__(self, raw, sock, deadline):
+        self.raw, self.sock, self.deadline = raw, sock, deadline
+
+    def _arm(self):
+        left = self.deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError('request headers too slow')
+        self.sock.settimeout(left)
+
+    def readline(self, *a):
+        self._arm()
+        return self.raw.readline(*a)
+
+    def read(self, *a):
+        self._arm()
+        return self.raw.read(*a)
+
+    def __getattr__(self, name):
+        return getattr(self.raw, name)
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    protocol_version = 'HTTP/1.1'
+    server_version = 'portal-hostd/1'
+    sys_version = ''
+    timeout = HEADER_TIMEOUT
+
+    def log_message(self, fmt, *args):
+        if os.environ.get('HOSTD_DEBUG'):
+            log('http: ' + fmt % args)
+
+    def handle_one_request(self):
+        raw = self.rfile
+        self.rfile = _DeadlineReader(raw, self.connection, time.monotonic() + HEADER_TIMEOUT)
+        try:
+            super().handle_one_request()
+        except (TimeoutError, socket.timeout):
+            self.close_connection = True
+        finally:
+            self.rfile = raw
+            try:
+                self.connection.settimeout(HEADER_TIMEOUT)
+            except OSError:
+                pass
+
+    # -- responses
+    def send_json(self, status, obj, extra=None):
+        body = json.dumps(obj, separators=(',', ':'), allow_nan=False).encode()
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Cache-Control', 'no-store')
+        for k, v in (extra or {}).items():
+            self.send_header(k, v)
+        self.end_headers()
+        if self.command != 'HEAD':
+            self.wfile.write(body)
+
+    def send_error_json(self, status, code, message, extra=None):
+        self.send_json(status, {'error': code, 'message': message}, extra)
+
+    def do_GET(self):
+        self.route('GET')
+
+    def do_POST(self):
+        self.route('POST')
+
+    def do_DELETE(self):
+        self.route('DELETE')
+
+    def do_PUT(self):
+        self.route('PUT')
+
+    def do_PATCH(self):
+        self.route('PATCH')
+
+    def body_json(self):
+        if 'chunked' in (self.headers.get('Transfer-Encoding') or '').lower():
+            self.close_connection = True
+            raise ApiError(411, 'length_required', 'send a Content-Length body')
+        try:
+            n = int(self.headers.get('Content-Length') or 0)
+        except ValueError:
+            raise ApiError(400, 'bad_request', 'invalid Content-Length')
+        if n > MAX_BODY:
+            self.close_connection = True
+            raise ApiError(413, 'body_too_large', f'request bodies are limited to {MAX_BODY} bytes')
+        data = self.rfile.read(n) if n > 0 else b''
+        if not data.strip():
+            return {}
+        try:
+            obj = json.loads(data)
+        except ValueError:
+            raise ApiError(400, 'invalid_json', 'body is not valid JSON')
+        if not isinstance(obj, dict):
+            raise ApiError(400, 'invalid_json', 'body must be a JSON object')
+        return obj
+
+    def route(self, method):
+        app = self.server.app
+        path = self.path.split('?', 1)[0]
+        try:
+            if method in ('POST', 'PUT', 'PATCH', 'DELETE'):
+                body = self.body_json()  # always consume the body (keep-alive safety, size limit)
+            else:
+                body = {}
+            self.connection.settimeout(HEADER_TIMEOUT)  # writes (and stalled stream consumers) get 10 s each
+            if path == '/v1/health':
+                if method != 'GET':
+                    raise ApiError(405, 'method_not_allowed', 'use GET')
+                return self.send_json(200, {'ok': True})
+            if not app.authorized(self.headers.get('Authorization')):
+                return self.send_error_json(401, 'unauthorized', 'missing or wrong bearer token',
+                                            {'WWW-Authenticate': 'Bearer'})
+            routes = {
+                ('GET', '/v1/info'): lambda: self.send_json(200, app.info()),
+                ('GET', '/v1/sample'): self.get_sample,
+                ('GET', '/v1/stream'): self.get_stream,
+                ('GET', '/v1/engine'): lambda: self.send_json(200, app.need_engine().status()),
+                ('POST', '/v1/engine/pull'): lambda: self.send_json(202, app.need_engine().start_pull(body.get('image'))),
+                ('POST', '/v1/engine/apply'): lambda: self.send_json(
+                    202, app.need_engine().start_apply(body.get('image'), body.get('version'))),
+                ('POST', '/v1/engine/rollback'): lambda: self.send_json(202, app.need_engine().start_rollback()),
+                ('POST', '/v1/engine/cancel'): lambda: self.send_json(200, app.need_engine().cancel()),
+            }
+            fn = routes.get((method, path))
+            if fn is not None:
+                return fn()
+            if path.startswith('/v1/engine/images/'):
+                if method != 'DELETE':
+                    raise ApiError(405, 'method_not_allowed', 'use DELETE')
+                digest = urllib.parse.unquote(path[len('/v1/engine/images/'):])
+                return self.send_json(200, app.need_engine().delete_image(digest))
+            if any(p == path for _, p in routes):
+                raise ApiError(405, 'method_not_allowed', f'{method} is not allowed here')
+            raise ApiError(404, 'not_found', 'no such endpoint')
+        except ApiError as e:
+            self.send_error_json(e.status, e.code, e.message)
+        except StepError as e:
+            self.send_error_json(500, 'quadlet_invalid', str(e))
+        except (BrokenPipeError, ConnectionResetError, TimeoutError, socket.timeout):
+            self.close_connection = True
+        except Exception as e:
+            log(f'http: {method} {path}: {type(e).__name__}: {e}')
+            try:
+                self.send_error_json(500, 'internal', f'{type(e).__name__}')
+            except OSError:
+                self.close_connection = True
+
+    def get_sample(self):
+        s = self.server.app.sampler.current()
+        if s is None:
+            raise ApiError(503, 'no_sample', 'no sample available yet')
+        self.send_json(200, s)
+
+    def get_stream(self):
+        app = self.server.app
+        if not app.sampler.add_stream():
+            raise ApiError(429, 'too_many_streams', f'at most {MAX_STREAMS} streams')
+        try:
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/event-stream')
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('Connection', 'close')
+            self.send_header('X-Accel-Buffering', 'no')
+            self.end_headers()
+            self.close_connection = True
+            self.wfile.write(b'event: info\ndata: ' + json.dumps(app.info(), separators=(',', ':')).encode() + b'\n\n')
+            seq = 0
+            while not app.sampler.stopping:
+                seq2, sample = app.sampler.wait_newer(seq, PING_EVERY)
+                if sample is None:
+                    self.wfile.write(b': ping\n\n')
+                else:
+                    seq = seq2
+                    self.wfile.write(b'event: sample\ndata: ' +
+                                     json.dumps(sample, separators=(',', ':'), allow_nan=False).encode() + b'\n\n')
+        except (BrokenPipeError, ConnectionResetError, TimeoutError, socket.timeout, OSError):
+            pass
+        finally:
+            app.sampler.remove_stream()
+
+
+class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
+    daemon_threads = True
+    block_on_close = False
+    allow_reuse_address = True
+    request_queue_size = 32
+
+    def __init__(self, addr, app, max_connections=MAX_CONNECTIONS):
+        self.address_family = socket.AF_INET6 if ':' in addr[0] else socket.AF_INET
+        self.app = app
+        self.slots = threading.BoundedSemaphore(max_connections)
+        super().__init__(addr, Handler)
+
+    def process_request(self, request, client_address):
+        if not self.slots.acquire(blocking=False):
+            body = b'{"error":"too_many_connections","message":"connection limit reached"}'
+            try:
+                request.settimeout(1)
+                request.sendall(b'HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\n'
+                                b'Connection: close\r\nContent-Length: ' + str(len(body)).encode() + b'\r\n\r\n' + body)
+            except OSError:
+                pass
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self.slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.slots.release()
+
+
+class App:
+    def __init__(self, host, sampler, token, engine=None):
+        self.host, self.sampler, self.engine = host, sampler, engine
+        self.token = token.encode()
+        self._info = None
+
+    def authorized(self, header):
+        if not header or not header.startswith('Bearer '):
+            return False
+        return hmac.compare_digest(header[7:].strip().encode(), self.token)
+
+    def info(self):
+        if self._info is None:
+            self._info = self.host.info()
+        return self._info
+
+    def need_engine(self):
+        if self.engine is None:
+            raise ApiError(404, 'no_engine', 'this host has no engine control')
+        return self.engine
+
+
+# ---------------------------------------------------------------------------------------------- main
+
+def load_token():
+    cred = os.environ.get('CREDENTIALS_DIRECTORY')
+    path = os.path.join(cred, 'token') if cred else os.environ.get('HOSTD_TOKEN_FILE')
+    if not path:
+        raise SystemExit('portal-hostd: no token (LoadCredential=token:... or HOSTD_TOKEN_FILE)')
+    try:
+        with open(path, encoding='utf-8') as f:
+            token = f.read().strip()
+    except OSError as e:
+        raise SystemExit(f'portal-hostd: cannot read token {path}: {e.strerror}')
+    if len(token) < 32 or any(c.isspace() for c in token):
+        raise SystemExit('portal-hostd: the token must be at least 32 characters without whitespace')
+    return token
+
+
+def config(env):
+    role = env.get('ROLE', 'portal').strip()
+    if role not in ('portal', 'llm'):
+        raise SystemExit(f'portal-hostd: ROLE must be portal or llm, not {role!r}')
+    bind = env.get('BIND', '127.0.0.1' if role == 'portal' else '0.0.0.0').strip()
+    try:
+        port = int(env.get('PORT', DEFAULT_PORT))
+        interval = int(env.get('INTERVAL_MS', 500))
+    except ValueError:
+        raise SystemExit('portal-hostd: PORT and INTERVAL_MS must be integers')
+    if not 1 <= port <= 65535:
+        raise SystemExit('portal-hostd: PORT out of range')
+    if not 250 <= interval <= 5000:
+        raise SystemExit('portal-hostd: INTERVAL_MS must be within 250..5000')
+    unit = env.get('ENGINE_UNIT', '').strip() if role == 'llm' else ''
+    if unit and not unit.endswith('.service'):
+        unit += '.service'
+    home = pwd.getpwuid(os.getuid()).pw_dir
+    stem = unit[:-len('.service')] if unit else ''
+    quadlet = env.get('ENGINE_QUADLET', '').strip() or (
+        os.path.join(home, '.config/containers/systemd', stem + '.container') if unit else '')
+    return {'role': role, 'bind': bind, 'port': port, 'interval_ms': interval, 'engine_unit': unit,
+            'engine_quadlet': os.path.expanduser(quadlet), 'engine_url': env.get('ENGINE_URL', '').strip() or 'http://127.0.0.1:8080',
+            'state_dir': env.get('HOSTD_STATE_DIR', '').strip() or os.path.join(home, '.local/state/portal-hostd'),
+            'root': env.get('HOSTD_ROOT', ''), 'name': env.get('HOSTD_NAME', '').strip() or None}
+
+
+def sd_notify(msg):
+    addr = os.environ.get('NOTIFY_SOCKET')
+    if not addr:
+        return
+    if addr.startswith('@'):
+        addr = '\0' + addr[1:]
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as s:
+            s.sendto(msg.encode(), addr)
+    except OSError:
+        pass
+
+
+def build(cfg, token, runner=None):
+    host = Host(Fs(cfg['root']), cfg['role'], cfg['interval_ms'], cfg['engine_unit'] or None, cfg['name'])
+    sampler = Sampler(host, cfg['interval_ms'] / 1000.0)
+    engine = None
+    if cfg['engine_unit']:
+        engine = Engine(cfg['engine_unit'], cfg['engine_quadlet'], cfg['engine_url'], cfg['state_dir'], runner)
+    return App(host, sampler, token, engine)
+
+
+def main(argv):
+    cfg = config(os.environ)
+    if '--print-info' in argv or '--print-sample' in argv:
+        app = build(cfg, 'x' * 32)
+        if '--print-info' in argv:
+            print(json.dumps(app.info(), indent=1))
+        if '--print-sample' in argv:
+            app.host.open_perf()
+            a = app.host.read()
+            time.sleep(cfg['interval_ms'] / 1000.0)
+            print(json.dumps(app.host.compute(a, app.host.read(), app.host.fans.read()), indent=1))
+        return 0
+    token = load_token()
+    app = build(cfg, token)
+    if app.engine and not os.path.exists(app.engine.quadlet):
+        log(f'portal-hostd: warning: quadlet {app.engine.quadlet} does not exist')
+    server = Server((cfg['bind'], cfg['port']), app)
+    app.sampler.start()
+
+    def stop(signum, frame):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    src = app.host.sources()
+    log(f'portal-hostd: role={cfg["role"]} listening on {cfg["bind"]}:{cfg["port"]} interval={cfg["interval_ms"]}ms '
+        f'perf={src["perf"]} bandwidth={src["bandwidth"]} power={src["power"]} gpuBusy={src["gpuBusy"]} '
+        f'engine={cfg["engine_unit"] or "-"}')
+    sd_notify('READY=1')
+    try:
+        server.serve_forever(poll_interval=None)  # blocks in select() without periodic wakeups
+    except KeyboardInterrupt:
+        pass
+    finally:
+        sd_notify('STOPPING=1')
+        app.sampler.stop()
+        app.host.close_perf()
+        server.server_close()
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv[1:]))

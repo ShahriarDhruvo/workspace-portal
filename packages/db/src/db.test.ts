@@ -9,6 +9,12 @@ import { openDatabase, openForOwnershipChange, migrate } from "./db.ts";
 import { MIGRATIONS } from "./migrations.ts";
 import { users, sessions } from "./schema.ts";
 import { countSessionsUsingWorkspace, hashSessionToken, loadSessionContext, readCookie } from "./sessions.ts";
+import { usageDay } from "./usage-day.ts";
+
+test("usageDay is the local calendar day, zero-padded", () => {
+  assert.equal(usageDay(new Date(2026, 0, 5, 23, 59)), "2026-01-05");
+  assert.equal(usageDay(new Date(2026, 10, 18, 0, 1)), "2026-11-18");
+});
 
 function tempDb() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "portal-db-"));
