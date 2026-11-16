@@ -132,6 +132,11 @@ test("a failed restart reports hostd's rollback; a rollback swaps back; refusals
   const rolled = await done();
   assert.deepEqual([rolled!.kind, rolled!.stage, rolled!.fromVersion, rolled!.toVersion], ["rollback", "succeeded", "0.33.0", "0.31.0"]);
   assert.equal(host.version, "0.31.0");
+
+  // The previous image was removed since: refused before any drain.
+  host.local.delete(host.previous!);
+  await assert.rejects(updater.startRollback({ actorUserId: null }), (e) => e instanceof EngineRequestError && e.code === "not_pulled" && /0\.33\.0 image is no longer/.test(e.message));
+  assert.equal(queue.paused, false);
   assert.deepEqual(
     audits().map((a) => [a.action, a.details.kind, a.details.to, a.details.rolledBack ?? null]),
     [

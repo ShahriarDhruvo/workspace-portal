@@ -456,6 +456,9 @@ export function createMockLive(deps) {
       const down = unavailable();
       if (down) return [down.status, down];
       if (engine.previous === null) return [409, { error: "no_previous", message: "There is no previous engine version to go back to." }];
+      if (!engine.local.has(engine.previous)) {
+        return [409, { error: "not_pulled", message: `The ${engine.previous} image is no longer on the LLM server. Install ${engine.previous} from the list of versions instead.` }];
+      }
       if (engineBusy()) return [409, { error: "engine_job_running", message: "An engine update is running. Wait for it to finish, or cancel it." }];
       return [200, startEngineJob("rollback", engine.previous, body?.actorUserId ?? null)];
     }
@@ -477,7 +480,6 @@ export function createMockLive(deps) {
       if (version === undefined) return [404, { error: "not_found", message: "No such image." }];
       if (version === engine.version) return [409, { error: "image_current", message: "The engine runs this image." }];
       engine.local.delete(version);
-      if (engine.previous === version) engine.previous = null;
       return [200, { ok: true }];
     }
     return [405, { error: "method_not_allowed", message: "Not allowed." }];

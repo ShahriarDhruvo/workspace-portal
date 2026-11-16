@@ -203,6 +203,11 @@ export class EngineUpdater {
   async startRollback(request: { actorUserId: number | null }): Promise<EngineUpdateJob> {
     const { engine, host } = await this.#ready();
     if (engine.previous === null) throw new EngineRequestError("no_previous", "There is no previous engine version to go back to.");
+    // Refused now, not after a drain that held every new request: hostd would refuse at the restart.
+    if (!engine.images.some((image) => image.previous)) {
+      const version = engine.previous.version ?? "previous";
+      throw new EngineRequestError("not_pulled", `The ${version} image is no longer on the LLM server. Install ${version} from the list of versions instead.`);
+    }
     if (this.running) throw new EngineJobRunningError();
     const job = this.#begin("rollback", engine.version, engine.previous.version, engine.previous.image, request.actorUserId);
     void this.#run(job, host, { restart: () => host.rollback() });

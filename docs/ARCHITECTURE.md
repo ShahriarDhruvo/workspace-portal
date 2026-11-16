@@ -301,7 +301,7 @@ is updating that agent).
 
 Engine errors: 400 `invalid_version` (not X.Y.Z), `invalid_digest`, `invalid_actor`; 404
 `version_not_found` (the registry has no such tag), `not_found` (no such local image); 409 `already_current`,
-`no_previous` (nothing to roll back to), `engine_job_running` (one job at a time), `image_current`,
+`no_previous` (nothing to roll back to), `not_pulled` (the previous image was removed), `engine_job_running` (one job at a time), `image_current`,
 `job_running` (portal-hostd's own refusals); 429 `too_many_viewers` (the live view, 8 at once); 502
 `hostd_failed`; 503 `engine_unavailable` (no portal-hostd for the LLM server, it can't be reached, or it
 controls no engine).
@@ -313,7 +313,7 @@ Other error codes:
 * 405: `method_not_allowed`.
 * 401: `unauthorized`.
 * 409: `capacity`, `deleting`, `agent_mismatch`, `update_running`, `image_current`, `image_in_use`,
-  `already_current`, `no_previous`, `engine_job_running`, `job_running`.
+  `already_current`, `no_previous`, `not_pulled`, `engine_job_running`, `job_running`.
 * 429: `too_many_viewers`.
 * 500: `start_failed`, `stop_failed`, `internal`.
 * 502: `registry_unreachable`, `hostd_failed`.

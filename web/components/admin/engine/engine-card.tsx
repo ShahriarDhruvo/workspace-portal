@@ -139,7 +139,8 @@ export function EngineCard({ data, onChanged }: EngineCardProps) {
         // While a job runs its panel is the focus, and nothing else can start anyway.
         job && isEngineJobActive(job) ? null : (
           <>
-            {engine.previous ? (
+            {/* Rolling back reuses the previous image; once it's removed, Versions installs that version again. */}
+            {engine.previous && engine.images.some((image) => image.previous) ? (
               <GuardedButton
                 variant="outline"
                 blockedReason={blocked}
