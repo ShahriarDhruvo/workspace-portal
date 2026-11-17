@@ -1,5 +1,4 @@
-# portal-hostd: template. hostd/install.sh fills the @PLACEHOLDERS@ and installs it as
-# /etc/systemd/system/portal-hostd.service. Hardening notes: hostd/README.md.
+# Template: hostd/install.sh fills the @PLACEHOLDERS@ and installs it as /etc/systemd/system/portal-hostd.service.
 [Unit]
 Description=Portal host daemon (@ROLE@ role)
 Documentation=file:///usr/local/lib/portal-hostd/README.md
@@ -8,7 +7,7 @@ After=network-online.target@AFTER@
 
 [Service]
 Type=notify
-# Loaded as a module (not run as a script): that saves ~4.5 MB RSS of parser state.
+# Imported, not run as a script: only an import uses the bytecode that install.sh compiled.
 ExecStart=/usr/bin/python3 -I -c "import sys,importlib.util as u;s=u.spec_from_file_location('portal_hostd','/usr/local/lib/portal-hostd/portal-hostd.py');m=u.module_from_spec(s);s.loader.exec_module(m);sys.exit(m.main(sys.argv[1:]))"
 EnvironmentFile=/etc/portal-hostd/hostd.conf
 LoadCredential=token:/etc/portal-hostd/token

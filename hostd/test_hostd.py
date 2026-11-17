@@ -1276,7 +1276,6 @@ exit 0
     'ip': '#!/bin/bash\necho "$4 via 192.168.10.1 dev eth0 src 192.168.10.14 uid 0"\n',
     'restorecon': '#!/bin/bash\nexit 0\n',
     'journalctl': '#!/bin/bash\nexit 0\n',
-    'loginctl': '#!/bin/bash\necho yes\n',
 }
 
 
