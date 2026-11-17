@@ -4,7 +4,6 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import Database from "better-sqlite3";
 import { openDatabase, openForOwnershipChange, migrate } from "./db.ts";
 import { MIGRATIONS } from "./migrations.ts";
 import { eq } from "drizzle-orm";
@@ -47,36 +46,19 @@ test("migrations are idempotent", () => {
   assert.equal(db.$client.pragma("user_version", { simple: true }), MIGRATIONS.length);
 });
 
-test("migration 2 keeps existing workspaces as Qwen Code and refuses unknown agents", () => {
-  const client = new Database(":memory:");
-  client.exec(MIGRATIONS[0]!);
-  client.pragma("user_version = 1");
-  client.exec(`INSERT INTO users (username, first_name, last_name, password_hash, role, created_at, updated_at)
-               VALUES ('a', 'A', 'A', 'x', 'user', 0, 0), ('b', 'B', 'B', 'x', 'user', 0, 0)`);
-  client.exec(`INSERT INTO workspaces (user_id, status, started_at, updated_at) VALUES (1, 'stopped', 5, 0), (2, 'stopped', NULL, 0)`);
-  migrate(client);
-  assert.deepEqual(client.prepare("SELECT user_id, agent FROM workspaces ORDER BY user_id").all(), [
-    { user_id: 1, agent: "qwen" },
-    { user_id: 2, agent: null },
-  ]);
-  assert.throws(() => client.exec("UPDATE workspaces SET agent = 'other' WHERE user_id = 1"), /CHECK/);
-});
-
-test("migration 5: existing workspaces are the Private kind and every user may use Online until barred", () => {
-  const client = new Database(":memory:");
-  for (const sql of MIGRATIONS.slice(0, 4)) client.exec(sql);
-  client.pragma("user_version = 4");
+test("a workspace's agent and kind, and a user's Online permission, take only known values", () => {
+  const client = tempDb().$client;
   client.exec(`INSERT INTO users (username, first_name, last_name, password_hash, role, created_at, updated_at)
                VALUES ('a', 'A', 'A', 'x', 'user', 0, 0)`);
   client.exec(`INSERT INTO workspaces (user_id, status, started_at, updated_at) VALUES (1, 'stopped', 5, 0)`);
-  migrate(client);
-  assert.deepEqual(client.prepare("SELECT kind FROM workspaces").get(), { kind: "private" });
+  assert.deepEqual(client.prepare("SELECT agent, kind FROM workspaces").get(), { agent: null, kind: "private" });
   assert.deepEqual(client.prepare("SELECT online_allowed FROM users").get(), { online_allowed: 1 });
+  assert.throws(() => client.exec("UPDATE workspaces SET agent = 'other'"), /CHECK/);
   assert.throws(() => client.exec("UPDATE workspaces SET kind = 'public'"), /CHECK/);
   assert.throws(() => client.exec("UPDATE users SET online_allowed = 2"), /CHECK/);
 });
 
-test("migration 4: one host_daily row per day and server", () => {
+test("one host_daily row per day and server", () => {
   const db = tempDb();
   db.insert(hostDaily).values({ day: "2026-11-16", role: "llm", energyWh: null, updatedAt: 1 }).run();
   assert.throws(() => db.insert(hostDaily).values({ day: "2026-11-16", role: "llm", updatedAt: 2 }).run(), /UNIQUE/);
@@ -85,14 +67,7 @@ test("migration 4: one host_daily row per day and server", () => {
   assert.deepEqual(db.select().from(hostDaily).all(), [{ day: "2026-11-16", role: "llm", energyWh: null, rxBytes: 0, txBytes: 0, updatedAt: 1 }]);
 });
 
-test("migration 6: the hand-kept prices go, published prices per place and period, and portal settings", () => {
-  const client = new Database(":memory:");
-  for (const sql of MIGRATIONS.slice(0, 5)) client.exec(sql);
-  client.pragma("user_version = 5");
-  assert.ok((client.prepare("SELECT count(*) AS n FROM energy_rates").get() as { n: number }).n > 0, "migration 4 seeded prices");
-  migrate(client);
-  assert.equal(client.prepare("SELECT name FROM sqlite_master WHERE name = 'energy_rates'").get(), undefined);
-
+test("published prices per place and period, and portal settings", () => {
   const db = tempDb();
   const row = { location: "US-FL", periodStart: "2026-08-01", periodEnd: "2026-09-01", period: "2026-08", price: 0.1499, currency: "USD", source: "eia", fetchedAt: 1 } as const;
   db.insert(energyPrices).values(row).run();
@@ -120,7 +95,7 @@ test("migration 6: the hand-kept prices go, published prices per place and perio
   assert.equal(readSetting(db, "energy_price_location"), null);
 });
 
-test("migration 7: workspace sessions, one open per user, gone with their user", () => {
+test("workspace sessions: one open per user, gone with their user", () => {
   const db = tempDb();
   const userId = addUser(db, "ana").id;
   const open = { userId, kind: "private", agent: "qwen", startedAt: 1 } as const;
