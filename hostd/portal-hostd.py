@@ -66,19 +66,18 @@ class Fs:
     def p(self, path):
         return self.root + path
 
-    def text(self, path, default=None):
+    def text(self, path):
         try:
             with open(self.p(path), 'rb') as f:
                 return f.read().decode('utf-8', 'replace')
         except OSError:
-            return default
+            return None
 
-    def int(self, path, default=None):
-        t = self.text(path)
+    def int(self, path):
         try:
-            return int(t.strip(), 0) if t is not None else default
+            return int(self.text(path) or '', 0)
         except ValueError:
-            return default
+            return None
 
     def glob(self, pattern):
         n = len(self.root)
@@ -568,7 +567,6 @@ class Host:
         self.perf_gen = 0
         self._info = None
 
-    # -- detection
     def _cpuinfo(self):
         data = self.fs.text('/proc/cpuinfo') or ''
         model = None
@@ -659,7 +657,6 @@ class Host:
             g.close()
         self.perf_open = False
 
-    # -- static info
     def sources(self):
         groups = self.groups
         if self.amd:
@@ -705,7 +702,6 @@ class Host:
             'disks': {'devices': disks, 'mounts': mounts} if disks or mounts else None,
         }
 
-    # -- readings
     def _meminfo(self):
         out = {}
         for line in (self.meminfo.read() or b'').decode('ascii', 'replace').splitlines():
@@ -801,7 +797,7 @@ class Host:
                 busy, i915 = None, rates('i915')
                 if i915:
                     busy = r1(min(100.0, i915[0] / 1e9 * 100.0))
-                elif dt and cur['rc6'] is not None and prev['rc6'] is not None:     # else: the time not in RC6
+                elif dt and cur['rc6'] is not None and prev['rc6'] is not None:     # without the PMU: the time not in RC6
                     busy = r1(min(100.0, max(0.0, 100.0 - 100.0 * (cur['rc6'] - prev['rc6']) / (dt * 1000.0))))
                 gpu = {'usage': busy, 'mhz': cur['act'], 'tempC': temp, 'powerW': gpu_power,
                        'memUsedBytes': None, 'memTotalBytes': None}
@@ -1145,7 +1141,8 @@ def atomic_write(path, data, mode=None):
 
 
 class Runner:
-    """Runs systemctl --user directly and podman only inside the engine user's systemd manager."""
+    """Runs systemctl --user directly and podman only inside the engine user's systemd manager: under
+    NoNewPrivileges this service cannot run rootless podman's newuidmap itself."""
 
     PODMAN = ['systemd-run', '--user', '--wait', '--pipe', '--quiet', '--collect']
 
@@ -1229,7 +1226,6 @@ class Engine:
         self._images_cache = (0.0, None)
         self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
-    # -- helpers
     def _read_quadlet(self):
         try:
             with open(self.quadlet, 'rb') as f:
@@ -1324,7 +1320,6 @@ class Engine:
         except (OSError, StepError):
             return None, None
 
-    # -- status
     def status(self):
         job = self.job
         job_json = job.to_json() if job else None  # snapshot first: a finished job implies the quadlet below is final
@@ -1359,7 +1354,6 @@ class Engine:
                 'previous': previous, 'images': out_images,
                 'job': job_json}
 
-    # -- jobs
     def _validate(self, image):
         if not isinstance(image, str) or not IMAGE_RE.match(image):
             raise ApiError(400, 'invalid_image', 'image must be <repository>@sha256:<64 hex>')
@@ -1531,7 +1525,8 @@ class Engine:
 # ---------------------------------------------------------------------------------------------- http
 
 class _DeadlineReader:
-    """Wraps rfile so the request line + headers (+ body) must arrive within HEADER_TIMEOUT in total."""
+    """Stands in for rfile (http.server only calls these two) so that the request line, the headers and the
+    body must arrive within HEADER_TIMEOUT in total."""
 
     def __init__(self, raw, sock, deadline):
         self.raw, self.sock, self.deadline = raw, sock, deadline
@@ -1549,9 +1544,6 @@ class _DeadlineReader:
     def read(self, *a):
         self._arm()
         return self.raw.read(*a)
-
-    def __getattr__(self, name):
-        return getattr(self.raw, name)
 
 
 def compact(obj):

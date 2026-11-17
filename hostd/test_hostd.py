@@ -9,6 +9,7 @@ import os
 import shutil
 import socket
 import struct
+import subprocess
 import tempfile
 import threading
 import time
@@ -36,24 +37,13 @@ def write(root, path, data, mode='w'):
         f.write(data)
 
 
-def gpu_metrics_blob(gfx_temp=4950, soc_temp=5000, activity=0, dram_r=64, dram_w=15, socket_mw=7577,
-                     gfx_mw=38, core_mw=490, gfxclk=602, maxfreq=2900, throttle=(0, 10, 0, 0, 0, 0, 0),
-                     fmt=3, content=0):
+def gpu_metrics_blob(gfx_temp=4950, activity=0, socket_mw=7577, gfx_mw=38, core_mw=490, gfxclk=602,
+                     throttle=(0, 10, 0, 0, 0, 0, 0), fmt=3, content=0):
     b = bytearray(264)
     struct.pack_into('<HBB', b, 0, 264, fmt, content)
-    struct.pack_into('<HH', b, 4, gfx_temp, soc_temp)
-    struct.pack_into('<HH', b, 42, activity, 0)
-    struct.pack_into('<HH', b, 94, dram_r, dram_w)
-    struct.pack_into('<I', b, 112, socket_mw)
-    struct.pack_into('<I', b, 120, socket_mw)
-    struct.pack_into('<I', b, 124, gfx_mw)
-    struct.pack_into('<I', b, 132, core_mw)
-    struct.pack_into('<H', b, 168, 0xF830)
-    struct.pack_into('<HH', b, 170, 0xFFFF, 0xFFFF)
-    struct.pack_into('<H', b, 174, gfxclk)
-    struct.pack_into('<HH', b, 222, 5150, maxfreq)
-    struct.pack_into('<7I', b, 228, *throttle)
-    struct.pack_into('<I', b, 256, 1000000)
+    for off, kind, *values in ((4, '<H', gfx_temp), (42, '<H', activity), (112, '<I', socket_mw), (124, '<I', gfx_mw),
+                               (132, '<I', core_mw), (174, '<H', gfxclk), (224, '<H', 2900), (228, '<7I', *throttle)):
+        struct.pack_into(kind, b, off, *values)
     return bytes(b)
 
 
@@ -219,7 +209,9 @@ class TmpRoot(unittest.TestCase):
 
 
 class FakeGroup:
-    """Stands in for a PerfGroup: fixed labels/factors, counts set by the test."""
+    """Stands in for a PerfGroup: read() returns the counts the test sets (cumulative since open, like perf)."""
+
+    counts = None
 
     def __init__(self, labels, factors):
         self.labels, self.factors = labels, factors
@@ -235,15 +227,6 @@ class FakeGroup:
     def close(self):
         self.closed += 1
         self.fds = []
-
-    def read(self):
-        return None
-
-
-class CountingGroup(FakeGroup):
-    """A FakeGroup whose read() returns the counts the test sets (cumulative since open, like perf)."""
-
-    counts = None
 
     def read(self):
         return (1, 1, list(self.counts)) if self.fds and self.counts is not None else None
@@ -548,7 +531,7 @@ class TestMeter(TmpRoot):
         self.assertIsNone(H.Meter(host).rapl)               # no RAPL PMU in the fixture: no energy
         host.groups['rapl'] = FakeGroup(['pkg', 'ram', 'cores'], [1.0] * 3)
         m = H.Meter(host, period=3600)
-        group = CountingGroup(['pkg', 'ram'], [2 ** -32] * 2)
+        group = FakeGroup(['pkg', 'ram'], [2 ** -32] * 2)
         m.rapl = group
         m.start()
         self.assertEqual(group.opened, 1)
@@ -809,29 +792,26 @@ class FakeEngineHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
+def fake_engine(case):
+    """An H.Engine over a quadlet under case.root, a FakeRunner (case.runner) and a fake engine HTTP server."""
+    case.state = FakeEngineState()
+    write(case.root, '/quadlets/gufo.container', QUADLET)
+    case.quadlet = case.root + '/quadlets/gufo.container'
+    os.chmod(case.quadlet, 0o640)
+    srv = http.server.ThreadingHTTPServer(('127.0.0.1', 0), FakeEngineHandler)
+    srv.state = case.state
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    case.addCleanup(srv.server_close)
+    case.addCleanup(srv.shutdown)
+    case.runner = FakeRunner(case.state, case.quadlet)
+    return H.Engine('gufo.service', case.quadlet, f'http://127.0.0.1:{srv.server_port}', case.root + '/state',
+                    case.runner, ready_timeout=1.0, restart_timeout=5, poll=0.05, http_timeout=1.0)
+
+
 class EngineCase(TmpRoot):
     def setUp(self):
         super().setUp()
-        self.state = FakeEngineState()
-        self.qdir = os.path.join(self.root, 'quadlets')
-        os.makedirs(self.qdir)
-        self.quadlet = os.path.join(self.qdir, 'gufo.container')
-        with open(self.quadlet, 'w') as f:
-            f.write(QUADLET)
-        os.chmod(self.quadlet, 0o640)
-        self.srv = http.server.ThreadingHTTPServer(('127.0.0.1', 0), FakeEngineHandler)
-        self.srv.state = self.state
-        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
-        self.runner = FakeRunner(self.state, self.quadlet)
-        self.state_dir = os.path.join(self.root, 'state')
-        self.engine = H.Engine('gufo.service', self.quadlet, f'http://127.0.0.1:{self.srv.server_port}',
-                               self.state_dir, self.runner, ready_timeout=1.0, restart_timeout=5, poll=0.05,
-                               http_timeout=1.0)
-
-    def tearDown(self):
-        self.srv.shutdown()
-        self.srv.server_close()
-        super().tearDown()
+        self.engine = fake_engine(self)
 
     def wait_job(self, timeout=10):
         deadline = time.time() + timeout
@@ -1044,7 +1024,7 @@ class TestEngine(EngineCase):
 # ------------------------------------------------------------------------------------------ http tests
 
 class HttpCase(TmpRoot):
-    engine = None
+    max_connections = 16
 
     def setUp(self):
         super().setUp()
@@ -1053,7 +1033,7 @@ class HttpCase(TmpRoot):
         self.sampler = H.Sampler(host, 0.05, keepalive=0.3)
         self.meter = H.Meter(host, period=0.05)
         self.app = H.App(host, self.sampler, self.meter, TOKEN, self.make_engine())
-        self.server = H.Server(('127.0.0.1', 0), self.app, max_connections=self.max_conn())
+        self.server = H.Server(('127.0.0.1', 0), self.app, max_connections=self.max_connections)
         self.port = self.server.server_address[1]
         self.sampler.start()
         self.meter.start()
@@ -1061,9 +1041,6 @@ class HttpCase(TmpRoot):
 
     def make_engine(self):
         return None
-
-    def max_conn(self):
-        return 16
 
     def tearDown(self):
         self.server.shutdown()
@@ -1189,8 +1166,7 @@ class TestHttp(HttpCase):
 
 
 class TestConnectionLimit(HttpCase):
-    def max_conn(self):
-        return 2
+    max_connections = 2
 
     def test_limit(self):
         a = socket.create_connection(('127.0.0.1', self.port))
@@ -1204,23 +1180,7 @@ class TestConnectionLimit(HttpCase):
 
 class TestHttpEngine(HttpCase):
     def make_engine(self):
-        self.state = FakeEngineState()
-        qdir = os.path.join(self.root, 'q')
-        os.makedirs(qdir)
-        self.quadlet = os.path.join(qdir, 'gufo.container')
-        with open(self.quadlet, 'w') as f:
-            f.write(QUADLET)
-        self.esrv = http.server.ThreadingHTTPServer(('127.0.0.1', 0), FakeEngineHandler)
-        self.esrv.state = self.state
-        threading.Thread(target=self.esrv.serve_forever, daemon=True).start()
-        return H.Engine('gufo.service', self.quadlet, f'http://127.0.0.1:{self.esrv.server_port}',
-                        os.path.join(self.root, 's'), FakeRunner(self.state, self.quadlet), ready_timeout=1.0,
-                        poll=0.05, http_timeout=1.0)
-
-    def tearDown(self):
-        self.esrv.shutdown()
-        self.esrv.server_close()
-        super().tearDown()
+        return fake_engine(self)
 
     def test_endpoints(self):
         st, body = self.req('GET', '/v1/engine')
@@ -1287,7 +1247,6 @@ class TestConfig(TmpRoot):
             os.environ.update(env)
 
 
-
 # ------------------------------------------------------------------------------------------ installer
 STUBS = {
     # systemctl: log every call; restart marks the unit active
@@ -1324,7 +1283,6 @@ exit 0
 def _userns_ok():
     if not shutil.which('unshare') or not shutil.which('bash'):
         return False
-    import subprocess
     try:
         return subprocess.run(['unshare', '-r', 'true'], capture_output=True, timeout=10).returncode == 0
     except (OSError, subprocess.SubprocessError):
@@ -1372,7 +1330,6 @@ class TestInstaller(TmpRoot):
         super().tearDown()
 
     def run_install(self, *args, stdin=''):
-        import subprocess
         env = dict(os.environ, PATH=self.bin + os.pathsep + os.environ.get('PATH', '/usr/bin'),
                    STUB_STATE=self.state, HOSTD_TEST_PREFIX=self.prefix)
         env.pop('SUDO_USER', None)
