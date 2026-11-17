@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { WORKSPACE_KIND_NAMES, type AgentKind, type WorkspaceKind, type WorkspaceStatus } from "@portal/core/wire";
 import { fetchJson, needsReauth } from "@/lib/fetch-json";
 import { formatVersion, stopReasonText, workspaceState } from "@/lib/format";
-import type { WorkspaceStatusResponse } from "@/lib/gateway-types";
+import type { WorkspaceStatusResponse } from "@/lib/api";
 import { initialKind, onlineAccessAfter, otherKind, startErrorText } from "@/lib/workspace-kind";
 import { stopWarnings } from "@/lib/workspace-stop";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";

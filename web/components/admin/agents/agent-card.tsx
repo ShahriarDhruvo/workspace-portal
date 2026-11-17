@@ -11,7 +11,7 @@ import {
   type ActionContext,
   type AgentPackageRow,
 } from "@/lib/agent-versions";
-import type { AgentUpdateJob, AgentVersionInfo, InstalledImage } from "@/lib/gateway-types";
+import type { AgentUpdateJob, AgentVersionInfo, InstalledImage } from "@portal/core/wire";
 import { GuardedButton } from "@/components/common/guarded-button";
 import { LocalTime } from "@/components/local-time";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";

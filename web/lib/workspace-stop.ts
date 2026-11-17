@@ -1,8 +1,7 @@
 // What the confirmation of the user's own Stop (or "Restart now") warns about: a stop is immediate, even mid-task,
 // so every one asks first and says when it would cut work short or pull the workspace from under someone. And what
 // "Restart now" starts again. Pure; unit tested.
-import type { WorkspaceKind } from "@portal/core";
-import type { WorkspaceInfo } from "./gateway-types.ts";
+import type { WorkspaceInfo, WorkspaceKind } from "@portal/core";
 
 export interface StopWarnings {
   /** The agent is working on a task: the stop ends it mid-way. */

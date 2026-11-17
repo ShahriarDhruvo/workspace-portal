@@ -4,7 +4,8 @@ import http from "node:http";
 import { closeServer, listenLocal } from "../../test/fakes.ts";
 import { waitFor } from "../../test/harness.ts";
 import { HostMonitor } from "./host-monitor.ts";
-import { HostdClient, HostdError, SseParser, type HostSample } from "./hostd.ts";
+import type { HostSample } from "@portal/core";
+import { HostdClient, HostdError, SseParser } from "./hostd.ts";
 import type { Logger } from "../lib/log.ts";
 
 const TOKEN = "h".repeat(64);

@@ -3,11 +3,11 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useReducer, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { WORKSPACE_KIND_NAMES, type AgentKind, type WorkspaceKind } from "@portal/core/wire";
+import { WORKSPACE_KIND_NAMES, type AgentKind, type ApiError, type OnlineAccess, type WorkspaceKind } from "@portal/core/wire";
 import { agentFrameUrl, type AgentFrame } from "@/lib/agent-url";
 import { fetchJson, needsReauth } from "@/lib/fetch-json";
 import { stopReasonText, workspaceState, type WorkspaceState } from "@/lib/format";
-import type { ApiError, OnlineAccess, WorkspaceStatusResponse } from "@/lib/gateway-types";
+import type { WorkspaceStatusResponse } from "@/lib/api";
 import { hasContainer, initialKind, onlineAccessAfter, otherKind, startErrorText } from "@/lib/workspace-kind";
 import { stopWarnings } from "@/lib/workspace-stop";
 import { PortalMark } from "@/components/brand";

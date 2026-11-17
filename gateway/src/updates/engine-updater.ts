@@ -13,10 +13,21 @@
 //   4. the queue opens again; the held requests go to the (new or restored) engine.
 // One job at a time; the last one stays visible until the next starts.
 import crypto from "node:crypto";
-import { isStableVersion, writeAudit, type AuditAction, type PortalDb } from "@portal/core";
+import {
+  isStableVersion,
+  writeAudit,
+  type AuditAction,
+  type EngineHostState,
+  type EngineJob,
+  type EngineJobStage,
+  type EngineOverview,
+  type EngineStatus,
+  type EngineUpdateJob,
+  type PortalDb,
+} from "@portal/core";
 import type { Config } from "../config.ts";
-import { EngineReleaseError, EngineReleases, type EngineReleaseList } from "./engine-releases.ts";
-import { HostdClient, HostdError, type EngineJob, type EngineStatus } from "../monitor/hostd.ts";
+import { EngineReleaseError, EngineReleases } from "./engine-releases.ts";
+import { HostdClient, HostdError } from "../monitor/hostd.ts";
 import type { LlmQueue } from "../service/llm-queue.ts";
 import { errorMessage, type Logger } from "../lib/log.ts";
 
@@ -31,43 +42,6 @@ const APPLY_TIMEOUT_MS = 75 * 60_000;
 const LOG_LINES = 400;
 export const CANCELLED = "Cancelled.";
 export const GATEWAY_STOPPED = "The gateway stopped during the update; check the engine's version.";
-
-export type EngineJobStage = "pulling" | "draining" | "restarting" | "succeeded" | "failed" | "cancelled";
-
-export interface EngineUpdateJob {
-  id: string;
-  fromVersion: string | null;
-  /** The version asked for; once it succeeded, the one the engine reports. */
-  toVersion: string | null;
-  image: string | null;
-  /** The LLM server had an image of that version: no download, it is used as it is. */
-  reuse: boolean;
-  stage: EngineJobStage;
-  step: string;
-  log: string[];
-  startedAt: number;
-  finishedAt: number | null;
-  error: string | null;
-  /** hostd put the previous image back after the new one failed. */
-  rolledBack: boolean;
-  /** While draining: since when, until when at most, and how many requests are still running. */
-  drain: { since: number; deadline: number; inFlight: number } | null;
-  /** The update can still be cancelled with nothing changed. */
-  cancellable: boolean;
-  actorUserId: number | null;
-}
-
-/** off: no portal-hostd for the LLM server; offline: it can't be reached; no_engine: it controls no engine. */
-export type EngineHostState = "off" | "offline" | "no_engine" | "ok";
-
-export interface EngineOverview {
-  state: EngineHostState;
-  error: string | null;
-  engine: EngineStatus | null;
-  releases: EngineReleaseList | null;
-  job: EngineUpdateJob | null;
-  drainMinutes: number;
-}
 
 export class EngineUnavailableError extends Error {
   readonly state: EngineHostState;

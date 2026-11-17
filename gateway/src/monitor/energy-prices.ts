@@ -8,7 +8,7 @@
 //   * Eurostat nrg_pc_204 (JSON-stat): household prices with all taxes, band 2,500-4,999 kWh a year, in euros per
 //     kWh, for the last six half years.
 import { sql } from "drizzle-orm";
-import { ENERGY_LOCATIONS, ENERGY_PRICE_SOURCES, energyPrices, type EnergyCurrency, type EnergyPriceSource, type PortalDb } from "@portal/core";
+import { ENERGY_LOCATIONS, ENERGY_PRICE_SOURCES, energyPrices, type EnergyCurrency, type EnergyPriceSource, type EnergyPriceStatus, type PortalDb } from "@portal/core";
 import { readBoundedText } from "../lib/bounded-body.ts";
 import type { Logger } from "../lib/log.ts";
 
@@ -179,18 +179,6 @@ export function parseEurostat(text: string): PriceRow[] {
 
 const PARSERS: Readonly<Record<EnergyPriceSource, (body: string) => PriceRow[]>> = { eia: parseEiaTable, eurostat: parseEurostat };
 
-/** A source's last download: `at` the last try, `okAt` the last that stored prices. */
-export interface PriceSourceStatus {
-  at: number | null;
-  okAt: number | null;
-  /** Rows the last good download stored. */
-  rows: number;
-  /** Why the last try failed; null after a good one. */
-  error: string | null;
-}
-
-export type PriceStatus = Record<EnergyPriceSource, PriceSourceStatus>;
-
 /** Downloads a source's document as text (the body read up to MAX_BYTES). */
 export type FetchText = (url: string) => Promise<string>;
 
@@ -222,11 +210,11 @@ export class EnergyPrices {
   readonly #fetch: FetchText;
   readonly #now: () => number;
   readonly #refreshMs: number;
-  readonly #status: PriceStatus = {
+  readonly #status: EnergyPriceStatus = {
     eia: { at: null, okAt: null, rows: 0, error: null },
     eurostat: { at: null, okAt: null, rows: 0, error: null },
   };
-  #running: Promise<PriceStatus> | null = null;
+  #running: Promise<EnergyPriceStatus> | null = null;
   #timer: ReturnType<typeof setInterval> | null = null;
 
   constructor(options: EnergyPricesOptions) {
@@ -250,7 +238,7 @@ export class EnergyPrices {
     this.#timer = null;
   }
 
-  status(): PriceStatus {
+  status(): EnergyPriceStatus {
     return structuredClone(this.#status);
   }
 
@@ -258,14 +246,14 @@ export class EnergyPrices {
    * Downloads both sources and stores what they publish. A refresh already running is joined; on demand (without
    * `force`), a source downloaded within FRESH_MS is not asked again.
    */
-  refresh({ force = false }: { force?: boolean } = {}): Promise<PriceStatus> {
+  refresh({ force = false }: { force?: boolean } = {}): Promise<EnergyPriceStatus> {
     this.#running ??= this.#refreshAll(force).finally(() => {
       this.#running = null;
     });
     return this.#running;
   }
 
-  async #refreshAll(force: boolean): Promise<PriceStatus> {
+  async #refreshAll(force: boolean): Promise<EnergyPriceStatus> {
     const due = ENERGY_PRICE_SOURCES.filter((source) => {
       const okAt = this.#status[source].okAt;
       return force || okAt === null || this.#now() - okAt >= FRESH_MS;

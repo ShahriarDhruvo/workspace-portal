@@ -1,19 +1,10 @@
 // HostStats for GET /control/stats. The gateway runs with the host's /proc, so these are host figures.
 import fs from "node:fs";
 import os from "node:os";
+import type { HostStats } from "@portal/core";
 import type { Config } from "../config.ts";
 import type { LlmQueue } from "../service/llm-queue.ts";
 import type { WorkspaceManager } from "../workspaces/manager.ts";
-
-export interface HostStats {
-  running: number;
-  maxRunning: number;
-  idleTimeoutMinutes: number;
-  memTotalBytes: number;
-  memAvailableBytes: number;
-  cpus: number;
-  llm: { inFlight: number; queued: number; maxConcurrency: number };
-}
 
 export function readHostStats(config: Config, manager: WorkspaceManager, llm: LlmQueue): HostStats {
   return {

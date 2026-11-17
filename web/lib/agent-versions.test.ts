@@ -22,7 +22,7 @@ import {
   agentStatus,
   agentJobStep,
 } from "./agent-versions.ts";
-import type { AgentUpdateJob, AgentVersionInfo, AgentVersionsOverview } from "./gateway-types.ts";
+import type { AgentUpdateJob, AgentVersionInfo, AgentVersionsOverview } from "@portal/core/wire";
 
 const qwen: AgentVersionInfo = {
   id: "qwen",

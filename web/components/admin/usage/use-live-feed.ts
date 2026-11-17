@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { fetchJson } from "@/lib/fetch-json";
 import { EMPTY_HISTORY, historyFromInit, historyWithFrame, type LiveHistory } from "@/lib/live-format";
-import type { LiveFrame, LiveInit } from "@/lib/live-types";
+import type { LiveFrame, LiveInit } from "@portal/core/wire";
 
 const ROUTE = "/api/admin/live";
 const RETRY_MIN_MS = 2_000;

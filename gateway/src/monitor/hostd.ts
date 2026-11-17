@@ -3,6 +3,7 @@
 // hostd/README.md; the shapes below are what the gateway relies on and passes to the admin console.
 import http from "node:http";
 import https from "node:https";
+import type { HostInfo, HostSample } from "@portal/core";
 import type { HostdConfig } from "../config.ts";
 
 const REQUEST_TIMEOUT_MS = 5_000;
@@ -10,49 +11,6 @@ const REQUEST_TIMEOUT_MS = 5_000;
 const STREAM_IDLE_MS = 15_000;
 /** A larger event is refused (a sample is about 2 KB). */
 const MAX_EVENT_BYTES = 256 * 1024;
-
-export interface HostInfo {
-  hostd: number;
-  hostname: string;
-  role: "portal" | "llm";
-  os: string;
-  kernel: string;
-  intervalMs: number;
-  cpu: { model: string; cores: number; threads: number; maxMhz: number | null };
-  gpu: { name: string; maxMhz: number | null } | null;
-  memory: { totalBytes: number };
-  sources: { perf: boolean; bandwidth: string | null; power: string | null; gpuBusy: string | null };
-  power: { label: string } | null;
-  engine: { unit: string } | null;
-  /** The physical network interfaces that `net` counts; absent from hostd before API version 2. */
-  network?: { interfaces: string[] } | null;
-  /** The whole disks that `disk` I/O counts, and the mount points of the local filesystems its space adds up. */
-  disks?: { devices: string[]; mounts: string[] } | null;
-}
-
-export interface HostSample {
-  /** Epoch ms on the host. */
-  t: number;
-  cpu: { usage: number | null; mhz: number | null; mhzPeak: number | null; tempC: number | null; powerW: number | null; coreUsage: number[]; coreMhz: Array<number | null> };
-  gpu: { usage: number | null; mhz: number | null; tempC: number | null; powerW: number | null; memUsedBytes: number | null; memTotalBytes: number | null } | null;
-  memory: {
-    totalBytes: number;
-    availableBytes: number;
-    usedBytes: number;
-    gpuBytes: number | null;
-    swapTotalBytes: number;
-    swapUsedBytes: number;
-    readBps: number | null;
-    writeBps: number | null;
-  };
-  power: { watts: number | null; parts: { gpu: number | null; cpu: number | null; dram: number | null } };
-  fans: Array<{ label: string; rpm: number | null; duty: number | null }>;
-  throttling?: boolean | null;
-  /** Bytes per second over the physical interfaces together (hostd API version 2 on). */
-  net?: { rxBps: number | null; txBps: number | null } | null;
-  /** Bytes per second over the whole disks together, and the local filesystems' space together (version 2 on). */
-  disk?: { readBps: number | null; writeBps: number | null; totalBytes: number | null; freeBytes: number | null } | null;
-}
 
 /** GET /v1/meter (hostd API version 2 on): running totals since hostd started, kept whether or not anyone watches. */
 export interface MeterReading {
@@ -67,52 +25,6 @@ export interface MeterReading {
   /** Received and sent on the physical interfaces; null without any. */
   rxBytes: number | null;
   txBytes: number | null;
-}
-
-export interface EngineImage {
-  id: string;
-  digest: string | null;
-  version: string | null;
-  revision: string | null;
-  createdAt: number | null;
-  sizeBytes: number | null;
-  current: boolean;
-  previous: boolean;
-}
-
-export type EngineJobKind = "pull" | "apply";
-export type EngineJobPhase = "running" | "succeeded" | "failed" | "cancelled";
-
-export interface EngineJob {
-  id: string;
-  kind: EngineJobKind;
-  image: string | null;
-  version: string | null;
-  phase: EngineJobPhase;
-  step: string;
-  log: string[];
-  startedAt: number;
-  finishedAt: number | null;
-  error: string | null;
-  rolledBack: boolean;
-}
-
-export interface EngineStatus {
-  unit: string;
-  quadlet: string;
-  repository: string;
-  /** The quadlet's Image= value. */
-  image: string;
-  digest: string | null;
-  version: string | null;
-  revision: string | null;
-  state: string;
-  subState: string;
-  ready: boolean;
-  buildInfo: string | null;
-  previous: { image: string; digest: string | null; version: string | null } | null;
-  images: EngineImage[];
-  job: EngineJob | null;
 }
 
 /** hostd answered with an error (`{ error, message }`), or not at all. */

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { formatNumber } from "@/lib/live-format";
-import type { LlmLive, LlmTotalsPoint } from "@/lib/live-types";
+import type { LlmLive, LlmTotalsPoint } from "@portal/core/wire";
 import type { SessionPage } from "@/lib/session-types";
 import { cn } from "@/lib/utils";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";

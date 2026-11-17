@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { AGENT_NAMES } from "@portal/core";
+import { AGENT_NAMES, type WorkspaceInfo } from "@portal/core";
 import {
   agentLabel,
   formatBytes,
@@ -13,7 +13,6 @@ import {
   summarizeWorkspace,
   workspaceState,
 } from "./format.ts";
-import type { WorkspaceInfo } from "./gateway-types.ts";
 
 test("formatBytes uses binary units", () => {
   assert.equal(formatBytes(512), "512 B");

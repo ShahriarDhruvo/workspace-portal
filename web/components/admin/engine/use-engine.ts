@@ -1,6 +1,6 @@
 "use client";
 
-import type { AdminEngine } from "@/lib/engine-types";
+import type { AdminEngine } from "@/lib/overview";
 import { enginePollDelay, mergeEngine } from "@/lib/engine-updates";
 import { usePolled, type Polled } from "@/components/admin/agents/use-polled";
 

@@ -5,34 +5,7 @@
 //      └─────────────┴──▶ failed | cancelled      (the current version stays as it was)
 //
 // Pure state: the updater (agent-updater.ts) drives it and serves snapshots of it.
-import type { AgentKind } from "@portal/core";
-
-export type UpdatePhase = "building" | "verifying" | "succeeded" | "failed" | "cancelled";
-
-/** GET /control/agents/versions → job (docs/ARCHITECTURE.md, "Agent versions and updates"). */
-export interface AgentUpdateJob {
-  id: string;
-  agent: AgentKind;
-  /** The current version when the job started. */
-  fromVersion: string;
-  /** The exact version being installed (X.Y.Z, as listed in Package images). */
-  version: string;
-  rebuild: boolean;
-  /**
-   * The job uses the image already on the server: no build, only the version check (it starts in
-   * `verifying`; its log says so too).
-   */
-  reuse: boolean;
-  actorUserId: number | null;
-  phase: UpdatePhase;
-  /** The build step it is at, e.g. "[dsh 3/6] RUN npm install -g …". */
-  step: string | null;
-  /** The last JOB_LOG_LINES lines of build output. */
-  log: string[];
-  startedAt: number;
-  finishedAt: number | null;
-  error: string | null;
-}
+import type { AgentKind, AgentUpdateJob, UpdatePhase } from "@portal/core";
 
 export const JOB_LOG_LINES = 200;
 export const CANCELLED = "Cancelled";

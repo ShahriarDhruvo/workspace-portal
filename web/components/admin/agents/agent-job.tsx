@@ -3,7 +3,7 @@
 import { startTransition, useActionState, useEffect, useEffectEvent, type RefObject } from "react";
 import { cancelAgentUpdate, type AgentActionState } from "@/lib/actions/agents";
 import { agentJobStep, formatElapsed, isJobActive, jobElapsedMs, jobOutcome, jobTitle, phaseLabel } from "@/lib/agent-versions";
-import type { AgentUpdateJob, AgentVersionInfo } from "@/lib/gateway-types";
+import type { AgentUpdateJob, AgentVersionInfo } from "@portal/core/wire";
 import { FormError } from "@/components/forms/form-error";
 import { LocalTime } from "@/components/local-time";
 import { Button } from "@/components/ui/button";

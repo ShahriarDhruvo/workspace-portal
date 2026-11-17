@@ -2,9 +2,8 @@
 
 import { useRef, useState, type RefObject } from "react";
 import { useFormStatus } from "react-dom";
-import { WORKSPACE_KIND_NAMES, type WorkspaceKind } from "@portal/core/wire";
+import { WORKSPACE_KIND_NAMES, type OnlineAccess, type WorkspaceKind } from "@portal/core/wire";
 import { returnFocus } from "@/lib/focus";
-import type { OnlineAccess } from "@/lib/gateway-types";
 import { onlineBlockedReason, otherKind } from "@/lib/workspace-kind";
 import { SubmitButton } from "@/components/forms/submit-button";
 import {

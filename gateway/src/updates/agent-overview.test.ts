@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { describeAgentVersions, offeredReleases, type AgentVersionInputs } from "./agent-overview.ts";
-import type { ReleaseNotes } from "./github-releases.ts";
+import type { ReleaseNotes } from "@portal/core";
 import type { WorkspaceImageSummary } from "../docker/image-builder.ts";
 import { workspaceImage } from "../docker/image-names.ts";
 import type { PackageReleases } from "./release-cache.ts";

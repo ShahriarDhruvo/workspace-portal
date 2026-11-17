@@ -15,7 +15,7 @@ import {
   memoryFree,
   usedPercent,
 } from "@/lib/live-format";
-import type { HostLive, HostSample } from "@/lib/live-types";
+import type { HostLive, HostSample } from "@portal/core/wire";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";

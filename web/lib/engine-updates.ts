@@ -4,8 +4,8 @@
 // docs/ARCHITECTURE.md, "LLM engine updates".
 import { z } from "zod";
 import { compareVersions, isStableVersion } from "@portal/core/wire";
-import type { AdminEngine, EngineImage, EngineOverview, EngineRelease, EngineStatus, EngineUpdateJob } from "./engine-types.ts";
-import type { ApiError, ReleaseNotes } from "./gateway-types.ts";
+import type { ApiError, EngineImage, EngineOverview, EngineRelease, EngineStatus, EngineUpdateJob, ReleaseNotes } from "@portal/core/wire";
+import type { AdminEngine } from "./overview.ts";
 
 /** Poll intervals: a running job moves every second; otherwise little changes (the page also polls on focus). */
 export const ENGINE_ACTIVE_POLL_MS = 1_000;

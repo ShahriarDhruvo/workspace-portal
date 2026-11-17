@@ -10,7 +10,8 @@
 // A registry outage must not break the overview: a failed check keeps the last good answers, reports the error, and
 // is retried after a minute instead of on every poll (each attempt can take the registry client's full timeout).
 // Concurrent callers share one check.
-import { tagVersion, type GitHubReleases, type ReleaseNotes } from "./github-releases.ts";
+import type { ReleaseNotes } from "@portal/core";
+import { tagVersion, type GitHubReleases } from "./github-releases.ts";
 import { errorMessage, type Logger } from "../lib/log.ts";
 import type { NpmPackage, NpmRegistry, PublishedVersion } from "./npm-registry.ts";
 

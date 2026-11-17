@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { GitHubRelease, GitHubReleases, ReleaseNotes } from "./github-releases.ts";
+import type { ReleaseNotes } from "@portal/core";
+import type { GitHubRelease, GitHubReleases } from "./github-releases.ts";
 import { RegistryError, type NpmPackage, type NpmRegistry } from "./npm-registry.ts";
 import { NOTES_TTL_MS, notesByVersion, ReleaseCache, RELEASES_RETRY_MS, RELEASES_TTL_MS } from "./release-cache.ts";
 

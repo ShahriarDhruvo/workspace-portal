@@ -3,12 +3,10 @@
 // use), their image digests, and their release notes from GitHub (github-releases.ts). Cached for 10
 // minutes like the agents' releases (release-cache.ts): the console polls, and GitHub allows 60
 // anonymous requests an hour.
-import { byNewestVersion, compareVersions, isStableVersion } from "@portal/core";
+import { byNewestVersion, compareVersions, isStableVersion, type EngineRelease, type EngineReleaseList, type ReleaseNotes } from "@portal/core";
 import { readBoundedText } from "../lib/bounded-body.ts";
-import { createGitHubReleases, type GitHubReleases, type ReleaseNotes } from "./github-releases.ts";
+import { createGitHubReleases, type GitHubReleases } from "./github-releases.ts";
 import { errorMessage, type Logger } from "../lib/log.ts";
-
-export type { ReleaseNotes } from "./github-releases.ts";
 
 const TTL_MS = 10 * 60_000;
 const RETRY_MS = 60_000;
@@ -25,23 +23,6 @@ const MANIFEST_TYPES = [
   "application/vnd.oci.image.manifest.v1+json",
   "application/vnd.docker.distribution.manifest.v2+json",
 ].join(", ");
-
-export interface EngineRelease {
-  version: string;
-  /** The image's digest (sha256:...); null when the registry didn't say. */
-  digest: string | null;
-  /** The registry's `latest` tag points at this version. */
-  latest: boolean;
-  notes: ReleaseNotes | null;
-}
-
-export interface EngineReleaseList {
-  repository: string;
-  /** withLocalVersions: the newest releases, and the versions the LLM server has an image of, newest first. */
-  releases: EngineRelease[];
-  checkedAt: number | null;
-  error: string | null;
-}
 
 export class EngineReleaseError extends Error {
   constructor(message: string) {

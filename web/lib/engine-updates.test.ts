@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { EngineImage, EngineOverview, EngineRelease, EngineUpdateJob } from "./engine-types.ts";
+import type { EngineImage, EngineOverview, EngineRelease, EngineUpdateJob } from "@portal/core/wire";
 import {
   compareEngineVersions,
   ENGINE_ACTIVE_POLL_MS,
@@ -30,6 +30,7 @@ function overview(patch: Partial<EngineOverview> = {}, version: string | null = 
     error: null,
     engine: {
       unit: "gufo.service",
+      quadlet: "/etc/containers/systemd/gufo.container",
       repository: "ghcr.io/example/engine",
       image: "ghcr.io/example/engine@sha256:aa",
       digest: null,
@@ -39,7 +40,9 @@ function overview(patch: Partial<EngineOverview> = {}, version: string | null = 
       subState: "running",
       ready: true,
       buildInfo: null,
+      previous: null,
       images: [],
+      job: null,
     },
     releases: { repository: "ghcr.io/example/engine", releases: [release("0.34.0", true), release("0.31.0"), release("0.30.0")], checkedAt: 1, error: null },
     job: null,
@@ -77,6 +80,7 @@ const image = (patch: Partial<EngineImage> = {}): EngineImage => ({
   createdAt: null,
   sizeBytes: null,
   current: false,
+  previous: false,
   ...patch,
 });
 

@@ -3,11 +3,11 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import type { AgentKind } from "@portal/core";
+import type { AgentKind, WorkspaceInfo } from "@portal/core";
 import { startingAgent } from "@/lib/agent-choice";
 import { fetchJson } from "@/lib/fetch-json";
 import { agentLabel, formatVersion } from "@/lib/format";
-import type { AdminOverview, WorkspaceInfo } from "@/lib/gateway-types";
+import type { AdminOverview } from "@/lib/overview";
 import type { UserSummary } from "@/lib/user-summary";
 import { UserAvatar } from "@/components/brand";
 import { LocalTime } from "@/components/local-time";

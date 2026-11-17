@@ -6,6 +6,7 @@
 // request, sustained CPU) counts as activity, so the idle countdown starts when the work ends.
 // Safety net: MAX_BUSY_HOURS after a person last did anything, work no longer counts and only that
 // person's last action starts the idle countdown.
+import type { BusyReason } from "@portal/core";
 
 /** Only workspaces idle for longer than this can be evicted to make room for another user. */
 export const EVICTION_MIN_IDLE_MS = 5 * 60_000;
@@ -33,9 +34,6 @@ export function agentCountsAsWorking(agent: AgentState, now: number): boolean {
   if (!agent.unknown) return agent.working === true;
   return agent.answeredAt !== null && now - agent.answeredAt < AGENT_UNKNOWN_GRACE_MS;
 }
-
-/** Why a workspace counts as working right now; null when it is not. */
-export type BusyReason = "task" | "llm" | "cpu" | null;
 
 export interface BusySignals {
   /** The agent reports a turn in progress (generating, running a tool, waiting for approval). null: unknown. */

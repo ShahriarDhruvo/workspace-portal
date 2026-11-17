@@ -1,5 +1,6 @@
 // Small HTTP helpers shared by the gateway's servers.
 import http, { type IncomingHttpHeaders, type IncomingMessage, type RequestListener, type ServerResponse } from "node:http";
+import type { ApiError } from "@portal/core";
 
 /** A client must send its request headers within this time. */
 const HEADERS_TIMEOUT_MS = 60_000;
@@ -36,9 +37,9 @@ export function sendJson(res: ServerResponse, status: number, body: unknown, hea
   res.end(payload);
 }
 
-/** The error shape of every gateway API: `{ error: <code>, message: <human text> }`. */
+/** The error shape of every gateway API: an ApiError, `{ error: <code>, message: <human text> }`. */
 export function sendError(res: ServerResponse, status: number, code: string, message: string, headers?: Record<string, string>): void {
-  sendJson(res, status, { error: code, message }, headers);
+  sendJson(res, status, { error: code, message } satisfies ApiError, headers);
 }
 
 /** Reads a small JSON body; undefined when empty. */

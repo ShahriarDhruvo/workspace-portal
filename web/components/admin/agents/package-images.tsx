@@ -3,7 +3,7 @@
 import { useRef, useState, type Ref } from "react";
 import { packageSummary } from "@/lib/agent-versions";
 import { formatBytes } from "@/lib/format";
-import type { ReleaseNotes } from "@/lib/gateway-types";
+import type { ReleaseNotes } from "@portal/core/wire";
 import { DataTable, DataTableEmpty, DataTableHead, DataTablePagination, usePagination } from "@/components/common/data-table";
 import { GuardedButton } from "@/components/common/guarded-button";
 import { ReleaseNotesDialog, type ReleaseNotesTarget } from "@/components/admin/engine/release-notes";

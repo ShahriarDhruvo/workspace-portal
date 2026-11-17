@@ -25,8 +25,11 @@ import {
   writeAudit,
   type AgentKind,
   type AuditAction,
+  type BusyReason,
+  type OnlineAccess,
   type PortalDb,
   type Workspace,
+  type WorkspaceInfo,
   type WorkspaceKind,
   type WorkspaceStatus,
 } from "@portal/core";
@@ -48,53 +51,12 @@ import {
   reapVerdict,
   type ActivityAssessment,
   type AgentState,
-  type BusyReason,
   type ReapInput,
 } from "./policy.ts";
 import { READY_TIMEOUT_MS, waitForReady, type ReadyResult } from "./readiness.ts";
 import { WorkspaceImageMissingError, type ContainerRuntime, type ContainerState, type ContainerSummary } from "../docker/runtime.ts";
 import { eraseWorkspaceFiles, prepareWorkspaceFiles, removeWorkspaceFiles } from "./files.ts";
 import { hasLegacyFiles, moveLegacyFiles } from "./paths.ts";
-
-export interface WorkspaceInfo {
-  userId: number;
-  status: WorkspaceStatus;
-  /** The agent of the starting or running container; when stopped, the one used last; null if never started. */
-  agent: AgentKind | null;
-  /** The kind of the starting or running container; when stopped, the one used last ("private" if never started). */
-  kind: WorkspaceKind;
-  /**
-   * Whether this user may start an Online workspace now: "allowed"; "off" when ONLINE_WORKSPACES=off; "not_allowed"
-   * when the admin barred this user (users.online_allowed).
-   */
-  online: OnlineAccess;
-  /** The agent version of the starting or running container's image; null when stopped or unknown. */
-  agentVersion: string | null;
-  /** The agent answered its readiness probe and can take prompts. */
-  ready: boolean;
-  startedAt: number | null;
-  lastActivityAt: number | null;
-  /** null when not running. */
-  idleSeconds: number | null;
-  /** From docker stats; null when not running or unknown. */
-  memoryBytes: number | null;
-  /**
-   * Sessions that have it open right now: an open connection (event stream, socket) or a request in
-   * the last 20 s (presence).
-   */
-  connections: { owner: number; admin: number };
-  llmInFlight: number;
-  /** The agent is working: it is never stopped for inactivity while this is true. */
-  busy: boolean;
-  /** Why it counts as busy: "task" (the agent reports work), "llm" (a model request), "cpu" (sustained CPU). */
-  busyReason: BusyReason;
-  /** Nobody uses it any more; it stops by itself once the agent's work is done. */
-  stopPending: boolean;
-  stopReason: string | null;
-  lastError: string | null;
-}
-
-export type OnlineAccess = "allowed" | "off" | "not_allowed";
 
 export class CapacityError extends Error {
   constructor(maxRunning: number) {

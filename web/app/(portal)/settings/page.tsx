@@ -1,11 +1,10 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
-import { AGENT_NAMES } from "@portal/core";
+import { AGENT_NAMES, type AgentInfo, type WorkspaceInfo } from "@portal/core";
 import { saveName } from "@/lib/actions/settings";
 import { startingAgent } from "@/lib/agent-choice";
 import { formatVersion } from "@/lib/format";
 import { gateway, toApiError } from "@/lib/gateway";
-import type { AgentInfo, WorkspaceInfo } from "@/lib/gateway-types";
 import { requireUser } from "@/lib/session";
 import { ProfileForm } from "@/components/admin/profile-form";
 import { ChangePasswordForm } from "@/components/auth/change-password-form";

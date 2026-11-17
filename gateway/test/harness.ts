@@ -22,6 +22,7 @@ import {
   workspaces,
   type AgentKind,
   type PortalDb,
+  type WorkspaceInfo,
   type WorkspaceKind,
 } from "@portal/core";
 import type { AgentDeps } from "../src/proxy/agent-access.ts";
@@ -43,7 +44,7 @@ import { ReleaseCache } from "../src/updates/release-cache.ts";
 import type { SearchBackend, SearchQuery } from "../src/service/search-mcp.ts";
 import { createServiceServer, type ServiceDeps } from "../src/service/service-api.ts";
 import { SessionCache } from "../src/proxy/session-cache.ts";
-import { WorkspaceManager, type WorkspaceInfo } from "../src/workspaces/manager.ts";
+import { WorkspaceManager } from "../src/workspaces/manager.ts";
 import { EngineReleases } from "../src/updates/engine-releases.ts";
 import { EnergyPrices, type FetchText } from "../src/monitor/energy-prices.ts";
 import { EngineUpdater } from "../src/updates/engine-updater.ts";

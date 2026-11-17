@@ -1,10 +1,9 @@
 "use client";
 
 import { useOptimistic, useRef, useState, useTransition } from "react";
-import type { AgentKind } from "@portal/core";
+import type { AgentInfo, AgentKind, WorkspaceInfo } from "@portal/core";
 import { restartWorkspace, saveHarness } from "@/lib/actions/settings";
 import { formatVersion } from "@/lib/format";
-import type { AgentInfo, WorkspaceInfo } from "@/lib/gateway-types";
 import { stopWarnings } from "@/lib/workspace-stop";
 import { FormError } from "@/components/forms/form-error";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";

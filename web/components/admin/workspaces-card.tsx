@@ -1,9 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import type { AgentKind } from "@portal/core";
+import type { AgentKind, WorkspaceInfo } from "@portal/core";
 import { formatBytes, formatDuration, formatVersion } from "@/lib/format";
-import type { WorkspaceInfo } from "@/lib/gateway-types";
 import { formatElapsed } from "@/lib/live-format";
 import { DataTable, DataTableEmpty, DataTableHead, DataTablePagination, usePagination } from "@/components/common/data-table";
 import { StatusDot, type DotTone } from "@/components/common/status-dot";

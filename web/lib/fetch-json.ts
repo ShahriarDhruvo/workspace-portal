@@ -1,4 +1,4 @@
-import type { ApiError } from "./gateway-types";
+import type { ApiError } from "@portal/core/wire";
 
 // Browser-side fetch for the portal's JSON routes, normalizing failures to ApiError.
 

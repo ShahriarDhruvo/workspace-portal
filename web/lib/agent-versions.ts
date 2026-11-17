@@ -2,15 +2,8 @@
 // Package images table and what each offers, which actions are allowed right now and why not, the job's labels and
 // timings, how often to poll, and the gateway's errors in plain words. Pure; unit tested. The gateway's view of
 // versions: docs/ARCHITECTURE.md, "Agent versions and updates".
-import type {
-  AdminAgents,
-  AgentUpdateJob,
-  AgentVersionInfo,
-  ApiError,
-  InstalledImage,
-  ReleaseNotes,
-  UpdatePhase,
-} from "./gateway-types.ts";
+import type { AgentUpdateJob, AgentVersionInfo, ApiError, InstalledImage, ReleaseNotes, UpdatePhase } from "@portal/core/wire";
+import type { AdminAgents } from "./overview.ts";
 
 /** Poll intervals: a running job's log and step move every few seconds; otherwise little changes. */
 export const ACTIVE_POLL_MS = 1_000;

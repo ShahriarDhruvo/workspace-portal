@@ -6,7 +6,7 @@
 // Whether notes announce breaking changes is read from the conventions changelogs use, never guessed from a word
 // alone: Qwen Code's notes always have a "Breaking Changes" heading, mostly followed by "No known breaking changes."
 import { readBoundedText } from "../lib/bounded-body.ts";
-import { isVersion } from "@portal/core";
+import { isVersion, type ReleaseNotes } from "@portal/core";
 
 const TIMEOUT_MS = 10_000;
 /**
@@ -19,17 +19,6 @@ const PER_PAGE = 100;
 export const NOTES_CHARS = 12_000;
 /** 100 releases with long notes come to about 3 MB of JSON (Qwen Code's). */
 const MAX_BYTES = 8 * 1024 * 1024;
-
-export interface ReleaseNotes {
-  title: string;
-  /** The release's page on github.com. */
-  url: string;
-  publishedAt: number | null;
-  /** Markdown, cut at NOTES_CHARS. */
-  body: string;
-  /** The notes announce breaking changes (hasBreakingChanges). */
-  breaking: boolean;
-}
 
 export interface GitHubRelease {
   /** The git tag, e.g. "v0.27.4" or "dsh-v0.2.2-rc.1". */

@@ -1,6 +1,5 @@
 // Display formatting shared by server and client components. Pure; unit tested.
-import type { AgentKind } from "@portal/core";
-import type { WorkspaceInfo } from "./gateway-types.ts";
+import type { AgentKind, WorkspaceInfo } from "@portal/core";
 
 const BYTE_UNITS = ["B", "KiB", "MiB", "GiB", "TiB"] as const;
 

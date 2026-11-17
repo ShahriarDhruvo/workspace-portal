@@ -3,11 +3,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
-import { auditLog } from "@portal/core";
+import { auditLog, type LiveFrame, type LiveInit } from "@portal/core";
 import { CONTROL_SECRET, json, startGateway, waitFor, type Gateway, type GatewayOptions } from "./harness.ts";
 import { ENGINE_REPOSITORY, engineDigest } from "./fakes.ts";
 import { SseParser } from "../src/monitor/hostd.ts";
-import type { LiveFrame, LiveInit } from "../src/monitor/live.ts";
 
 async function withGateway(options: GatewayOptions, run: (gateway: Gateway) => Promise<void>): Promise<void> {
   const gateway = await startGateway(options);

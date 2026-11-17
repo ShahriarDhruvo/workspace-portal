@@ -1,7 +1,6 @@
 // The two kinds of workspace in the browser: their names, which one a Start offers first, why Online can't be
 // chosen, and what a refused start says. Pure; unit tested.
-import { WORKSPACE_KIND_NAMES, type WorkspaceKind, type WorkspaceStatus } from "@portal/core/wire";
-import type { ApiError, OnlineAccess, WorkspaceInfo } from "./gateway-types.ts";
+import { WORKSPACE_KIND_NAMES, type ApiError, type OnlineAccess, type WorkspaceInfo, type WorkspaceKind, type WorkspaceStatus } from "@portal/core/wire";
 
 export function otherKind(kind: WorkspaceKind): WorkspaceKind {
   return kind === "online" ? "private" : "online";

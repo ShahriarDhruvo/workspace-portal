@@ -1,69 +1,23 @@
 // What the admin console shows per agent (GET /control/agents/versions): the current and default versions, the
 // releases it offers (the Package images table), the images Docker has, and which versions running workspaces use.
 // Pure: the updater gathers the inputs.
-import { byNewestVersion, compareVersions, isNewerVersion, isStableVersion, isVersion, type AgentKind } from "@portal/core";
+import {
+  byNewestVersion,
+  compareVersions,
+  isNewerVersion,
+  isStableVersion,
+  isVersion,
+  type AgentKind,
+  type AgentRelease,
+  type AgentVersionInfo,
+  type WorkspaceInfo,
+} from "@portal/core";
 import { driverFor } from "../agents/index.ts";
-import type { ReleaseNotes } from "./github-releases.ts";
 import type { WorkspaceImageSummary } from "../docker/image-builder.ts";
 import type { PackageReleases } from "./release-cache.ts";
-import type { AgentUpdateJob } from "./update-job.ts";
-import type { WorkspaceInfo } from "../workspaces/manager.ts";
 
 /** How many of the newest stable releases the Updates page offers to build. */
 export const RELEASES_OFFERED = 5;
-
-export interface InstalledImage {
-  version: string;
-  image: string;
-  sizeBytes: number;
-  /** Epoch ms. */
-  createdAt: number;
-  current: boolean;
-  /** Workspace containers (starting or running) using it. */
-  inUse: number;
-}
-
-/** One version in the agent's Package images table. */
-export interface AgentRelease {
-  version: string;
-  /** Epoch ms the registry published it; null when unknown. */
-  publishedAt: number | null;
-  /** dist-tags.latest names it. */
-  latest: boolean;
-  /** Its release on the package's GitHub repository; null when there is none (or GitHub never answered). */
-  notes: ReleaseNotes | null;
-}
-
-export interface AgentVersionInfo {
-  id: AgentKind;
-  name: string;
-  packageName: string;
-  /** New workspaces start with this version. */
-  current: string;
-  /** From .env. */
-  defaultVersion: string;
-  /** dist-tags.latest; null when unknown. */
-  latest: string | null;
-  /** latest is newer than current (semver precedence, prereleases included). */
-  updateAvailable: boolean;
-  /** offeredReleases: the newest stable releases, the current version and those with an image here, newest first. */
-  releases: AgentRelease[];
-  /** This agent's workspace images in Docker, newest version first. */
-  installed: InstalledImage[];
-  /** Starting and running workspaces by image version (null: unknown), newest first. */
-  running: Array<{ version: string | null; count: number }>;
-}
-
-export interface AgentVersionsOverview {
-  /** The enabled agents, in WORKSPACE_AGENTS order. */
-  agents: AgentVersionInfo[];
-  /** The running job, else the last finished one since the gateway started. */
-  job: AgentUpdateJob | null;
-  /** The last registry check failed: releases and latest are unknown or stale. */
-  registryError: string | null;
-  /** Epoch ms of the last successful registry check. */
-  checkedAt: number | null;
-}
 
 export interface AgentVersionInputs {
   kind: AgentKind;

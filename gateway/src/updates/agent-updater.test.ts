@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { auditLog, openDatabase, users } from "@portal/core";
+import { auditLog, openDatabase, users, type WorkspaceInfo } from "@portal/core";
 import { AgentUpdater, GATEWAY_RESTARTED, ImageCurrentError, InvalidVersionError, UpdateRunningError, VersionNotFoundError } from "./agent-updater.ts";
 import { AgentVersions } from "./agent-versions.ts";
 import { loadConfig } from "../config.ts";
@@ -12,7 +12,7 @@ import { stagingImage, workspaceImage } from "../docker/image-names.ts";
 import type { Logger } from "../lib/log.ts";
 import { RegistryError } from "./npm-registry.ts";
 import { ReleaseCache } from "./release-cache.ts";
-import { AgentUnavailableError, type WorkspaceInfo } from "../workspaces/manager.ts";
+import { AgentUnavailableError } from "../workspaces/manager.ts";
 import { FakeImageBuilder, FakeRegistry, FakeRuntime, gate } from "../../test/fakes.ts";
 
 function setup(options: { agents?: string; buildTimeoutMs?: number } = {}) {

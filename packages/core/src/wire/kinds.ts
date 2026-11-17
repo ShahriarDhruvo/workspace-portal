@@ -1,5 +1,5 @@
 // The values the database, the gateway and the browser all name: roles, workspace statuses, agents, workspace kinds,
-// the two servers.
+// the two servers, why the web app stops a workspace.
 
 export const ROLES = ["admin", "user"] as const;
 export type Role = (typeof ROLES)[number];
@@ -28,6 +28,10 @@ export const WORKSPACE_KIND_NAMES: Readonly<Record<WorkspaceKind, string>> = { p
 export function isWorkspaceKind(value: unknown): value is WorkspaceKind {
   return typeof value === "string" && (WORKSPACE_KINDS as readonly string[]).includes(value);
 }
+
+/** Why the web app stops a workspace: an admin's Stop, the user's own (to switch agents), deactivation, deletion. */
+export const STOP_REASONS = ["admin", "user", "deactivated", "deleted"] as const;
+export type StopReason = (typeof STOP_REASONS)[number];
 
 /** The two servers portal-hostd reports on: the portal's own and the LLM server. */
 export const HOST_ROLES = ["portal", "llm"] as const;

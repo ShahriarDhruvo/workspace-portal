@@ -2,8 +2,7 @@
 
 import type { AgentKind } from "@portal/core";
 import type { ActionContext } from "@/lib/agent-versions";
-import type { AdminEngine } from "@/lib/engine-types";
-import type { AdminAgents } from "@/lib/gateway-types";
+import type { AdminAgents, AdminEngine } from "@/lib/overview";
 import { EngineCard } from "@/components/admin/engine/engine-card";
 import { useEngine } from "@/components/admin/engine/use-engine";
 import { PageHeading } from "@/components/layout/page-heading";

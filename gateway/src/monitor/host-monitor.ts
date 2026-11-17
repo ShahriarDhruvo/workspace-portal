@@ -1,7 +1,8 @@
 // Live hardware readings of one server, from its portal-hostd's event stream. Connected only while
 // someone watches (Admin > Usage), so hostd samples nothing the rest of the time. Keeps the last
 // minute of readings for the charts a new viewer opens with.
-import { HostdClient, HostdError, type HostInfo, type HostSample } from "./hostd.ts";
+import type { HostInfo, HostLive, HostRole, HostSample, HostState } from "@portal/core";
+import { HostdClient, HostdError } from "./hostd.ts";
 import type { HostdConfig } from "../config.ts";
 import type { Logger } from "../lib/log.ts";
 
@@ -12,19 +13,6 @@ const LINGER_MS = 15_000;
 const RETRY_MIN_MS = 1_000;
 /** Retries run only while someone watches, and one is a connection to a LAN host: readings return within 5 s. */
 const RETRY_MAX_MS = 5_000;
-
-export type HostRole = "portal" | "llm";
-/** off: not set up (no token); connecting; online: readings arrive; offline: hostd can't be reached or refused. */
-export type HostState = "off" | "connecting" | "online" | "offline";
-
-export interface HostLive {
-  role: HostRole;
-  state: HostState;
-  /** Why it is offline. */
-  error: string | null;
-  info: HostInfo | null;
-  sample: HostSample | null;
-}
 
 export class HostMonitor {
   readonly role: HostRole;
@@ -62,7 +50,7 @@ export class HostMonitor {
     };
   }
 
-  live(): HostLive {
+  live(): Omit<HostLive, "today"> {
     return { role: this.role, state: this.#state, error: this.#error, info: this.#info, sample: this.#history.at(-1) ?? null };
   }
 

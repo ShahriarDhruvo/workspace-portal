@@ -3,7 +3,19 @@
 import crypto from "node:crypto";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import { eq } from "drizzle-orm";
-import { AGENT_KINDS, isAgentKind, isWorkspaceKind, users, WORKSPACE_KINDS, type AgentKind, type PortalDb, type WorkspaceKind } from "@portal/core";
+import {
+  AGENT_KINDS,
+  isAgentKind,
+  isWorkspaceKind,
+  STOP_REASONS,
+  users,
+  WORKSPACE_KINDS,
+  type AgentInfo,
+  type AgentKind,
+  type PortalDb,
+  type StopReason,
+  type WorkspaceKind,
+} from "@portal/core";
 import {
   ImageCurrentError,
   InvalidVersionError,
@@ -63,9 +75,6 @@ export interface ControlDeps {
 }
 
 const MAX_BODY_BYTES = 16 * 1024;
-/** Why the web app stops a workspace: an admin's Stop, the user's own (to switch agents), deactivation, deletion. */
-const STOP_REASONS = ["admin", "user", "deactivated", "deleted"] as const;
-type StopReason = (typeof STOP_REASONS)[number];
 
 /** A handler that wrote the response itself (an event stream) returns this. */
 const RESPONDED = Symbol("responded");
@@ -334,7 +343,7 @@ function requireUser(db: PortalDb, userId: number, field: "userId" | "actorUserI
 }
 
 /** The agents enabled on this install, in display order, with the version new workspaces start with. */
-function agentList(config: Config, versions: AgentVersions): Array<{ id: AgentKind; name: string; description: string; version: string }> {
+function agentList(config: Config, versions: AgentVersions): AgentInfo[] {
   return config.workspace.agents.map((id) => {
     const { name, description } = driverFor(id);
     return { id, name, description, version: versions.current(id) };
@@ -352,7 +361,7 @@ function agentParam(value: string | undefined): AgentKind {
   return agent;
 }
 
-/** `{ version: string, rebuild?: boolean, actorUserId?: number }`. */
+/** An AgentUpdateRequest, checked. */
 function updateBody(agent: AgentKind, body: unknown): UpdateRequest {
   const { version, rebuild, actorUserId } = objectBody(body);
   if (typeof version !== "string" || version.trim() === "" || version.length > 128) {

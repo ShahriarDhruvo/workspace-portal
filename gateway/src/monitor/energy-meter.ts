@@ -3,21 +3,11 @@
 // the time: every POLL_MS it reads each set-up hostd, takes the increase since the reading before (kept in
 // host_meter, so a gateway restart counts only what is new) and adds it to the local day it happened on.
 import { sql } from "drizzle-orm";
-import { HOST_ROLES, hostDaily, hostMeter, usageDay, type HostRole, type PortalDb } from "@portal/core";
+import { HOST_ROLES, hostDaily, hostMeter, usageDay, type HostRole, type HostToday, type PortalDb } from "@portal/core";
 import { HostdError, type MeterReading } from "./hostd.ts";
 import type { Logger } from "../lib/log.ts";
 
 const POLL_MS = 30_000;
-
-/** A server's totals for the current local day, as host_daily has them (each live frame's `hosts[role].today`). */
-export interface HostToday {
-  /** YYYY-MM-DD, local (usageDay). */
-  day: string;
-  /** null while the server's power has never been measurable. */
-  energyWh: number | null;
-  rxBytes: number;
-  txBytes: number;
-}
 
 /** What the meter needs of a portal-hostd (a HostdClient). */
 export interface MeterSource {

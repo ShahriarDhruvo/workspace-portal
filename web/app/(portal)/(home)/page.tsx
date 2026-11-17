@@ -5,7 +5,7 @@ import { openMyWorkspace } from "@/lib/actions/admin";
 import { startingAgent } from "@/lib/agent-choice";
 import { config } from "@/lib/config";
 import { gateway, toApiError } from "@/lib/gateway";
-import type { WorkspaceStatusResponse } from "@/lib/gateway-types";
+import type { WorkspaceStatusResponse } from "@/lib/api";
 import { requireUser } from "@/lib/session";
 import { loadUsageToday } from "@/lib/usage";
 import { SubmitButton } from "@/components/forms/submit-button";

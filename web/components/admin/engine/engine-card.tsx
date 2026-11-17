@@ -2,7 +2,8 @@
 
 import { useRef, useState } from "react";
 import { removeEngineImage, restartEngineNow, updateEngine } from "@/lib/actions/engine";
-import type { AdminEngine, EngineImage, EngineOverview } from "@/lib/engine-types";
+import type { EngineImage, EngineOverview } from "@portal/core/wire";
+import type { AdminEngine } from "@/lib/overview";
 import {
   enginePackageRows,
   engineRemoveBlocker,

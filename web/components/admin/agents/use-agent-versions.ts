@@ -1,7 +1,7 @@
 "use client";
 
 import { mergeAgents, pollDelay } from "@/lib/agent-versions";
-import type { AdminAgents } from "@/lib/gateway-types";
+import type { AdminAgents } from "@/lib/overview";
 import { usePolled, type Polled } from "./use-polled";
 
 const delayOf = (data: AdminAgents) => pollDelay(data.versions?.job ?? null);

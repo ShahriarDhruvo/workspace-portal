@@ -19,8 +19,8 @@
 // The seams (ImageBuilder, NpmRegistry, ReleaseCache, AgentVersions, the clock) are injected, so the
 // flow is tested with fakes.
 import crypto from "node:crypto";
-import { isVersion, writeAudit, type AgentKind, type AuditAction, type PortalDb } from "@portal/core";
-import { describeAgentVersions, type AgentVersionsOverview } from "./agent-overview.ts";
+import { isVersion, writeAudit, type AgentKind, type AgentUpdateJob, type AgentVersionsOverview, type AuditAction, type PortalDb, type WorkspaceInfo } from "@portal/core";
+import { describeAgentVersions } from "./agent-overview.ts";
 import type { AgentVersions } from "./agent-versions.ts";
 import { driverFor } from "../agents/index.ts";
 import type { Config } from "../config.ts";
@@ -29,8 +29,8 @@ import { stagingImage, workspaceImage } from "../docker/image-names.ts";
 import { errorMessage, type Logger } from "../lib/log.ts";
 import type { NpmRegistry } from "./npm-registry.ts";
 import type { ReleaseCache } from "./release-cache.ts";
-import { CANCELLED, UpdateJob, type AgentUpdateJob } from "./update-job.ts";
-import { AgentUnavailableError, type WorkspaceInfo } from "../workspaces/manager.ts";
+import { CANCELLED, UpdateJob } from "./update-job.ts";
+import { AgentUnavailableError } from "../workspaces/manager.ts";
 
 /**
  * A generous bound for one job's build and version check: a full rebuild (Debian packages, Chromium,

@@ -4,10 +4,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { auditLog } from "@portal/core";
+import { auditLog, type AgentUpdateJob, type AgentVersionsOverview } from "@portal/core";
 import { json, startGateway, type Gateway, type GatewayOptions, type Reply } from "./harness.ts";
-import type { AgentUpdateJob } from "../src/updates/update-job.ts";
-import type { AgentVersionsOverview } from "../src/updates/agent-overview.ts";
 import { workspaceImage } from "../src/docker/image-names.ts";
 import { WorkspaceManager } from "../src/workspaces/manager.ts";
 import { gate } from "./fakes.ts";

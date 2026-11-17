@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { cancelEngineUpdate } from "@/lib/actions/engine";
-import type { EngineUpdateJob } from "@/lib/engine-types";
+import type { EngineUpdateJob } from "@portal/core/wire";
 import { engineJobOutcome, engineJobStep, engineJobTitle, engineStageLabel, isEngineJobActive } from "@/lib/engine-updates";
 import { FormError } from "@/components/forms/form-error";
 import { JobOutcome, JobPanel } from "@/components/admin/agents/version-card";

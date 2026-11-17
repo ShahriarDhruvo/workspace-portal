@@ -1,18 +1,21 @@
 import "server-only";
 import { after } from "next/server";
-import type { AgentKind, WorkspaceKind } from "@portal/core";
-import { config } from "./config";
 import type {
   AgentInfo,
+  AgentKind,
   AgentUpdateJob,
   AgentUpdateRequest,
   AgentVersionsOverview,
   ApiError,
   EnergyPriceStatus,
+  EngineOverview,
+  EngineUpdateJob,
   HostStats,
+  StopReason,
   WorkspaceInfo,
-} from "./gateway-types";
-import type { EngineOverview, EngineUpdateJob } from "./engine-types";
+  WorkspaceKind,
+} from "@portal/core";
+import { config } from "./config";
 import type { DeletedSessions } from "./session-store";
 
 // Client for the gateway control API (docs/ARCHITECTURE.md, "Gateway control API").
@@ -45,7 +48,7 @@ export class GatewayError extends Error {
   }
 }
 
-function errorBody(payload: unknown): { error?: string; message?: string } {
+function errorBody(payload: unknown): Partial<ApiError> {
   if (payload === null || typeof payload !== "object") return {};
   const { error, message } = payload as Record<string, unknown>;
   return {
@@ -89,9 +92,6 @@ async function call<T>(
   }
   return payload as T;
 }
-
-/** Why the portal stops a workspace: an admin's Stop, the user's own Stop (or restart), deactivation, deletion. */
-export type StopReason = "admin" | "user" | "deactivated" | "deleted";
 
 export const gateway = {
   stats: () => call<HostStats>("GET", "/control/stats"),

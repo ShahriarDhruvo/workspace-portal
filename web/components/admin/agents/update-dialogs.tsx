@@ -5,7 +5,7 @@ import { removeAgentImage, updateAgent, type AgentActionState } from "@/lib/acti
 import { updateWork } from "@/lib/agent-versions";
 import { returnFocus } from "@/lib/focus";
 import { formatBytes } from "@/lib/format";
-import type { AgentVersionInfo, InstalledImage } from "@/lib/gateway-types";
+import type { AgentVersionInfo, InstalledImage } from "@portal/core/wire";
 import { FormError } from "@/components/forms/form-error";
 import { SubmitButton } from "@/components/forms/submit-button";
 import {

@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchJson } from "@/lib/fetch-json";
-import type { ApiError } from "@/lib/gateway-types";
+import type { ApiError } from "@portal/core/wire";
 
 export interface Polled<T> {
   data: T;

@@ -1,12 +1,26 @@
 import "server-only";
-import type { SessionContext } from "@portal/core";
+import type { AgentInfo, AgentKind, ApiError, SessionContext, WorkspaceInfo } from "@portal/core";
 import { startingAgent } from "./agent-choice";
 import { GatewayError, gateway, toApiError } from "./gateway";
-import type { ApiError, WorkspaceInfo, WorkspaceStatusResponse } from "./gateway-types";
 import { checkApiAccess } from "./request-guards";
 import { getSession, renewSession } from "./session";
 
 // Helpers for the JSON Route Handlers under app/api.
+
+/** GET /api/workspace/status, POST /api/workspace/start and POST /api/workspace/stop. */
+export interface WorkspaceStatusResponse extends WorkspaceInfo {
+  /** Whose workspace this session uses (the gateway routes the iframe there). */
+  targetUserId: number;
+  /** True when an admin is viewing someone else's workspace. */
+  actingAs: boolean;
+  /** The agents enabled on this install, in display order. */
+  agents: AgentInfo[];
+  /**
+   * The agent a start would launch: the workspace owner's choice in Settings while it is enabled, else the first
+   * enabled agent; null when none is enabled.
+   */
+  nextAgent: AgentKind | null;
+}
 
 export function json(body: unknown, status = 200): Response {
   return Response.json(body, { status, headers: { "cache-control": "no-store" } });

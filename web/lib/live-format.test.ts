@@ -29,7 +29,7 @@ import {
   memoryFree,
   usedPercent,
 } from "./live-format.ts";
-import type { HostSample, LiveFrame } from "./live-types.ts";
+import type { HostSample, LiveFrame } from "@portal/core/wire";
 
 test("readings are short and say when they are unknown", () => {
   assert.equal(formatNumber(1370.4), "1,370");

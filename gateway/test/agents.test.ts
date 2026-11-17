@@ -3,11 +3,11 @@
 // both agents enabled.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { users, workspaces } from "@portal/core";
+import { users, workspaces, type WorkspaceInfo } from "@portal/core";
 import { eq } from "drizzle-orm";
 import { cookie, json, MIN, request, startGateway, type Gateway, type GatewayOptions } from "./harness.ts";
 import { driverFor } from "../src/agents/index.ts";
-import { WorkspaceManager, type WorkspaceInfo } from "../src/workspaces/manager.ts";
+import { WorkspaceManager } from "../src/workspaces/manager.ts";
 
 const BOTH = { env: { WORKSPACE_AGENTS: "qwen,dsh" } } satisfies GatewayOptions;
 

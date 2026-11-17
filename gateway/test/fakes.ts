@@ -6,7 +6,7 @@ import http, { type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { WebSocketServer } from "ws";
-import type { AgentKind, WorkspaceKind } from "@portal/core";
+import type { AgentKind, EngineJob, EngineStatus, ReleaseNotes, WorkspaceKind } from "@portal/core";
 import { driverFor } from "../src/agents/index.ts";
 import type { SettingsObject } from "../src/agents/qwen-settings.ts";
 import type { WorkspaceStartOptions } from "../src/docker/container-spec.ts";
@@ -21,9 +21,9 @@ import {
   type SweepResult,
   type WorkspaceImageSummary,
 } from "../src/docker/image-builder.ts";
-import type { NotesClient, RegistryClient, ReleaseNotes } from "../src/updates/engine-releases.ts";
+import type { NotesClient, RegistryClient } from "../src/updates/engine-releases.ts";
 import type { EngineHost } from "../src/updates/engine-updater.ts";
-import { HostdError, type EngineJob, type EngineStatus } from "../src/monitor/hostd.ts";
+import { HostdError } from "../src/monitor/hostd.ts";
 import { parseWorkspaceImage, STAGING_REPOSITORY, workspaceImage } from "../src/docker/image-names.ts";
 import { RegistryError, type NpmPackage, type NpmRegistry } from "../src/updates/npm-registry.ts";
 import { userPaths } from "../src/workspaces/paths.ts";

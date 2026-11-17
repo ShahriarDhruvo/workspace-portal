@@ -13,6 +13,7 @@
 // the oldest unpaired requests that were forwarded before the session was first seen. Without /slots
 // (another kind of server) the rows come from the gateway alone: Write from the streamed tokens, and
 // Read only for finished requests (from their timings).
+import type { EngineState, LlmLive, LlmSession, LlmWaiting } from "@portal/core";
 import type { LlmQueue } from "../service/llm-queue.ts";
 import type { ActiveLlmRequest, LlmRequests } from "./llm-requests.ts";
 import type { Logger } from "../lib/log.ts";
@@ -25,53 +26,6 @@ const WRITE_WINDOW_MS = 3_000;
 const MIN_SPAN_MS = 800;
 /** A forwarded request without an engine session for this long is shown as waiting in the engine. */
 const ENGINE_WAIT_GRACE_MS = 1_000;
-
-export type EngineState = "ready" | "loading" | "offline" | "unknown";
-export type SessionPhase = "preparing" | "reading" | "writing";
-
-/** One engine session working on a request. Token counts and rates are null where unknown. */
-export interface LlmSession {
-  /** The engine's session number, from 1; null without /slots. */
-  slot: number | null;
-  userId: number | null;
-  userName: string | null;
-  /** preparing: admitted, nothing processed yet (prompt cache, images); reading: the prompt; writing: the answer. */
-  phase: SessionPhase;
-  promptTokens: number | null;
-  /** Prompt tokens reused from the engine's prompt cache (not read again). */
-  cachedTokens: number | null;
-  /** Prompt tokens read so far. */
-  processedTokens: number | null;
-  generatedTokens: number;
-  readTps: number | null;
-  writeTps: number | null;
-  /** When the request reached the engine (epoch ms). */
-  startedAt: number;
-}
-
-export interface LlmWaiting {
-  userId: number;
-  userName: string | null;
-  since: number;
-  /** portal: in the gateway's queue (limits, or a paused queue); engine: forwarded, the engine has no free session. */
-  stage: "portal" | "engine";
-}
-
-export interface LlmLive {
-  engine: EngineState;
-  /** The engine reports its sessions (/slots); otherwise rows come from the gateway alone. */
-  sessionsReported: boolean;
-  /** Sessions the engine has (null when unknown). */
-  engineSessions: number | null;
-  maxConcurrency: number;
-  inFlight: number;
-  queued: number;
-  /** The gateway holds new requests (an engine update is restarting the LLM server). */
-  paused: boolean;
-  sessions: LlmSession[];
-  waiting: LlmWaiting[];
-  totals: { readTps: number; writeTps: number };
-}
 
 /** One engine session as /slots reports it. */
 export interface EngineSlot {

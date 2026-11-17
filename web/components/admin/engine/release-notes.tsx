@@ -2,7 +2,7 @@
 
 import type { RefObject } from "react";
 import { returnFocus } from "@/lib/focus";
-import type { ReleaseNotes } from "@/lib/gateway-types";
+import type { ReleaseNotes } from "@portal/core/wire";
 import { parseReleaseNotes, type NoteBlock, type NoteSpan } from "@/lib/release-notes";
 import { LocalTime } from "@/components/local-time";
 import { Badge } from "@/components/ui/badge";

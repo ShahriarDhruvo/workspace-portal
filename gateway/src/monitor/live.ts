@@ -9,11 +9,10 @@
 // `frame` every FRAME_MS (LiveFrame).
 import type { ServerResponse } from "node:http";
 import { inArray } from "drizzle-orm";
-import { displayName, users, type PortalDb } from "@portal/core";
-import type { EnergyMeter, HostToday } from "./energy-meter.ts";
-import type { HostLive, HostMonitor, HostRole } from "./host-monitor.ts";
-import type { HostSample } from "./hostd.ts";
-import type { LlmLive, LlmMonitor } from "./llm-monitor.ts";
+import { displayName, users, type HostLive, type HostRole, type LiveFrame, type LiveInit, type LlmTotalsPoint, type PortalDb } from "@portal/core";
+import type { EnergyMeter } from "./energy-meter.ts";
+import type { HostMonitor } from "./host-monitor.ts";
+import type { LlmMonitor } from "./llm-monitor.ts";
 import type { Logger } from "../lib/log.ts";
 import type { SessionLog } from "./session-log.ts";
 
@@ -22,26 +21,6 @@ const FRAME_MS = 500;
 const LLM_HISTORY_FRAMES = 120;
 /** Viewers beyond this are refused (each is an admin with Admin > Usage open). */
 const MAX_VIEWERS = 8;
-
-/** A server in a frame: its readings, and its totals for today (null until the energy meter has read it today). */
-export type LiveHost = HostLive & { today: HostToday | null };
-
-export interface LiveFrame {
-  /** Gateway time (epoch ms), for "since" values. */
-  t: number;
-  hosts: Record<HostRole, LiveHost>;
-  llm: LlmLive;
-  /** Changes whenever the workspace sessions do (0 without them). */
-  sessionsVersion: number;
-}
-
-export interface LiveInit {
-  frameMs: number;
-  /** The last minute of readings per server, oldest first. */
-  history: Record<HostRole, HostSample[]>;
-  /** The LLM totals of the recent frames, oldest first. */
-  llmHistory: Array<{ t: number; readTps: number; writeTps: number }>;
-}
 
 export interface LiveDeps {
   llm: LlmMonitor;
@@ -69,7 +48,7 @@ export class LiveHub {
   readonly #viewers = new Set<Send>();
   #timer: ReturnType<typeof setInterval> | null = null;
   #unwatch: Array<() => void> = [];
-  #llmHistory: Array<{ t: number; readTps: number; writeTps: number }> = [];
+  #llmHistory: LlmTotalsPoint[] = [];
 
   constructor(deps: LiveDeps) {
     this.#deps = deps;
@@ -119,7 +98,7 @@ export class LiveHub {
   /** The current state (also each viewer's first frame). */
   frame(): LiveFrame {
     const { llm, hosts, energy, sessions } = this.#deps;
-    const host = (role: HostRole): LiveHost => ({ ...hosts[role].live(), today: energy?.today(role) ?? null });
+    const host = (role: HostRole): HostLive => ({ ...hosts[role].live(), today: energy?.today(role) ?? null });
     return { t: this.#now(), hosts: { portal: host("portal"), llm: host("llm") }, llm: llm.snapshot(), sessionsVersion: sessions?.version ?? 0 };
   }
 
