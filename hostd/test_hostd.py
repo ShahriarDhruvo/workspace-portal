@@ -640,7 +640,7 @@ class TestSampler(TmpRoot):
 
     def test_idle_until_watched_then_stops(self):
         time.sleep(0.2)
-        self.assertEqual(self.sampler.samples_taken, 0)  # nobody watching: nothing sampled
+        self.assertEqual(self.sampler.seq, 0)  # nobody watching: nothing sampled
         self.assertTrue(self.sampler.add_stream())
         seq, s1 = self.sampler.wait_newer(0, 2)
         seq, s2 = self.sampler.wait_newer(seq, 2)
@@ -651,9 +651,9 @@ class TestSampler(TmpRoot):
         self.assertEqual(s2['fans'][0]['rpm'] if s2['fans'][0]['rpm'] is not None else 1200, 1200)
         self.sampler.remove_stream()
         time.sleep(0.15)
-        n = self.sampler.samples_taken
+        n = self.sampler.seq
         time.sleep(0.25)
-        self.assertEqual(self.sampler.samples_taken, n)   # stopped
+        self.assertEqual(self.sampler.seq, n)   # stopped
         self.assertEqual(self.group.closed, 0)
         time.sleep(0.6)
         self.assertGreaterEqual(self.group.closed, 1)     # perf closed after the linger time
@@ -673,9 +673,9 @@ class TestSampler(TmpRoot):
         s2 = self.sampler.current()
         self.assertIsNotNone(s2['throttling'])   # second call within the keepalive has a previous reading
         time.sleep(0.5)
-        n = self.sampler.samples_taken
+        n = self.sampler.seq
         time.sleep(0.2)
-        self.assertEqual(self.sampler.samples_taken, n)
+        self.assertEqual(self.sampler.seq, n)
 
 
 # ----------------------------------------------------------------------------------------- engine fakes
@@ -1123,7 +1123,7 @@ class TestHttp(HttpCase):
         self.assertEqual(m2['instance'], m['instance'])
         self.assertGreater(m2['t'], m['t'])
         self.assertGreater(m2['energyJ'], m['energyJ'])            # 7.577 W, counted without any stream open
-        self.assertEqual(self.sampler.samples_taken, 0)
+        self.assertEqual(self.sampler.seq, 0)
         self.assertEqual(self.req('POST', '/v1/meter')[0], 405)
 
     def open_stream(self):

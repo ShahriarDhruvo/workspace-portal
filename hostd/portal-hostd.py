@@ -1,15 +1,10 @@
 #!/usr/bin/python3
-"""portal-hostd: live hardware readings of this host for the workspace portal's gateway and, in the llm role,
-LLM engine (rootless Podman quadlet) updates through the engine user's own systemd manager.
+"""portal-hostd: this host's live hardware readings for the workspace portal's gateway and, in the llm role,
+updates of the LLM engine (a rootless Podman quadlet) through the engine user's systemd manager.
+Standard library only. README.md has the configuration, the API and the data sources.
 
-Python 3.11+ standard library only. Configuration comes from the environment (systemd
-EnvironmentFile=/etc/portal-hostd/hostd.conf); the bearer token from $CREDENTIALS_DIRECTORY/token
-(systemd LoadCredential) or $HOSTD_TOKEN_FILE. See README.md for the API and the data sources.
-
-Cost model: nothing is sampled while nobody watches; the only thread that wakes then is the meter, every
-2 s, for one read of the power source and one of /proc/net/dev (the running totals of GET /v1/meter). While a
-stream is open, one shared sampler thread reads every source once per interval through file
-descriptors that stay open (os.pread), and perf counters are read as one group per PMU.
+Nothing is sampled while nobody watches: only the meter thread wakes, every METER_PERIOD. While a stream is
+open, one sampler thread reads every source once per interval through file descriptors that stay open.
 """
 
 import glob
@@ -35,7 +30,7 @@ import urllib.parse
 import urllib.request
 from collections import deque
 
-API_VERSION = 2         # 2: network and disk readings, GET /v1/meter
+API_VERSION = 2
 DEFAULT_PORT = 9180
 MAX_CONNECTIONS = 16
 MAX_STREAMS = 4
@@ -47,7 +42,7 @@ FAN_PERIOD = 3.0
 BUSY_PCT = 1.0          # a logical CPU counts as busy (for clock averages) above this usage
 PING_EVERY = 15.0
 STATUS_CACHE = 5.0
-METER_PERIOD = 2.0      # the always-on meter's tick
+METER_PERIOD = 2.0
 SPACE_PERIOD = 5.0      # filesystem space is measured at most this often
 SECTOR = 512            # /proc/diskstats counts 512-byte sectors, whatever the disk's block size
 
@@ -104,29 +99,22 @@ class Src:
 
     __slots__ = ('path', 'fd', 'size')
 
-    def __init__(self, path, size=4096):
+    def __init__(self, path, size):
         self.path, self.fd, self.size = path, None, size
 
     def read(self):
-        for attempt in (0, 1):
+        for _ in range(2):      # after an error, once more with the file opened again
             try:
                 if self.fd is None:
                     self.fd = os.open(self.path, os.O_RDONLY | os.O_CLOEXEC)
-                data = os.pread(self.fd, self.size, 0)
-                if len(data) < self.size:
-                    return data
-                parts = [data]
-                off = len(data)
-                while True:
-                    more = os.pread(self.fd, 65536, off)
-                    if not more:
-                        return b''.join(parts)
-                    parts.append(more)
-                    off += len(more)
+                data = b''
+                while True:     # one pread unless the file fills the buffer (some reads are slow: SMU, EC)
+                    chunk = os.pread(self.fd, self.size, len(data))
+                    data += chunk
+                    if len(chunk) < self.size:
+                        return data
             except OSError:
                 self.close()
-                if attempt:
-                    return None
         return None
 
     def int(self):
@@ -220,29 +208,30 @@ def pmu_event(fs, pmu, name):
 
 
 def rapl_events(fs, labels):
-    """The RAPL PMU's energy events among labels (pkg, ram, cores, gpu) -> [(label, spec, joules per count)]."""
+    """The RAPL PMU's energy events among labels (pkg, ram, cores, gpu) -> [(label, spec, joules per count)].
+    PerfUnavailable without the package's."""
     evs = []
     for label in labels:
         try:
-            spec, scale = pmu_event(fs, 'power', 'energy-' + label)
-            evs.append((label, spec, scale))
+            evs.append((label, *pmu_event(fs, 'power', 'energy-' + label)))
         except PerfUnavailable:
-            pass
+            if label == 'pkg':
+                raise
     return evs
 
 
 class PerfGroup:
-    """One perf group (all events on one PMU), read with a single read() syscall."""
+    """One perf group (all events on one PMU), read with a single read() syscall. events: [(label, spec,
+    factor)], where the factor converts a count into the reported unit."""
 
     def __init__(self, fs, pmu, events):
-        # events: list of (label, spec, factor); factor converts a count into the reported unit
         base = pmu_dir(pmu)
         t = fs.int(base + '/type')
         if t is None:
             raise PerfUnavailable(f'no PMU {pmu}')
         mask = (fs.text(base + '/cpumask') or '').strip()
         m = re.match(r'(\d+)', mask)
-        self.pmu, self.type, self.cpu = pmu, t, int(m.group(1)) if m else 0
+        self.type, self.cpu = t, int(m.group(1)) if m else 0
         self.labels = [e[0] for e in events]
         self.factors = [e[2] for e in events]
         self.configs = [pmu_encode(fs, pmu, e[1]) for e in events]
@@ -299,34 +288,31 @@ GM_V3_SIZE = 264
 
 
 def decode_gpu_metrics(b):
-    """struct gpu_metrics_v3_0 (kgd_pp_interface.h, format 3 content 0, natural alignment, 264 bytes).
-    Returns None for any other revision. Temperatures are centi-degrees C, powers mW, clocks MHz."""
+    """The fields read here of struct gpu_metrics_v3_0 (kgd_pp_interface.h: format 3, content 0, 264 bytes), or
+    None for any other revision. Temperatures are centi-degrees C, powers mW, clocks MHz."""
     if not b or len(b) < GM_V3_SIZE:
         return None
     size, fmt, content = struct.unpack_from('<HBB', b, 0)
     if (fmt, content) != (3, 0) or size < GM_V3_SIZE:
         return None
-    u16 = lambda off: struct.unpack_from('<H', b, off)[0]
-    u32 = lambda off: struct.unpack_from('<I', b, off)[0]
-    v16 = lambda off: (lambda x: None if x == 0xFFFF else x)(u16(off))
-    v32 = lambda off: (lambda x: None if x == 0xFFFFFFFF else x)(u32(off))
+
+    def field(fmt, off):    # all bits set: the firmware has no value
+        x, = struct.unpack_from(fmt, b, off)
+        return None if x == (1 << 8 * struct.calcsize(fmt)) - 1 else x
+
     return {
-        'temperature_gfx': v16(4), 'temperature_soc': v16(6),
-        'average_gfx_activity': v16(42), 'average_vcn_activity': v16(44),
-        'average_dram_reads': v16(94), 'average_dram_writes': v16(96),
-        'average_socket_power': v32(112), 'average_apu_power': v32(120), 'average_gfx_power': v32(124),
-        'average_all_core_power': v32(132),
-        'average_gfxclk_frequency': v16(174), 'average_fclk_frequency': v16(182), 'average_uclk_frequency': v16(186),
-        'current_core_maxfreq': v16(222), 'current_gfx_maxfreq': v16(224),
-        'throttle': struct.unpack_from('<7I', b, 228),
+        'temperature_gfx': field('<H', 4), 'average_gfx_activity': field('<H', 42),
+        'average_socket_power': field('<I', 112), 'average_gfx_power': field('<I', 124),
+        'average_all_core_power': field('<I', 132), 'average_gfxclk_frequency': field('<H', 174),
+        'current_gfx_maxfreq': field('<H', 224), 'throttle': struct.unpack_from('<7I', b, 228),
     }
 
 
 # ------------------------------------------------------------------------------------------- devices
 
 def pci_name(fs, vendor, device):
-    """Device name from pci.ids (vendor/device as 4-digit lowercase hex), or None. Streams the 1.3 MB
-    file line by line so it never sits in memory (pymalloc would keep the RSS)."""
+    """Device name from pci.ids (vendor/device as 4-digit lowercase hex), or None. Read line by line: the file
+    is over a megabyte, and memory once allocated for it would stay in the RSS."""
     try:
         f = open(fs.p('/usr/share/hwdata/pci.ids'), encoding='utf-8', errors='replace')
     except OSError:
@@ -369,14 +355,11 @@ def gpu_display_name(fs, card_dev, kind, cpu_model):
 
 
 class AmdGpu:
-    kind = 'amdgpu'
-
     def __init__(self, fs, dev):
-        self.dev = dev
         self.metrics = Src(fs.p(dev + '/gpu_metrics'), 1024)
         self.vram_used = Src(fs.p(dev + '/mem_info_vram_used'), 64)
         self.vram_total = fs.int(dev + '/mem_info_vram_total')
-        gm = decode_gpu_metrics(self.metrics.read())
+        gm = self.read()
         self.ok = gm is not None
         self.max_mhz = gm['current_gfx_maxfreq'] if gm else None
         if not self.max_mhz:
@@ -384,12 +367,10 @@ class AmdGpu:
             self.max_mhz = max(map(int, levels)) if levels else None
 
     def read(self):
-        return decode_gpu_metrics(self.metrics.read()) if self.ok else None
+        return decode_gpu_metrics(self.metrics.read())
 
 
 class IntelGpu:
-    kind = 'i915'
-
     def __init__(self, fs, card):
         self.act = Src(fs.p(card + '/gt_act_freq_mhz'), 64)
         rc6 = card + '/power/rc6_residency_ms'
@@ -400,7 +381,8 @@ class IntelGpu:
 
 
 class EcFans:
-    """Fans of the Sixunited AXB35 EC driver (ec_su_axb35). Each read is an EC transaction (~3 ms, sleeps)."""
+    """Fans of the Sixunited AXB35 EC driver (ec_su_axb35). Each read is an EC transaction that sleeps, so
+    the sampler leaves them to a thread of their own."""
 
     def __init__(self, fs):
         self.fans = []
@@ -423,8 +405,11 @@ class EcFans:
 # ---------------------------------------------------------------------------------- network and disks
 
 def counter_rates(prev, cur, dt, unit=1):
-    """Per-second increase of two counters summed over the names in both readings ({name: (a, b)}), times unit.
-    A counter that went back (a reset) adds nothing; neither does a name in only one reading."""
+    """Per-second increase of two counters summed over the names in both readings ({name: (a, b)}), times unit;
+    (None, None) without both readings. A counter that went back (a reset) adds nothing; neither does a name
+    in only one reading."""
+    if prev is None or cur is None or not dt:
+        return None, None
     da = db = 0
     for name, (a, b) in cur.items():
         p = prev.get(name)
@@ -434,71 +419,44 @@ def counter_rates(prev, cur, dt, unit=1):
     return int(da * unit / dt), int(db * unit / dt)
 
 
-class NetCounters:
-    """Bytes received and sent per physical network interface, from /proc/net/dev. Physical: one with a device
-    behind it (/sys/class/net/IF/device), so not lo, bridges (docker0, br-*, virbr*), veth pairs or tunnels
-    (tun, WireGuard), whose traffic a physical interface carries too or never leaves the host."""
+# Counters arguments: the /proc table, where sysfs lists its devices, and the columns of the name and the two
+# counters (a ':' counts as a space).
+NET = ('/proc/net/dev', '/sys/class/net/', 0, 1, 9)         # bytes received and sent
+DISKS = ('/proc/diskstats', '/sys/block/', 2, 5, 9)         # sectors read and written
 
-    def __init__(self, fs):
-        self.fs = fs
-        self.src = Src(fs.p('/proc/net/dev'), 16384)
-        self._physical = {}   # name -> bool, for the names of the last reading (veths come and go)
+
+class Counters:
+    """Two counters per device of a /proc table, for the devices with hardware behind them (a `device` link in
+    sysfs). That leaves out lo, bridges, veth pairs and tunnels, and partitions, loop, zram, device-mapper and
+    md devices: what they carry a real device counts too, or it never leaves the host."""
+
+    def __init__(self, fs, table, sysfs, name, a, b):
+        self.fs, self.sysfs, self.columns = fs, sysfs, (name, a, b)
+        self.src = Src(fs.p(table), 16384)
+        self._real = {}       # name -> bool, for the names of the last reading (veths come and go)
 
     def read(self):
-        """{name: (rx_bytes, tx_bytes)} of the physical interfaces, or None without /proc/net/dev or any of them."""
+        """{name: (a, b)}, or None without the table or any such device."""
         data = self.src.read()
         if not data:
             return None
+        name_at, a, b = self.columns
         seen, out = {}, {}
-        for line in data.decode('ascii', 'replace').splitlines()[2:]:
-            name, sep, rest = line.partition(':')
-            name, f = name.strip(), rest.split()
-            if not sep or len(f) < 9:
-                continue
-            phys = self._physical.get(name)
-            if phys is None:
-                phys = self.fs.exists(f'/sys/class/net/{name}/device')
-            seen[name] = phys
-            if phys:
-                try:
-                    out[name] = (int(f[0]), int(f[8]))
-                except ValueError:
-                    pass
-        self._physical = seen
-        return out or None
-
-
-class DiskCounters:
-    """Sectors read and written per whole disk, from /proc/diskstats. Whole disk: a /sys/block entry with a device
-    behind it, so no partitions, loop, zram, ram, device-mapper or md devices (the disks under those count
-    their I/O already)."""
-
-    def __init__(self, fs):
-        self.fs = fs
-        self.src = Src(fs.p('/proc/diskstats'), 16384)
-        self._whole = {}      # name -> bool, for the names of the last reading
-
-    def read(self):
-        """{name: (sectors_read, sectors_written)} of the whole disks, or None without /proc/diskstats or any."""
-        data = self.src.read()
-        if not data:
-            return None
-        seen, out = {}, {}
-        for line in data.decode('ascii', 'replace').splitlines():
+        for line in data.decode('ascii', 'replace').replace(':', ' ').splitlines():
             f = line.split()
-            if len(f) < 10:
+            if len(f) <= b:
                 continue
-            name = f[2]
-            whole = self._whole.get(name)
-            if whole is None:
-                whole = self.fs.exists('/sys/block/' + name.replace('/', '!') + '/device')
-            seen[name] = whole
-            if whole:
+            name = f[name_at]
+            real = self._real.get(name)
+            if real is None:
+                real = self.fs.exists(self.sysfs + name.replace('/', '!') + '/device')
+            seen[name] = real
+            if real:
                 try:
-                    out[name] = (int(f[5]), int(f[9]))
+                    out[name] = (int(f[a]), int(f[b]))
                 except ValueError:
                     pass
-        self._whole = seen
+        self._real = seen
         return out or None
 
 
@@ -509,9 +467,8 @@ def _unescape(field):
 
 def local_filesystems(mounts):
     """(source, mount point) of the filesystems on local block devices in /proc/self/mounts text, one per source
-    (btrfs subvolumes and bind mounts share theirs), in mount order. Only what this process can measure counts:
-    a mount covered by a later one at or above its mount point is left out (ProtectHome=yes puts an empty tmpfs
-    over /home, and statvfs there measures that)."""
+    (btrfs subvolumes and bind mounts share theirs), in mount order. A mount covered by a later one at or above
+    its mount point is left out: statvfs there would measure the cover (ProtectHome's empty tmpfs over /home)."""
     entries = []
     for line in mounts.splitlines():
         f = line.split()
@@ -535,9 +492,8 @@ def local_filesystems(mounts):
 
 
 class FsSpace:
-    """Size and free space of the local filesystems together (statvfs: f_blocks and f_bavail, in f_frsize units).
-    statvfs on a failing disk can hang, so after the first measurement each refresh runs in a thread of its own,
-    at most every `period` seconds, and get() always answers at once with the last result."""
+    """Size and free space of the local filesystems together. statvfs on a failing disk can hang, so after the
+    first measurement each refresh runs in a thread of its own and get() answers at once with the last result."""
 
     def __init__(self, fs, period=SPACE_PERIOD, statvfs=os.statvfs):
         self.fs, self.period, self.statvfs = fs, period, statvfs
@@ -580,8 +536,8 @@ def r1(x):
     return None if x is None else round(x, 1)
 
 
-def r2(x):
-    return None if x is None else round(x, 2)
+def r2(x, per=1):
+    return None if x is None else round(x / per, 2)
 
 
 class Host:
@@ -589,36 +545,30 @@ class Host:
         self.fs, self.role, self.interval_ms, self.engine_unit = fs, role, interval_ms, engine_unit
         self.stat = Src(fs.p('/proc/stat'), 65536)
         self.meminfo = Src(fs.p('/proc/meminfo'), 8192)
-        self.ncpu = self._count_cpus()
-        self.freq = [Src(fs.p(f'/sys/devices/system/cpu/cpu{i}/cpufreq/scaling_cur_freq'), 64)
-                     for i in range(self.ncpu)]
+        self.ncpu = len(re.findall(r'^cpu\d+\s', fs.text('/proc/stat') or '', re.M)) or os.cpu_count() or 1
+        cpus, cpufreq = range(self.ncpu), '/sys/devices/system/cpu/cpu%d/cpufreq/'
+        self.freq = [Src(fs.p(cpufreq % i + 'scaling_cur_freq'), 64) for i in cpus]
         self.cpu_model, self.cores, self.threads = self._cpuinfo()
-        # amd-pstate(-epp): for a CPU without a fresh APERF/MPERF tick sample (idle >20 ms) the kernel reports
-        # policy->cur, which is scaling_min_freq, instead of a measurement. Treat exactly that value as unknown.
-        drv = (fs.text('/sys/devices/system/cpu/cpu0/cpufreq/scaling_driver') or '').strip()
-        self.freq_fallback = [fs.int(f'/sys/devices/system/cpu/cpu{i}/cpufreq/scaling_min_freq')
-                              for i in range(self.ncpu)] if drv.startswith('amd-pstate') else None
-        maxes = [fs.int(f'/sys/devices/system/cpu/cpu{i}/cpufreq/cpuinfo_max_freq') for i in range(self.ncpu)]
-        maxes = [m for m in maxes if m]
+        # amd-pstate reports scaling_min_freq, not a measurement, for a CPU that was idle at the last tick:
+        # exactly that value counts as unknown.
+        amd_pstate = (fs.text(cpufreq % 0 + 'scaling_driver') or '').startswith('amd-pstate')
+        self.freq_fallback = [fs.int(cpufreq % i + 'scaling_min_freq') for i in cpus] if amd_pstate else None
+        maxes = [m for i in cpus if (m := fs.int(cpufreq % i + 'cpuinfo_max_freq'))]
         self.cpu_max_mhz = max(maxes) // 1000 if maxes else None
         self.cpu_temp = self._cpu_temp()
         self.gpu, self.gpu_name = self._gpu()
+        self.amd = isinstance(self.gpu, AmdGpu)
         self.fans = EcFans(fs)
-        self.net = NetCounters(fs)
-        self.disks = DiskCounters(fs)
+        self.net = Counters(fs, *NET)
+        self.disks = Counters(fs, *DISKS)
         self.space = FsSpace(fs)
-        self.groups = {}       # name -> PerfGroup (defined; opened while the sampler runs)
-        self._define_perf()
-        self.perf_ok = self._probe_perf()
+        self.groups = self._perf_groups()   # name -> PerfGroup, open while the sampler runs
+        self.perf_ok = bool(self.groups)
         self.perf_open = False
         self.perf_gen = 0
+        self._info = None
 
     # -- detection
-    def _count_cpus(self):
-        data = self.fs.text('/proc/stat') or ''
-        n = len(re.findall(r'^cpu\d+\s', data, re.M))
-        return n or (os.cpu_count() or 1)
-
     def _cpuinfo(self):
         data = self.fs.text('/proc/cpuinfo') or ''
         model = None
@@ -671,42 +621,31 @@ class Host:
                 return IntelGpu(fs, card), gpu_display_name(fs, card + '/device', 'i915', self.cpu_model)
         return None, None
 
-    def _define_perf(self):
+    def _perf_groups(self):
+        """The perf groups this host has and this process may open (CAP_PERFMON)."""
         fs = self.fs
-        try:  # Strix Halo data fabric: DRAM channels 0,4,8,12 (of 16) per direction, 64 B per beat, x4
-            ev = [(f'rd{n}', f'event={0x1f + 0x40 * n},umask=0xffe', 256.0) for n in (0, 4, 8, 12)]
-            ev += [(f'wr{n}', f'event={0x1f + 0x40 * n},umask=0x7ff', 256.0) for n in (0, 4, 8, 12)]
-            if self.gpu is not None and self.gpu.kind == 'amdgpu':
-                self.groups['df'] = PerfGroup(fs, 'amd_df', ev)
-        except PerfUnavailable:
-            pass
-        try:  # Intel client IMC: free-running 64-byte line counters
-            self.groups['imc'] = PerfGroup(fs, 'uncore_imc', [
-                ('rd', pmu_event(fs, 'uncore_imc', 'data_reads')[0], 64.0),
-                ('wr', pmu_event(fs, 'uncore_imc', 'data_writes')[0], 64.0)])
-        except PerfUnavailable:
-            pass
-        if self.gpu is None or self.gpu.kind != 'amdgpu':
-            evs = rapl_events(fs, ('pkg', 'ram', 'cores', 'gpu'))
-            if any(e[0] == 'pkg' for e in evs):
-                try:
-                    self.groups['rapl'] = PerfGroup(fs, 'power', evs)
-                except PerfUnavailable:
-                    pass
-        if self.gpu is not None and self.gpu.kind == 'i915':
+        named = lambda pmu, event: pmu_event(fs, pmu, event)[0]
+        wanted = {}     # name -> (PMU, its events)
+        if self.amd:    # Strix Halo data fabric: DRAM channels 0, 4, 8, 12 (of 16) per direction, 64 B per beat, x4
+            wanted['df'] = ('amd_df', lambda: [(f'{rw}{n}', f'event={0x1f + 0x40 * n},umask={umask}', 256.0)
+                                               for rw, umask in (('rd', '0xffe'), ('wr', '0x7ff')) for n in (0, 4, 8, 12)])
+        # Intel client IMC: free-running counters of 64-byte lines
+        wanted['imc'] = ('uncore_imc', lambda: [('rd', named('uncore_imc', 'data_reads'), 64.0),
+                                                ('wr', named('uncore_imc', 'data_writes'), 64.0)])
+        if not self.amd:
+            wanted['rapl'] = ('power', lambda: rapl_events(fs, ('pkg', 'ram', 'cores', 'gpu')))
+        if isinstance(self.gpu, IntelGpu):
+            wanted['i915'] = ('i915', lambda: [('rcs0', named('i915', 'rcs0-busy'), 1.0)])
+        groups = {}
+        for name, (pmu, events) in wanted.items():
             try:
-                self.groups['i915'] = PerfGroup(fs, 'i915', [('rcs0', pmu_event(fs, 'i915', 'rcs0-busy')[0], 1.0)])
+                group = PerfGroup(fs, pmu, events())
             except PerfUnavailable:
-                pass
-
-    def _probe_perf(self):
-        ok = {}
-        for name, g in list(self.groups.items()):
-            ok[name] = g.open()
-            g.close()
-            if not ok[name]:
-                del self.groups[name]
-        return bool(ok) and any(ok.values())
+                continue
+            if group.open():
+                groups[name] = group
+            group.close()
+        return groups
 
     def open_perf(self):
         if not self.perf_open:
@@ -722,39 +661,40 @@ class Host:
 
     # -- static info
     def sources(self):
-        gpu_busy = None
-        if self.gpu is not None:
-            gpu_busy = 'activity' if self.gpu.kind == 'amdgpu' else (
-                'pmu' if 'i915' in self.groups else ('awake' if self.gpu.rc6 else None))
-        power = 'socket' if (self.gpu is not None and self.gpu.kind == 'amdgpu') else (
-            'rapl' if 'rapl' in self.groups else None)
-        bw = 'amd_df' if 'df' in self.groups else ('uncore_imc' if 'imc' in self.groups else None)
+        groups = self.groups
+        if self.amd:
+            power, gpu_busy = 'socket', 'activity'
+        else:
+            power = 'rapl' if 'rapl' in groups else None
+            gpu_busy = 'pmu' if 'i915' in groups else 'awake' if self.gpu and self.gpu.rc6 else None
+        bw = 'amd_df' if 'df' in groups else 'uncore_imc' if 'imc' in groups else None
         return {'perf': self.perf_ok, 'bandwidth': bw, 'power': power, 'gpuBusy': gpu_busy}
 
     def info(self):
-        osr = self.fs.text('/etc/os-release') or ''
-        m = re.search(r'^PRETTY_NAME="?(.*?)"?$', osr, re.M)
-        src = self.sources()
-        power_label = {'socket': 'APU socket power', 'rapl': 'CPU package + DRAM (RAPL)'}.get(src['power'])
-        return {
-            'hostd': API_VERSION,
-            'hostname': socket.gethostname().split('.')[0],
-            'role': self.role,
-            'os': m.group(1) if m else None,
-            'kernel': (self.fs.text('/proc/sys/kernel/osrelease') or os.uname().release).strip(),
-            'intervalMs': self.interval_ms,
-            'cpu': {'model': self.cpu_model, 'cores': self.cores, 'threads': self.threads, 'maxMhz': self.cpu_max_mhz},
-            'gpu': {'name': self.gpu_name, 'maxMhz': self.gpu.max_mhz} if self.gpu is not None else None,
-            'memory': {'totalBytes': self._meminfo().get('MemTotal', 0) * 1024},
-            'sources': src,
-            'power': {'label': power_label} if power_label else None,
-            'engine': {'unit': self.engine_unit} if self.engine_unit else None,
-            **self.inventory(),
-        }
+        if self._info is None:      # all of it but the inventory stays as it is
+            m = re.search(r'^PRETTY_NAME="?(.*?)"?$', self.fs.text('/etc/os-release') or '', re.M)
+            src = self.sources()
+            power_label = {'socket': 'APU socket power', 'rapl': 'CPU package + DRAM (RAPL)'}.get(src['power'])
+            self._info = {
+                'hostd': API_VERSION,
+                'hostname': socket.gethostname().split('.')[0],
+                'role': self.role,
+                'os': m.group(1) if m else None,
+                'kernel': (self.fs.text('/proc/sys/kernel/osrelease') or os.uname().release).strip(),
+                'intervalMs': self.interval_ms,
+                'cpu': {'model': self.cpu_model, 'cores': self.cores, 'threads': self.threads,
+                        'maxMhz': self.cpu_max_mhz},
+                'gpu': {'name': self.gpu_name, 'maxMhz': self.gpu.max_mhz} if self.gpu is not None else None,
+                'memory': {'totalBytes': self._meminfo().get('MemTotal', 0) * 1024},
+                'sources': src,
+                'power': {'label': power_label} if power_label else None,
+                'engine': {'unit': self.engine_unit} if self.engine_unit else None,
+            }
+        return {**self._info, **self.inventory()}
 
     def inventory(self):
-        """What the samples' net and disk count: the physical interfaces, the whole disks and the mount points of
-        the local filesystems, as they are now (the static rest of info() is cached)."""
+        """What the samples' net and disk count, as it is now: the physical interfaces, the whole disks and the
+        mount points of the local filesystems."""
         fs = self.fs
         ifaces = [os.path.basename(d) for d in fs.glob('/sys/class/net/*') if fs.exists(d + '/device')]
         disks = [os.path.basename(d).replace('!', '/') for d in fs.glob('/sys/block/*') if fs.exists(d + '/device')]
@@ -803,12 +743,10 @@ class Host:
         raw['mem'] = self._meminfo()
         raw['temp'] = self.cpu_temp.int() if self.cpu_temp else None
         g = self.gpu
-        if g is not None and g.kind == 'amdgpu':
-            raw['gm'] = g.read()
-            raw['vram'] = g.vram_used.int()
+        if self.amd:
+            raw['gm'], raw['vram'] = g.read(), g.vram_used.int()
         elif g is not None:
-            raw['act'] = g.act.int()
-            raw['rc6'] = g.rc6.int() if g.rc6 else None
+            raw['act'], raw['rc6'] = g.act.int(), g.rc6.int() if g.rc6 else None
         for name, grp in self.groups.items():
             raw['perf_' + name] = grp.read()
         raw['net'] = self.net.read()
@@ -817,14 +755,16 @@ class Host:
         return raw
 
     def compute(self, prev, cur, fans=None):
-        if prev is not None and prev.get('gen') != cur.get('gen'):
+        """The sample of reading cur; rates are over the time since reading prev and null without it."""
+        if prev is not None and prev['gen'] != cur['gen']:      # the perf counters began again at zero
             prev = None
         dt = cur['mono'] - prev['mono'] if prev else None
         n = self.ncpu
 
-        # CPU usage and clocks
-        usage = None
-        core_usage = [None] * n
+        def rates(name):
+            return perf_rates(self.groups.get(name), prev and prev.get('perf_' + name), cur.get('perf_' + name), dt)
+
+        usage, core_usage = None, [None] * n
         if prev and prev['agg'] and cur['agg']:
             dtot, didle = cur['agg'][0] - prev['agg'][0], cur['agg'][1] - prev['agg'][1]
             usage = r1(100.0 * (dtot - didle) / dtot) if dtot > 0 else None
@@ -832,113 +772,65 @@ class Host:
                 a, b = prev['per'].get(i), cur['per'].get(i)
                 if a and b and b[0] > a[0]:
                     core_usage[i] = r1(min(100.0, max(0.0, 100.0 * ((b[0] - a[0]) - (b[1] - a[1])) / (b[0] - a[0]))))
-        core_mhz = [None] * n
+        core_mhz = [None] * n       # of the busy CPUs only; their average is weighted by usage
         wsum = wmhz = 0.0
-        peak = None
-        for i in range(n):
-            f = cur['freq'][i] if i < len(cur['freq']) else None
-            u = core_usage[i]
-            if f and self.freq_fallback and f == self.freq_fallback[i]:
-                f = None
-            if f and u is not None and u > BUSY_PCT:
-                mhz = round(f / 1000)
-                core_mhz[i] = mhz
+        for i, (f, u) in enumerate(zip(cur['freq'], core_usage)):
+            if f and u is not None and u > BUSY_PCT and not (self.freq_fallback and f == self.freq_fallback[i]):
+                core_mhz[i] = round(f / 1000)
                 wsum += u
-                wmhz += u * mhz
-                peak = mhz if peak is None else max(peak, mhz)
-        cpu_mhz = round(wmhz / wsum) if wsum > 0 else None
-        temp = r2(cur['temp'] / 1000.0) if cur.get('temp') is not None else None
+                wmhz += u * core_mhz[i]
+        temp = r2(cur['temp'], 1000)
 
-        # perf-based rates
-        def rates(name):
-            grp = self.groups.get(name)
-            return perf_rates(grp, prev.get('perf_' + name) if prev else None, cur.get('perf_' + name), dt)
-
-        rapl = rates('rapl')
-        rapl_d = dict(zip(self.groups['rapl'].labels, rapl)) if rapl else {}
-
-        cpu_power = gpu_block = None
-        watts = None
-        parts = {'gpu': None, 'cpu': None, 'dram': None}
-        throttling = None
-        g = self.gpu
-        if g is not None and g.kind == 'amdgpu':
-            gm = cur.get('gm')
-            if gm:
-                act = gm['average_gfx_activity']
-                gpu_block = {
-                    'usage': act if act is not None and act <= 100 else None,
-                    'mhz': gm['average_gfxclk_frequency'],
-                    'tempC': r2(gm['temperature_gfx'] / 100.0) if gm['temperature_gfx'] is not None else None,
-                    'powerW': r2(gm['average_gfx_power'] / 1000.0) if gm['average_gfx_power'] is not None else None,
-                }
-                cpu_power = r2(gm['average_all_core_power'] / 1000.0) if gm['average_all_core_power'] is not None else None
-                watts = r2(gm['average_socket_power'] / 1000.0) if gm['average_socket_power'] is not None else None
-                parts = {'gpu': gpu_block['powerW'], 'cpu': cpu_power, 'dram': None}
-                pg = prev.get('gm') if prev else None
-                if pg:
-                    throttling = any(c > p for p, c in zip(pg['throttle'], gm['throttle']))
-            else:
-                gpu_block = {'usage': None, 'mhz': None, 'tempC': None, 'powerW': None}
-            gpu_block['memUsedBytes'] = cur.get('vram')
-            gpu_block['memTotalBytes'] = g.vram_total
-        elif g is not None:
-            busy = None
-            i915 = rates('i915')
-            if i915:
-                busy = r1(min(100.0, i915[0] / 1e9 * 100.0))
-            elif prev and cur.get('rc6') is not None and prev.get('rc6') is not None and dt:
-                idle_ms = cur['rc6'] - prev['rc6']
-                busy = r1(min(100.0, max(0.0, 100.0 - 100.0 * idle_ms / (dt * 1000.0))))
-            gpu_block = {'usage': busy, 'mhz': cur.get('act'), 'tempC': temp,
-                         'powerW': r2(rapl_d.get('gpu')), 'memUsedBytes': None, 'memTotalBytes': None}
-        if g is None or g.kind != 'amdgpu':
-            cpu_power = r2(rapl_d.get('cores'))
-            if 'pkg' in rapl_d:
-                watts = r2(rapl_d['pkg'] + rapl_d.get('ram', 0.0))
-            parts = {'gpu': r2(rapl_d.get('gpu')), 'cpu': cpu_power, 'dram': r2(rapl_d.get('ram'))}
-
-        bw = rates('df')
-        if bw:
-            read_bps, write_bps = int(sum(bw[:4])), int(sum(bw[4:]))
+        gpu = throttling = None
+        if self.amd:
+            gm = cur['gm'] or {}
+            act = gm.get('average_gfx_activity')
+            cpu_power, dram = r2(gm.get('average_all_core_power'), 1000), None
+            gpu_power, watts = r2(gm.get('average_gfx_power'), 1000), r2(gm.get('average_socket_power'), 1000)
+            gpu = {'usage': act if act is not None and act <= 100 else None, 'mhz': gm.get('average_gfxclk_frequency'),
+                   'tempC': r2(gm.get('temperature_gfx'), 100), 'powerW': gpu_power,
+                   'memUsedBytes': cur['vram'], 'memTotalBytes': self.gpu.vram_total}
+            if gm and prev and prev['gm']:
+                throttling = any(c > p for p, c in zip(prev['gm']['throttle'], gm['throttle']))
         else:
-            imc = rates('imc')
-            read_bps, write_bps = (int(imc[0]), int(imc[1])) if imc else (None, None)
+            rapl = rates('rapl')
+            rapl = dict(zip(self.groups['rapl'].labels, rapl)) if rapl else {}
+            cpu_power, dram, gpu_power = r2(rapl.get('cores')), r2(rapl.get('ram')), r2(rapl.get('gpu'))
+            watts = r2(rapl['pkg'] + rapl.get('ram', 0.0)) if 'pkg' in rapl else None
+            if self.gpu is not None:
+                busy, i915 = None, rates('i915')
+                if i915:
+                    busy = r1(min(100.0, i915[0] / 1e9 * 100.0))
+                elif dt and cur['rc6'] is not None and prev['rc6'] is not None:     # else: the time not in RC6
+                    busy = r1(min(100.0, max(0.0, 100.0 - 100.0 * (cur['rc6'] - prev['rc6']) / (dt * 1000.0))))
+                gpu = {'usage': busy, 'mhz': cur['act'], 'tempC': temp, 'powerW': gpu_power,
+                       'memUsedBytes': None, 'memTotalBytes': None}
 
-        net = None
-        if cur.get('net') is not None:
-            rx = tx = None
-            if prev and prev.get('net') is not None and dt:
-                rx, tx = counter_rates(prev['net'], cur['net'], dt)
-            net = {'rxBps': rx, 'txBps': tx}
-        disk = None
-        io, space = cur.get('disk'), cur.get('space')
-        if io is not None or space is not None:
-            rd = wr = None
-            if io is not None and prev and prev.get('disk') is not None and dt:
-                rd, wr = counter_rates(prev['disk'], io, dt, SECTOR)
-            disk = {'readBps': rd, 'writeBps': wr,
-                    'totalBytes': space[0] if space else None, 'freeBytes': space[1] if space else None}
-
+        bw = rates('df') or rates('imc') or []
+        half = len(bw) // 2     # either group: its read counters, then as many write counters
+        rx, tx = counter_rates(prev and prev['net'], cur['net'], dt)
+        rd, wr = counter_rates(prev and prev['disk'], cur['disk'], dt, SECTOR)
+        space = cur['space'] or (None, None)
         mem = cur['mem']
-        total = mem.get('MemTotal', 0) * 1024
-        avail = mem.get('MemAvailable', 0) * 1024
-        gpu_bytes = mem['GPUActive'] * 1024 if ('GPUActive' in mem and g is not None and g.kind == 'amdgpu') else None
+        total, avail = mem.get('MemTotal', 0) * 1024, mem.get('MemAvailable', 0) * 1024
         return {
             't': cur['t'],
-            'cpu': {'usage': usage, 'mhz': cpu_mhz, 'mhzPeak': peak, 'tempC': temp, 'powerW': cpu_power,
-                    'coreUsage': core_usage, 'coreMhz': core_mhz},
-            'gpu': gpu_block,
+            'cpu': {'usage': usage, 'mhz': round(wmhz / wsum) if wsum > 0 else None,
+                    'mhzPeak': max((m for m in core_mhz if m is not None), default=None), 'tempC': temp,
+                    'powerW': cpu_power, 'coreUsage': core_usage, 'coreMhz': core_mhz},
+            'gpu': gpu,
             'memory': {'totalBytes': total, 'availableBytes': avail, 'usedBytes': max(0, total - avail),
-                       'gpuBytes': gpu_bytes,
+                       'gpuBytes': mem['GPUActive'] * 1024 if self.amd and 'GPUActive' in mem else None,
                        'swapTotalBytes': mem.get('SwapTotal', 0) * 1024,
                        'swapUsedBytes': max(0, mem.get('SwapTotal', 0) - mem.get('SwapFree', 0)) * 1024,
-                       'readBps': read_bps, 'writeBps': write_bps},
-            'power': {'watts': watts, 'parts': parts},
+                       'readBps': int(sum(bw[:half])) if bw else None,
+                       'writeBps': int(sum(bw[half:])) if bw else None},
+            'power': {'watts': watts, 'parts': {'gpu': gpu_power, 'cpu': cpu_power, 'dram': dram}},
             'fans': fans if fans is not None else self.fans.empty(),
             'throttling': throttling,
-            'net': net,
-            'disk': disk,
+            'net': {'rxBps': rx, 'txBps': tx} if cur['net'] is not None else None,
+            'disk': {'readBps': rd, 'writeBps': wr, 'totalBytes': space[0], 'freeBytes': space[1]}
+                    if cur['disk'] is not None or cur['space'] is not None else None,
         }
 
 
@@ -948,9 +840,9 @@ class Sampler:
     """One shared sampling thread; runs only while a stream is open or for a few seconds after /v1/sample."""
 
     def __init__(self, host, interval_s, keepalive=KEEPALIVE_AFTER_SAMPLE, perf_linger=PERF_LINGER,
-                 fan_period=FAN_PERIOD, max_streams=MAX_STREAMS):
+                 fan_period=FAN_PERIOD):
         self.host, self.interval = host, interval_s
-        self.keepalive, self.perf_linger, self.fan_period, self.max_streams = keepalive, perf_linger, fan_period, max_streams
+        self.keepalive, self.perf_linger, self.fan_period = keepalive, perf_linger, fan_period
         self.cond = threading.Condition()
         self.streams = 0
         self.keep_until = 0.0
@@ -959,7 +851,6 @@ class Sampler:
         self.seq = 0
         self.fan_values = None
         self.stopping = False
-        self.samples_taken = 0
         self._thread = threading.Thread(target=self._run, name='sampler', daemon=True)
         self._fan_thread = threading.Thread(target=self._fans, name='fans', daemon=True) if host.fans.fans else None
 
@@ -978,7 +869,7 @@ class Sampler:
 
     def add_stream(self):
         with self.cond:
-            if self.streams >= self.max_streams:
+            if self.streams >= MAX_STREAMS:
                 return False
             self.streams += 1
             self.cond.notify_all()
@@ -987,11 +878,6 @@ class Sampler:
     def remove_stream(self):
         with self.cond:
             self.streams = max(0, self.streams - 1)
-            self.cond.notify_all()
-
-    def touch(self):
-        with self.cond:
-            self.keep_until = max(self.keep_until, time.monotonic() + self.keepalive)
             self.cond.notify_all()
 
     def wait_newer(self, seq, timeout):
@@ -1006,11 +892,12 @@ class Sampler:
             return (self.seq, self.latest) if self.latest is not None else (seq, None)
 
     def current(self, timeout=3.0):
-        """A fresh sample for /v1/sample: the latest if recent, else the next one."""
-        self.touch()
+        """A fresh sample for /v1/sample: the latest if recent, else the next one. Keeps the sampler running
+        for `keepalive` seconds."""
         with self.cond:
-            fresh = self.latest is not None and time.monotonic() - self.latest_mono < 1.5 * self.interval
-            if fresh:
+            self.keep_until = time.monotonic() + self.keepalive
+            self.cond.notify_all()
+            if self.latest is not None and time.monotonic() - self.latest_mono < 1.5 * self.interval:
                 return self.latest
             seq = self.seq
         return self.wait_newer(seq, timeout)[1]
@@ -1049,7 +936,6 @@ class Sampler:
                 if sample is not None:
                     self.latest, self.latest_mono = sample, time.monotonic()
                     self.seq += 1
-                    self.samples_taken += 1
                     self.cond.notify_all()
                 deadline = t0 + self.interval
                 while not self.stopping:
@@ -1080,25 +966,21 @@ class Sampler:
 # --------------------------------------------------------------------------------------------- meter
 
 class Meter:
-    """Running totals since this hostd started, kept whether or not anyone watches, for GET /v1/meter (the
-    gateway's energy meter reads it every 30 s): the energy behind the samples' power.watts, and the bytes
-    received and sent on the physical interfaces. One thread wakes every `period` seconds for one read of each.
-
-    Energy: on an AMD APU the socket power (gpu_metrics average_socket_power) integrated over time; on Intel the
-    RAPL package + DRAM counters, exact, in a perf group of the meter's own that stays open (the sampler's groups
-    open and close with its viewers). None without either. Bytes: the increase of each interface's counters;
-    counters that went back (a reset, or an interface gone and back) and interfaces that appear later began
-    again at zero."""
+    """Running totals since this hostd started, for GET /v1/meter, kept whether or not anyone watches: the
+    energy behind the samples' power.watts and the bytes on the physical interfaces. Energy is the APU's socket
+    power integrated over time, or the RAPL package + DRAM counters; None without either. The sources are the
+    meter's own and stay open: the sampler's perf groups close when nobody watches, and a RAPL counter begins
+    again at zero when opened."""
 
     def __init__(self, host, period=METER_PERIOD):
         self.instance = secrets.token_hex(8)
         self.started_at = now_ms()
         self.period = period
-        self.net = NetCounters(host.fs)
+        self.net = Counters(host.fs, *NET)
         self.gpu_metrics = self.rapl = None
-        if host.gpu is not None and host.gpu.kind == 'amdgpu':
-            self.gpu_metrics = Src(host.fs.p(host.gpu.dev + '/gpu_metrics'), 1024)
-        elif 'rapl' in host.groups:   # the PMU opened when the Host probed it
+        if host.amd:
+            self.gpu_metrics = Src(host.gpu.metrics.path, 1024)
+        elif 'rapl' in host.groups:
             try:
                 self.rapl = PerfGroup(host.fs, 'power', rapl_events(host.fs, ('pkg', 'ram')))
             except PerfUnavailable:
@@ -1137,7 +1019,7 @@ class Meter:
         net = self.net.read()
         mono = time.monotonic()
         with self.lock:
-            if self.gpu_metrics is not None and self.energy is not None:
+            if self.gpu_metrics is not None:
                 gm = decode_gpu_metrics(self.gpu_metrics.read())
                 mw = gm['average_socket_power'] if gm else None
                 if mw is not None:
@@ -1152,7 +1034,7 @@ class Meter:
             if net is not None:
                 if self._links is None:
                     self.rx = self.tx = 0
-                else:
+                else:   # a counter that went back, or an interface that is new, began at zero
                     for name, (rx, tx) in net.items():
                         last = self._links.get(name, (0, 0))
                         self.rx += rx - last[0] if rx >= last[0] else rx
