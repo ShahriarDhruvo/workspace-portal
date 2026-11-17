@@ -27,6 +27,7 @@ import { HostdError } from "./hostd.ts";
 import { HttpError, readJsonBody, sendError, sendJson, splitTarget } from "./http-util.ts";
 import { ImageInUseError, ImageNotFoundError } from "./image-builder.ts";
 import { TooManyViewersError, type LiveHub } from "./live.ts";
+import type { EnergyPrices } from "./energy-prices.ts";
 import type { LlmQueue } from "./llm-queue.ts";
 import type { Logger } from "./log.ts";
 import { RegistryError } from "./npm-registry.ts";
@@ -55,6 +56,7 @@ export interface ControlDeps {
   engine: EngineUpdater;
   llm: LlmQueue;
   live: LiveHub;
+  prices: EnergyPrices;
   sessions: SessionCache;
   connections: ConnectionRegistry;
   log: Logger;
@@ -93,6 +95,10 @@ const ROUTES: Route[] = [
     },
   },
   { method: "GET", pattern: /^\/control\/agents$/, handler: (deps) => ({ agents: agentList(deps.config, deps.versions) }) },
+  // Admin > Energy's electricity prices (energy-prices.ts): the downloads' state, and a download now when the admin
+  // picks a place (a source downloaded in the last 10 minutes is not asked again). Answers once both are done.
+  { method: "GET", pattern: /^\/control\/energy-prices$/, handler: (deps) => deps.prices.status() },
+  { method: "POST", pattern: /^\/control\/energy-prices\/refresh$/, handler: (deps) => deps.prices.refresh() },
   {
     // For deploy/install.sh and update-image.sh: answers at once (no registry or hostd call).
     method: "GET",

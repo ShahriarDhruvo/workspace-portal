@@ -7,7 +7,7 @@ import type { AgentKind, WorkspaceKind, WorkspaceStatus } from "@portal/db";
 import { fetchJson, needsReauth } from "@/lib/fetch-json";
 import { formatVersion, stopReasonText, workspaceState } from "@/lib/format";
 import type { WorkspaceStatusResponse } from "@/lib/gateway-types";
-import { initialKind, KIND_NAMES, onlineAccessAfter, startErrorText } from "@/lib/workspace-kind";
+import { initialKind, KIND_NAMES, onlineAccessAfter, otherKind, startErrorText } from "@/lib/workspace-kind";
 import { stopNeedsConfirm, stopWarnings } from "@/lib/workspace-stop";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -15,14 +15,15 @@ import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader,
 import { ArrowRightIcon, StopIcon, WarningIcon } from "@/components/ui/icons";
 import { Spinner } from "@/components/ui/spinner";
 import { KindBadge } from "./kind-badge";
-import { StartWorkspace } from "./start-workspace";
+import { KindPicker, StartWorkspaceButton, useKindChoice } from "./start-workspace";
 import { StopDialog } from "./stop-dialog";
 
 // Home's one focal point: the user's workspace, with the one thing to do next in the card's top right corner, where
-// the button itself says the state: the Private | Online switch and Start (or Try again), "Starting…", "Open
-// workspace" with Stop beside it, or "Stopping…"; while a workspace is there, its kind's badge takes the switch's
-// place. Start confirms the chosen kind first, then launches the harness chosen in Settings and goes to
-// /workspace. It polls /api/workspace/status, every 2 s while something is under way.
+// the button itself says the state: "Start Online" / "Start Private" (or Try again), "Starting…", "Open workspace"
+// with Stop beside it, or "Stopping…"; while a workspace is there, its kind's badge sits beside the buttons.
+// Stopped, the card's body holds the choice between the two workspaces (KindPicker). Start confirms the chosen
+// kind first, then launches the harness chosen in Settings and goes to /workspace. It polls
+// /api/workspace/status, every 2 s while something is under way.
 
 /**
  * The stop reasons worth a line on the card. Not the owner's own Stop or sign-out, and not an idle stop: the
@@ -54,6 +55,7 @@ export function HomeCard({ initial, initialError, idleTimeoutMinutes, agentNames
   const [actionError, setActionError] = useState<{ message: string; status: WorkspaceStatus | null } | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const stopButton = useRef<HTMLButtonElement>(null);
+  const choice = useKindChoice(info?.online ?? "off", info ? initialKind(info) : "private");
 
   const status = info?.status ?? null;
   const settling = request !== null || status === "starting" || status === "stopping" || (status === "running" && !info?.ready);
@@ -177,6 +179,7 @@ export function HomeCard({ initial, initialError, idleTimeoutMinutes, agentNames
   // A failed Start says why it failed; that replaces the earlier failure's explanation.
   const failed = status === "error" && request === null && error === null;
   const notes = failed || error || stoppedBecause || changesNextTime || pollError;
+  const choosing = !(ready || starting || stopping);
 
   return (
     <Card>
@@ -221,14 +224,13 @@ export function HomeCard({ initial, initialError, idleTimeoutMinutes, agentNames
               Stopping…
             </Button>
           ) : (
-            <StartWorkspace
-              online={info.online}
-              initialKind={initialKind(info)}
+            <StartWorkspaceButton
+              kind={choice.kind}
+              onSwitch={choice.onlineBlocked ? undefined : () => choice.choose(otherKind(choice.kind))}
               whose="your"
-              label={status === "error" ? "Try again" : "Start"}
+              retry={status === "error"}
               disabled={info.nextAgent === null}
               onStart={start}
-              switchClassName="max-sm:*:flex-1"
             />
           )}
         </CardAction>
@@ -238,7 +240,7 @@ export function HomeCard({ initial, initialError, idleTimeoutMinutes, agentNames
           {state.activity ? `${state.label.toLowerCase()}, ${state.activity}` : state.label.toLowerCase()}
         </p>
       </CardHeader>
-      {notes ? (
+      {notes || choosing ? (
         <CardContent className="flex flex-col gap-3">
           {failed ? (
             <Alert variant="destructive">
@@ -261,6 +263,15 @@ export function HomeCard({ initial, initialError, idleTimeoutMinutes, agentNames
             <p role="status" className="text-13 text-muted-foreground">
               Can&apos;t check the workspace right now: {pollError}
             </p>
+          ) : null}
+          {choosing ? (
+            <KindPicker
+              value={choice.kind}
+              onValueChange={choice.choose}
+              onlineBlocked={choice.onlineBlocked}
+              idPrefix="home-kind"
+              className="sm:grid-cols-2"
+            />
           ) : null}
         </CardContent>
       ) : null}

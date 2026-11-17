@@ -135,4 +135,28 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE users ADD COLUMN online_allowed INTEGER NOT NULL DEFAULT 1 CHECK (online_allowed IN (0, 1));
   ALTER TABLE workspaces ADD COLUMN kind TEXT NOT NULL DEFAULT 'private' CHECK (kind IN ('private', 'online'));
   `,
+  // 6: electricity prices come from public sources (energy-locations.ts) for a place the admin picks, instead of
+  // the hand-kept list of migration 4, which goes. The gateway fills energy_prices; the place is a portal setting,
+  // unset until the admin picks one. Audit entries of the old price changes stay as they were.
+  `
+  CREATE TABLE energy_prices (
+    location     TEXT    NOT NULL CHECK (location GLOB '[A-Z][A-Z]-[A-Z][A-Z]'),
+    period_start TEXT    NOT NULL CHECK (period_start GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-01'),
+    period_end   TEXT    NOT NULL CHECK (period_end GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-01' AND period_end > period_start),
+    period       TEXT    NOT NULL CHECK (period GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]' OR period GLOB '[0-9][0-9][0-9][0-9]-S[12]'),
+    price        REAL    NOT NULL CHECK (price > 0),
+    currency     TEXT    NOT NULL CHECK (currency IN ('USD', 'EUR')),
+    source       TEXT    NOT NULL CHECK (source IN ('eia', 'eurostat')),
+    fetched_at   INTEGER NOT NULL,
+    PRIMARY KEY (location, period_start)
+  );
+
+  CREATE TABLE portal_settings (
+    key        TEXT    PRIMARY KEY,
+    value      TEXT    NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+
+  DROP TABLE energy_rates;
+  `,
 ];

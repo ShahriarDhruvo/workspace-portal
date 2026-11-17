@@ -1,8 +1,11 @@
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
-/** Content widths: sm for a page of one or two cards (Home), md for forms and settings, lg for the admin console. */
-const WIDTHS = { sm: "max-w-[560px]", md: "max-w-[760px]", lg: "max-w-[1200px]" } as const;
+/**
+ * Content widths: sm for a page of one or two cards (Home), md for forms and settings, lg for the admin console,
+ * and wide for Usage, which grows into the margins of a wide desktop (3xl, 1800px) to show its cards side by side.
+ */
+const WIDTHS = { sm: "max-w-[560px]", md: "max-w-[760px]", lg: "max-w-[1200px]", wide: "max-w-[1200px] 3xl:max-w-[2400px]" } as const;
 
 export type PageWidth = keyof typeof WIDTHS;
 
@@ -13,7 +16,7 @@ export type PageWidth = keyof typeof WIDTHS;
  */
 export function PageMain({ width, className, children }: { width: PageWidth; className?: string; children: ReactNode }) {
   return (
-    <main className="flex flex-1 flex-col px-5 py-8 max-sm:px-4 max-sm:py-6">
+    <main className={cn("flex flex-1 flex-col px-5 py-8 max-sm:px-4 max-sm:py-6", width === "wide" && "3xl:px-8")}>
       <div className={cn("mx-auto my-auto flex w-full min-w-0 flex-col gap-6", WIDTHS[width], className)}>{children}</div>
     </main>
   );

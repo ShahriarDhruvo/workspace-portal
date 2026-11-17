@@ -34,7 +34,6 @@ import {
   RefreshCw,
   ScrollText,
   Settings,
-  Shield,
   Square,
   SquarePen,
   Sun,
@@ -43,6 +42,7 @@ import {
   Users,
   UserX,
   X,
+  Zap,
   type LucideIcon,
   type LucideProps,
 } from "lucide-react";
@@ -73,7 +73,6 @@ export const EditIcon = icon(SquarePen, "EditIcon");
 export const TrashIcon = icon(Trash2, "TrashIcon");
 export const RefreshIcon = icon(RefreshCw, "RefreshIcon");
 export const WarningIcon = icon(CircleAlert, "WarningIcon");
-export const ShieldIcon = icon(Shield, "ShieldIcon");
 export const UsersIcon = icon(Users, "UsersIcon");
 export const RightUpIcon = icon(ArrowUpRight, "RightUpIcon");
 export const BackIcon = icon(ChevronLeft, "BackIcon");
@@ -87,6 +86,7 @@ export const UserXIcon = icon(UserX, "UserXIcon");
 export const EyeIcon = icon(Eye, "EyeIcon");
 export const PackageIcon = icon(Package, "PackageIcon");
 export const UsageIcon = icon(Activity, "UsageIcon");
+export const EnergyIcon = icon(Zap, "EnergyIcon");
 export const SuccessIcon = icon(CircleCheck, "SuccessIcon");
 export const FailedIcon = icon(CircleX, "FailedIcon");
 export const CancelledIcon = icon(CircleSlash, "CancelledIcon");

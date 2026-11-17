@@ -3,13 +3,12 @@ import assert from "node:assert/strict";
 import {
   appendHistory,
   axisTicks,
+  formatAxisTick,
   daysOfMonth,
   formatBandwidth,
   formatBytesOf,
-  formatCents,
   formatClock,
   formatClockOrIdle,
-  formatDate,
   formatDay,
   formatElapsed,
   formatKwh,
@@ -18,7 +17,10 @@ import {
   formatPercent,
   formatRate,
   formatTemp,
-  formatUsd,
+  formatMoney,
+  formatPricePeriod,
+  formatUnitPrice,
+  priceUnit,
   formatWatts,
   historyFromInit,
   historyWithFrame,
@@ -72,19 +74,28 @@ test("energy, money and prices stay readable when tiny", () => {
   assert.equal(formatKwh(204.56), "204.6");
   assert.equal(formatKwh(12_045.4), "12,045");
   assert.equal(formatKwh(null), "—");
-  assert.equal(formatUsd(0.0213), "$0.02");
-  assert.equal(formatUsd(0.004), "<$0.01");
-  assert.equal(formatUsd(0), "$0.00");
-  assert.equal(formatUsd(1234.5), "$1,234.50");
-  assert.equal(formatUsd(null), "—");
-  assert.equal(formatCents(14.258), "14.258");
-  assert.equal(formatCents(15), "15.000");
-  assert.equal(formatCents(null), "—");
+  assert.equal(formatMoney(0.0213, "USD"), "$0.02");
+  assert.equal(formatMoney(0.004, "USD"), "<$0.01");
+  assert.equal(formatMoney(0, "USD"), "$0.00");
+  assert.equal(formatMoney(1234.5, "USD"), "$1,234.50");
+  assert.equal(formatMoney(1234.5, "EUR"), "€1,234.50");
+  assert.equal(formatMoney(0.001, "EUR"), "<€0.01");
+  assert.equal(formatMoney(null, "USD"), "—");
+  assert.equal(formatMoney(1, null), "—", "no place picked: no currency");
+  assert.equal(formatUnitPrice(0.1499, "USD"), "14.99");
+  assert.equal(formatUnitPrice(0.15, "USD"), "15.00");
+  assert.equal(formatUnitPrice(0.3618, "EUR"), "0.3618");
+  assert.equal(formatUnitPrice(null, "EUR"), "—");
+  assert.equal(formatUnitPrice(0.2, null), "—");
+  assert.equal(priceUnit("USD"), "¢/kWh");
+  assert.equal(priceUnit("EUR"), "€/kWh");
+  assert.equal(formatPricePeriod("2026-08"), "August 2026");
+  assert.equal(formatPricePeriod("2026-S1"), "Jan to Jun 2026");
+  assert.equal(formatPricePeriod("2025-S2"), "Jul to Dec 2025");
 });
 
 test("days and months read the same in every time zone", () => {
   assert.equal(formatDay("2026-11-16"), "Mon, Nov 16");
-  assert.equal(formatDate("2026-08-01"), "Aug 1, 2026");
   assert.equal(formatMonth("2026-11"), "November 2026");
   assert.equal(daysOfMonth("2026-11").length, 30);
   assert.equal(daysOfMonth("2028-02").at(-1), "2028-02-29");
@@ -97,6 +108,11 @@ test("axis ticks are round numbers from zero", () => {
   assert.deepEqual(axisTicks(0.3), [0, 0.1, 0.2, 0.3]);
   assert.deepEqual(axisTicks(41), [0, 20, 40, 60]);
   assert.deepEqual(axisTicks(0), [0, 1]);
+  assert.deepEqual(axisTicks(0.002), [0, 0.001, 0.002]);
+  assert.deepEqual([0, 0.001, 0.002].map((tick) => formatAxisTick(tick, [0, 0.001, 0.002])), ["0.000", "0.001", "0.002"]);
+  assert.deepEqual([0, 0.5, 1, 1.5].map((tick) => formatAxisTick(tick, [0, 0.5, 1, 1.5])), ["0.0", "0.5", "1.0", "1.5"]);
+  assert.deepEqual([0, 20, 40].map((tick) => formatAxisTick(tick, [0, 20, 40])), ["0", "20", "40"]);
+  assert.equal(formatAxisTick(2500, [0, 2500]), "2,500");
 });
 
 function sample(t: number, availableBytes = 6e9): HostSample {

@@ -5,7 +5,7 @@ import { isMonth, loadEnergyMonth } from "@/lib/energy";
 export const dynamic = "force-dynamic";
 
 /**
- * Admin > Usage's energy card: a month of both servers' energy and cost (?month=YYYY-MM, the current month without
+ * Admin > Energy: a month of both servers' energy and cost (?month=YYYY-MM, the current month without
  * one), today so far and the prices. Polled every 60 s while the page is visible, and on a change of month.
  */
 export async function GET(request: Request): Promise<Response> {

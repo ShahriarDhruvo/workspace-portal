@@ -7,7 +7,9 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import { openDatabase, openForOwnershipChange, migrate } from "./db.ts";
 import { MIGRATIONS } from "./migrations.ts";
-import { energyRates, hostDaily, users, sessions } from "./schema.ts";
+import { energyPrices, hostDaily, portalSettings, users, sessions } from "./schema.ts";
+import { readSetting, writeSetting } from "./settings.ts";
+import { ENERGY_LOCATIONS, energyLocation, energyLocationLabel, isEnergyLocationId } from "./energy-locations.ts";
 import { countSessionsUsingWorkspace, hashSessionToken, loadSessionContext, readCookie } from "./sessions.ts";
 import { usageDay } from "./usage-day.ts";
 
@@ -73,16 +75,64 @@ test("migration 5: existing workspaces are the Private kind and every user may u
   assert.throws(() => client.exec("UPDATE users SET online_allowed = 2"), /CHECK/);
 });
 
-test("migration 4: one host_daily row per day and server, and the electricity price history", () => {
+test("migration 4: one host_daily row per day and server", () => {
   const db = tempDb();
   db.insert(hostDaily).values({ day: "2026-11-16", role: "llm", energyWh: null, updatedAt: 1 }).run();
   assert.throws(() => db.insert(hostDaily).values({ day: "2026-11-16", role: "llm", updatedAt: 2 }).run(), /UNIQUE/);
   assert.throws(() => db.insert(hostDaily).values({ day: "2026-11-16", role: "other" as "llm", updatedAt: 2 }).run(), /CHECK/);
   assert.throws(() => db.insert(hostDaily).values({ day: "16/11/2026", role: "portal", updatedAt: 2 }).run(), /CHECK/);
   assert.deepEqual(db.select().from(hostDaily).all(), [{ day: "2026-11-16", role: "llm", energyWh: null, rxBytes: 0, txBytes: 0, updatedAt: 1 }]);
-  const rates = db.select().from(energyRates).orderBy(energyRates.effectiveFrom).all();
-  assert.ok(rates.length > 0 && rates.every((rate) => /^\d{4}-\d{2}-\d{2}$/.test(rate.effectiveFrom) && rate.centsPerKwh > 0));
-  assert.equal(rates.at(-1)?.centsPerKwh, 14.258);
+});
+
+test("migration 6: the hand-kept prices go, published prices per place and period, and portal settings", () => {
+  const client = new Database(":memory:");
+  for (const sql of MIGRATIONS.slice(0, 5)) client.exec(sql);
+  client.pragma("user_version = 5");
+  assert.ok((client.prepare("SELECT count(*) AS n FROM energy_rates").get() as { n: number }).n > 0, "migration 4 seeded prices");
+  migrate(client);
+  assert.equal(client.prepare("SELECT name FROM sqlite_master WHERE name = 'energy_rates'").get(), undefined);
+
+  const db = tempDb();
+  const row = { location: "US-FL", periodStart: "2026-08-01", periodEnd: "2026-09-01", period: "2026-08", price: 0.1499, currency: "USD", source: "eia", fetchedAt: 1 } as const;
+  db.insert(energyPrices).values(row).run();
+  assert.throws(() => db.insert(energyPrices).values(row).run(), /UNIQUE/);
+  for (const bad of [
+    { location: "Florida" },
+    { periodStart: "2026-08-02" },
+    { periodEnd: "2026-07-01" },
+    { periodEnd: "2026-08-15" },
+    { period: "August 2026" },
+    { price: 0 },
+    { currency: "GBP" },
+    { source: "teco" },
+  ]) {
+    assert.throws(() => db.insert(energyPrices).values({ ...row, periodStart: "2026-07-01", periodEnd: "2026-08-01", period: "2026-07", ...bad } as typeof energyPrices.$inferInsert).run(), /CHECK/, JSON.stringify(bad));
+  }
+  db.insert(energyPrices).values({ ...row, location: "EU-DE", periodStart: "2026-01-01", periodEnd: "2026-07-01", period: "2026-S1", price: 0.3618, currency: "EUR", source: "eurostat" }).run();
+
+  assert.equal(readSetting(db, "energy_price_location"), null, "no place until the admin picks one");
+  writeSetting(db, "energy_price_location", "US-FL", 5);
+  writeSetting(db, "energy_price_location", "EU-DE", 6);
+  assert.deepEqual(db.select().from(portalSettings).all(), [{ key: "energy_price_location", value: "EU-DE", updatedAt: 6 }]);
+  assert.equal(readSetting(db, "energy_price_location"), "EU-DE");
+  writeSetting(db, "energy_price_location", null);
+  assert.equal(readSetting(db, "energy_price_location"), null);
+});
+
+test("energy locations: the 50 states and DC, Eurostat's countries, unique ids, a label that tells the two Georgias apart", () => {
+  assert.equal(ENERGY_LOCATIONS.filter((location) => location.region === "us").length, 51);
+  assert.ok(ENERGY_LOCATIONS.filter((location) => location.region === "europe").length >= 35);
+  assert.equal(new Set(ENERGY_LOCATIONS.map((location) => location.id)).size, ENERGY_LOCATIONS.length);
+  assert.ok(ENERGY_LOCATIONS.every((location) => /^(US|EU)-[A-Z]{2}$/.test(location.id)));
+  assert.deepEqual(energyLocation("US-FL"), { id: "US-FL", region: "us", code: "FL", name: "Florida", source: "eia", currency: "USD" });
+  assert.deepEqual(energyLocation("EU-EL"), { id: "EU-EL", region: "europe", code: "EL", name: "Greece", source: "eurostat", currency: "EUR" });
+  assert.equal(energyLocation("EU-UK"), null);
+  assert.equal(energyLocation(null), null);
+  assert.ok(isEnergyLocationId("US-DC") && !isEnergyLocationId("us-fl") && !isEnergyLocationId(5));
+  assert.equal(energyLocationLabel(energyLocation("US-GA")!), "Georgia, US");
+  assert.equal(energyLocationLabel(energyLocation("EU-GE")!), "Georgia");
+  const us = ENERGY_LOCATIONS.filter((location) => location.region === "us").map((location) => location.name);
+  assert.deepEqual(us, [...us].sort((a, b) => a.localeCompare(b, "en")), "A to Z");
 });
 
 test("only one admin can exist", () => {

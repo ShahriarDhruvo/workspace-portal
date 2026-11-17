@@ -88,3 +88,14 @@ test("workspace kinds and the Online permission read as words", () => {
   assert.equal(formatAuditDetails(JSON.stringify({ allowed: false })), "Allowed: no");
   assert.equal(formatAuditDetails(JSON.stringify({ username: "bob", onlineAllowed: true })), "Username: bob · Online workspace: yes");
 });
+
+test("electricity prices: the place by name, and the hand-kept prices of older entries", () => {
+  assert.equal(auditActionLabel("energy_price_location_set", true), "Changed electricity price location");
+  assert.equal(formatAuditDetails(JSON.stringify({ location: { from: null, to: "Florida, US" } })), "Location: — → Florida, US");
+  assert.equal(formatAuditDetails(JSON.stringify({ location: { from: "Florida, US", to: "Germany" } })), "Location: Florida, US → Germany");
+  assert.equal(auditActionLabel("energy_rate_set", true), "Set electricity price");
+  assert.equal(
+    formatAuditDetails(JSON.stringify({ effectiveFrom: "2027-01-01", price: "15 ¢/kWh", note: "TECO 2027" })),
+    "Effective from: 2027-01-01 · Price: 15 ¢/kWh · Note: TECO 2027",
+  );
+});

@@ -2,27 +2,29 @@ import { Card, CardAction, CardContent, CardFooter, CardHeader } from "@/compone
 import { Skeleton } from "@/components/ui/skeleton";
 
 // Admin > Usage while it loads, in the shape of its cards (same frames, headers and heights), so nothing moves when
-// the data arrives: the page's loading.tsx shows all of it, the live view its live part until the first frame.
+// the data arrives: the page's loading.tsx shows all of it, the live view its cards until the first frame.
 
-/** The whole page: heading, the live cards, the energy card. */
+/**
+ * The cards' layout (UsageLive and its skeleton): the sessions over the two servers, which sit side by side from
+ * xl; on a wide desktop (3xl) all three in a row, the sessions a little wider for their table.
+ */
+export const USAGE_GRID = "grid items-start gap-4 xl:grid-cols-2 3xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)]";
+
+/** The whole page: heading and the live cards. */
 export function UsageSkeleton() {
   return (
     <>
-      <div className="flex items-end justify-between gap-4">
-        <Skeleton className="h-6 w-20" />
-        <Skeleton className="h-5 w-14 rounded-4xl" />
-      </div>
+      <Skeleton className="h-6 w-20" />
       <LiveSkeleton />
-      <EnergySkeleton />
     </>
   );
 }
 
-/** The LLM sessions, both servers and the workspaces. */
+/** The LLM sessions and both servers. */
 export function LiveSkeleton() {
   return (
-    <div className="flex flex-col gap-6" aria-busy="true" aria-label="Loading the live view">
-      <Card className="gap-0 py-0">
+    <div className={USAGE_GRID} aria-busy="true" aria-label="Loading the live view">
+      <Card className="gap-0 py-0 xl:col-span-2 3xl:col-span-1">
         <CardHeader className="border-b px-4 py-3">
           <TitleLines />
           <CardAction className="flex gap-6">
@@ -40,16 +42,8 @@ export function LiveSkeleton() {
         </div>
         <Rows count={3} />
       </Card>
-      <div className="grid gap-4 xl:grid-cols-2">
-        <ServerSkeleton />
-        <ServerSkeleton />
-      </div>
-      <Card className="gap-0 py-0">
-        <CardHeader className="border-b px-4 py-3">
-          <Skeleton className="h-6 w-48" />
-        </CardHeader>
-        <Rows count={2} />
-      </Card>
+      <ServerSkeleton />
+      <ServerSkeleton />
     </div>
   );
 }
@@ -76,28 +70,6 @@ function ServerSkeleton() {
       <CardFooter className="h-10 justify-center p-0">
         <Skeleton className="h-4 w-16" />
       </CardFooter>
-    </Card>
-  );
-}
-
-function EnergySkeleton() {
-  return (
-    <Card className="gap-0 py-0" aria-busy="true" aria-label="Loading energy">
-      <CardHeader className="border-b px-4 py-3">
-        <Skeleton className="h-8 w-24" />
-        <CardAction className="flex gap-2">
-          <Skeleton className="h-8 w-16" />
-          <Skeleton className="h-8 w-36" />
-        </CardAction>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4 p-4">
-        <div className="grid grid-cols-2 gap-3">
-          <Skeleton className="h-[76px] rounded-lg" />
-          <Skeleton className="h-[76px] rounded-lg" />
-        </div>
-        <Skeleton className="h-40" />
-      </CardContent>
-      <Rows count={5} />
     </Card>
   );
 }

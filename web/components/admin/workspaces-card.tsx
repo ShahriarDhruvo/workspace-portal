@@ -2,60 +2,78 @@
 
 import Link from "next/link";
 import type { AgentKind } from "@portal/db";
-import { formatBytes, formatVersion } from "@/lib/format";
+import { formatBytes, formatDuration, formatVersion } from "@/lib/format";
+import type { WorkspaceInfo } from "@/lib/gateway-types";
 import { formatElapsed } from "@/lib/live-format";
-import type { LiveFrame, LiveWorkspace } from "@/lib/live-types";
 import { DataTable, DataTableEmpty, DataTableHead, DataTablePagination, usePagination } from "@/components/common/data-table";
 import { StatusDot, type DotTone } from "@/components/common/status-dot";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { TableBody, TableCell, TableHeader, TableRow } from "@/components/ui/table";
 import { KindBadge } from "@/components/workspace/kind-badge";
-import { OpenWorkspaceForm } from "../open-workspace-form";
+import { OpenWorkspaceForm } from "./open-workspace-form";
 
-const BUSY: Record<NonNullable<LiveWorkspace["busyReason"]>, string> = {
+const BUSY: Record<NonNullable<WorkspaceInfo["busyReason"]>, string> = {
   task: "running a task",
   llm: "waiting on the model",
   cpu: "using the CPU",
 };
 
-function status(workspace: LiveWorkspace): { tone: DotTone; label: string; pulse: boolean } {
+/** The Status cell: a dot and a word, the reason in a tooltip where there is one (an error, a stop that waits). */
+function status(workspace: WorkspaceInfo): { tone: DotTone; label: string; pulse: boolean; title: string | null } {
   switch (workspace.status) {
     case "starting":
-      return { tone: "warning", label: "Starting", pulse: true };
+      return { tone: "warning", label: "Starting", pulse: true, title: null };
     case "stopping":
-      return { tone: "warning", label: "Stopping", pulse: true };
+      return { tone: "warning", label: "Stopping", pulse: true, title: null };
     case "error":
-      return { tone: "danger", label: "Error", pulse: false };
+      return { tone: "danger", label: "Error", pulse: false, title: workspace.lastError };
     case "stopped":
-      return { tone: "idle", label: "Stopped", pulse: false };
-    case "running":
-      return workspace.busy
-        ? { tone: "success", label: `Working, ${BUSY[workspace.busyReason ?? "task"]}`, pulse: true }
-        : { tone: "info", label: "Idle", pulse: false };
+      return { tone: "idle", label: "Stopped", pulse: false, title: null };
+    case "running": {
+      if (!workspace.ready) return { tone: "warning", label: "Starting", pulse: true, title: null };
+      if (workspace.busy) {
+        return {
+          tone: "success",
+          label: `Working, ${BUSY[workspace.busyReason ?? "task"]}`,
+          pulse: true,
+          title: workspace.stopPending ? "Everyone signed out while the agent was working; it stops once the work is done." : null,
+        };
+      }
+      const idle = workspace.idleSeconds;
+      return { tone: "info", label: idle !== null && idle >= 60 ? `Idle ${formatDuration(idle)}` : "Idle", pulse: false, title: null };
+    }
   }
 }
 
 const number = "text-right tabular-nums";
 
-/** The workspaces that aren't stopped, live: who, which kind and harness, what it is doing and what it uses. */
-export function WorkspacesCard({
-  workspaces,
-  now,
-  agentNames,
-}: {
-  workspaces: LiveFrame["workspaces"];
+interface WorkspacesCardProps {
+  /** Every user's workspace (GET /control/workspaces); the stopped ones are left out. */
+  workspaces: readonly WorkspaceInfo[];
+  /** Display names by user id. */
+  names: ReadonlyMap<number, string>;
+  /** MAX_RUNNING_WORKSPACES. */
+  maxRunning: number | null;
+  /** When `workspaces` was read (epoch ms), for "Up for". */
   now: number;
   agentNames: Readonly<Record<AgentKind, string>>;
-}) {
-  const running = workspaces.list.filter((w) => w.status === "running" || w.status === "starting").length;
-  const { rows, pagination } = usePagination(workspaces.list);
+}
+
+/**
+ * Admin > Users' running workspaces, under the users table and refreshed with it: who, which kind and harness, what
+ * it is doing and what it uses, and Open workspace.
+ */
+export function WorkspacesCard({ workspaces, names, maxRunning, now, agentNames }: WorkspacesCardProps) {
+  const list = workspaces.filter((workspace) => workspace.status !== "stopped");
+  const running = list.filter((w) => w.status === "running" || w.status === "starting").length;
+  const { rows, pagination } = usePagination(list);
   return (
     <Card className="gap-0 py-0">
       <CardHeader className="border-b px-4 py-3">
         <CardTitle className="flex items-baseline gap-2">
           <h2 className="text-16">Workspaces</h2>
           <span className="text-13 font-normal text-muted-foreground tabular-nums">
-            {running} of {workspaces.maxRunning} running
+            {maxRunning === null ? `${running} running` : `${running} of ${maxRunning} running`}
           </span>
         </CardTitle>
       </CardHeader>
@@ -77,17 +95,11 @@ export function WorkspacesCard({
         </TableHeader>
         <TableBody>
           {rows.length === 0 ? (
-            <DataTableEmpty colSpan={9}>
-              No workspace is running. See everyone on{" "}
-              <Link href="/admin/users" className="underline underline-offset-3 hover:text-foreground">
-                Users
-              </Link>
-              .
-            </DataTableEmpty>
+            <DataTableEmpty colSpan={9}>No workspace is running.</DataTableEmpty>
           ) : (
             rows.map((workspace) => {
               const state = status(workspace);
-              const name = workspace.userName ?? `User #${workspace.userId}`;
+              const name = names.get(workspace.userId) ?? `User #${workspace.userId}`;
               return (
                 <TableRow key={workspace.userId}>
                   <TableCell>
@@ -106,7 +118,7 @@ export function WorkspacesCard({
                       ) : null}
                     </span>
                   </TableCell>
-                  <TableCell>
+                  <TableCell title={state.title ?? undefined}>
                     <span className="flex items-center gap-1.5">
                       <StatusDot tone={state.tone} pulse={state.pulse} />
                       {state.label}
@@ -114,7 +126,7 @@ export function WorkspacesCard({
                   </TableCell>
                   <TableCell className={number}>{workspace.memoryBytes === null ? "—" : formatBytes(workspace.memoryBytes)}</TableCell>
                   <TableCell className={number}>{workspace.llmInFlight}</TableCell>
-                  <TableCell className={number}>{workspace.open}</TableCell>
+                  <TableCell className={number}>{workspace.connections.owner + workspace.connections.admin}</TableCell>
                   <TableCell className={`${number} text-muted-foreground`}>
                     {workspace.startedAt === null ? "—" : formatElapsed(now - workspace.startedAt)}
                   </TableCell>

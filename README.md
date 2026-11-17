@@ -572,9 +572,16 @@ engine container (the gufo quadlet) when the admin asks. Details: [hostd/README.
 temperatures and power, memory used and free, memory bandwidth and fans, network upload and download (and the
 day's totals), disk read and write and the free space; every LLM session with its
 read speed (prompt tokens per second) and write speed (answer tokens per second), with the totals charted over
-the last minute; the requests waiting; the last finished requests with the engine's own timings; and the running
-workspaces. Readings a machine can't provide show "—". It also keeps both servers' energy per day with its cost
-at the electricity price, for good.
+the last minute; the requests waiting; and the last finished requests with the engine's own timings. Readings a
+machine can't provide show "—". On a wide screen the sessions and both servers sit side by side.
+
+**Admin > Energy** keeps both servers' energy per day, for good, with its cost at the published electricity price
+of the place the admin picks under **Settings > Electricity price** (EIA's monthly residential average for US
+states, Eurostat's half-yearly household price for European countries; the gateway downloads both, no key
+needed). The energy is what each server's own sensor reports, not a reading at the wall.
+
+**Admin > Users** lists the running workspaces under the users, every 5 seconds: kind, harness, status, memory,
+LLM requests and how many have it open.
 
 **Admin > Updates > LLM engine** lists the engine's latest five releases and the images on the LLM server, each
 with its release notes ("Breaking changes" marked), and switches to any of them in three steps: download its

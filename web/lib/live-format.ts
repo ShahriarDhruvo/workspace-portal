@@ -1,5 +1,6 @@
-// Formatting and history for Admin > Usage: the live view and the energy card. Pure; unit tested.
+// Formatting and history for Admin > Usage's live view and Admin > Energy. Pure; unit tested.
 import { formatBytes } from "./format.ts";
+import type { EnergyCurrency } from "@portal/db";
 import type { HostSample, LiveFrame, LiveInit, LlmTotalsPoint } from "./live-types.ts";
 
 /** How much history the charts show. */
@@ -93,8 +94,6 @@ export function usedPercent(used: number | null | undefined, total: number | nul
 const kwh3 = new Intl.NumberFormat("en", { minimumFractionDigits: 3, maximumFractionDigits: 3 });
 const kwh2 = new Intl.NumberFormat("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const kwh1 = new Intl.NumberFormat("en", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
-const cents = new Intl.NumberFormat("en", { minimumFractionDigits: 3, maximumFractionDigits: 3 });
 
 /** Energy without its unit: three decimals for a day's few kWh ("0.214"), fewer as it grows ("41.75", "1,204.5"). */
 export function formatKwh(kwh: number | null | undefined): string {
@@ -103,30 +102,51 @@ export function formatKwh(kwh: number | null | undefined): string {
   return (value < 10 ? kwh3 : value < 100 ? kwh2 : value < 1000 ? kwh1 : integer).format(value);
 }
 
-/** Dollars and cents: "$1.18", "$0.02"; "<$0.01" for a cost too small to show in cents. */
-export function formatUsd(dollars: number | null | undefined): string {
-  if (dollars === null || dollars === undefined || !Number.isFinite(dollars)) return "—";
-  return dollars > 0 && dollars < 0.005 ? "<$0.01" : usd.format(Math.max(0, dollars));
+const money: Record<EnergyCurrency, Intl.NumberFormat> = {
+  USD: new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }),
+  EUR: new Intl.NumberFormat("en-US", { style: "currency", currency: "EUR" }),
+};
+// Prices per kWh as their sources publish them: EIA in cents to a hundredth, Eurostat in euros to four places.
+const unitPrice: Record<EnergyCurrency, { unit: string; scale: number; format: Intl.NumberFormat }> = {
+  USD: { unit: "¢/kWh", scale: 100, format: new Intl.NumberFormat("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) },
+  EUR: { unit: "€/kWh", scale: 1, format: new Intl.NumberFormat("en", { minimumFractionDigits: 4, maximumFractionDigits: 4 }) },
+};
+
+/** An amount with its currency: "$1.18", "€0.02"; "<$0.01" for a cost too small to show in cents. "—" when unknown. */
+export function formatMoney(amount: number | null | undefined, currency: EnergyCurrency | null | undefined): string {
+  if (amount === null || amount === undefined || !Number.isFinite(amount) || !currency) return "—";
+  const format = money[currency];
+  return amount > 0 && amount < 0.005 ? `<${format.format(0.01)}` : format.format(Math.max(0, amount));
 }
 
-/** A price per kWh in cents, to a thousandth as utilities publish them: "14.258". */
-export function formatCents(centsPerKwh: number | null | undefined): string {
-  return centsPerKwh === null || centsPerKwh === undefined || !Number.isFinite(centsPerKwh) ? "—" : cents.format(centsPerKwh);
+/** The unit prices are shown in: "¢/kWh" for dollars, "€/kWh" for euros. */
+export function priceUnit(currency: EnergyCurrency): string {
+  return unitPrice[currency].unit;
+}
+
+/** A price per kWh (in currency units) in its unit, without it: 0.1499 USD is "14.99" (¢), 0.3618 EUR "0.3618". */
+export function formatUnitPrice(price: number | null | undefined, currency: EnergyCurrency | null | undefined): string {
+  if (price === null || price === undefined || !Number.isFinite(price) || !currency) return "—";
+  const { scale, format } = unitPrice[currency];
+  return format.format(price * scale);
+}
+
+const HALVES = { "1": "Jan to Jun", "2": "Jul to Dec" } as const;
+
+/** A price's period: "2026-08" is "August 2026", Eurostat's "2026-S1" "Jan to Jun 2026". */
+export function formatPricePeriod(period: string): string {
+  const half = /^(\d{4})-S([12])$/.exec(period);
+  if (half) return `${HALVES[half[2] as "1" | "2"]} ${half[1]}`;
+  return /^\d{4}-(0[1-9]|1[0-2])$/.test(period) ? formatMonth(period) : period;
 }
 
 // Days and months are calendar dates (YYYY-MM-DD, YYYY-MM): read and shown in UTC so no time zone moves them.
 const dayFormat = new Intl.DateTimeFormat("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
-const longDayFormat = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
 const monthFormat = new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
 
 /** "Mon, Nov 16" */
 export function formatDay(day: string): string {
   return dayFormat.format(new Date(`${day}T00:00:00Z`));
-}
-
-/** "Nov 16, 2026" */
-export function formatDate(day: string): string {
-  return longDayFormat.format(new Date(`${day}T00:00:00Z`));
 }
 
 /** "November 2026" */
@@ -142,6 +162,14 @@ export function axisTicks(max: number, intervals = 3): number[] {
   const step = [1, 2, 2.5, 5, 10].map((m) => m * power).find((candidate) => candidate >= raw) ?? 10 * power;
   const steps = Math.ceil(max / step - 1e-9);
   return Array.from({ length: steps + 1 }, (_, i) => Number((i * step).toPrecision(12)));
+}
+
+/** An axis label with as many decimals as the ticks' step needs, so 0.001 and 0.002 don't both read "0". */
+export function formatAxisTick(value: number, ticks: readonly number[]): string {
+  const step = ticks[1] ?? 1;
+  let decimals = 0;
+  while (decimals < 6 && Math.abs(Math.round(step * 10 ** decimals) - step * 10 ** decimals) > 1e-9) decimals++;
+  return value.toLocaleString("en", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 }
 
 /** Every day of a YYYY-MM month, YYYY-MM-DD, in order. */

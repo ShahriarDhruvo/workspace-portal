@@ -6,12 +6,10 @@ import { useEffect, useRef, useState } from "react";
 import type { AgentKind } from "@portal/db";
 import { startingAgent } from "@/lib/agent-choice";
 import { fetchJson } from "@/lib/fetch-json";
-import { agentLabel, formatVersion, summarizeWorkspace } from "@/lib/format";
+import { agentLabel, formatVersion } from "@/lib/format";
 import type { AdminOverview, WorkspaceInfo } from "@/lib/gateway-types";
 import type { UserSummary } from "@/lib/user-summary";
-import { hasContainer } from "@/lib/workspace-kind";
 import { UserAvatar } from "@/components/brand";
-import { StatusDot } from "@/components/common/status-dot";
 import { LocalTime } from "@/components/local-time";
 import { DataTable, DataTableHead, DataTablePagination, usePagination } from "@/components/common/data-table";
 import { Badge } from "@/components/ui/badge";
@@ -25,10 +23,10 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { EditIcon, EllipsisIcon, KeyIcon, StopIcon, TrashIcon, UserCheckIcon, UserXIcon } from "@/components/ui/icons";
 import { TableBody, TableCell, TableHeader, TableRow } from "@/components/ui/table";
-import { KindBadge } from "@/components/workspace/kind-badge";
 import { OpenWorkspaceForm } from "./open-workspace-form";
 import { ServiceIssue } from "./service-issue";
 import { UserDialog, type DialogUser, type UserDialogKind } from "./user-dialogs";
+import { WorkspacesCard } from "./workspaces-card";
 
 const REFRESH_MS = 5_000;
 
@@ -36,15 +34,17 @@ interface DashboardProps {
   users: UserSummary[];
   initialOverview: AdminOverview;
   currentAdminId: number;
-  idleTimeoutMinutes: number;
   /** AGENT_NAMES, which this client component can't import from @portal/db. */
   agentNames: Readonly<Record<AgentKind, string>>;
   /** The enabled agents in display order; null when the gateway can't say. */
   enabledAgents: ReadonlyArray<{ id: AgentKind }> | null;
 }
 
-/** The users table, 30 to a page, with workspace state (and the kind that runs) refreshed every 5 s. */
-export function UsersDashboard({ users, initialOverview, currentAdminId, idleTimeoutMinutes, agentNames, enabledAgents }: DashboardProps) {
+/**
+ * The users table, 30 to a page, over the running workspaces (who, kind, harness, status, what it uses), both
+ * refreshed every 5 s from the workspace list. Without the gateway the workspaces card is left out.
+ */
+export function UsersDashboard({ users, initialOverview, currentAdminId, agentNames, enabledAgents }: DashboardProps) {
   const router = useRouter();
   const [overview, setOverview] = useState(initialOverview);
 
@@ -64,6 +64,7 @@ export function UsersDashboard({ users, initialOverview, currentAdminId, idleTim
   }, [router]);
 
   const workspaces = new Map((overview.workspaces ?? []).map((info) => [info.userId, info]));
+  const names = new Map(users.map((user) => [user.id, user.name]));
   const { rows, pagination } = usePagination(users);
 
   return (
@@ -72,7 +73,7 @@ export function UsersDashboard({ users, initialOverview, currentAdminId, idleTim
       <DataTable footer={<DataTablePagination {...pagination} label="Users pages" />} tableProps={{ "aria-label": "Users" }}>
         <TableHeader>
           <TableRow>
-            {["Name", "Username", "Role", "Account", "Workspace", "Harness", "Last sign-in"].map((heading) => (
+            {["Name", "Username", "Role", "Account", "Harness", "Last sign-in"].map((heading) => (
               <DataTableHead key={heading}>{heading}</DataTableHead>
             ))}
             <DataTableHead>
@@ -87,13 +88,21 @@ export function UsersDashboard({ users, initialOverview, currentAdminId, idleTim
               user={user}
               isSelf={user.id === currentAdminId}
               workspace={overview.workspaces ? (workspaces.get(user.id) ?? null) : undefined}
-              idleTimeoutMinutes={idleTimeoutMinutes}
               agentNames={agentNames}
               nextAgent={enabledAgents ? startingAgent(user.agent, enabledAgents) : user.agent}
             />
           ))}
         </TableBody>
       </DataTable>
+      {overview.workspaces ? (
+        <WorkspacesCard
+          workspaces={overview.workspaces}
+          names={names}
+          maxRunning={overview.stats?.maxRunning ?? null}
+          now={overview.t}
+          agentNames={agentNames}
+        />
+      ) : null}
     </>
   );
 }
@@ -103,14 +112,12 @@ interface UserRowProps {
   isSelf: boolean;
   /** undefined = unknown (gateway unavailable); null = no workspace row (stopped). */
   workspace: WorkspaceInfo | null | undefined;
-  idleTimeoutMinutes: number;
   agentNames: Readonly<Record<AgentKind, string>>;
   /** The harness the workspace starts with next (the saved choice while enabled, else the default). */
   nextAgent: AgentKind | null;
 }
 
-function UserRow({ user, isSelf, workspace, idleTimeoutMinutes, agentNames, nextAgent }: UserRowProps) {
-  const summary = workspace === undefined ? null : summarizeWorkspace(workspace, idleTimeoutMinutes);
+function UserRow({ user, isSelf, workspace, agentNames, nextAgent }: UserRowProps) {
   const running = workspace?.status === "running" || workspace?.status === "starting";
   // A running workspace shows its agent and version; a stopped one, the harness it starts with next.
   const agent = running && workspace ? agentLabel(workspace, agentNames) : nextAgent ? agentNames[nextAgent] : null;
@@ -136,21 +143,6 @@ function UserRow({ user, isSelf, workspace, idleTimeoutMinutes, agentNames, next
       <TableCell>{user.role === "admin" ? <Badge>Admin</Badge> : <Badge variant="outline">User</Badge>}</TableCell>
       <TableCell>
         {user.active ? <Badge variant="success">Active</Badge> : <Badge variant="secondary">Deactivated</Badge>}
-      </TableCell>
-      <TableCell title={summary?.title ?? undefined}>
-        {summary ? (
-          <span className="flex items-center gap-x-1">
-            <span className="flex items-center gap-1.5 text-foreground">
-              <StatusDot tone={summary.tone} pulse={summary.label === "Working"} />
-              {summary.label}
-              {workspace && hasContainer(workspace.status) ? <KindBadge kind={workspace.kind} /> : null}
-              {summary.detail ? <span className="text-muted-foreground">·</span> : null}
-            </span>
-            {summary.detail ? <span className="text-muted-foreground">{summary.detail}</span> : null}
-          </span>
-        ) : (
-          <span className="text-muted-foreground">Unknown</span>
-        )}
       </TableCell>
       <TableCell
         className={running ? "text-foreground" : "text-muted-foreground"}

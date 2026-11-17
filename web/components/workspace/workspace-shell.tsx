@@ -8,9 +8,11 @@ import { agentFrameUrl, type AgentFrame } from "@/lib/agent-url";
 import { fetchJson, needsReauth } from "@/lib/fetch-json";
 import { stopReasonText, workspaceState, type WorkspaceState } from "@/lib/format";
 import type { ApiError, OnlineAccess, WorkspaceStatusResponse } from "@/lib/gateway-types";
-import { hasContainer, initialKind, KIND_NAMES, onlineAccessAfter, startErrorText } from "@/lib/workspace-kind";
+import { hasContainer, initialKind, KIND_NAMES, onlineAccessAfter, otherKind, startErrorText } from "@/lib/workspace-kind";
 import { stopNeedsConfirm, stopWarnings } from "@/lib/workspace-stop";
 import { PortalMark } from "@/components/brand";
+import { HOME_LINK, portalLinks } from "@/components/layout/portal-links";
+import { NavMenuItems } from "@/components/layout/header-nav";
 import { BarMenu } from "@/components/common/bar-menu";
 import { useTheme } from "@/components/common/theme";
 import { ThemeToggle } from "@/components/common/theme-toggle";
@@ -18,13 +20,13 @@ import type { Viewer } from "@/components/layout/app-header";
 import { HeaderBar } from "@/components/layout/header-bar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
-import { CloseIcon, EyeIcon, HomeIcon, SettingsIcon, ShieldIcon, StopIcon, WarningIcon } from "@/components/ui/icons";
+import { DropdownMenuLabel, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
+import { CloseIcon, EyeIcon, HomeIcon, StopIcon, WarningIcon } from "@/components/ui/icons";
 import { Separator } from "@/components/ui/separator";
 import { Spinner } from "@/components/ui/spinner";
 import { BootScreen } from "./boot-screen";
 import { KindBadge } from "./kind-badge";
-import { StartWorkspace } from "./start-workspace";
+import { KindPicker, StartWorkspaceButton, useKindChoice } from "./start-workspace";
 import { StateCard } from "./state-card";
 import { StatusPill } from "./status-pill";
 import { StopDialog } from "./stop-dialog";
@@ -214,18 +216,18 @@ function idleCopy(
   target: WorkspaceShellProps["target"],
   kind: WorkspaceKind,
   idleTimeoutMinutes: number,
-): { title: string; body: string | null; warning: boolean; action: string } {
+): { title: string; body: string | null; warning: boolean; retry: boolean } {
   const whose = whoseOf(target);
   switch (idle.kind) {
     case "fresh":
-      return { title: `${whose} workspace is stopped`, body: null, warning: false, action: "Start" };
+      return { title: `${whose} workspace is stopped`, body: null, warning: false, retry: false };
     case "stopped": {
       const reason = stopReasonText(idle.reason, idleTimeoutMinutes, target.isViewer ? "owner" : "other");
       return {
         title: `${whose} ${KIND_NAMES[kind]} workspace was stopped`,
         body: reason ? `It was stopped ${reason}.` : null,
         warning: false,
-        action: "Start again",
+        retry: false,
       };
     }
     case "capacity":
@@ -233,14 +235,14 @@ function idleCopy(
         title: "The workspace can't start yet",
         body: "All workspace slots are busy. Try again in a minute.",
         warning: true,
-        action: "Try again",
+        retry: true,
       };
     case "failed":
       return {
         title: `The ${KIND_NAMES[kind]} workspace couldn't start`,
         body: idle.message ?? "Something went wrong while starting it.",
         warning: true,
-        action: "Try again",
+        retry: true,
       };
   }
 }
@@ -257,6 +259,7 @@ export function WorkspaceShell({ viewer, target, frames, idleTimeoutMinutes, age
   const delay = useRef(2_000);
 
   const { info } = state;
+  const choice = useKindChoice(info?.online ?? "off", state.startError ? state.startedKind : info ? initialKind(info) : "private");
   const phase = phaseOf(state, target.id);
   const switched = phase.kind === "switched";
   const pill = pillOf(phase, state);
@@ -391,19 +394,24 @@ export function WorkspaceShell({ viewer, target, frames, idleTimeoutMinutes, age
           warning={copy.warning}
           actions={
             <>
-              {/* Apart from the switch and Start, which belong together; under them when a phone has no room. */}
+              {/* Apart from Start; under it when a phone has no room. */}
               {home ? <div className="mr-auto max-sm:order-last">{home}</div> : null}
               {info ? (
-                <StartWorkspace
-                  online={info.online}
-                  initialKind={state.startError ? kind : initialKind(info)}
+                <StartWorkspaceButton
+                  kind={choice.kind}
+                  onSwitch={choice.onlineBlocked ? undefined : () => choice.choose(otherKind(choice.kind))}
                   whose={target.isViewer ? "your" : `${target.name}'s`}
-                  label={copy.action}
+                  retry={copy.retry}
                   disabled={info.nextAgent === null}
                   onStart={start}
                 />
               ) : null}
             </>
+          }
+          body={
+            info && info.nextAgent !== null ? (
+              <KindPicker value={choice.kind} onValueChange={choice.choose} onlineBlocked={choice.onlineBlocked} idPrefix="workspace-kind" />
+            ) : null
           }
         >
           {info?.nextAgent === null ? "No harness is enabled on this server. Ask the administrator." : copy.body}
@@ -451,7 +459,7 @@ export function WorkspaceShell({ viewer, target, frames, idleTimeoutMinutes, age
       <HeaderBar>
         <Link
           href={target.isViewer ? "/" : "/admin"}
-          aria-label={target.isViewer ? "Home" : "Admin"}
+          aria-label={target.isViewer ? "Home" : "Usage"}
           className="hit-area relative shrink-0 rounded-sm"
         >
           <PortalMark />
@@ -505,26 +513,7 @@ export function WorkspaceShell({ viewer, target, frames, idleTimeoutMinutes, age
               </DropdownMenuLabel>
             ) : null}
             {runningAgent || adminConnected ? <DropdownMenuSeparator /> : null}
-            <DropdownMenuItem asChild>
-              <Link href="/">
-                <HomeIcon />
-                Home
-              </Link>
-            </DropdownMenuItem>
-            <DropdownMenuItem asChild>
-              <Link href="/settings">
-                <SettingsIcon />
-                Settings
-              </Link>
-            </DropdownMenuItem>
-            {viewer.isAdmin ? (
-              <DropdownMenuItem asChild>
-                <Link href="/admin">
-                  <ShieldIcon />
-                  Admin
-                </Link>
-              </DropdownMenuItem>
-            ) : null}
+            <NavMenuItems links={[HOME_LINK, ...portalLinks(viewer.isAdmin)]} />
           </BarMenu>
         </div>
       </HeaderBar>

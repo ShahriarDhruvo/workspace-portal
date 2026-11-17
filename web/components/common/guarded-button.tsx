@@ -13,13 +13,13 @@ interface GuardedButtonProps extends Omit<ComponentProps<typeof Button>, "asChil
 }
 
 /**
- * The tooltip of a control that can be unavailable for a reason (GuardedButton, the Online item of the workspace
- * switch): spread `tooltip` on its Tooltip, put `ref` on the control and call `explain` from its click while
- * blocked. Only a hover, a visible (keyboard) focus or a press while blocked asks: the focus a dialog hands back
- * after a click doesn't, nor a control becoming blocked under the focus. `explain` prevents the click's default,
- * so the tooltip doesn't take the press as its cue to close (and a Radix toggle doesn't toggle).
+ * The tooltip of GuardedButton, a control that can be unavailable for a reason: spread `tooltip` on its Tooltip,
+ * put `ref` on the control and call `explain` from its click while blocked. Only a hover, a visible (keyboard)
+ * focus or a press while blocked asks: the focus a dialog hands back after a click doesn't, nor a control becoming
+ * blocked under the focus. `explain` prevents the click's default,
+ * so the tooltip doesn't take the press as its cue to close.
  */
-export function useBlockedHint<T extends HTMLElement>(blockedReason: string | null | undefined) {
+function useBlockedHint<T extends HTMLElement>(blockedReason: string | null | undefined) {
   const ref = useRef<T>(null);
   // The reason the pointer or the keyboard asked about.
   const [hintFor, setHintFor] = useState<string | null>(null);

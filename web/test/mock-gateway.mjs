@@ -48,6 +48,11 @@
 // known=0: it never answered, so the releases' dates, notes and latest are unknown).
 // The live view (GET /control/live) and LLM engine updates (/control/engine...) are simulated in mock-live.mjs, with
 // its hooks POST /__mock/live?... and POST /__mock/engine?... (see there).
+// Electricity prices (gateway/src/energy-prices.ts): at start every place gets a year of plausible published prices
+// in energy_prices (INSERT OR IGNORE): EIA months for the US states up to three months back (each state's latest as
+// EIA published it on 2026-11-16), Eurostat half years for Europe. GET /control/energy-prices and POST
+// /control/energy-prices/refresh answer like the gateway. Hooks: POST /__mock/prices?down=1|0 (downloads fail with
+// HTTP 503), POST /__mock/prices?clear=1 (no prices stored, as before the first download).
 import crypto from "node:crypto";
 import http from "node:http";
 import path from "node:path";
@@ -118,6 +123,61 @@ const db = new Database(path.join(env.PORTAL_DATA_DIR || "/srv/workspace-portal"
 });
 db.pragma("busy_timeout = 5000");
 
+// ---------------------------------------------------------------- electricity prices
+// Each place's latest published price (EIA: August 2026, dollars per kWh; Eurostat: Jan to Jun 2026, euros).
+const US_PRICES = { CT: 0.2451, ME: 0.3211, MA: 0.3048, NH: 0.2764, RI: 0.2818, VT: 0.2384, NJ: 0.2461, NY: 0.2865, PA: 0.2177, IL: 0.1932, IN: 0.1702, MI: 0.2299, OH: 0.1938, WI: 0.1941, IA: 0.1706, KS: 0.1547, MN: 0.172, MO: 0.1602, NE: 0.1354, ND: 0.1331, SD: 0.1515, DE: 0.187, DC: 0.2598, FL: 0.1499, GA: 0.159, MD: 0.214, NC: 0.1495, SC: 0.1576, VA: 0.1764, WV: 0.1631, AL: 0.1633, KY: 0.138, MS: 0.1443, TN: 0.1342, AR: 0.1437, LA: 0.1287, OK: 0.1482, TX: 0.1591, AZ: 0.1505, CO: 0.1717, ID: 0.1337, MT: 0.1557, NV: 0.1272, NM: 0.1651, UT: 0.1331, WY: 0.1443, CA: 0.2975, OR: 0.1592, WA: 0.1463, AK: 0.2941, HI: 0.4718 };
+const EUROPE_PRICES = { BE: 0.3575, BG: 0.1341, CZ: 0.2884, DK: 0.2375, DE: 0.3618, EE: 0.2118, IE: 0.3871, EL: 0.2401, ES: 0.2509, FR: 0.2485, HR: 0.1816, IT: 0.3142, CY: 0.2688, LV: 0.2415, LT: 0.2162, LU: 0.2023, HU: 0.1139, MT: 0.1268, NL: 0.244, AT: 0.326, PL: 0.2999, PT: 0.2367, RO: 0.2836, SI: 0.2118, SK: 0.1985, FI: 0.2694, SE: 0.3062, IS: 0.2076, LI: 0.2988, NO: 0.1993, BA: 0.0995, ME: 0.1039, MD: 0.1872, MK: 0.1168, GE: 0.0731, AL: 0.119, RS: 0.1197, TR: 0.0657, XK: 0.0869 };
+const prices = { down: false, status: { eia: { at: null, okAt: null, rows: 0, error: null }, eurostat: { at: null, okAt: null, rows: 0, error: null } } };
+
+/** A year of each place's prices, ending at the latest a source would have published by now. */
+function seedPrices() {
+  const now = new Date();
+  const insert = db.prepare(
+    "INSERT OR IGNORE INTO energy_prices (location, period_start, period_end, period, price, currency, source, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+  );
+  const ymd = (year, month) => `${year}-${String(month).padStart(2, "0")}-01`;
+  const counts = { eia: 0, eurostat: 0 };
+  db.transaction(() => {
+    // EIA: 13 months up to three months back, each a little off the latest (dearest in August, as in Florida).
+    for (let back = 0; back < 13; back++) {
+      const date = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 3 - back, 1));
+      const [year, month] = [date.getUTCFullYear(), date.getUTCMonth() + 1];
+      const next = new Date(Date.UTC(year, month, 1));
+      const factor = 1 - 0.008 * back + 0.05 * (Math.cos(((month - 8) / 12) * 2 * Math.PI) - 1);
+      for (const [code, latest] of Object.entries(US_PRICES)) {
+        const price = back === 0 ? latest : Math.round(latest * factor * 10000) / 10000;
+        counts.eia += insert.run(`US-${code}`, ymd(year, month), ymd(next.getUTCFullYear(), next.getUTCMonth() + 1), `${year}-${String(month).padStart(2, "0")}`, price, "USD", "eia", now.getTime()).changes;
+      }
+    }
+    // Eurostat: the six half years up to the last one ended four months ago.
+    const shifted = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 4, 1));
+    let [year, half] = [shifted.getUTCFullYear(), shifted.getUTCMonth() < 6 ? 2 : 1];
+    if (half === 2) year -= 1;
+    for (let back = 0; back < 6; back++) {
+      const start = half === 1 ? ymd(year, 1) : ymd(year, 7);
+      const end = half === 1 ? ymd(year, 7) : ymd(year + 1, 1);
+      for (const [code, latest] of Object.entries(EUROPE_PRICES)) {
+        const price = back === 0 ? latest : Math.round(latest * (1 + 0.02 * back) * 10000) / 10000;
+        counts.eurostat += insert.run(`EU-${code}`, start, end, `${year}-S${half}`, price, "EUR", "eurostat", now.getTime()).changes;
+      }
+      [year, half] = half === 1 ? [year - 1, 2] : [year, 1];
+    }
+  })();
+  return counts;
+}
+
+/** A download as the gateway's: rows stored, or the error, per source. */
+function refreshPrices() {
+  const at = Date.now();
+  const counts = prices.down ? null : seedPrices();
+  for (const source of ["eia", "eurostat"]) {
+    const rows = db.prepare("SELECT count(*) AS n FROM energy_prices WHERE source = ?").get(source).n;
+    prices.status[source] = counts ? { at, okAt: at, rows, error: null } : { ...prices.status[source], at, error: "HTTP 503" };
+  }
+  return prices.status;
+}
+refreshPrices();
+
 /** The agent a start without one launches, like the gateway's: users.agent if enabled, else the first enabled. */
 function preferredAgent(userId) {
   const chosen = db.prepare("SELECT agent FROM users WHERE id = ?").get(userId)?.agent ?? null;
@@ -152,8 +212,6 @@ const live = createMockLive({
     const row = db.prepare("SELECT first_name, middle_name, last_name FROM users WHERE id = ?").get(id);
     return row ? [row.first_name, row.middle_name, row.last_name].filter(Boolean).join(" ") : null;
   },
-  maxRunning: () => settings.maxRunning,
-  memoryLimitBytes: 2304 * 1024 ** 2,
   audit,
 });
 
@@ -227,6 +285,14 @@ async function control(req, res, url) {
     if (parts[1] === "log") return send(res, 200, { log, calls });
     if (parts[1] === "agents") return send(res, 200, agentHook(parts[2], url.searchParams));
     if (parts[1] === "live" || parts[1] === "engine") return send(res, 200, live.hook(parts[1], url.searchParams));
+    if (parts[1] === "prices") {
+      if (url.searchParams.has("down")) prices.down = url.searchParams.get("down") === "1";
+      if (url.searchParams.get("clear") === "1") {
+        db.prepare("DELETE FROM energy_prices").run();
+        for (const source of ["eia", "eurostat"]) prices.status[source] = { at: null, okAt: null, rows: 0, error: null };
+      }
+      return send(res, 200, prices);
+    }
     if (parts[1] === "registry") {
       if (url.searchParams.has("down")) registry.setDown(url.searchParams.get("down") === "1");
       if (url.searchParams.get("known") === "0") registry.forget();
@@ -276,6 +342,11 @@ async function control(req, res, url) {
   if (parts[0] !== "control") return send(res, 404, { error: "not_found", message: "Not found" });
 
   if (parts[1] === "health") return send(res, 200, { ok: true });
+  if (parts[1] === "energy-prices") {
+    if (parts.length === 2 && req.method === "GET") return send(res, 200, prices.status);
+    if (parts[2] === "refresh" && req.method === "POST") return send(res, 200, refreshPrices());
+    return send(res, 404, { error: "not_found", message: "Unknown route." });
+  }
   if (parts[1] === "agents") return agentRoutes(req, res, url, parts.slice(2));
   if (parts[1] === "live" || parts[1] === "engine") {
     const body = req.method === "POST" ? await readBody(req) : null;

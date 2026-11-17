@@ -2,6 +2,7 @@
 // All timestamps are integer milliseconds since the Unix epoch.
 // The SQL in migrations.ts must stay in sync with this file.
 import { sql } from "drizzle-orm";
+import { ENERGY_CURRENCIES, ENERGY_PRICE_SOURCES } from "./energy-locations.ts";
 import {
   sqliteTable,
   integer,
@@ -150,7 +151,7 @@ export const HOST_ROLES = ["portal", "llm"] as const;
 export type HostRole = (typeof HOST_ROLES)[number];
 
 // Written by the gateway's energy meter: each server's totals per local day (YYYY-MM-DD, usageDay()), from its
-// portal-hostd's running counters. Kept for good (two rows a day): Admin > Usage prices them per day.
+// portal-hostd's running counters. Kept for good (two rows a day): Admin > Energy prices them per day.
 export const hostDaily = sqliteTable(
   "host_daily",
   {
@@ -178,16 +179,38 @@ export const hostMeter = sqliteTable("host_meter", {
   txBytes: integer("tx_bytes"),
 });
 
-// The electricity price, one row per change, in force from its day until the next row's (Admin > Usage).
-export const energyRates = sqliteTable("energy_rates", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  /** YYYY-MM-DD, local. */
-  effectiveFrom: text("effective_from").notNull().unique(),
-  /** All per-kWh charges together, in US cents. */
-  centsPerKwh: real("cents_per_kwh").notNull(),
-  /** Where the price comes from, e.g. "TECO residential, first 1,000 kWh". */
-  note: text("note"),
-  createdAt: integer("created_at").notNull(),
+// Published electricity prices (energy-locations.ts), one row per place and period, downloaded by the gateway
+// (gateway/src/energy-prices.ts) for every place; Admin > Energy prices each day at its chosen place's.
+export const energyPrices = sqliteTable(
+  "energy_prices",
+  {
+    /** An energy-locations.ts id: "US-FL", "EU-DE". */
+    location: text("location").notNull(),
+    /** YYYY-MM-DD, the period's first day. */
+    periodStart: text("period_start").notNull(),
+    /** YYYY-MM-DD, the day after the period's last. */
+    periodEnd: text("period_end").notNull(),
+    /** As the source names it: "2026-08" (a month, EIA) or "2026-S1" (a half year, Eurostat). */
+    period: text("period").notNull(),
+    /** In `currency` per kWh (EIA's 14.99 cents is 0.1499). */
+    price: real("price").notNull(),
+    currency: text("currency", { enum: ENERGY_CURRENCIES }).notNull(),
+    source: text("source", { enum: ENERGY_PRICE_SOURCES }).notNull(),
+    /** Epoch ms of the download that last wrote the row (sources revise recent figures). */
+    fetchedAt: integer("fetched_at").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.location, t.periodStart] })],
+);
+
+// Portal-wide settings the admin changes in the browser, one row per key (PORTAL_SETTING_KEYS); a missing row is
+// "not set".
+export const PORTAL_SETTING_KEYS = ["energy_price_location"] as const;
+export type PortalSettingKey = (typeof PORTAL_SETTING_KEYS)[number];
+
+export const portalSettings = sqliteTable("portal_settings", {
+  key: text("key", { enum: PORTAL_SETTING_KEYS }).primaryKey(),
+  value: text("value").notNull(),
+  updatedAt: integer("updated_at").notNull(),
 });
 
 export type User = typeof users.$inferSelect;
@@ -196,4 +219,4 @@ export type Session = typeof sessions.$inferSelect;
 export type Workspace = typeof workspaces.$inferSelect;
 export type AuditEntry = typeof auditLog.$inferSelect;
 export type HostDaily = typeof hostDaily.$inferSelect;
-export type EnergyRate = typeof energyRates.$inferSelect;
+export type EnergyPrice = typeof energyPrices.$inferSelect;

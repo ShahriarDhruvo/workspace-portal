@@ -18,52 +18,113 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { Field, FieldContent, FieldDescription, FieldLabel, FieldTitle } from "@/components/ui/field";
 import { GlobeIcon, LockIcon, PlayIcon } from "@/components/ui/icons";
-import { KindSwitch } from "./kind-switch";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 
 // Starting a stopped workspace, the same on Home, on the workspace page and in the admin's view of someone's
-// workspace: the Private | Online switch, Start, and the confirmation that says what the chosen kind means. No
-// workspace starts without that choice and that confirmation.
+// workspace: the choice of kind (KindPicker, two radio cards that say what each kind is), a Start button that
+// names the chosen kind, and the confirmation that says what it means for the files. No workspace starts without
+// that choice and that confirmation. The caller lays the picker and the button out (Home: the button in the
+// card's corner, the picker in its body) and holds the choice with useKindChoice.
 
-interface StartWorkspaceProps {
-  /** Whether Online may start for this workspace's owner (WorkspaceInfo.online). */
-  online: OnlineAccess;
-  /** The kind the switch starts on (initialKind in lib/workspace-kind.ts). */
-  initialKind: WorkspaceKind;
+/**
+ * The kind chosen for the next start: what the user picked, else `initialKind` (lib/workspace-kind.ts: Online
+ * by default, the failed kind after a failed start), and Private whatever was picked while Online can't start
+ * (`onlineBlocked` then says why).
+ */
+export function useKindChoice(online: OnlineAccess, initialKind: WorkspaceKind) {
+  const [choice, setChoice] = useState<WorkspaceKind | null>(null);
+  const onlineBlocked = onlineBlockedReason(online);
+  const kind: WorkspaceKind = onlineBlocked ? "private" : (choice ?? initialKind);
+  return { kind, choose: setChoice, onlineBlocked };
+}
+
+/** What each kind is, in a line under its name. */
+const KIND_LINES: Readonly<Record<WorkspaceKind, string>> = {
+  private: "No internet access. Web search and page reading still work.",
+  online: "Public internet access, for installing packages and using online services.",
+};
+
+interface KindPickerProps {
+  value: WorkspaceKind;
+  onValueChange: (kind: WorkspaceKind) => void;
+  /** Why Online can't be chosen (turned off on the portal, or not for this account); null when it can. */
+  onlineBlocked: string | null;
+  /** Unique on the page, for the radio ids. */
+  idPrefix: string;
+  /** The grid's columns (Home: side by side from `sm`; the workspace page's narrow card: stacked). */
+  className?: string;
+}
+
+/**
+ * The choice between the user's two workspaces as radio cards, like Settings' harness choice: icon and name, the
+ * line that says what it is, the radio on the right. With Online unavailable its card is disabled and its line
+ * says why.
+ */
+export function KindPicker({ value, onValueChange, onlineBlocked, idPrefix, className }: KindPickerProps) {
+  return (
+    <RadioGroup
+      value={value}
+      onValueChange={(next) => {
+        if (next === "private" || (next === "online" && !onlineBlocked)) onValueChange(next);
+      }}
+      aria-label="Workspace to start"
+      className={className}
+    >
+      {(["private", "online"] as const).map((kind) => {
+        const Icon = kind === "online" ? GlobeIcon : LockIcon;
+        const blocked = kind === "online" ? onlineBlocked : null;
+        return (
+          <FieldLabel key={kind} htmlFor={`${idPrefix}-${kind}`}>
+            <Field orientation="horizontal" data-disabled={blocked ? true : undefined}>
+              <FieldContent>
+                <FieldTitle>
+                  <Icon className="shrink-0" />
+                  {KIND_NAMES[kind]}
+                </FieldTitle>
+                <FieldDescription className="text-13">{blocked ?? KIND_LINES[kind]}</FieldDescription>
+              </FieldContent>
+              <RadioGroupItem value={kind} id={`${idPrefix}-${kind}`} disabled={blocked !== null} />
+            </Field>
+          </FieldLabel>
+        );
+      })}
+    </RadioGroup>
+  );
+}
+
+interface StartWorkspaceButtonProps {
+  /** The chosen kind (useKindChoice). */
+  kind: WorkspaceKind;
+  /** Picks the other kind, offered as "Use Private" / "Use Online" in the confirmation; absent when it can't start. */
+  onSwitch?: () => void;
   /** "your", or the owner's name with "'s" when an administrator starts someone else's. */
   whose: string;
-  /** The Start button's label: "Start", "Start again", "Try again". */
-  label: string;
+  /** After a failed start or a refusal: "Try again" instead of "Start Online" / "Start Private". */
+  retry?: boolean;
   /** No harness is enabled: nothing can start. */
   disabled?: boolean;
   /** Starts that kind; resolves once the request is answered (the caller shows what came of it). */
   onStart: (kind: WorkspaceKind) => Promise<void>;
-  /** For the switch's ToggleGroup (e.g. stretching its items on a phone). */
-  switchClassName?: string;
+  className?: string;
 }
 
-/**
- * The switch and the Start button, as siblings for the caller's button row, and the confirmation Start opens.
- * Online unavailable, the switch stays on Private and Start confirms Private.
- */
-export function StartWorkspace({ online, initialKind, whose, label, disabled = false, onStart, switchClassName }: StartWorkspaceProps) {
-  const [choice, setChoice] = useState(initialKind);
+/** The Start button, naming the chosen kind, and the confirmation it opens. */
+export function StartWorkspaceButton({ kind, onSwitch, whose, retry = false, disabled = false, onStart, className }: StartWorkspaceButtonProps) {
   const [confirming, setConfirming] = useState(false);
   const startButton = useRef<HTMLButtonElement>(null);
-  const onlineBlocked = onlineBlockedReason(online);
-  const kind = onlineBlocked ? "private" : choice;
   return (
     <>
-      <KindSwitch value={kind} onValueChange={setChoice} onlineBlocked={onlineBlocked} className={switchClassName} />
-      <Button ref={startButton} type="button" onClick={() => setConfirming(true)} disabled={disabled}>
+      <Button ref={startButton} type="button" onClick={() => setConfirming(true)} disabled={disabled} className={className}>
         <PlayIcon />
-        {label}
+        {retry ? "Try again" : `Start ${KIND_NAMES[kind]}`}
       </Button>
       <StartDialog
         open={confirming}
         onOpenChange={setConfirming}
         kind={kind}
-        onSwitch={onlineBlocked ? undefined : () => setChoice(otherKind(kind))}
+        onSwitch={onSwitch}
         whose={whose}
         onConfirm={() => onStart(kind)}
         returnFocusTo={startButton}
@@ -76,7 +137,7 @@ interface StartDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   kind: WorkspaceKind;
-  /** Flips the switch, and so the dialog, to the other kind; absent when that one can't start. */
+  /** Picks the other kind, and so flips the dialog to it; absent when that one can't start. */
   onSwitch?: () => void;
   whose: string;
   onConfirm: () => Promise<void>;

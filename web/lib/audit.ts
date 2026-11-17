@@ -25,6 +25,7 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   engine_update_failed: "LLM engine update failed",
   engine_image_removed: "LLM engine image removed",
   energy_rate_set: "Set electricity price",
+  energy_price_location_set: "Changed electricity price location",
   workspace_files_erased: "Erased workspace files",
   user_online_access_changed: "Changed Online access",
 };
@@ -58,6 +59,9 @@ const DETAIL_LABELS: Record<string, string> = {
   // A new user's Online permission, and a change of it.
   onlineAllowed: "Online workspace",
   allowed: "Allowed",
+  // The place electricity prices come from, from/to by name (older entries of the hand-kept price have
+  // effectiveFrom, price and note).
+  location: "Location",
 };
 
 function humanize(key: string): string {

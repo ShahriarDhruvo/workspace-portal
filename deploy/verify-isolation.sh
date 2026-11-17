@@ -131,7 +131,7 @@ for item in items:
     if isinstance(item, str):
         loaded.append(ipaddress.ip_network(item))
     elif "prefix" in item:
-        loaded.append(ipaddress.ip_network(f"{item['prefix']['addr']}/{item['prefix']['len']}"))
+        loaded.append(ipaddress.ip_network("%s/%s" % (item["prefix"]["addr"], item["prefix"]["len"])))
     elif "range" in item:
         loaded.extend(ipaddress.summarize_address_range(*map(ipaddress.ip_address, item["range"])))
 loaded += [ipaddress.ip_network(n) for n in sys.argv[2].split()]

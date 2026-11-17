@@ -8,6 +8,7 @@ export async function loadAdminOverview(): Promise<AdminOverview> {
   const [workspaces, stats] = await Promise.allSettled([gateway.listWorkspaces(), gateway.stats()]);
   const failure = workspaces.status === "rejected" ? workspaces.reason : stats.status === "rejected" ? stats.reason : null;
   return {
+    t: Date.now(),
     workspaces: workspaces.status === "fulfilled" ? workspaces.value : null,
     stats: stats.status === "fulfilled" ? stats.value : null,
     error: failure === null ? null : toApiError(failure),

@@ -206,7 +206,21 @@ export interface AdminAgents {
 
 /** GET /api/admin/overview. Either part is null when the gateway could not provide it. */
 export interface AdminOverview {
+  /** When it was read (epoch ms, the portal server's clock, which the gateway shares), for "Up for". */
+  t: number;
   workspaces: WorkspaceInfo[] | null;
   stats: HostStats | null;
   error: ApiError | null;
 }
+
+/** A price source's last download (gateway/src/energy-prices.ts): `at` the last try, `okAt` the last good one. */
+export interface EnergyPriceSourceStatus {
+  at: number | null;
+  okAt: number | null;
+  rows: number;
+  /** Why the last try failed; null after a good one. */
+  error: string | null;
+}
+
+/** GET /control/energy-prices and POST /control/energy-prices/refresh. */
+export type EnergyPriceStatus = Record<"eia" | "eurostat", EnergyPriceSourceStatus>;

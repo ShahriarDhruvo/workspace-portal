@@ -35,7 +35,7 @@ function openLive(g: Gateway, secret = CONTROL_SECRET): Promise<{ status: number
   });
 }
 
-test("GET /control/live streams an init event, then frames with the workspaces and the LLM view; it stops when nobody watches", () =>
+test("GET /control/live streams an init event, then frames with the servers and the LLM view (not the workspaces, even with one running); it stops when nobody watches", () =>
   withGateway({}, async (g) => {
     const { alice } = g.ids;
     await g.control("POST", `/control/workspaces/${alice}/start`, {});
@@ -55,11 +55,7 @@ test("GET /control/live streams an init event, then frames with the workspaces a
       ["off", "off"],
       "no portal-hostd set up in the test gateway",
     );
-    assert.equal(frame.workspaces.maxRunning, g.config.maxRunning);
-    assert.deepEqual(
-      frame.workspaces.list.map((w) => [w.userId, w.userName, w.status, w.agent]),
-      [[alice, "alice Test", "running", "qwen"]],
-    );
+    assert.equal("workspaces" in frame, false, "the running workspaces are on Admin > Users, not in the live frames");
     assert.deepEqual([frame.llm.maxConcurrency, frame.llm.inFlight, frame.llm.queued, frame.llm.paused], [g.config.llm.maxConcurrency, 0, 0, false]);
     // The fake LLM server has no /slots: the rows come from the gateway's own count.
     const lastFrame = (): LiveFrame => live.events.filter((e) => e.event === "frame").at(-1)!.data as LiveFrame;

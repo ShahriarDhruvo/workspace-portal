@@ -1,6 +1,5 @@
 // The admin's live view: the events of GET /api/admin/live, passed through from the gateway's GET /control/live
 // (docs/ARCHITECTURE.md, "Live view"). HostInfo and HostSample are portal-hostd's (hostd/README.md).
-import type { AgentKind, WorkspaceKind, WorkspaceStatus } from "@portal/db";
 
 export type HostRole = "portal" | "llm";
 /** off: not set up; connecting; online: readings arrive; offline: portal-hostd can't be reached or refused. */
@@ -118,27 +117,10 @@ export interface LlmLive {
   recent: LlmFinished[];
 }
 
-export interface LiveWorkspace {
-  userId: number;
-  userName: string | null;
-  status: WorkspaceStatus;
-  agent: AgentKind | null;
-  /** Of the current container, or the last one. */
-  kind: WorkspaceKind;
-  agentVersion: string | null;
-  busy: boolean;
-  busyReason: "task" | "llm" | "cpu" | null;
-  memoryBytes: number | null;
-  llmInFlight: number;
-  open: number;
-  startedAt: number | null;
-}
-
 export interface LiveFrame {
   t: number;
   hosts: Record<HostRole, HostLive>;
   llm: LlmLive;
-  workspaces: { maxRunning: number; memoryLimitBytes: number; list: LiveWorkspace[] };
 }
 
 export interface LlmTotalsPoint {

@@ -39,7 +39,7 @@ set_if_missing GATEWAY_CONTROL_SECRET "$(openssl rand -hex 32)"
 set_if_missing ADMIN_PASSWORD "$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20)"
 set_if_missing HOSTD_PORTAL_TOKEN "$(openssl rand -hex 32)"
 # The containers run in UTC unless told otherwise, and the daily totals (Home's usage today, the energy per day
-# on Admin > Usage) begin at their midnight: give them the host's time zone.
+# on Admin > Energy) begin at their midnight: give them the host's time zone.
 if ! env_value "$ENV_FILE" TZ >/dev/null; then
   zone=$(timedatectl show -p Timezone --value 2>/dev/null || true)
   if [[ -z $zone ]]; then
@@ -280,7 +280,7 @@ elif command -v ufw >/dev/null && ufw status | grep -q "Status: active"; then
 fi
 
 # ---------------------------------------------------------------- portal-hostd
-# This server's live readings and energy meter for Admin > Usage (hostd/README.md); before the stack starts,
+# This server's live readings and energy meter for Admin > Usage and Energy (hostd/README.md); before the stack starts,
 # so the gateway finds it at once. It listens on loopback only. The token goes on stdin, not the command line.
 HOSTD_PORTAL_URL=$(env_get HOSTD_PORTAL_URL)
 if [[ ${HOSTD_PORTAL_URL,,} == off ]]; then

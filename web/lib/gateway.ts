@@ -8,6 +8,7 @@ import type {
   AgentUpdateRequest,
   AgentVersionsOverview,
   ApiError,
+  EnergyPriceStatus,
   HostStats,
   WorkspaceInfo,
 } from "./gateway-types";
@@ -135,6 +136,13 @@ export const gateway = {
     }),
   deleteData: (userId: number) =>
     call<{ ok: true }>("DELETE", `/control/workspaces/${userId}/data`, { timeoutMs: STOP_TIMEOUT_MS }),
+  /** The electricity price downloads' state (EIA, Eurostat): answers at once. */
+  energyPrices: () => call<EnergyPriceStatus>("GET", "/control/energy-prices"),
+  /**
+   * Downloads the electricity prices now (a source downloaded in the last 10 minutes is skipped) and answers once
+   * they are stored: Settings, when the admin picks a place that has none yet.
+   */
+  refreshEnergyPrices: () => call<EnergyPriceStatus>("POST", "/control/energy-prices/refresh", { timeoutMs: REGISTRY_TIMEOUT_MS }),
   /** The enabled agents' versions, their Package images rows and the running or last update job. */
   agentVersions: ({ refresh = false }: { refresh?: boolean } = {}) =>
     call<AgentVersionsOverview>("GET", `/control/agents/versions${refresh ? "?refresh=1" : ""}`, {

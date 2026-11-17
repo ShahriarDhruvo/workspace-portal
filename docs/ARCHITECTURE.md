@@ -261,11 +261,20 @@ install's default, the first of `WORKSPACE_AGENTS`.
 `workspaces.kind` (migration 5, `private` | `online`, default `private`) is the kind of the current or last
 container; rows from before kinds are Private, and so is a container without a kind label.
 
+Migration 6 replaces the hand-kept `energy_rates` with published prices: `energy_prices` (one row per place and
+period: `location` such as `US-FL` or `EU-DE`, `period_start`/`period_end` (end exclusive), `period` as the source
+names it (`2026-08`, `2026-S1`), `price` per kWh, `currency` `USD` | `EUR`, `source` `eia` | `eurostat`,
+`fetched_at`) and `portal_settings` (key/value; `energy_price_location`, unset until the admin picks a place).
+The places and their sources are `packages/db/src/energy-locations.ts`, which imports nothing, so the web app's
+client components load it on its own (`@portal/db/energy-locations`); the package's main entry brings SQLite.
+
 Ownership:
-* web writes `users`, `sessions`, `login_attempts`, and `audit_log` (user and admin actions, among them
-  `agent_preference_changed` with `{ from, to }`, agent kinds or null for the default, and
-  `user_online_access_changed` with `{ allowed }`).
-* gateway writes `workspaces`, `llm_usage`, `host_daily` and `host_meter` (the energy meter), and
+* web writes `users`, `sessions`, `login_attempts`, `portal_settings`, and `audit_log` (user and admin actions,
+  among them `agent_preference_changed` with `{ from, to }`, agent kinds or null for the default,
+  `user_online_access_changed` with `{ allowed }`, and `energy_price_location_set` with
+  `{ location: { from, to } }`, the places by name ("Florida, US"); older logs may hold `energy_rate_set` from the hand-kept rates).
+* gateway writes `workspaces`, `llm_usage`, `host_daily` and `host_meter` (the energy meter), `energy_prices`
+  (Electricity prices), and
   `audit_log` (`workspace_started` with `{ agent, version, kind }`, `workspace_stopped` with `{ reason, kind }`,
   `workspace_error` with `{ error, kind }` (plus `reason` when a stop failed), `workspace_files_erased` with
   `{ kind }` and the admin as actor, `agent_updated` with `{ agent, from, to, rebuild }`,
@@ -345,6 +354,8 @@ Errors: `{ "error": "<code>", "message": "<human text>" }` with a 4xx/5xx status
 GET  /control/health                         → { ok: true }
 GET  /control/stats                          → HostStats
 GET  /control/live                           → text/event-stream: the admin's live view (see Live view)
+GET  /control/energy-prices                  → EnergyPriceStatus   each source's last download (see Electricity prices)
+POST /control/energy-prices/refresh          → EnergyPriceStatus   download both now (a source fetched in the last 10 min is skipped); answers when done
 GET  /control/agents                         → { agents: AgentInfo[] }   (the enabled agents, in WORKSPACE_AGENTS order; version = the current one)
 GET  /control/agents/versions[?refresh=1]    → AgentVersionsOverview   (refresh=1 asks the npm registry and GitHub again)
 POST /control/agents/:agent/update           → AgentUpdateJob  body { version: "0.27.4", rebuild?: boolean, actorUserId?: number }; see Agent versions and updates
@@ -603,7 +614,8 @@ old build whose tag a rebuild moved while a workspace still used it). It logs wh
 ## Live view (`GET /control/live`)
 
 Admin > Usage opens it through the web app (`/api/admin/live`). Server-sent events: `init` once, then
-`frame` every 500 ms. Everything behind it runs only while at least one viewer is connected (at most 8):
+`frame` every 500 ms. The running workspaces are not in it: Admin > Users polls the workspace list
+(`/api/admin/overview`), which costs hostd nothing. Everything behind it runs only while at least one viewer is connected (at most 8):
 
 * **Server readings** (`host-monitor.ts`): one event stream per portal-hostd (`GET /v1/stream`), opened at
   the first viewer, closed 15 s after the last left, reconnecting with backoff (1 s doubling to 5 s). The
@@ -643,8 +655,6 @@ type LiveFrame = {
     totals: { readTps: number; writeTps: number };
     recent: Array<{ userId; userName; finishedAt; durationMs; ttftMs; promptTokens; cachedTokens; generatedTokens; readTps; writeTps; ok }>;
   };
-  workspaces: { maxRunning: number; memoryLimitBytes: number;
-                list: Array<{ userId; userName; status; agent; kind; agentVersion; busy; busyReason; memoryBytes; llmInFlight; open; startedAt }> };
 };
 ```
 
@@ -657,7 +667,7 @@ leaves them out; a source a machine lacks is null.
 ## Energy meter
 
 `energy-meter.ts` keeps each server's energy use and network traffic per local day in `host_daily` (two rows
-a day, kept for good; Admin > Usage prices them with `energy_rates`). It runs from the gateway's start,
+a day, kept for good; Admin > Energy prices them, see Electricity prices). It runs from the gateway's start,
 whether or not anyone watches:
 
 * Every 30 s, `GET /v1/meter` from each set-up portal-hostd (`HOSTD_PORTAL_*`, `HOSTD_LLM_*`): running totals
@@ -676,6 +686,24 @@ whether or not anyone watches:
 * Days are local to the gateway's `TZ`, which `docker-compose.yml` passes to both services (the web app's
   "usage today" uses the same day). `deploy/install.sh` records the host's zone in `.env`; without one the
   containers count UTC days.
+
+## Electricity prices
+
+`energy-prices.ts` downloads the published prices of every place in `energy-locations.ts` into `energy_prices`:
+at the gateway's start, every 24 h, and when the admin picks a place with no prices stored yet (`POST
+/control/energy-prices/refresh`; a source fetched in the last 10 minutes is not asked again). Neither source
+needs an account or key; each answer is read up to 2 MiB with a 20 s timeout.
+
+* **United States** (51 places, the states and DC): EIA's Electric Power Monthly, Table 5.6.A (HTML), the
+  average residential price in cents per kWh for the latest month and the same month a year before. EIA
+  publishes about two months late and revises recent months, so a later download replaces a month's figure.
+* **Europe** (39 countries, Eurostat's codes): Eurostat `nrg_pc_204` (JSON-stat), household prices with all
+  taxes, consumption band 2,500-4,999 kWh a year, euros per kWh, the last six half years.
+* A page that doesn't parse as the table it was (too few places, a changed layout) is an error in the log and
+  in `GET /control/energy-prices`; what is stored stays as it was. A wrong price is never written.
+* The web app (`web/lib/energy.ts`) prices each day at its place's period that contains it; a day past the
+  latest published period uses that latest figure, marked as such on the page. Without a place chosen, Admin >
+  Energy shows energy only and links to Settings.
 
 ## LLM engine updates
 
@@ -1178,22 +1206,23 @@ For each running workspace, it computes a verdict, re-checks the agent state bef
 | Route | Who | Purpose |
 |---|---|---|
 | `/login` | anyone | Username + password. A username locks for 15 min after 5 failures in 15 min. `?working=1` explains a deferred stop |
-| `/` (Home) | signed in | The workspace card: harness and version; stopped, the Private \| Online switch (Online by default; Online unavailable, with a tooltip saying why, when `online` isn't `allowed`) and Start, which opens the kind's confirmation ("Use Private" / "Use Online" flips it, "Start Online" / "Start Private" starts it); running, the kind's badge, Stop and Open workspace; why it stopped or was refused (`kind_mismatch`, `online_disabled`, `online_not_allowed`, `capacity`); the idle rule. Then the user's LLM usage today (`llm_usage`). Polls every 2 s while something changes, else every 5 s |
-| `/workspace` | signed in | Slim top bar (status pill, the kind's badge, harness, "Admin connected", Stop, menu) + iframe on the running kind's port (`workspaceFrame(session, kind)`: Private `:AGENT_PORT_BASE+target.id`, Online `:ONLINE_AGENT_PORT_BASE+target.id`). Nothing starts by itself: a stopped workspace shows Home, the switch and Start with the same confirmation. Stop asks first only when the agent is working, the workspace is open elsewhere or an admin is in it (`web/lib/workspace-stop.ts`), then goes to `/` |
-| `/settings` | signed in | Account (name, username, role, the dark / light theme), Harness (radio cards, saved at once; "Restart now", the same kind again, when the running one differs), Password (`#password`). Nothing about Private / Online |
+| `/` (Home) | signed in | The workspace card: harness and version; stopped, the kind to start as two radio cards, Private and Online, each with a line on what it allows (Online chosen by default; disabled, with the reason, when `online` isn't `allowed`), and "Start Online" / "Start Private", which opens that kind's confirmation ("Use Private" / "Use Online" flips it); running, the kind's badge, Stop and Open workspace; why it stopped or was refused (`kind_mismatch`, `online_disabled`, `online_not_allowed`, `capacity`); the idle rule. Then the user's LLM usage today (`llm_usage`). Polls every 2 s while something changes, else every 5 s |
+| `/workspace` | signed in | Slim top bar (status pill, the kind's badge, harness, "Admin connected", Stop, menu) + iframe on the running kind's port (`workspaceFrame(session, kind)`: Private `:AGENT_PORT_BASE+target.id`, Online `:ONLINE_AGENT_PORT_BASE+target.id`). Nothing starts by itself: a stopped workspace shows the same kind choice and Start with the same confirmation. Stop asks first only when the agent is working, the workspace is open elsewhere or an admin is in it (`web/lib/workspace-stop.ts`), then goes to `/` |
+| `/settings` | signed in | Account (username, role and the dark / light theme; the names, with Save, audited `user_updated`), Harness (radio cards, saved at once; "Restart now", the same kind again, when the running one differs), Password (`#password`); for the admin, Electricity price (`#electricity`: the place, saved on change, with its latest price and source; a place with no prices stored yet asks the gateway to download them). Nothing about Private / Online |
 | `/change-password` | signed in | Only the forced change (`must_change_password`); otherwise redirects to `/settings#password` |
-| `/admin` (Usage) | admin | Live (GET `/api/admin/live`, frames every 500 ms while the tab is visible): LLM sessions with total Read and Write tok/s (the selected one charted over the last minute) and Running / Waiting / Recent tables; the LLM server and portal server cards (power draw, CPU, GPU, memory with free GiB and %, network, disks, fans); the running workspaces with their kind (Type); energy per day and its cost |
-| `/admin/users` | admin | Users table: role, account, workspace status (Working / Idle / Stopped, stop pending) with the running kind's badge, the harness (the running agent and version, or the one the next Start launches), last sign-in, Open workspace and the actions menu |
+| `/admin` (Usage) | admin | Live (GET `/api/admin/live`, frames every 500 ms while the tab is visible): LLM sessions with total Read and Write tok/s (the selected one charted over the last minute) and Running / Waiting / Recent tables; the LLM server and portal server cards (power draw, CPU, GPU, memory with free GiB and %, network, disks, fans). The sessions span the width over the two servers; from 1800 px wide the page grows into the margins and the three sit side by side |
+| `/admin/energy` | admin | Both servers' energy per day (the servers' own sensors, not the wall): today and the month so far with their cost, the month's days as bars and as a table (kWh per server, price, cost); the month picker in the heading. GET `/api/admin/energy` every 60 s while visible and on a change of month |
+| `/admin/users` | admin | Users table: role, account, the harness (the running agent and version, or the one the next Start launches), last sign-in, Open workspace and the actions menu (Stop workspace among them). Under it the running workspaces: user, kind, harness, status (Starting, Working with why, Idle for how long, Stopping, Error with the reason), memory, LLM requests, viewers, up for, Open workspace. Both from GET `/api/admin/overview` every 5 s |
 | `/admin/users/new` | admin | Names, username, temporary password and the "Online workspace" permission (on by default; `users.online_allowed`, in `user_created`'s details) |
 | `/admin/users/[id]` | admin | Pills (role, account, workspace status, the running kind, harness), Open workspace / Stop; Profile (names); Workspaces: the "Online workspace" switch (`setOnlineAccess`, audited `user_online_access_changed {allowed}`; off while their Online workspace starts or runs confirms, then stops it) and "Erase Private files…" / "Erase Online files…" (`eraseWorkspaceFiles` → `DELETE /control/workspaces/:id/files?kind=`, which the gateway audits; unavailable while that kind starts, runs or stops); Account (reset password, deactivate, delete) |
-| `/admin/users/[id]/workspace` | admin | Red banner "Viewing <name>'s workspace · Exit" + iframe on that user's port for the running kind. A stopped workspace shows the switch (the user's own Online access) and Start with the confirmation (the user's harness); there is no Stop here (the users table has it) |
+| `/admin/users/[id]/workspace` | admin | Red banner "Viewing <name>'s workspace · Exit" + iframe on that user's port for the running kind. A stopped workspace shows the kind choice (the user's own Online access) and Start with the confirmation (the user's harness); there is no Stop here (the users table has it) |
 | `/admin/updates` | admin | The LLM engine, Qwen Code and DeepSeek Harness, one card each built the same way: name, source, status and the current version, with "Update to X.Y.Z" when latest is newer; the running job inline (stage, log, Cancel, and "Restart now" while the engine drains); then one folded Package images table (the offered versions: badges, release date, image on the server or to build/download first, workspaces using it, and Release notes, Switch/Use/Build/Rebuild, Remove). See Agent versions and updates, and LLM engine updates. `/admin/agents` redirects here |
 | `/admin/audit` | admin | Audit log |
 
 The admin pages read the gateway on the server and then follow admin-only routes for live data:
 `GET /api/admin/live` (Usage: the gateway's `/control/live` event stream passed through; the session is
 checked again every 30 s and the stream ends when it no longer holds), `GET /api/admin/overview` (the users
-table, every 5 s), `GET /api/admin/agents` and `GET /api/admin/engine` (the Updates page). "Check for updates"
+table and the running workspaces, every 5 s), `GET /api/admin/energy` (Energy), `GET /api/admin/agents` and `GET /api/admin/engine` (the Updates page). "Check for updates"
 is a POST to those two, which asks the gateway with `refresh=1` (the registries again, not the cache); a POST so
 that it gets the same-origin check of the state-changing routes, and a workspace page the admin has open can't
 make the server query a registry in a loop. The Updates page polls every second while a job runs, else less

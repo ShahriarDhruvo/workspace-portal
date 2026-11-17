@@ -1,20 +1,44 @@
-// Energy and its cost for Admin > Usage: both servers' daily totals (host_daily, kept current by the gateway's
-// energy meter) priced at the electricity price in force each day (energy_rates). Server side only, but it takes
-// the database as an argument (no server-only imports) so it can be unit tested; the page and
-// GET /api/admin/energy pass getDb(), the price action lib/actions/energy.ts.
+// Energy and its cost for Admin > Energy: both servers' daily totals (host_daily, kept current by the gateway's
+// energy meter) priced at the published electricity price of the place the admin picked in Settings
+// (portal_settings.energy_price_location; energy_prices, downloaded by the gateway from EIA or Eurostat). Server
+// side only, but it takes the database as an argument (no server-only imports) so it can be unit tested; the
+// pages, GET /api/admin/energy and lib/actions/energy.ts pass getDb().
 import { and, asc, desc, eq, gte, lte, sql } from "drizzle-orm";
-import { z } from "zod";
-import { energyRates, hostDaily, usageDay, writeAudit, type PortalDb } from "@portal/db";
+import {
+  ENERGY_SOURCE_NAMES,
+  energyLocation,
+  energyLocationLabel,
+  energyPrices,
+  hostDaily,
+  readSetting,
+  usageDay,
+  writeAudit,
+  writeSetting,
+  type EnergyLocation,
+  type PortalDb,
+} from "@portal/db";
+import { formatPricePeriod, formatUnitPrice, priceUnit } from "./live-format.ts";
 
-/** A price, in force from its day until the next one's. */
-export interface EnergyPrice {
-  /** YYYY-MM-DD. */
-  effectiveFrom: string;
-  centsPerKwh: number;
-  note: string | null;
+/** A published price, for the days from `periodStart` up to (not including) `periodEnd`. */
+export interface PricePeriod {
+  periodStart: string;
+  periodEnd: string;
+  /** "2026-08" (a month) or "2026-S1" (a half year). */
+  period: string;
+  /** In the place's currency per kWh. */
+  price: number;
 }
 
-/** One day of both servers. null: not measurable (a server without a power sensor) or not priced (no price yet). */
+/** The price a day is charged at. */
+export interface DayPrice {
+  /** In the place's currency per kWh. */
+  price: number;
+  period: string;
+  /** The day is outside the period: its month isn't published yet, so the latest figure stands in. */
+  estimate: boolean;
+}
+
+/** One day of both servers. null: not measurable (a server without a power sensor) or not priced (no place or price). */
 export interface EnergyDay {
   /** YYYY-MM-DD. */
   day: string;
@@ -22,13 +46,14 @@ export interface EnergyDay {
   portalKwh: number | null;
   /** The servers that could be measured, together. */
   kwh: number | null;
-  centsPerKwh: number | null;
-  usd: number | null;
+  price: DayPrice | null;
+  /** In the place's currency. */
+  cost: number | null;
 }
 
 export interface EnergyTotal {
   kwh: number | null;
-  usd: number | null;
+  cost: number | null;
 }
 
 export interface EnergyMonth {
@@ -43,10 +68,10 @@ export interface EnergyMonth {
   todayTotal: EnergyTotal;
   /** The months with readings, newest first; always includes the current one. */
   months: string[];
-  /** Every price, newest first. */
-  prices: EnergyPrice[];
-  /** The price in force today. */
-  price: EnergyPrice | null;
+  /** Where prices come from; null until the admin picks a place in Settings. */
+  location: EnergyLocation | null;
+  /** Today's price there; null without a place or before its prices are downloaded. */
+  price: DayPrice | null;
 }
 
 const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -56,21 +81,18 @@ export function isMonth(value: unknown): value is string {
   return typeof value === "string" && MONTH.test(value);
 }
 
-/** YYYY-MM-DD that names a real calendar day. */
-export function isDay(value: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-  const date = new Date(`${value}T00:00:00Z`);
-  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
-}
-
-/** The price in force on `day`: the latest that starts on or before it. `prices` oldest first. */
-export function priceOn(prices: readonly EnergyPrice[], day: string): EnergyPrice | null {
-  let found: EnergyPrice | null = null;
-  for (const price of prices) {
-    if (price.effectiveFrom > day) break;
-    found = price;
+/**
+ * The price of `day`: the newest period that starts on or before it, or the oldest when it is older than every
+ * period. Outside its period the figure is an estimate (the month is not published yet). `periods` oldest first.
+ */
+export function priceOn(periods: readonly PricePeriod[], day: string): DayPrice | null {
+  let found = periods[0];
+  for (const period of periods) {
+    if (period.periodStart > day) break;
+    found = period;
   }
-  return found;
+  if (!found) return null;
+  return { price: found.price, period: found.period, estimate: day < found.periodStart || day >= found.periodEnd };
 }
 
 /** Adds up what is known: null only when every part is. */
@@ -79,8 +101,8 @@ function sumKnown(values: ReadonlyArray<number | null>): number | null {
   return known.length === 0 ? null : known.reduce((sum, value) => sum + value, 0);
 }
 
-/** A day's servers (host_daily rows, Wh) priced at the price in force that day. */
-export function priceDay(day: string, rows: ReadonlyArray<{ role: string; energyWh: number | null }>, price: EnergyPrice | null): EnergyDay {
+/** A day's servers (host_daily rows, Wh) priced at that day's price. */
+export function priceDay(day: string, rows: ReadonlyArray<{ role: string; energyWh: number | null }>, price: DayPrice | null): EnergyDay {
   const kwhOf = (role: string): number | null => {
     const wh = rows.find((row) => row.role === role)?.energyWh;
     return wh === null || wh === undefined ? null : wh / 1000;
@@ -88,52 +110,60 @@ export function priceDay(day: string, rows: ReadonlyArray<{ role: string; energy
   const llmKwh = kwhOf("llm");
   const portalKwh = kwhOf("portal");
   const kwh = sumKnown([llmKwh, portalKwh]);
-  const centsPerKwh = price?.centsPerKwh ?? null;
-  return { day, llmKwh, portalKwh, kwh, centsPerKwh, usd: kwh === null || centsPerKwh === null ? null : (kwh * centsPerKwh) / 100 };
+  return { day, llmKwh, portalKwh, kwh, price, cost: kwh === null || price === null ? null : kwh * price.price };
 }
 
 /** The days together; each day costs what its own price says. */
 export function totalOf(days: readonly EnergyDay[]): EnergyTotal {
-  return { kwh: sumKnown(days.map((day) => day.kwh)), usd: sumKnown(days.map((day) => day.usd)) };
+  return { kwh: sumKnown(days.map((day) => day.kwh)), cost: sumKnown(days.map((day) => day.cost)) };
 }
 
 type DayRow = { day: string; role: string; energyWh: number | null };
 
 /** host_daily rows grouped by day and priced, newest first. */
-function pricedDays(rows: readonly DayRow[], prices: readonly EnergyPrice[]): EnergyDay[] {
+function pricedDays(rows: readonly DayRow[], periods: readonly PricePeriod[]): EnergyDay[] {
   const byDay = new Map<string, DayRow[]>();
   for (const row of rows) byDay.set(row.day, [...(byDay.get(row.day) ?? []), row]);
   return [...byDay.keys()]
     .sort()
     .reverse()
-    .map((day) => priceDay(day, byDay.get(day) ?? [], priceOn(prices, day)));
+    .map((day) => priceDay(day, byDay.get(day) ?? [], priceOn(periods, day)));
 }
 
-/** Every price, oldest first. */
-function loadPrices(db: PortalDb): EnergyPrice[] {
+/** The place the admin picked (a stored id no longer known counts as none). */
+export function loadEnergyLocation(db: PortalDb): EnergyLocation | null {
+  return energyLocation(readSetting(db, "energy_price_location"));
+}
+
+/** A place's published prices, oldest first. */
+export function loadPricePeriods(db: PortalDb, location: EnergyLocation | null): PricePeriod[] {
+  if (!location) return [];
   return db
-    .select({ effectiveFrom: energyRates.effectiveFrom, centsPerKwh: energyRates.centsPerKwh, note: energyRates.note })
-    .from(energyRates)
-    .orderBy(asc(energyRates.effectiveFrom))
+    .select({ periodStart: energyPrices.periodStart, periodEnd: energyPrices.periodEnd, period: energyPrices.period, price: energyPrices.price })
+    .from(energyPrices)
+    .where(eq(energyPrices.location, location.id))
+    .orderBy(asc(energyPrices.periodStart))
     .all();
 }
 
 /**
  * A month of both servers' energy and its cost (the current month when `month` isn't one), today so far, the
- * months there are, and the prices. `now` decides what today is (the server's local day, as the meter's).
+ * months there are, and the place and today's price. `now` decides what today is (the server's local day, as the
+ * meter's).
  */
 export function loadEnergyMonth(db: PortalDb, month?: string | null, now: Date = new Date()): EnergyMonth {
   const today = usageDay(now);
   const current = today.slice(0, 7);
   const shown = isMonth(month) ? month : current;
-  const prices = loadPrices(db);
+  const location = loadEnergyLocation(db);
+  const periods = loadPricePeriods(db, location);
   const columns = { day: hostDaily.day, role: hostDaily.role, energyWh: hostDaily.energyWh };
   const monthRows = db
     .select(columns)
     .from(hostDaily)
     .where(and(gte(hostDaily.day, `${shown}-01`), lte(hostDaily.day, `${shown}-31`)))
     .all();
-  const days = pricedDays(monthRows, prices);
+  const days = pricedDays(monthRows, periods);
   const todayRows = shown === current ? monthRows.filter((row) => row.day === today) : db.select(columns).from(hostDaily).where(eq(hostDaily.day, today)).all();
   const monthColumn = sql<string>`substr(${hostDaily.day}, 1, 7)`;
   const withData = db.selectDistinct({ month: monthColumn }).from(hostDaily).orderBy(desc(monthColumn)).all();
@@ -143,53 +173,38 @@ export function loadEnergyMonth(db: PortalDb, month?: string | null, now: Date =
     today,
     days,
     total: totalOf(days),
-    todayTotal: totalOf(pricedDays(todayRows, prices)),
+    todayTotal: totalOf(pricedDays(todayRows, periods)),
     months,
-    prices: [...prices].reverse(),
-    price: priceOn(prices, today),
+    location,
+    price: priceOn(periods, today),
   };
 }
 
-/** The price form (lib/actions/energy.ts): a day, cents per kWh (to a thousandth), an optional note. */
-export const energyPriceSchema = z.object({
-  effectiveFrom: z.string().trim().refine(isDay, "Pick a day."),
-  centsPerKwh: z
-    .string()
-    .trim()
-    .min(1, "Enter the price.")
-    .transform(Number)
-    .pipe(z.number({ message: "Enter a number." }).min(0, "It can't be negative.").max(1000, "At most 1,000 ¢."))
-    .transform((cents) => Math.round(cents * 1000) / 1000),
-  note: z
-    .string()
-    .trim()
-    .max(120, "At most 120 characters.")
-    .transform((note) => note || null),
-});
-
-export type EnergyPriceInput = z.output<typeof energyPriceSchema>;
-
-const priceText = (cents: number) => `${cents} ¢/kWh`;
+/**
+ * Makes `location` the place Admin > Energy prices energy for, audited as `energy_price_location_set` (with the
+ * places by name, "Florida, US"). Nothing changes, and nothing is audited, when it already is. Returns whether it
+ * changed.
+ */
+export function saveEnergyLocation(db: PortalDb, location: EnergyLocation, actorUserId: number, now = Date.now()): boolean {
+  return db.transaction(() => {
+    const before = loadEnergyLocation(db);
+    if (before?.id === location.id) return false;
+    writeSetting(db, "energy_price_location", location.id, now);
+    writeAudit(db, {
+      action: "energy_price_location_set",
+      actorUserId,
+      details: { location: { from: before ? energyLocationLabel(before) : null, to: energyLocationLabel(location) } },
+    });
+    return true;
+  });
+}
 
 /**
- * Sets the price in force from a day on (replacing the one that starts that same day, if any) and audits it as
- * `energy_rate_set`, with the price it replaced.
+ * Settings' line under the place: its price today, "14.99 ¢/kWh · August 2026 · EIA", or that none is downloaded
+ * yet (with the last download's error, when it failed). null without a place.
  */
-export function saveEnergyPrice(db: PortalDb, input: EnergyPriceInput, actorUserId: number, now = Date.now()): void {
-  db.transaction(() => {
-    const before = db.select().from(energyRates).where(eq(energyRates.effectiveFrom, input.effectiveFrom)).get();
-    db.insert(energyRates)
-      .values({ ...input, createdAt: now })
-      .onConflictDoUpdate({ target: energyRates.effectiveFrom, set: { centsPerKwh: input.centsPerKwh, note: input.note, createdAt: now } })
-      .run();
-    writeAudit(db, {
-      action: "energy_rate_set",
-      actorUserId,
-      details: {
-        effectiveFrom: input.effectiveFrom,
-        price: before ? { from: priceText(before.centsPerKwh), to: priceText(input.centsPerKwh) } : priceText(input.centsPerKwh),
-        ...(input.note ? { note: input.note } : {}),
-      },
-    });
-  });
+export function priceSummary(location: EnergyLocation | null, price: DayPrice | null, downloadError: string | null = null): string | null {
+  if (!location) return null;
+  if (!price) return downloadError ? `No prices downloaded yet: ${downloadError}` : "No prices downloaded yet.";
+  return `${formatUnitPrice(price.price, location.currency)} ${priceUnit(location.currency)} · ${formatPricePeriod(price.period)} · ${ENERGY_SOURCE_NAMES[location.source]}`;
 }

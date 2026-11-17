@@ -14,6 +14,7 @@ import { createControlServer } from "./control-api.ts";
 import { DockerImageBuilder } from "./docker-image-builder.ts";
 import { DockerRuntime, isSupportedDockerVersion, MIN_DOCKER_VERSION_TEXT } from "./docker-runtime.ts";
 import { EnergyMeter } from "./energy-meter.ts";
+import { EnergyPrices } from "./energy-prices.ts";
 import { fenceCheck } from "./fence.ts";
 import { createNotesClient, createRegistryClient, EngineReleases } from "./engine-releases.ts";
 import { createEngineHost, EngineUpdater } from "./engine-updater.ts";
@@ -124,7 +125,7 @@ async function main(log: Logger): Promise<void> {
     names: (ids) => userNames(db, ids),
     log,
   });
-  // Each server's energy and traffic per day (Admin > Usage): read all the time, not only while someone watches.
+  // Each server's energy and traffic per day (Admin > Energy): read all the time, not only while someone watches.
   const energy = new EnergyMeter({
     db,
     sources: {
@@ -134,7 +135,10 @@ async function main(log: Logger): Promise<void> {
     log,
   });
   energy.start();
-  const live = new LiveHub({ config, db, manager, llm: llmMonitor, hosts, energy, log });
+  // The published electricity prices Admin > Energy prices those days at (every place's, for the one the admin picks).
+  const prices = new EnergyPrices({ db, log });
+  prices.start();
+  const live = new LiveHub({ llm: llmMonitor, hosts, energy, log });
   const engine = new EngineUpdater({
     config,
     host: config.hostd.llm.token === "" ? null : createEngineHost(new HostdClient(config.hostd.llm)),
@@ -161,7 +165,7 @@ async function main(log: Logger): Promise<void> {
     config.reader.url === ""
       ? null
       : withPageCache(createReaderBackend({ baseUrl: config.reader.url, timeoutMs: config.reader.timeoutMs }), { ttlMs: config.reader.cacheMs });
-  const control = createControlServer({ config, db, manager, versions, updater, engine, llm, live, sessions, connections, log });
+  const control = createControlServer({ config, db, manager, versions, updater, engine, llm, live, prices, sessions, connections, log });
   const createAgentServer = createAgentServerFactory({ config, manager, sessions, connections, log });
   const servers: http.Server[] = [control];
 
@@ -222,6 +226,7 @@ async function main(log: Logger): Promise<void> {
     connections.closeAll(1001, "gateway restarting");
     live.close();
     energy.stop();
+    prices.stop();
     hosts.portal.close();
     hosts.llm.close();
     manager.shutdown();

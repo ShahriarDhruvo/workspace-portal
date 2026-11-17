@@ -1,16 +1,19 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
-import { AGENT_NAMES, displayName } from "@portal/db";
+import { AGENT_NAMES } from "@portal/db";
+import { saveName } from "@/lib/actions/settings";
 import { startingAgent } from "@/lib/agent-choice";
 import { formatVersion } from "@/lib/format";
 import { gateway, toApiError } from "@/lib/gateway";
 import type { AgentInfo, WorkspaceInfo } from "@/lib/gateway-types";
 import { requireUser } from "@/lib/session";
+import { ProfileForm } from "@/components/admin/profile-form";
 import { ChangePasswordForm } from "@/components/auth/change-password-form";
 import { FormError } from "@/components/forms/form-error";
 import { PageHeading } from "@/components/layout/page-heading";
 import { PageMain } from "@/components/layout/page-main";
 import { Section } from "@/components/layout/section";
+import { ElectricityPriceSection } from "@/components/settings/electricity-price-section";
 import { HarnessPicker } from "@/components/settings/harness-picker";
 import { ThemePicker } from "@/components/settings/theme-picker";
 import { Badge } from "@/components/ui/badge";
@@ -32,11 +35,11 @@ function Fact({ label, labelId, children }: { label: string; labelId?: string; c
 
 /**
  * Settings of the signed-in user's own account, also for an administrator viewing someone else's workspace:
- * the account at a glance with the theme switch, the harness, and the password.
+ * the account (username, role and the theme switch, then the name, which the user can change), the harness,
+ * and the password.
  */
 export default async function SettingsPage() {
   const { user } = await requireUser();
-  const name = displayName(user);
 
   let agents: AgentInfo[] = [];
   let workspace: WorkspaceInfo | null = null;
@@ -56,13 +59,8 @@ export default async function SettingsPage() {
       <PageHeading title="Settings" />
       <div className="flex flex-col gap-4">
         <Section id="account" title="Account">
-          <CardContent>
-            <dl className="grid grid-cols-2 gap-x-4 gap-y-4 sm:grid-cols-4 sm:gap-x-6">
-              <Fact label="Name">
-                <span className="truncate" title={name}>
-                  {name}
-                </span>
-              </Fact>
+          <ProfileForm action={saveName} firstName={user.firstName} middleName={user.middleName} lastName={user.lastName}>
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-4 sm:grid-cols-3">
               <Fact label="Username">
                 <span className="truncate font-mono text-13" title={user.username}>
                   {user.username}
@@ -73,7 +71,7 @@ export default async function SettingsPage() {
                 <ThemePicker labelledBy="theme-label" />
               </Fact>
             </dl>
-          </CardContent>
+          </ProfileForm>
         </Section>
 
         <Section
@@ -106,6 +104,8 @@ export default async function SettingsPage() {
         <Section id="password" title="Password">
           <ChangePasswordForm username={user.username} temporary={false} />
         </Section>
+
+        {user.role === "admin" ? <ElectricityPriceSection /> : null}
       </div>
     </PageMain>
   );

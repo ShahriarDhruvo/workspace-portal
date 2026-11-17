@@ -43,6 +43,7 @@ import { createServiceServer, type ServiceDeps } from "../src/service-api.ts";
 import { SessionCache } from "../src/session-cache.ts";
 import { WorkspaceManager, type WorkspaceInfo } from "../src/workspaces.ts";
 import { EngineReleases } from "../src/engine-releases.ts";
+import { EnergyPrices, type FetchText } from "../src/energy-prices.ts";
 import { EngineUpdater } from "../src/engine-updater.ts";
 import { HostMonitor } from "../src/host-monitor.ts";
 import { LiveHub, userNames } from "../src/live.ts";
@@ -181,6 +182,8 @@ export interface GatewayOptions {
   search?: SearchBackend;
   /** The LLM server's portal-hostd; null = not set up. By default a fake engine at 0.31.0 that ends each job at the next status call. */
   engineHost?: FakeEngineHost | null;
+  /** What the electricity price sources answer (by URL); by default every download fails ("offline"). */
+  priceSource?: FetchText;
 }
 
 export interface Gateway {
@@ -363,11 +366,6 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
     pollMs: 5,
   });
   const live = new LiveHub({
-    config,
-    db,
-    get manager() {
-      return manager;
-    },
     llm: new LlmMonitor({
       upstreamUrl: config.llm.upstreamUrl,
       apiKey: config.llm.apiKey,
@@ -386,7 +384,9 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
   });
 
   const agentDeps: AgentDeps = { config, manager, sessions: sessionCache, connections, log };
-  const controlDeps: ControlDeps = { config, db, manager, versions, updater, engine, llm: llmQueue, live, sessions: sessionCache, connections, log };
+  // Never started: the tests that need prices give `priceSource` (offline otherwise).
+  const prices = new EnergyPrices({ db, log, fetchText: options.priceSource ?? (() => Promise.reject(new Error("offline"))) });
+  const controlDeps: ControlDeps = { config, db, manager, versions, updater, engine, llm: llmQueue, live, prices, sessions: sessionCache, connections, log };
   const serviceBase = { config, db, manager, llm: llmQueue, requests: llmRequests, log, search, reader: options.reader };
   const serviceDeps: ServiceDeps[] = [
     { ...serviceBase, kind: "private", resolveCaller: () => caller.userId },

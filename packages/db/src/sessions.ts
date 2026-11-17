@@ -112,7 +112,9 @@ export type AuditAction =
   | "engine_updated"
   | "engine_update_failed"
   | "engine_image_removed"
+  /** Older entries only: the hand-kept electricity price (before migration 6). */
   | "energy_rate_set"
+  | "energy_price_location_set"
   | "workspace_files_erased"
   | "user_online_access_changed";
 

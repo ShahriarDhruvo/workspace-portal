@@ -103,7 +103,7 @@ function dailyTotals(day, role) {
 /**
  * @param {{ workspaces: () => Array<{ userId: number; status: string; agent: string | null; kind: string; agentVersion: string | null;
  *   busy: boolean; busyReason: string | null; memoryBytes: number | null; llmInFlight: number; connections: { owner: number; admin: number };
- *   startedAt: number | null }>; userName: (id: number) => string | null; maxRunning: () => number; memoryLimitBytes: number;
+ *   startedAt: number | null }>; userName: (id: number) => string | null;
  *   audit: (action: string, actorUserId: number | null, details: unknown) => void }} deps
  */
 export function createMockLive(deps) {
@@ -281,23 +281,6 @@ export function createMockLive(deps) {
             return { userId, userName: deps.userName(userId), since: t - 2000 * (i + 1), stage: "portal" };
           })
         : [];
-    const list = deps
-      .workspaces()
-      .filter((w) => w.status !== "stopped")
-      .map((w) => ({
-        userId: w.userId,
-        userName: deps.userName(w.userId),
-        status: w.status,
-        agent: w.agent,
-        kind: w.kind,
-        agentVersion: w.agentVersion,
-        busy: w.busy || sessions.some((s) => s.userId === w.userId),
-        busyReason: w.busy ? "task" : sessions.some((s) => s.userId === w.userId) ? "llm" : null,
-        memoryBytes: w.memoryBytes,
-        llmInFlight: sessions.filter((s) => s.userId === w.userId).length,
-        open: w.connections.owner + w.connections.admin,
-        startedAt: w.startedAt,
-      }));
     return {
       t,
       hosts: { portal: live("portal"), llm: live("llm") },
@@ -314,7 +297,6 @@ export function createMockLive(deps) {
         totals,
         recent,
       },
-      workspaces: { maxRunning: deps.maxRunning(), memoryLimitBytes: deps.memoryLimitBytes, list },
     };
   }
 

@@ -1,5 +1,5 @@
 // The energy meter: each server's energy use and network traffic per local day (host_daily, priced on
-// Admin > Usage), from its portal-hostd's running totals (GET /v1/meter). Unlike the live view it runs all
+// Admin > Energy), from its portal-hostd's running totals (GET /v1/meter). Unlike the live view it runs all
 // the time: every POLL_MS it reads each set-up hostd, takes the increase since the reading before (kept in
 // host_meter, so a gateway restart counts only what is new) and adds it to the local day it happened on.
 import { sql } from "drizzle-orm";

@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 /**
  * The 46px top bar every signed-in page shares (Home, Settings, the admin console, the workspace), like the Web
  * Shell's header row: one row on the background colour over a 1px rule, 20px side padding (16px on phones). The
- * portal's pages keep it on screen from AppHeader's sticky wrapper (with the admin bar under it); the workspace
+ * portal's pages keep it on screen from AppHeader's sticky wrapper; the workspace
  * page doesn't scroll.
  */
 export function HeaderBar({ children }: { children: ReactNode }) {

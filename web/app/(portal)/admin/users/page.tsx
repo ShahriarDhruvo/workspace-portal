@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { asc, desc } from "drizzle-orm";
 import { AGENT_NAMES, users } from "@portal/db";
-import { config } from "@/lib/config";
 import { getDb } from "@/lib/db";
 import { gateway } from "@/lib/gateway";
 import { loadAdminOverview } from "@/lib/overview";
@@ -16,6 +15,7 @@ import { PlusIcon } from "@/components/ui/icons";
 
 export const metadata: Metadata = { title: "Users" };
 
+/** Admin > Users: everyone, with New user, over the running workspaces. */
 export default async function UsersPage() {
   const session = await requireAdmin();
   const rows = getDb()
@@ -41,7 +41,6 @@ export default async function UsersPage() {
         users={rows.map(toUserSummary)}
         initialOverview={overview}
         currentAdminId={session.user.id}
-        idleTimeoutMinutes={overview.stats?.idleTimeoutMinutes ?? config.idleTimeoutMinutes}
         agentNames={AGENT_NAMES}
         enabledAgents={enabled?.map((agent) => ({ id: agent.id })) ?? null}
       />

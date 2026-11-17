@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { eq } from "drizzle-orm";
 import { AGENT_NAMES, displayName, users, WORKSPACE_KIND_NAMES, type WorkspaceKind } from "@portal/db";
+import { updateProfile } from "@/lib/actions/admin";
 import { startingAgent } from "@/lib/agent-choice";
 import { config } from "@/lib/config";
 import { getDb } from "@/lib/db";
@@ -134,7 +135,7 @@ export default async function UserPage({ params }: PageProps<"/admin/users/[id]"
 
       <div className="flex flex-col gap-4">
         <Section id="profile" title="Profile">
-          <ProfileForm userId={user.id} firstName={user.firstName} middleName={user.middleName} lastName={user.lastName} />
+          <ProfileForm action={updateProfile} userId={user.id} firstName={user.firstName} middleName={user.middleName} lastName={user.lastName} />
         </Section>
 
         <Section id="workspace" title="Workspaces">

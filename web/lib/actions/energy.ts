@@ -1,27 +1,29 @@
 "use server";
 
+import { refresh } from "next/cache";
+import { energyLocation } from "@portal/db";
 import { getDb } from "../db";
-import { energyPriceSchema, saveEnergyPrice } from "../energy";
+import { loadPricePeriods, saveEnergyLocation } from "../energy";
+import { gateway } from "../gateway";
 import { requireAdmin } from "../session";
-import { fieldErrors, formText, type FieldErrors } from "../validation";
 
-// Admin > Usage: the electricity price the energy card prices each day at. Re-checks the admin role, validates
-// its input with zod, and is audited (energy_rate_set), like the other admin actions.
+// Settings > Electricity price (admin only): the place whose published prices Admin > Energy prices energy at.
+// Re-checks the admin role, accepts only a known place, and is audited (energy_price_location_set).
 
-const FIELDS = ["effectiveFrom", "centsPerKwh", "note"] as const;
-type PriceValues = Record<(typeof FIELDS)[number], string>;
+export type EnergyLocationResult = { ok: true } | { ok: false; message: string };
 
-export type EnergyPriceState =
-  | { status: "idle" }
-  | { status: "invalid"; fieldErrors: FieldErrors; values: PriceValues }
-  | { status: "saved"; at: number };
-
-/** Sets the price in force from a day on; a price that starts that same day is replaced. */
-export async function setEnergyPrice(_previous: EnergyPriceState, formData: FormData): Promise<EnergyPriceState> {
+/**
+ * Makes `location` (an energy-locations.ts id) the place prices come from. When none of its prices are stored yet
+ * (a first pick before the gateway's first download got through), asks the gateway to download them now; a failed
+ * download leaves the place picked, and Settings says the prices are not downloaded yet.
+ */
+export async function setEnergyLocation(location: string): Promise<EnergyLocationResult> {
   const session = await requireAdmin();
-  const values = formText(formData, FIELDS);
-  const parsed = energyPriceSchema.safeParse(values);
-  if (!parsed.success) return { status: "invalid", fieldErrors: fieldErrors(parsed.error), values };
-  saveEnergyPrice(getDb(), parsed.data, session.user.id);
-  return { status: "saved", at: Date.now() };
+  const place = energyLocation(location);
+  if (!place) return { ok: false, message: "There is no such place." };
+  const db = getDb();
+  saveEnergyLocation(db, place, session.user.id);
+  if (loadPricePeriods(db, place).length === 0) await gateway.refreshEnergyPrices().catch(() => undefined);
+  refresh();
+  return { ok: true };
 }

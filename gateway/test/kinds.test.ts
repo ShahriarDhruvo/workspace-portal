@@ -70,7 +70,7 @@ test("an Online start: its own files, UID, settings with the Online service addr
     assert.equal(g.workspaceRow(alice)?.kind, "online");
     assert.equal(g.workspaceRow(alice)?.containerName, `wp-wo-${alice}`);
     assert.deepEqual(g.auditActions(alice).find((entry) => entry.action === "workspace_started")?.details, { agent: "qwen", version: "0.27.0", kind: "online" });
-    assert.deepEqual(g.live.frame().workspaces.list.map((w) => [w.userId, w.kind]), [[alice, "online"]]);
+    assert.equal(g.info(alice).kind, "online", "the workspace list (Admin > Users) shows the kind");
 
     await g.control("POST", `/control/workspaces/${alice}/stop`, { reason: "user", actorUserId: alice });
     assert.deepEqual(g.auditActions(alice).at(-1)?.details, { reason: "user", kind: "online" });

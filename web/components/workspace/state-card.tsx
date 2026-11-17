@@ -1,11 +1,13 @@
 import type { ReactNode } from "react";
-import { Card, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { WarningIcon } from "@/components/ui/icons";
 
 interface StateCardProps {
   title: string;
   /** What happened, when the title alone doesn't say it. */
   children?: ReactNode;
+  /** Content between the text and the buttons (the workspace page's choice of kind). */
+  body?: ReactNode;
   /** The card's buttons, the primary one last (right-aligned in the footer, wrapping on a narrow phone). */
   actions?: ReactNode;
   /** Something went wrong: the title gets the attention icon and the text is announced. */
@@ -13,7 +15,7 @@ interface StateCardProps {
 }
 
 /** Card for the workspace page's not-running states: what happened, then what to do about it. */
-export function StateCard({ title, children, actions, warning = false }: StateCardProps) {
+export function StateCard({ title, children, body, actions, warning = false }: StateCardProps) {
   return (
     <Card role={warning ? "alert" : "status"} className="w-[min(420px,100%)]">
       <CardHeader>
@@ -25,6 +27,7 @@ export function StateCard({ title, children, actions, warning = false }: StateCa
         </CardTitle>
         {children ? <CardDescription>{children}</CardDescription> : null}
       </CardHeader>
+      {body ? <CardContent>{body}</CardContent> : null}
       {actions ? <CardFooter className="flex-wrap justify-end gap-2">{actions}</CardFooter> : null}
     </Card>
   );
