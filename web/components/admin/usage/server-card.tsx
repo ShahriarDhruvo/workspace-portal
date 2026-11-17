@@ -24,9 +24,8 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { ArrowDownIcon, ArrowUpIcon, ChevronDownIcon } from "@/components/ui/icons";
 import { Progress } from "@/components/ui/progress";
-import { Skeleton } from "@/components/ui/skeleton";
 import { LiveChart } from "./live-chart";
-import { ReadoutsSkeleton } from "./usage-skeleton";
+import { DETAIL_GRID, METRIC_GRID, ServerBodySkeleton } from "./usage-skeleton";
 
 const TITLES = { llm: "LLM server", portal: "Portal server" } as const;
 
@@ -42,8 +41,8 @@ const STATES: Record<HostLive["state"], ReactNode> = {
  * over the last minute); under it five metrics that each read at a glance: one figure, a bar where it is a share of
  * a whole, at most two quiet facts. Under them the readings behind CPU, GPU and memory (clocks, temperatures,
  * per-part power, swap, bandwidth) and the fans; the disks, interfaces and the system are one click away under
- * Details, which works the same on touch screens. A reading the server can't
- * give (an older portal-hostd has no network or disk) shows "—"; a server without portal-hostd says how to set it up.
+ * Details, which works the same on touch screens. A reading the server can't give (an older portal-hostd has no
+ * network or disk) shows "—"; a server without portal-hostd says how to set it up.
  */
 export function ServerCard({ host, history, now }: { host: HostLive; history: readonly HostSample[]; now: number }) {
   const sample = host.state === "online" ? host.sample : null;
@@ -92,7 +91,7 @@ function Readings({ host, sample, history, now }: { host: HostLive; sample: Host
             className="h-24"
           />
         ) : null}
-        <div className="grid grid-cols-2 gap-3 @lg:grid-cols-3">
+        <div className={METRIC_GRID}>
           <Metric label="CPU" value={formatPercent(cpu.usage)} share={cpu.usage} />
           <Metric label="GPU" value={formatPercent(gpu?.usage)} share={gpu?.usage ?? null} />
           <Metric label="Memory" value={formatPercent(usedPercent(memory.usedBytes, memory.totalBytes))} share={usedPercent(memory.usedBytes, memory.totalBytes)}>
@@ -234,8 +233,6 @@ function Details({ host, sample }: { host: HostLive; sample: HostSample }) {
   );
 }
 
-const DETAIL_GRID = "grid grid-cols-2 gap-x-6 gap-y-4 @lg:grid-cols-3";
-
 function DetailGroup({ title, className, children }: { title: string; className?: string; children: ReactNode }) {
   return (
     <section className={cn("flex min-w-0 flex-col gap-1.5", className)}>
@@ -257,18 +254,7 @@ function Reading({ label, value }: { label: string; value: string }) {
 
 function NoReadings({ host }: { host: HostLive }) {
   if (host.state === "connecting" || (host.state === "online" && host.sample === null)) {
-    return (
-      <CardContent className="@container flex flex-1 flex-col gap-4 p-4" aria-busy="true" aria-label="Waiting for readings">
-        <Skeleton className="h-24 rounded-lg" />
-        <div className="grid grid-cols-2 gap-3 @lg:grid-cols-3">
-          {[0, 1, 2, 3].map((key) => (
-            <Skeleton key={key} className="h-28 rounded-lg" />
-          ))}
-          <Skeleton className="col-span-2 h-28 rounded-lg" />
-        </div>
-        <ReadoutsSkeleton />
-      </CardContent>
-    );
+    return <ServerBodySkeleton busyLabel="Waiting for readings" />;
   }
   return (
     <CardContent className="flex flex-1 flex-col p-4">

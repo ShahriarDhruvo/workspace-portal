@@ -36,8 +36,8 @@ import { StopDialog } from "./stop-dialog";
 // ONLINE_AGENT_PORT_BASE + user id). It polls /api/workspace/status (2 s until ready, then 10 s) and only mounts
 // the iframe once the agent is ready. Nothing here starts a workspace by itself: stopped, it says so and offers
 // the Private and Online cards and Start, which confirms the kind (the owner's harness from Settings). Stop (own
-// workspace only) always asks first, saying what it would interrupt, then goes back to Home. The harness is named
-// in the bar's menu (the agent's own page names it too).
+// workspace only) always asks first, saying what it would interrupt, then goes back to Home. The bar's menu names
+// the harness.
 
 interface WorkspaceShellProps {
   viewer: Viewer;

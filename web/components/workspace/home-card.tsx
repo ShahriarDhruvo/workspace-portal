@@ -134,7 +134,6 @@ export function HomeCard({ initial, initialError, idleTimeoutMinutes, agentNames
     return result.error.message;
   }
 
-
   if (!info) {
     return (
       <Card>
