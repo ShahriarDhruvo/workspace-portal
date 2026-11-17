@@ -27,7 +27,7 @@ export function onlineBlockedReason(online: OnlineAccess): string | null {
 }
 
 /**
- * The kind the Private | Online switch starts on: Online whenever it may start (the user's own default), except
+ * The kind the Private and Online picker starts on: Online whenever it may start (the user's own default), except
  * after a failed start, which offers that kind again.
  */
 export function initialKind(info: Pick<WorkspaceInfo, "status" | "kind" | "online">): WorkspaceKind {

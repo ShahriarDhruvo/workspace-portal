@@ -108,7 +108,7 @@ export function HomeCard({ initial, initialError, idleTimeoutMinutes, agentNames
       router.refresh();
       return;
     }
-    // Refused for Online access: the switch shows Online unavailable at once, not after the next poll.
+    // Refused for Online access: the picker shows Online unavailable at once, not after the next poll.
     const online = onlineAccessAfter(result.error);
     if (online) setInfo((current) => (current ? { ...current, online } : current));
     // The refusal may come from a change elsewhere (the other kind started in another tab): show it now.

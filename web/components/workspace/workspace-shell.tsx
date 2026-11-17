@@ -35,7 +35,7 @@ import { StopDialog } from "./stop-dialog";
 // iframe, served by the gateway on the running kind's own port (Private: AGENT_PORT_BASE + user id, Online:
 // ONLINE_AGENT_PORT_BASE + user id). It polls /api/workspace/status (2 s until ready, then 10 s) and only mounts
 // the iframe once the agent is ready. Nothing here starts a workspace by itself: stopped, it says so and offers
-// the Private | Online switch and Start, which confirms the kind (the owner's harness from Settings). Stop (own
+// the Private and Online cards and Start, which confirms the kind (the owner's harness from Settings). Stop (own
 // workspace only) asks first when it would interrupt something, then goes back to Home.
 
 interface WorkspaceShellProps {
@@ -73,7 +73,7 @@ type Action =
   | { type: "pollFailed"; error: ApiError }
   | { type: "startRequested"; kind: WorkspaceKind }
   | { type: "startSucceeded"; info: WorkspaceStatusResponse }
-  /** `online`: what a refusal for Online access says about it, so the switch shows it unavailable at once. */
+  /** `online`: what a refusal for Online access says about it, so the picker shows it unavailable at once. */
   | { type: "startFailed"; error: ApiError; online: OnlineAccess | null }
   | { type: "stopRequested" }
   | { type: "stopFailed"; message: string | null }

@@ -9,7 +9,7 @@ test("the browser's kind names are the database package's", () => {
   assert.equal(otherKind("online"), "private");
 });
 
-test("the switch offers Online first when it may start; a failed start offers its own kind again", () => {
+test("the picker offers Online first when it may start; a failed start offers its own kind again", () => {
   assert.equal(initialKind({ status: "stopped", kind: "private", online: "allowed" }), "online", "Online is the default");
   assert.equal(initialKind({ status: "error", kind: "private", online: "allowed" }), "private");
   assert.equal(initialKind({ status: "error", kind: "online", online: "allowed" }), "online");
