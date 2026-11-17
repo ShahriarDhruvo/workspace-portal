@@ -125,10 +125,8 @@ export function SessionsTable({ initial, version, llm, now }: SessionsTableProps
                   </span>
                 </TableCell>
                 <TableCell>
-                  <span className="flex items-baseline">
-                    {row.endedAt === null ? <LiveStatus userId={row.userId} llm={llm} /> : <LocalTime at={row.startedAt} relative />}
-                    <Quiet>{formatDuration(((row.endedAt ?? now) - row.startedAt) / 1000)}</Quiet>
-                  </span>
+                  {row.endedAt === null ? <LiveStatus userId={row.userId} llm={llm} /> : <LocalTime at={row.startedAt} relative />}
+                  <Quiet>{formatDuration(((row.endedAt ?? now) - row.startedAt) / 1000)}</Quiet>
                 </TableCell>
                 <TableCell className={number}>
                   {formatCount(row.requests)}
@@ -156,9 +154,9 @@ export function SessionsTable({ initial, version, llm, now }: SessionsTableProps
   );
 }
 
-/** A quieter fact after a cell's value: how long, the failed requests. */
+/** A quieter fact after a cell's value, in the same size on the same baseline: how long, the failed requests. */
 function Quiet({ className, children }: { className?: string; children: ReactNode }) {
-  return <span className={cn("ml-1.5 text-12 text-muted-foreground", className)}>{children}</span>;
+  return <span className={cn("ml-2 text-muted-foreground", className)}>{children}</span>;
 }
 
 function KindIcon({ kind }: { kind: SessionRow["kind"] }) {
@@ -188,8 +186,8 @@ function liveState(userId: number, llm: LlmLive): { state: LiveState; title?: st
 function LiveStatus({ userId, llm }: { userId: number; llm: LlmLive }) {
   const { state, title } = liveState(userId, llm);
   return (
-    <span className="inline-flex items-center gap-1.5" title={title}>
-      <span aria-hidden="true" className={cn("size-1.5 rounded-full", STATUS_DOTS[state])} />
+    <span title={title}>
+      <span aria-hidden="true" className={cn("mr-1.5 inline-block size-1.5 rounded-full align-middle", STATUS_DOTS[state])} />
       {STATUS_NAMES[state]}
     </span>
   );
