@@ -573,8 +573,8 @@ temperatures and power, memory used and free, memory bandwidth and fans, network
 day's totals), disk read and write and the free space; the LLM's total read speed (prompt tokens per second)
 and write speed (answer tokens per second), each charted over the last minute; and every workspace session (a
 run from Start to its stop), with what the LLM is doing for it now and what its requests added up to: requests,
-average read and write speed, tokens in and out, time on the LLM, its share of the LLM server's energy with the
-average draw, and that energy's cost. Readings a machine can't provide show "—". On a wide screen the sessions and both servers sit side by side.
+average read and write speed, tokens in and out, time on the LLM, the average power draw of its share of the LLM
+server's energy, and that energy's cost. Readings a machine can't provide show "—". On a wide screen the sessions and both servers sit side by side.
 
 **Admin > Energy** keeps both servers' energy per day, for good, with its cost at the published electricity price
 of the place the admin picks under **Settings > Electricity price** (EIA's monthly residential average for US

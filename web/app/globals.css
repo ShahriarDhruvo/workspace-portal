@@ -69,8 +69,9 @@
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --font-mono: "SF Mono", "Fira Code", "JetBrains Mono", "Cascadia Code", monospace;
 
-  /* A wide desktop: Usage puts its three cards side by side from here (PageMain width "wide"). */
-  --breakpoint-3xl: 112.5rem;
+  /* A wide desktop: Usage puts its three cards side by side from here (PageMain width "wide"), where the sessions
+     table fits on one line a row beside both servers with their tiles three across. */
+  --breakpoint-3xl: 128rem;
 
   /* Dialog overlays (bg-black/10: the backdrop barely dims, on purpose). */
   --color-black: #000;

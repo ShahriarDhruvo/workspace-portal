@@ -17,7 +17,7 @@ import { SESSIONS_TABLE_HEIGHT } from "./usage-skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 const PAGE_SIZES = [SESSION_PAGE_SIZE];
-const COLUMNS = 9;
+const COLUMNS = 10;
 const number = "text-right tabular-nums";
 
 interface SessionsTableProps {
@@ -32,9 +32,9 @@ interface SessionsTableProps {
 /**
  * The LLM sessions card's table: each run of a user's workspace, from Start to its stop, and what its LLM requests
  * added up to: Read and Write averaged over the engine's own time, tokens, time on the LLM server, its share of
- * the LLM server's energy with its average draw, and what that cost. Two lines a row (the quiet one says when and
- * how long), so it fits the narrow card of a wide desktop. The running ones come first and say what the LLM is
- * doing for them now (from the live frame). The page is read again when the card appears, whenever the frame
+ * the LLM server's energy as its average draw (the watt-hours on hover), and what that cost. One line a row, the
+ * lesser facts in a quieter font. The running ones come first and say what the LLM is doing for them now (from
+ * the live frame). The page is read again when the card appears, whenever the frame
  * says the sessions changed (about every 2 s while the LLM works: energy shares and finished requests; a quarter
  * second's wait folds a burst into one read), and on paging; six rows a page.
  */
@@ -84,7 +84,8 @@ export function SessionsTable({ initial, version, llm, now }: SessionsTableProps
       >
         <TableHeader>
           <TableRow>
-            <DataTableHead>Session</DataTableHead>
+            <DataTableHead>User</DataTableHead>
+            <DataTableHead title="When it started, or what the LLM is doing for it now; then how long it ran">Started</DataTableHead>
             <DataTableHead align="right" title="Requests to the LLM">
               Reqs
             </DataTableHead>
@@ -103,8 +104,8 @@ export function SessionsTable({ initial, version, llm, now }: SessionsTableProps
             <DataTableHead align="right" title="Time its requests took on the LLM server">
               LLM time
             </DataTableHead>
-            <DataTableHead align="right" title="Its share of the LLM server's energy, and the average draw">
-              Energy
+            <DataTableHead align="right" title="The average draw of its share of the LLM server's energy">
+              Power
             </DataTableHead>
             <DataTableHead align="right">Cost</DataTableHead>
           </TableRow>
@@ -114,24 +115,24 @@ export function SessionsTable({ initial, version, llm, now }: SessionsTableProps
             <DataTableEmpty colSpan={COLUMNS}>No sessions yet.</DataTableEmpty>
           ) : (
             data.rows.map((row) => (
-              <TableRow key={row.id} className="[&>td]:align-top">
+              <TableRow key={row.id}>
                 <TableCell>
-                  <span className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2">
+                  <span className="flex items-center gap-2">
                     <KindIcon kind={row.kind} />
-                    <span className="max-w-36 truncate 3xl:max-w-24" title={row.userName}>
+                    <span className="max-w-36 truncate 3xl:max-w-28" title={row.userName}>
                       {row.userName}
                     </span>
-                    {row.endedAt === null ? <LiveStatus userId={row.userId} llm={llm} /> : <span />}
-                    <Secondary className="gap-1">
-                      {row.endedAt === null ? <LiveStatusName userId={row.userId} llm={llm} /> : <LocalTime at={row.startedAt} relative />}
-                      <span aria-hidden="true">·</span>
-                      {formatDuration(((row.endedAt ?? now) - row.startedAt) / 1000)}
-                    </Secondary>
+                  </span>
+                </TableCell>
+                <TableCell>
+                  <span className="flex items-baseline">
+                    {row.endedAt === null ? <LiveStatus userId={row.userId} llm={llm} /> : <LocalTime at={row.startedAt} relative />}
+                    <Quiet>{formatDuration(((row.endedAt ?? now) - row.startedAt) / 1000)}</Quiet>
                   </span>
                 </TableCell>
                 <TableCell className={number}>
                   {formatCount(row.requests)}
-                  {row.failed > 0 ? <Secondary className="justify-end text-destructive">{formatCount(row.failed)} failed</Secondary> : null}
+                  {row.failed > 0 ? <Quiet className="text-destructive">{formatCount(row.failed)} failed</Quiet> : null}
                 </TableCell>
                 <TableCell className={number}>{formatNumber(row.readTps)}</TableCell>
                 <TableCell className={number}>{formatNumber(row.writeTps)}</TableCell>
@@ -140,9 +141,8 @@ export function SessionsTable({ initial, version, llm, now }: SessionsTableProps
                 </TableCell>
                 <TableCell className={number}>{formatCount(row.tokensOut)}</TableCell>
                 <TableCell className={number}>{row.requests > 0 ? formatElapsed(row.llmMs) : "—"}</TableCell>
-                <TableCell className={number}>
-                  {formatWh(row.energyWh)}
-                  {row.watts !== null ? <Secondary className="justify-end">{formatWatts(row.watts)}</Secondary> : null}
+                <TableCell className={number} title={row.energyWh !== null ? `${formatWh(row.energyWh)} in all` : undefined}>
+                  {formatWatts(row.watts)}
                 </TableCell>
                 <TableCell className={number}>
                   <Cost row={row} currency={data.currency} />
@@ -156,9 +156,9 @@ export function SessionsTable({ initial, version, llm, now }: SessionsTableProps
   );
 }
 
-/** A cell's second, quieter line: the state or start and how long, the failed requests, the average draw. */
-function Secondary({ className, children }: { className?: string; children: ReactNode }) {
-  return <span className={cn("mt-0.5 flex h-4 items-center text-12 text-muted-foreground tabular-nums", className)}>{children}</span>;
+/** A quieter fact after a cell's value: how long, the failed requests. */
+function Quiet({ className, children }: { className?: string; children: ReactNode }) {
+  return <span className={cn("ml-1.5 text-12 text-muted-foreground", className)}>{children}</span>;
 }
 
 function KindIcon({ kind }: { kind: SessionRow["kind"] }) {
@@ -184,20 +184,12 @@ function liveState(userId: number, llm: LlmLive): { state: LiveState; title?: st
   return { state: "idle" };
 }
 
-/** Its state's dot, under the kind icon: activity colours it, an idle session's is grey. */
+/** Its state: a dot in its colour (activity colours it, an idle session's is grey) and its name. */
 function LiveStatus({ userId, llm }: { userId: number; llm: LlmLive }) {
-  return (
-    <span aria-hidden="true" className="mt-0.5 flex h-4 items-center justify-center">
-      <span className={cn("size-1.5 rounded-full", STATUS_DOTS[liveState(userId, llm).state])} />
-    </span>
-  );
-}
-
-/** Its state's name, under the user's name. */
-function LiveStatusName({ userId, llm }: { userId: number; llm: LlmLive }) {
   const { state, title } = liveState(userId, llm);
   return (
-    <span className="text-foreground" title={title}>
+    <span className="inline-flex items-center gap-1.5" title={title}>
+      <span aria-hidden="true" className={cn("size-1.5 rounded-full", STATUS_DOTS[state])} />
       {STATUS_NAMES[state]}
     </span>
   );

@@ -13,10 +13,10 @@ import { TableBody, TableCell, TableHeader, TableRow } from "@/components/ui/tab
  * xl; on a wide desktop (3xl) all three in a row, the sessions a little wider for their table. Cards in a row are
  * as tall as the tallest: each gives the extra height to its charts.
  */
-export const USAGE_GRID = "grid gap-4 xl:grid-cols-2 3xl:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)_minmax(0,1fr)]";
+export const USAGE_GRID = "grid gap-4 xl:grid-cols-2 3xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1fr)]";
 
 /** The sessions table's height with a full page (its heading row, the rows and the pager), kept whatever it shows. */
-export const SESSIONS_TABLE_HEIGHT = 36 + SESSION_PAGE_SIZE * 55 + 53;
+export const SESSIONS_TABLE_HEIGHT = 36 + SESSION_PAGE_SIZE * 37 + 53;
 
 /** The whole page: heading and the live cards. */
 export function UsageSkeleton() {
@@ -71,7 +71,7 @@ export function LiveSkeleton({ rows = SESSION_PAGE_SIZE }: { rows?: number }) {
   );
 }
 
-/** SessionsTable: its heading row and two-line rows (built from the same parts) and the pager, or its empty state. */
+/** SessionsTable: its heading row and rows (built from the same parts) and the pager, or its empty state. */
 function SessionsSkeleton({ rows }: { rows: number }) {
   return (
     <div className="flex flex-col" style={{ minHeight: SESSIONS_TABLE_HEIGHT }}>
@@ -92,7 +92,7 @@ function SessionsSkeleton({ rows }: { rows: number }) {
             <DataTableHead>
               <Skeleton className="h-3 w-14" />
             </DataTableHead>
-            <DataTableHead colSpan={8}>
+            <DataTableHead colSpan={9}>
               <Skeleton className="ml-auto h-3 w-full max-w-sm" />
             </DataTableHead>
           </TableRow>
@@ -104,16 +104,11 @@ function SessionsSkeleton({ rows }: { rows: number }) {
             </DataTableEmpty>
           ) : (
             Array.from({ length: rows }, (_, row) => (
-              <TableRow key={row} className="hover:bg-transparent [&>td]:align-top">
+              <TableRow key={row} className="hover:bg-transparent">
                 <TableCell>
-                  <span className="flex h-5 items-center">
-                    <Skeleton className="h-4 w-28" />
-                  </span>
-                  <span className="mt-0.5 flex h-4 items-center">
-                    <Skeleton className="h-3 w-20" />
-                  </span>
+                  <Skeleton className="my-0.5 h-4 w-28" />
                 </TableCell>
-                <TableCell colSpan={8}>
+                <TableCell colSpan={9}>
                   <Skeleton className="my-0.5 ml-auto h-4 w-full max-w-sm" />
                 </TableCell>
               </TableRow>
