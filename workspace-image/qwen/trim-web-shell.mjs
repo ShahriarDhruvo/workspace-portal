@@ -5,7 +5,11 @@
 //     Overview, Split View, Daemon Status, Local files, Use this computer);
 //   * the chat header loses Mobile access (pairing a phone with Local Control, which the gateway blocks);
 //   * every new session starts with Plan mode on (the composer's + menu toggle), running the approved plan
-//     in the approval mode the composer shows, as when a person turns the toggle on.
+//     in the approval mode the composer shows, as when a person turns the toggle on;
+//   * the Web preview shows the workspace's own web apps: it loads its address in the person's browser, where
+//     http://localhost:3000 is the person's own computer, so localhost, 127.x.x.x and 0.0.0.0 go to the
+//     workspace's preview port instead (the gateway's preview-proxy.ts), and its frame may lock the pointer
+//     (mouse look in a game) and show alert/confirm dialogs.
 // Qwen Code has no setting for any of this: the Web Shell app hard-codes the options of its shell component,
 // and `tools.approvalMode: "plan"` would also start the terminal's `qwen` and headless `qwen -p` in plan
 // mode (headless can't leave it, so it could change nothing) and run approved plans with "Ask" approval.
@@ -46,6 +50,22 @@ const STYLE = [
  * Layer 1, edits of the Web Shell app's bundle. Each pattern must match exactly once. Minified names are
  * matched as `[\w$]+`, so a rebuild of the same code still fits; anything else is a different version.
  */
+/**
+ * The gateway serves a workspace's web apps on its agent port + this (gateway/src/config.ts, PREVIEW_PORT_OFFSET;
+ * a gateway test checks the two agree).
+ */
+const PREVIEW_PORT_OFFSET = 1000;
+
+/**
+ * The Web preview's address, as the person's browser can reach it: a loopback address of the workspace becomes
+ * `<this page's host>:<its port + PREVIEW_PORT_OFFSET>/__portal/port/<port>/<path>`, which the gateway answers
+ * with the workspace's port <port>. `u` is the address (a URL), `p` this page's address; any other address stays.
+ */
+const PREVIEW_ADDRESS =
+  `(u,p)=>{if(!/^(?:localhost|127(?:\\.\\d{1,3}){3}|0\\.0\\.0\\.0)$/i.test(u.hostname))return u;` +
+  `const w=new URL(p),q=Number(w.port)+${PREVIEW_PORT_OFFSET};if(!w.port||q>65535)return u;` +
+  `return new URL("/__portal/port/"+(u.port||(u.protocol==="https:"?"443":"80"))+u.pathname+u.search+u.hash,w.protocol+"//"+w.hostname+":"+q)}`;
+
 const EDITS = [
   {
     name: "sidebar: only Home, New session and the toggle",
@@ -70,6 +90,23 @@ const EDITS = [
       /(const ([\w$]+)=([\w$]+)\.currentMode,[\s\S]{0,400}?[\w$]+\()\2\?\?"default"(\)\)\},\[\3\.currentMode,\3\.planExecutionMode,\3\.sessionId,[\w$]+\]\))/g,
     replace: (_, head, mode, state, tail) =>
       `${head}(!${state}.sessionId&&${mode}&&${mode}!=="plan")?"plan":(${mode}??"default")${tail}`,
+  },
+  {
+    name: "Web preview: the workspace's own addresses through the gateway",
+    // The preview's address check, which both the address bar and the links opened from messages go through:
+    //   function Eie(e,t,n){try{const s=new URL(e.trim());if(…)return;const r=[…],o=new URL(s);return o.protocol=
+    //   "https:",r.includes(xB(s))||r.includes(xB(o))?void 0:s}catch{return}}
+    // (t: this page's address). The address it accepts goes through PREVIEW_ADDRESS; the frame, its frame-src,
+    // the refresh and "Open externally" all use what it returns.
+    pattern: /(function [\w$]+\(([\w$]+),([\w$]+),[\w$]+\)\{try\{const ([\w$]+)=new URL\(\2\.trim\(\)\);[^{}]{0,400}?\?void 0:)\4(\}catch\{return\}\})/g,
+    replace: (_, head, _address, page, parsed, tail) => `${head}(${PREVIEW_ADDRESS})(${parsed},${page})${tail}`,
+  },
+  {
+    name: "Web preview: pointer lock and dialogs in its frame",
+    // <iframe title="${o8(t)}" src="${o8(e.href)}" sandbox="allow-scripts allow-same-origin allow-forms" ...>
+    // The sandbox keeps the app in its frame (no popups, no navigating the page); a game still needs the mouse.
+    pattern: /(src="\$\{[\w$]+\([\w$]+\.href\)\}" sandbox="allow-scripts allow-same-origin allow-forms)"/g,
+    replace: (_, head) => `${head} allow-pointer-lock allow-modals"`,
   },
 ];
 

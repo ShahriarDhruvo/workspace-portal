@@ -8,7 +8,8 @@
 //     from the admin console; everyone else only ever has their own),
 // and, for anything the Web Shell authenticates, the session-bound workspace token of this kind (checked by the
 // proxy, which swaps it for the container's real token). Whether the port's kind is the one running is the
-// proxy's next question (otherKindError).
+// proxy's next question (otherKindError). The preview ports (preview-proxy.ts, the agent port + PREVIEW_PORT_OFFSET)
+// pass the same checks, where a same-site page load may also open the preview in a tab of its own.
 import type { IncomingMessage } from "node:http";
 import {
   agentBrowserToken,
@@ -19,7 +20,7 @@ import {
   type WorkspaceKind,
   type WorkspaceStatus,
 } from "@portal/db";
-import type { Config } from "./config.ts";
+import { PREVIEW_PORT_OFFSET, type Config } from "./config.ts";
 import type { ConnectionRegistry } from "./connections.ts";
 import { originMatchesHost, parseHostHeader, rejectsCrossSite, rejectsSameSite, type HostParts } from "./headers.ts";
 import type { Logger } from "./log.ts";
@@ -82,20 +83,33 @@ export function otherKindError(
   return { code: "kind_mismatch", message, running: running.kind };
 }
 
+/** Which of a workspace's ports a server answers on: its agent's, or its web apps' (preview-proxy.ts). */
+export type WorkspaceSurface = "agent" | "preview";
+
 /** The workspace (user id and kind) a connection reached, from the local port it arrived on. */
-export function workspaceForPort(config: Config, localPort: number | undefined): { userId: number; kind: WorkspaceKind } | null {
+export function workspaceForPort(
+  config: Config,
+  localPort: number | undefined,
+  surface: WorkspaceSurface = "agent",
+): { userId: number; kind: WorkspaceKind } | null {
   if (localPort === undefined) return null;
+  const agentPort = surface === "preview" ? localPort - PREVIEW_PORT_OFFSET : localPort;
   for (const kind of WORKSPACE_KINDS) {
-    const userId = userIdForAgentPort(config.workspace.kinds[kind].agentPortBase, config.agentPortCount, localPort);
+    const userId = userIdForAgentPort(config.workspace.kinds[kind].agentPortBase, config.agentPortCount, agentPort);
     if (userId !== null) return { userId, kind };
   }
   return null;
 }
 
-export function checkAgentAccess(req: IncomingMessage, deps: Pick<AgentDeps, "config" | "sessions">, upgrade: boolean): AgentAccess {
+export function checkAgentAccess(
+  req: IncomingMessage,
+  deps: Pick<AgentDeps, "config" | "sessions">,
+  upgrade: boolean,
+  surface: WorkspaceSurface = "agent",
+): AgentAccess {
   const host = parseHostHeader(req.headers.host);
   if (!host) return { ok: false, status: 400, code: "bad_request", message: "Missing or invalid Host header.", host };
-  const workspace = workspaceForPort(deps.config, req.socket.localPort);
+  const workspace = workspaceForPort(deps.config, req.socket.localPort, surface);
   if (workspace === null) return { ok: false, status: 404, code: "not_found", message: "No workspace here.", host };
   const { userId, kind } = workspace;
   const { origin } = req.headers;
@@ -105,7 +119,7 @@ export function checkAgentAccess(req: IncomingMessage, deps: Pick<AgentDeps, "co
   if (rejectsCrossSite(req.method ?? "GET", req.headers, upgrade)) {
     return { ok: false, status: 403, code: "forbidden_cross_site", message: "Cross-site requests are not allowed.", host };
   }
-  if (rejectsSameSite(req.method ?? "GET", req.headers, upgrade)) {
+  if (rejectsSameSite(req.method ?? "GET", req.headers, upgrade, surface === "preview")) {
     return { ok: false, status: 403, code: "forbidden_same_site", message: "Requests from another port of this host are not allowed.", host };
   }
   const context = deps.sessions.fromCookieHeader(req.headers.cookie);

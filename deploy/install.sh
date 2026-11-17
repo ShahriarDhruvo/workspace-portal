@@ -85,6 +85,8 @@ done
 WEB_PORT=$(web_port)
 AGENT_PORTS=$(agent_port_range)
 ONLINE_AGENT_PORTS=$(online_agent_port_range)
+PREVIEW_PORTS=$(preview_port_range)
+ONLINE_PREVIEW_PORTS=$(online_preview_port_range)
 case $(env_get ONLINE_WORKSPACES | tr '[:upper:]' '[:lower:]') in
   true | on | yes | 1 | false | off | no | 0) ;;
   *) die "ONLINE_WORKSPACES in .env must be on or off (got \"$(env_get ONLINE_WORKSPACES)\")" ;;
@@ -276,6 +278,8 @@ elif command -v ufw >/dev/null && ufw status | grep -q "Status: active"; then
     ufw allow from "$source" to any port "${WEB_PORT}" proto tcp >/dev/null
     ufw allow from "$source" to any port "${AGENT_PORTS/-/:}" proto tcp >/dev/null
     ufw allow from "$source" to any port "${ONLINE_AGENT_PORTS/-/:}" proto tcp >/dev/null
+    ufw allow from "$source" to any port "${PREVIEW_PORTS/-/:}" proto tcp >/dev/null
+    ufw allow from "$source" to any port "${ONLINE_PREVIEW_PORTS/-/:}" proto tcp >/dev/null
   done
 fi
 
@@ -363,6 +367,7 @@ cat <<DONE
 
     Portal:     http://$(host_ip || echo '<server-ip>'):${WEB_PORT}
     Workspaces: Private ports ${AGENT_PORTS}, Online ports ${ONLINE_AGENT_PORTS} (one per user and kind)
+    Previews:   Private ports ${PREVIEW_PORTS}, Online ports ${ONLINE_PREVIEW_PORTS} (the apps running in them)
     Online:     ${ONLINE_STATE}
     Admin:      $(env_get ADMIN_USERNAME)   (first sign-in: grep ^ADMIN_PASSWORD ${ENV_FILE}; you choose a new one then)
 $(for agent in "${ENABLED_AGENTS[@]}"; do printf '    Agent:      %s %s\n' "$(agent_name "$agent")" "$(agent_version "$agent")"; done)

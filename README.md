@@ -241,8 +241,8 @@ It:
    `DSH_VERSION` until an admin picks another; a few minutes each the first time) and the web, gateway,
    SearXNG and page reader images;
 6. installs and starts the firewall unit (both workspace networks, SearXNG and the page reader), and opens
-   ports 3000, 3101–3299 (Private workspaces) and 3301–3499 (Online) to your LAN (and to Tailscale, if
-   present) in firewalld or ufw;
+   ports 3000, 3101–3299 (Private workspaces), 3301–3499 (Online), 4101–4299 and 4301–4499 (the apps running
+   in them, for the Web preview) to your LAN (and to Tailscale, if present) in firewalld or ufw;
 7. checks that no other program holds the two loopback ports the stack publishes (SearXNG's and the
    reader's), generates SearXNG's key, starts the stack with `docker compose up -d`, waits for the web app,
    SearXNG and the reader to answer, and prints the URL.
@@ -514,6 +514,13 @@ has no settings for it):
   Scheduled Tasks, PR watches, Goals and the "More" menu (with the Web Shell's own Settings page, Session
   Overview, Split View, Daemon Status, Local files and Use this computer). The chat header loses Mobile access.
   Files, Terminal and Web preview stay in the right panel.
+- The **Web preview** shows the apps running in the workspace. It loads in the user's own browser, where
+  `http://localhost:3000` would be the user's own computer, so `localhost`, `127.x.x.x` and `0.0.0.0` addresses
+  go to the workspace instead: the gateway serves its port 3000 (any port from 1024) on the workspace's preview
+  port, 1000 above its own (`/__portal/port/3000/`). The app's server must listen on all addresses (`0.0.0.0`;
+  Vite needs `--host`). Its frame may lock the pointer (games) and show dialogs. A Private workspace's app may
+  load nothing from outside its preview address. Internet
+  sites show only when they allow being framed (Google doesn't): **Open externally** opens them in a tab.
 - Every new session starts with **Plan mode** on: the agent plans first and works only after the user approves
   the plan, then in the approval mode the composer shows. A user can switch it off for a session in the
   composer's + menu. This is the Web Shell only: `qwen` in the terminal and `qwen -p` start as before.
@@ -759,7 +766,7 @@ The simplest setup uses the tailnet directly. Tailscale already encrypts the tra
 
 1. Install Tailscale on the server and run `tailscale up`.
 2. Re-run `sudo bash deploy/install.sh`. When a `tailscale0` interface exists, it also opens 3000,
-   3101–3299 and 3301–3499 to Tailscale addresses (100.64.0.0/10). With firewalld you can instead put `tailscale0` in a
+   3101–3299, 3301–3499, 4101–4299 and 4301–4499 to Tailscale addresses (100.64.0.0/10). With firewalld you can instead put `tailscale0` in a
    trusted zone.
 3. Users open `http://<machine>.<tailnet>.ts.net:3000` (MagicDNS) or `http://100.x.y.z:3000`. The workspace
    iframe follows the page's host automatically.

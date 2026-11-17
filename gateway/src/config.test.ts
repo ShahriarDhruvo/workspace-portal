@@ -1,11 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AGENT_KINDS } from "@portal/db";
 import { driverFor } from "./agents/index.ts";
-import { ConfigError, DEFAULT_TRUSTED_HOSTS, isPublicIpv4, loadConfig, MIB, NOT_PUBLIC, parseByteSize } from "./config.ts";
+import { ConfigError, DEFAULT_TRUSTED_HOSTS, isPublicIpv4, loadConfig, MIB, NOT_PUBLIC, parseByteSize, PREVIEW_PORT_OFFSET } from "./config.ts";
 
 const HOUR = 3_600_000;
 const secrets = { GATEWAY_CONTROL_SECRET: "c".repeat(64) };
@@ -256,8 +257,12 @@ test("the workspace port ranges must fit and must not overlap each other or the 
     "AGENT_PORT_BASE + AGENT_PORT_COUNT must stay below 65536 (got 65400 + 200)",
   ]);
   assert.deepEqual(problems({ ...secrets, ONLINE_AGENT_PORT_BASE: "65400" }), ["ONLINE_AGENT_PORT_BASE + AGENT_PORT_COUNT must stay below 65536 (got 65400 + 200)"]);
-  const edge = loadConfig({ ...secrets, AGENT_PORT_BASE: "65336", AGENT_PORT_COUNT: "200", ONLINE_AGENT_PORT_BASE: "5000" });
-  assert.equal(edge.workspace.kinds.private.agentPortBase, 65336, "the last port is 65535");
+  // The preview ports are the workspace ports + PREVIEW_PORT_OFFSET: they must fit too.
+  assert.deepEqual(problems({ ...secrets, AGENT_PORT_BASE: "64400", AGENT_PORT_COUNT: "200", ONLINE_AGENT_PORT_BASE: "5000" }), [
+    "AGENT_PORT_BASE + 1000 + AGENT_PORT_COUNT must stay below 65536: the preview ports are the workspace ports + 1000 (got 64400 + 200)",
+  ]);
+  const edge = loadConfig({ ...secrets, AGENT_PORT_BASE: "64336", AGENT_PORT_COUNT: "200", ONLINE_AGENT_PORT_BASE: "5000" });
+  assert.equal(edge.workspace.kinds.private.agentPortBase, 64336, "the last preview port is 65535");
 
   const overlap = (key: string, first: number, last: number): string =>
     `WEB_PORT, CONTROL_PORT and SERVICE_PORT must lie outside the workspace port range (${key} + 1 … ${key} + AGENT_PORT_COUNT - 1: ${first}-${last})`;
@@ -267,6 +272,14 @@ test("the workspace port ranges must fit and must not overlap each other or the 
   for (const [name, port] of [["WEB_PORT", "3301"], ["SERVICE_PORT", "3499"]] as const) {
     assert.deepEqual(problems({ ...secrets, [name]: port }), [overlap("ONLINE_AGENT_PORT_BASE", 3301, 3499)], `${name}=${port}`);
   }
+  for (const [name, port] of [["WEB_PORT", "4101"], ["CONTROL_PORT", "4499"]] as const) {
+    assert.equal(problems({ ...secrets, [name]: port }).length, 1, `${name}=${port}: a preview port`);
+    assert.match(problems({ ...secrets, [name]: port })[0]!, /must lie outside the preview port range/);
+  }
+  // A preview range must not meet a workspace range either: Online's workspace ports where Private's previews are.
+  assert.deepEqual(problems({ ...secrets, ONLINE_AGENT_PORT_BASE: "4150" }), [
+    "the Online workspace ports (4151-4349) and the Private preview ports (4101-4299) overlap: each needs ports of its own (the preview ports are the workspace ports + 1000; set AGENT_PORT_BASE, ONLINE_AGENT_PORT_BASE or AGENT_PORT_COUNT so they don't meet)",
+  ]);
   // The base itself and base + count are not workspace ports.
   const edges = loadConfig({ ...secrets, WEB_PORT: "3100", CONTROL_PORT: "3300" });
   assert.deepEqual([edges.webPort, edges.controlPort], [3100, 3300]);
@@ -279,6 +292,11 @@ test("the workspace port ranges must fit and must not overlap each other or the 
   assert.equal(loadConfig({ ...secrets, ONLINE_AGENT_PORT_BASE: "3299" }).workspace.kinds.online.agentPortBase, 3299, "the ranges may touch");
   assert.equal(loadConfig({ ...secrets, ONLINE_AGENT_PORT_BASE: "2700" }).workspace.kinds.online.agentPortBase, 2700, "Online's may lie below Private's");
   assert.equal(loadConfig({ ...secrets, AGENT_PORT_COUNT: "50" }).workspace.kinds.online.agentPortBase, 3150, "by default right after Private's");
+});
+
+test("the gateway and the Web Shell's Web preview agree on where the preview ports are", () => {
+  const trim = fs.readFileSync(fileURLToPath(new URL("../../workspace-image/qwen/trim-web-shell.mjs", import.meta.url)), "utf8");
+  assert.match(trim, new RegExp(`^const PREVIEW_PORT_OFFSET = ${PREVIEW_PORT_OFFSET};$`, "m"));
 });
 
 test("each kind has a network, bridge, subnet and UID range of its own", () => {

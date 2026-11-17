@@ -50,7 +50,7 @@ if systemctl is-active --quiet firewalld; then
 elif command -v ufw >/dev/null && ufw status | grep -q "Status: active"; then
   for source in $(portal_sources); do
     ufw delete allow from "$source" to any port "$(web_port)" proto tcp >/dev/null 2>&1 || true
-    for range in "$(agent_port_range)" "$(online_agent_port_range)"; do
+    for range in "$(agent_port_range)" "$(online_agent_port_range)" "$(preview_port_range)" "$(online_preview_port_range)"; do
       ufw delete allow from "$source" to any port "${range/-/:}" proto tcp >/dev/null 2>&1 || true
     done
   done

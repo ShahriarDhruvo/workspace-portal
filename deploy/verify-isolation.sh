@@ -46,6 +46,8 @@ CONTROL_PORT=$(env_get CONTROL_PORT)
 WEB_PORT=$(web_port)
 AGENT_PORTS=$(agent_port_range)
 FIRST_AGENT_PORT=${AGENT_PORTS%-*}
+PREVIEW_PORTS=$(preview_port_range)
+FIRST_PREVIEW_PORT=${PREVIEW_PORTS%-*}
 UID_BASE=$(env_get WORKSPACE_UID_BASE)
 DATA_DIR=$(env_get PORTAL_DATA_DIR)
 READER_PORT=$(env_get READER_PORT)
@@ -76,6 +78,8 @@ ONLINE_DNS_2=$(env_get ONLINE_DNS_2)
 ONLINE_UID_BASE=$(env_get ONLINE_UID_BASE)
 ONLINE_AGENT_PORTS=$(online_agent_port_range)
 FIRST_ONLINE_AGENT_PORT=${ONLINE_AGENT_PORTS%-*}
+ONLINE_PREVIEW_PORTS=$(online_preview_port_range)
+FIRST_ONLINE_PREVIEW_PORT=${ONLINE_PREVIEW_PORTS%-*}
 ONLINE_ON=false
 if online_enabled; then ONLINE_ON=true; fi
 PORT_COUNT=$(env_get AGENT_PORT_COUNT)
@@ -278,6 +282,7 @@ add_closed "$GW" 22 "host-SSH-via-the-bridge"
 add_closed "$GW" "$WEB_PORT" "the-portal-via-the-bridge"
 add_closed "$GW" "$CONTROL_PORT" "the-gateway-control-API"
 add_closed "$GW" "$FIRST_AGENT_PORT" "a-workspace-port-via-the-bridge"
+add_closed "$GW" "$FIRST_PREVIEW_PORT" "a-preview-port-via-the-bridge"
 for address in $(ip -4 -o addr show | awk '{print $4}' | cut -d/ -f1 | grep -v -e '^127\.' -e "^$GW$"); do
   add_closed "$address" 22 "SSH-on-host-address-$address"
   add_closed "$address" "$WEB_PORT" "the-portal-on-host-address-$address"
@@ -335,7 +340,8 @@ while read -r peer port; do
   if [[ -n $peer ]]; then add_closed "$peer" "$port" "another-workspace"; fi
 done < <(workspace_peers "$NETWORK")
 # Nothing of the Online side: its service listener, the Online ports, its workspaces.
-private_closed=("$ONLINE_GW $SERVICE_PORT the-Online-service-listener" "$GW $FIRST_ONLINE_AGENT_PORT an-Online-workspace-port-via-the-bridge")
+private_closed=("$ONLINE_GW $SERVICE_PORT the-Online-service-listener" "$GW $FIRST_ONLINE_AGENT_PORT an-Online-workspace-port-via-the-bridge"
+  "$GW $FIRST_ONLINE_PREVIEW_PORT an-Online-preview-port-via-the-bridge")
 while read -r peer port; do
   if [[ -n $peer ]]; then private_closed+=("$peer $port an-Online-workspace"); fi
 done < <(workspace_peers "$ONLINE_NETWORK")
@@ -565,6 +571,8 @@ else
     "$ONLINE_GW $CONTROL_PORT the-gateway-control-API-via-the-Online-bridge"
     "$ONLINE_GW $FIRST_AGENT_PORT a-Private-workspace-port-via-the-Online-bridge"
     "$ONLINE_GW $FIRST_ONLINE_AGENT_PORT an-Online-workspace-port-via-the-Online-bridge"
+    "$ONLINE_GW $FIRST_PREVIEW_PORT a-Private-preview-port-via-the-Online-bridge"
+    "$ONLINE_GW $FIRST_ONLINE_PREVIEW_PORT an-Online-preview-port-via-the-Online-bridge"
     "$ONLINE_GW $READER_PORT the-page-reader-via-the-Online-bridge" "$ONLINE_GW $SEARXNG_PORT SearXNG-via-the-Online-bridge")
   while read -r peer port; do
     if [[ -n $peer ]]; then online_closed+=("$peer $port another-Online-workspace"); fi

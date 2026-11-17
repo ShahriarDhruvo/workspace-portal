@@ -8,6 +8,11 @@ import { WORKSPACE_KIND_NAMES, type WorkspaceKind } from "@portal/db";
 export const PORTAL_PATH_PREFIX = "/__portal/";
 /** POST target of the "Try again" buttons: starts that port's kind of the workspace, then redirects to /. */
 export const START_PATH = `${PORTAL_PATH_PREFIX}start`;
+/**
+ * A preview port's entry: `/__portal/port/<n>/<path>` serves the workspace's port n from now on, starting at
+ * /<path> (preview-proxy.ts). The Web Shell's Web preview opens `http://localhost:<n>/<path>` this way.
+ */
+export const PORT_PATH = `${PORTAL_PATH_PREFIX}port/`;
 
 const MAX_DETAIL_CHARS = 4_000;
 
@@ -134,6 +139,30 @@ export function unreachablePage(): string {
   return render({
     title: "Your workspace isn't answering",
     text: "It may have stopped a moment ago. Reload the page.",
+  });
+}
+
+/** A preview port opened without a port chosen (`PORT_PATH`): its address alone doesn't say which app. */
+export function previewUnchosenPage(): string {
+  return render({
+    title: "No app chosen",
+    text: "Open your app from the Web preview in your workspace: http://localhost followed by the port its server listens on, such as http://localhost:3000.",
+  });
+}
+
+/** A port a preview can't show: below 1024 (nothing in a workspace may listen there) or the agent's own. */
+export function previewBadPortPage(port: string): string {
+  return render({
+    title: `Port ${port} can't be shown here`,
+    text: "Use the port your app's server listens on, from 1024 to 65535.",
+  });
+}
+
+/** Nothing in the workspace answers on the chosen port. */
+export function previewUnreachablePage(port: number): string {
+  return render({
+    title: `Nothing answers on port ${port}`,
+    text: `Start your app's server in the workspace on port ${port}, listening on all addresses (0.0.0.0), not only on localhost: for Vite add --host. Then refresh.`,
   });
 }
 

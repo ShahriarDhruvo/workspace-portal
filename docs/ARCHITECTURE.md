@@ -9,6 +9,7 @@ something here turns out to be wrong, fix this file in the same change.
 Browser ──▶ :3000            web (Next.js)       sign-in, change password, admin, /workspace (top bar + iframe)
 Browser ──▶ :3100+N          gateway agent port  user N's Private workspace: session check → HTTP/WebSocket proxy to wp-ws-N
 Browser ──▶ :3300+N          gateway agent port  user N's Online workspace: the same, to wp-wo-N
+Browser ──▶ :4100+N, :4300+N gateway preview port the web apps running in user N's Private / Online workspace (agent port + 1000)
                              gateway 127.0.0.1:4002   control API, called by web and the deploy scripts
                              gateway 172.29.0.1:4001  service API (LLM proxy + search/read MCP), called by Private workspaces only
                              gateway 172.28.0.1:4001  the same service API, called by Online workspaces only
@@ -145,8 +146,8 @@ scripts read `.env` through `deploy/lib.sh` (`env_get`), falling back to `.env.e
 |---|---|---|---|
 | `PORTAL_DATA_DIR` | `/srv/workspace-portal` | both | Host path; mounted at the same path inside the containers |
 | `WEB_BIND` / `WEB_PORT` | `0.0.0.0` / `3000` | web | Portal UI |
-| `AGENT_BIND` / `AGENT_PORT_BASE` / `AGENT_PORT_COUNT` | `0.0.0.0` / `3100` / `200` | gateway, web, installer | User N's Private workspace (1 ≤ N < count) is served on `base + N`. Web builds the iframe URL from it |
-| `ONLINE_AGENT_PORT_BASE` | `AGENT_PORT_BASE + AGENT_PORT_COUNT` (3300) | gateway, web, installer | User N's Online workspace is served on `base + N`, the same count |
+| `AGENT_BIND` / `AGENT_PORT_BASE` / `AGENT_PORT_COUNT` | `0.0.0.0` / `3100` / `200` | gateway, web, installer | User N's Private workspace (1 ≤ N < count) is served on `base + N`. Web builds the iframe URL from it. The web apps running in it are served on `base + N + 1000` (`PREVIEW_PORT_OFFSET`, fixed: the Web Shell's Web preview works it out) |
+| `ONLINE_AGENT_PORT_BASE` | `AGENT_PORT_BASE + AGENT_PORT_COUNT` (3300) | gateway, web, installer | User N's Online workspace is served on `base + N`, the same count; its apps on `base + N + 1000`. None of the four ranges may meet another or the portal's ports |
 | `CONTROL_PORT` | `4002` | both, deploy scripts | Gateway control API on 127.0.0.1. The deploy scripts ask it whether a console update runs (`console_update_running` in `deploy/lib.sh`) |
 | `SERVICE_PORT` | `4001` | gateway, firewall | Service API on `WORKSPACE_GATEWAY_IP` (Private) and `ONLINE_GATEWAY_IP` (Online) |
 | `GATEWAY_CONTROL_SECRET` | random | both, deploy scripts | Bearer token of the control API; also the HMAC key of workspace browser tokens |
@@ -875,6 +876,50 @@ For every HTTP request and WebSocket upgrade (`agent-access.ts`, `agent-proxy.ts
 10. WebSockets: only the agent's paths (table above; others 404). The relay pings the browser every
     20 s, drops it after 2 missed pongs, and applies backpressure at 4 MiB buffered.
 
+## Preview ports (agent port + PREVIEW_PORT_OFFSET, 1000)
+
+A workspace's web app (a dev server the agent or the person started in it) runs on a network the person's
+browser can't reach, and the Web Shell's Web preview loads its address in that browser: `http://localhost:3000`
+there is the person's own computer. So the gateway serves the apps of each workspace on a port of their own, one
+per user and kind like the agent ports (`preview-proxy.ts`), and the trimmed Web Shell (`trim-web-shell.mjs`)
+turns a loopback address in the Web preview (`localhost`, `127.x.x.x`, `0.0.0.0`; typed or opened from a message)
+into `http://<host>:<its own port + 1000>/__portal/port/<port>/<path>`. A preview is its own origin: its page
+can't read the Web Shell's token or storage, nor another workspace's.
+
+1. **Checks.** The agent ports' steps 1 to 3 (`checkAgentAccess(…, "preview")`), with one difference: a same-site
+   page load may also open a tab of its own (`Sec-Fetch-Dest: document`: the Web preview's "Open externally"),
+   besides navigating a frame. Same-site subresources, other methods and upgrades are still refused.
+2. **Choosing the app.** `GET /__portal/port/<n>/<path>` sets `portal_preview_<this port>=<n>` (HttpOnly,
+   SameSite=Lax; cookies ignore ports, so the name carries it) and answers 303 to `/<path>` (only a path of this
+   origin). n is 1024 to 65535 and never the agent's own port (400 `bad_port`, a page for a page load). Every
+   other request goes to the container's port n; without the cookie a page load gets "No app chosen" and the rest
+   404 `no_app_chosen`. One app per preview port at a time: opening another port switches the cookie.
+   `POST /__portal/start` is the agent ports' "Try again". Nothing else under `/__portal/` exists here.
+3. **Not running.** The agent ports' themed pages and JSON errors (step 7); a preview never starts a workspace.
+4. **Forwarding** to `http://<container ip>:<n>`:
+   * The app sees a browser on its own machine: `Host: localhost:<n>`, an Origin (when sent) of
+     `http://localhost:<n>`, the Referer's origin likewise (another Referer is dropped). Dev servers check these
+     (Vite's allowed hosts, Next's dev origins). Forwarded/X-Forwarded-* go; the portal's cookies (`portal_*`) are
+     taken out of Cookie, the app's own stay.
+   * On responses: Set-Cookie for a `portal_*` name is dropped (the app can't replace the portal session),
+     `X-Frame-Options` is removed, every CSP gets `frame-ancestors` for the portal and this workspace's agent port
+     (the Web preview's frame sits in the Web Shell's, in the portal's), a Location on `localhost:<n>` (also
+     127.0.0.1 and 0.0.0.0) becomes a path, and Cache-Control follows the agent ports' rule.
+   * **Private** responses also get a second CSP (`privatePreviewPolicy`): scripts, styles, images, fonts,
+     frames and connections only from this origin (its WebSockets included), `data:` and `blob:`; forms and
+     `<base>` only to it. What the app runs in the person's browser can't take the workspace's files to the
+     internet, which the workspace itself can't reach; inside the Web preview its sandboxed frame can't be
+     navigated off the origin either (the preview's own frame-src), nor open windows.
+   * Nothing answering: a page load gets "Nothing answers on port n" (listen on 0.0.0.0, Vite `--host`), the
+     rest 502 `app_unreachable`. The container isn't checked: a missing server is not a broken workspace.
+   * The upload limit and event-stream tracking are the agent ports'.
+5. **WebSockets** (any path, any upgrade): the same checks, the handshake goes to the app with the same request
+   headers, its 101 comes back without portal cookies, then the two connections are joined byte for byte. They
+   close with the workspace, the session or its disconnect, like the agent's sockets.
+6. **Person activity:** a page load, and data the browser sends on an app's socket (at most one touch a second):
+   someone playing a game or watching a live page keeps the workspace from going idle; an app's own polling over
+   HTTP does not.
+
 ## Service API (WORKSPACE_GATEWAY_IP:SERVICE_PORT and ONLINE_GATEWAY_IP:SERVICE_PORT), for workspace containers
 
 One listener per kind, on the host's address on that kind's network (the Online one only while Online is on;
@@ -1042,7 +1087,7 @@ component's options, so no setting reaches them, and `tools.approvalMode: "plan"
 also put the terminal's `qwen` and headless `qwen -p` (which can't leave plan mode) in plan mode, and approved
 plans would run with "Ask" approval. Two layers, each working without the other:
 
-* The app bundle (the `type="module"` entry in `index.html`). Three edits, each applied only when its pattern
+* The app bundle (the `type="module"` entry in `index.html`). Five edits, each applied only when its pattern
   matches exactly once (minified names as `[\w$]+`):
   * `sidebar`: `showLive` and `showSessionSourceSwitch` off, `primaryNav.items` `["newTask", "agents"]`,
     `footer.items` `["collapse"]`. That leaves Home and the toggle in the rail and New session in the list;
@@ -1057,6 +1102,14 @@ plans would run with "Ask" approval. Two layers, each working without the other:
     execution mode. That is what the + menu's toggle does, so the approved plan runs in the mode the composer
     shows (Classifier Approval by default). A session shows its own mode; a toggle switched off before the
     first prompt stays off.
+  * Web preview addresses: the preview's address check (`function(e,t,n){try{const s=new URL(e.trim());…
+    ?void 0:s}catch{return}}`, which the address bar and links opened from messages both go through) returns a
+    loopback address (`localhost`, `127.x.x.x`, `0.0.0.0`) as the workspace's preview address instead:
+    `<this page's host>:<its port + 1000>/__portal/port/<port><path>` (see "Preview ports"; `PREVIEW_PORT_OFFSET`
+    in the script, which a gateway test holds to the gateway's). The frame, its frame-src, refresh and "Open
+    externally" all use what it returns.
+  * The Web preview frame's sandbox also gets `allow-pointer-lock` (mouse look in a game) and `allow-modals`
+    (alert, confirm). It still has no popups and no top navigation: the app stays in its frame.
 
   The result must parse (`node --check` on a temporary copy). It is written next to the original as
   `<entry>.portal-<sha256 prefix>.js`, `index.html` loads it, and an import map sends the other chunks'

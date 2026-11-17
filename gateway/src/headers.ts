@@ -73,12 +73,14 @@ export function rejectsCrossSite(method: string, headers: IncomingHttpHeaders, u
  * Same-site requests come from another port of this host: the portal, or another workspace's origin (the user's
  * Online one included). SameSite=Lax only holds between sites, so the browser sends the portal's session cookie
  * along with them, an image or script a page there merely asks for included. All they may do is what the portal
- * itself does: navigate its iframe (GET or HEAD). Anything else, WebSockets included, is refused.
+ * itself does: navigate its iframe (GET or HEAD), and for a preview port (`pages`) also open it in a tab of its own
+ * (the Web preview's "Open externally"). Anything else, WebSockets included, is refused.
  */
-export function rejectsSameSite(method: string, headers: IncomingHttpHeaders, upgrade: boolean): boolean {
+export function rejectsSameSite(method: string, headers: IncomingHttpHeaders, upgrade: boolean, pages = false): boolean {
   if (headers["sec-fetch-site"] !== "same-site") return false;
-  const frameNavigation = headers["sec-fetch-mode"] === "navigate" && headers["sec-fetch-dest"] === "iframe";
-  return upgrade || !frameNavigation || (method !== "GET" && method !== "HEAD");
+  const dest = headers["sec-fetch-dest"];
+  const navigation = headers["sec-fetch-mode"] === "navigate" && (dest === "iframe" || (pages && dest === "document"));
+  return upgrade || !navigation || (method !== "GET" && method !== "HEAD");
 }
 
 // ------------------------------------------------------------------ workspace requests and responses
@@ -143,15 +145,20 @@ export function splitBearerSubprotocol(header: string | undefined): { token: str
   return { token, protocols };
 }
 
-/** Who may frame a workspace: the portal page, i.e. the same host on the portal's port. */
+/**
+ * Who may frame a workspace: the portal page, i.e. the same host on the portal's port; for a preview port also the
+ * workspace's agent port (the Web Shell's Web preview frames the app, inside the portal's frame).
+ */
 export interface FramePolicy {
   hostname: string;
   webPort: number;
+  agentPort?: number;
 }
 
-/** The pages allowed to frame the agent: only the portal (WEB_PORT on the same host). */
-export function frameAncestorSources({ hostname, webPort }: FramePolicy): string {
-  return `http://${hostname}:${webPort} https://${hostname}:${webPort}`;
+/** The pages allowed to frame the agent: only the portal (WEB_PORT on the same host); a preview also the agent. */
+export function frameAncestorSources({ hostname, webPort, agentPort }: FramePolicy): string {
+  const ports = agentPort === undefined ? [webPort] : [webPort, agentPort];
+  return ports.map((port) => `http://${hostname}:${port} https://${hostname}:${port}`).join(" ");
 }
 
 /**
@@ -196,6 +203,108 @@ export function workspaceResponseHeaders(upstream: IncomingHttpHeaders, frame: F
     out["cache-control"] = workspaceCacheControl(upstream["cache-control"]);
   }
   out["content-security-policy"] = mergeFrameAncestors(upstream["content-security-policy"], frameAncestorSources(frame));
+  return out;
+}
+
+// ------------------------------------------------------------------ previews
+
+/** The cookies the portal and gateway set start with this; a workspace's app neither sees nor sets them. */
+const PORTAL_COOKIE_PREFIX = "portal_";
+
+/** A cookie (a Cookie pair, or a Set-Cookie value) of the portal's own. */
+export function isPortalCookie(cookie: string): boolean {
+  return cookie.trimStart().toLowerCase().startsWith(PORTAL_COOKIE_PREFIX);
+}
+
+/** A Cookie header without the portal's own cookies (the session first of all); null when nothing is left. */
+export function withoutPortalCookies(cookie: string | undefined): string | null {
+  const kept = (cookie ?? "")
+    .split(";")
+    .map((pair) => pair.trim())
+    .filter((pair) => pair !== "" && !isPortalCookie(pair));
+  return kept.length > 0 ? kept.join("; ") : null;
+}
+
+/** A preview's request target as given: a dev server answers `localhost:<port>` (Vite and Next check Host and Origin). */
+export function localAuthority(port: number): string {
+  return `localhost:${port}`;
+}
+
+/**
+ * The browser's request headers as a workspace's web app may see them: as if the browser were on the workspace
+ * itself (Host, Origin and the Referer's origin say localhost:<port>), its own cookies but none of the portal's,
+ * and no forwarding headers. The browser's origin is `origin` (the preview port's).
+ */
+export function previewRequestHeaders(incoming: IncomingHttpHeaders, origin: string, port: number): HeaderMap {
+  const out = endToEndHeaders(incoming);
+  for (const name of ["host", "cookie", "expect", "forwarded", "x-forwarded-for", "x-forwarded-host", "x-forwarded-port", "x-forwarded-proto", "x-real-ip"]) {
+    delete out[name];
+  }
+  const local = `http://${localAuthority(port)}`;
+  out.host = localAuthority(port);
+  if (incoming.origin !== undefined) out.origin = local;
+  const { referer } = incoming;
+  if (referer !== undefined) {
+    if (referer === origin || referer.startsWith(`${origin}/`)) out.referer = local + referer.slice(origin.length);
+    else delete out.referer;
+  }
+  const cookie = withoutPortalCookies(incoming.cookie);
+  if (cookie !== null) out.cookie = cookie;
+  return out;
+}
+
+/**
+ * A Private workspace's app may load, send and fetch only from its own preview origin (and data: and blob:): what
+ * runs in the person's browser can't take the workspace's data off to the internet, which the workspace itself
+ * can't reach. Inside the Web preview its frame can't be navigated anywhere else either (the preview's frame-src).
+ */
+export function privatePreviewPolicy(origin: string): string {
+  const socket = origin.replace(/^http/, "ws");
+  return [
+    "default-src 'self' data: blob:",
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob:",
+    "style-src 'self' 'unsafe-inline' data: blob:",
+    `connect-src 'self' ${socket}`,
+    "form-action 'self'",
+    "base-uri 'self'",
+  ].join("; ");
+}
+
+/** A redirect to the app's own address (`http://localhost:<port>/x`, also 127.0.0.1 and 0.0.0.0) becomes `/x`. */
+export function previewLocation(location: string, port: number): string {
+  let url: URL;
+  try {
+    url = new URL(location);
+  } catch {
+    return location; // relative: already right
+  }
+  const local = ["localhost", "127.0.0.1", "0.0.0.0", "[::1]"].includes(url.hostname) && (url.port === "" ? 80 : Number(url.port)) === port;
+  return url.protocol === "http:" && local ? `${url.pathname}${url.search}${url.hash}` : location;
+}
+
+/**
+ * A workspace app's response as the browser gets it: framed only by its workspace's Web Shell inside the portal,
+ * never setting a portal cookie, not kept in shared caches (as the agent's), its own redirects kept on the preview
+ * origin, and for a Private workspace confined to that origin (privatePreviewPolicy).
+ */
+export function previewResponseHeaders(
+  upstream: IncomingHttpHeaders,
+  options: { frame: FramePolicy; port: number; privateOrigin: string | null },
+  status?: number,
+): HeaderMap {
+  const out = endToEndHeaders(upstream);
+  delete out["x-frame-options"];
+  const cookies = (upstream["set-cookie"] ?? []).filter((cookie) => !isPortalCookie(cookie));
+  if (cookies.length > 0) out["set-cookie"] = cookies;
+  else delete out["set-cookie"];
+  if (typeof upstream.location === "string") out.location = previewLocation(upstream.location, options.port);
+  if (status !== 304) {
+    delete out.expires;
+    out["cache-control"] = workspaceCacheControl(upstream["cache-control"]);
+  }
+  const own = upstream["content-security-policy"];
+  const policies = [...(own === undefined ? [] : Array.isArray(own) ? own : [own]), ...(options.privateOrigin ? [privatePreviewPolicy(options.privateOrigin)] : [])];
+  out["content-security-policy"] = mergeFrameAncestors(policies, frameAncestorSources(options.frame));
   return out;
 }
 

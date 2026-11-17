@@ -7,6 +7,14 @@ import { AGENT_KINDS, isAgentKind, WORKSPACE_KINDS, type AgentKind, type Workspa
 import { isVersion } from "./versions.ts";
 
 /**
+ * A workspace's preview port (preview-proxy.ts: the person's browser reaching the web app running in the workspace)
+ * is its agent port plus this: Private 4101-4299 and Online 4301-4499 with the default ports. Fixed rather than
+ * configurable, because the Web Shell's Web preview works it out from the port it was loaded from
+ * (workspace-image/qwen/trim-web-shell.mjs, PREVIEW_PORT_OFFSET).
+ */
+export const PREVIEW_PORT_OFFSET = 1000;
+
+/**
  * What one kind of workspace (Private, Online) has to itself: its Docker network, its UID range and its agent port
  * range. Nothing here is shared with the other kind, so a user's two workspaces can't reach or read each other.
  */
@@ -25,7 +33,10 @@ export interface KindConfig {
   bridge: string;
   /** User N's workspace of this kind runs as UID/GID uidBase + N, which owns that user's directories of this kind only. */
   uidBase: number;
-  /** User N's workspace of this kind is served on port agentPortBase + N (1 <= N < agentPortCount). */
+  /**
+   * User N's workspace of this kind is served on port agentPortBase + N (1 <= N < agentPortCount), and the web apps
+   * running in it on that port + PREVIEW_PORT_OFFSET.
+   */
   agentPortBase: number;
   /** The DNS servers its containers use (Online; ONLINE_DNS_1/2). Empty for Private, whose internal network has none. */
   dns: readonly string[];
@@ -402,16 +413,41 @@ function kindProblems(config: Config): string[] {
     });
     if (agentPortBase + count - 1 > 65535) {
       problems.push(`${keys.ports} + AGENT_PORT_COUNT must stay below 65536 (got ${agentPortBase} + ${count})`);
+    } else if (agentPortBase + PREVIEW_PORT_OFFSET + count - 1 > 65535) {
+      problems.push(`${keys.ports} + ${PREVIEW_PORT_OFFSET} + AGENT_PORT_COUNT must stay below 65536: the preview ports are the workspace ports + ${PREVIEW_PORT_OFFSET} (got ${agentPortBase} + ${count})`);
     }
     const [first, last] = span(agentPortBase);
     if ([config.webPort, config.controlPort, config.servicePort].some((port) => port >= first && port <= last)) {
       problems.push(`WEB_PORT, CONTROL_PORT and SERVICE_PORT must lie outside the workspace port range (${keys.ports} + 1 … ${keys.ports} + AGENT_PORT_COUNT - 1: ${first}-${last})`);
+    }
+    const [firstPreview, lastPreview] = span(agentPortBase + PREVIEW_PORT_OFFSET);
+    if ([config.webPort, config.controlPort, config.servicePort].some((port) => port >= firstPreview && port <= lastPreview)) {
+      problems.push(`WEB_PORT, CONTROL_PORT and SERVICE_PORT must lie outside the preview port range (${keys.ports} + ${PREVIEW_PORT_OFFSET} + 1 …: ${firstPreview}-${lastPreview})`);
     }
     const own = parseCidr(subnet);
     if (own && !cidrContains(own, gatewayIp)) problems.push(`${keys.gateway} (${gatewayIp}) must lie inside ${keys.subnet} (${subnet})`);
     const range = parseCidr(ipRange);
     if (own && range && !(range.bits >= own.bits && cidrContains(own, ipRange.split("/")[0]!))) {
       problems.push(`${keys.range} (${ipRange}) must lie inside ${keys.subnet} (${subnet})`);
+    }
+  }
+  // Four ranges: each kind's workspace ports and its preview ports (PREVIEW_PORT_OFFSET above them).
+  const ranges = [
+    { name: "the Private workspace ports", span: span(priv.agentPortBase) },
+    { name: "the Online workspace ports", span: span(online.agentPortBase) },
+    { name: "the Private preview ports", span: span(priv.agentPortBase + PREVIEW_PORT_OFFSET) },
+    { name: "the Online preview ports", span: span(online.agentPortBase + PREVIEW_PORT_OFFSET) },
+  ];
+  for (let i = 0; i < ranges.length; i++) {
+    for (let j = i + 1; j < ranges.length; j++) {
+      // The workspace ranges are reported below, with what to change; the preview ranges then overlap as well.
+      if ((i === 0 && j === 1) || (i === 2 && j === 3)) continue;
+      const [a, b] = [ranges[i]!, ranges[j]!];
+      if (overlaps(a.span, b.span)) {
+        problems.push(
+          `${a.name} (${a.span.join("-")}) and ${b.name} (${b.span.join("-")}) overlap: each needs ports of its own (the preview ports are the workspace ports + ${PREVIEW_PORT_OFFSET}; set AGENT_PORT_BASE, ONLINE_AGENT_PORT_BASE or AGENT_PORT_COUNT so they don't meet)`,
+        );
+      }
     }
   }
   if (overlaps(span(priv.agentPortBase), span(online.agentPortBase))) {

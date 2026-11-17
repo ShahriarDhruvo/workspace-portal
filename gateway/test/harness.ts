@@ -26,9 +26,10 @@ import {
 } from "@portal/db";
 import type { AgentDeps } from "../src/agent-access.ts";
 import { createAgentServerFactory } from "../src/agent-proxy.ts";
+import { createPreviewServerFactory } from "../src/preview-proxy.ts";
 import { AgentUpdater } from "../src/agent-updater.ts";
 import { AgentVersions } from "../src/agent-versions.ts";
-import { loadConfig, type Config } from "../src/config.ts";
+import { loadConfig, PREVIEW_PORT_OFFSET, type Config } from "../src/config.ts";
 import { ConnectionRegistry } from "../src/connections.ts";
 import { createControlServer, type ControlDeps } from "../src/control-api.ts";
 import type { FenceState } from "../src/fence.ts";
@@ -231,6 +232,8 @@ export interface Gateway {
 
   agentPort(userId: number, kind?: WorkspaceKind): number;
   agentOrigin(userId: number, kind?: WorkspaceKind): string;
+  /** The port the web apps of this workspace are previewed on (preview-proxy.ts). */
+  previewPort(userId: number, kind?: WorkspaceKind): number;
   /** The token the browser of this session must present to this workspace. */
   browserToken(sessionToken: string, userId: number, kind?: WorkspaceKind): string;
   addSession(userId: number, actingAsUserId?: number | null): string;
@@ -410,15 +413,17 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
     ...WORKSPACE_KINDS.map((kind): ServiceDeps => ({ ...serviceBase, kind })),
   ];
   const createAgentServer = createAgentServerFactory(agentDeps);
+  const createPreviewServer = createPreviewServerFactory(agentDeps);
   const control = createControlServer(controlDeps);
   const services = serviceDeps.map(createServiceServer);
   const servers: http.Server[] = [control, ...services];
   const [controlPort, servicePort, privateServicePort, onlineServicePort] = await Promise.all([control, ...services].map((server) => listenLocal(server)));
-  servers.push(...(await listenAgentPorts(config, createAgentServer)));
+  servers.push(...(await listenAgentPorts(config, createAgentServer, createPreviewServer)));
 
   const sockets: WebSocket[] = [];
   const agentPort = (userId: number, kind: WorkspaceKind = "private"): number => config.workspace.kinds[kind].agentPortBase + userId;
   const agentOrigin = (userId: number, kind: WorkspaceKind = "private"): string => `http://127.0.0.1:${agentPort(userId, kind)}`;
+  const previewPort = (userId: number, kind: WorkspaceKind = "private"): number => agentPort(userId, kind) + PREVIEW_PORT_OFFSET;
   const browserToken = (sessionToken: string, userId: number, kind: WorkspaceKind = "private"): string =>
     agentBrowserToken(CONTROL_SECRET, hashSessionToken(sessionToken), userId, kind);
   const info = (userId: number): WorkspaceInfo => manager.info(userId);
@@ -460,6 +465,7 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
     createAgentServer,
     agentPort,
     agentOrigin,
+    previewPort,
     browserToken,
     addSession,
     actAs(sessionToken, userId) {
@@ -572,8 +578,8 @@ function randomBase(): number {
   return 20_000 + Math.floor(Math.random() * 10_000);
 }
 
-/** One agent server per workspace port of each kind, like main.ts; moves both ranges if a port is taken. */
-async function listenAgentPorts(config: Config, create: () => http.Server): Promise<http.Server[]> {
+/** One agent and one preview server per workspace of each kind, like main.ts; moves the ranges if a port is taken. */
+async function listenAgentPorts(config: Config, create: () => http.Server, createPreview: () => http.Server): Promise<http.Server[]> {
   const { kinds } = config.workspace;
   for (let attempt = 0; ; attempt++) {
     const servers: http.Server[] = [];
@@ -583,6 +589,9 @@ async function listenAgentPorts(config: Config, create: () => http.Server): Prom
           const server = create();
           servers.push(server);
           await listenLocal(server, kinds[kind].agentPortBase + userId);
+          const preview = createPreview();
+          servers.push(preview);
+          await listenLocal(preview, kinds[kind].agentPortBase + userId + PREVIEW_PORT_OFFSET);
         }
       }
       return servers;

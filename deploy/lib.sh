@@ -325,8 +325,10 @@ agent_port() { # agent
 }
 
 # The ports users' browsers need: the portal and one port per workspace, in a range per kind (a user's
-# Private and Online workspaces are separate browser origins). Online's range follows Private's unless
+# Private and Online workspaces are separate browser origins), and as many again for the web apps running in
+# them, PREVIEW_PORT_OFFSET above (the Web preview). Online's range follows Private's unless
 # ONLINE_AGENT_PORT_BASE says otherwise, as in the gateway (gateway/src/config.ts).
+PREVIEW_PORT_OFFSET=1000
 web_port() { env_get WEB_PORT; }
 online_agent_port_base() {
   env_get ONLINE_AGENT_PORT_BASE "$(($(env_get AGENT_PORT_BASE) + $(env_get AGENT_PORT_COUNT)))"
@@ -336,6 +338,8 @@ port_range_from() { # base -> FIRST-LAST
 }
 agent_port_range() { port_range_from "$(env_get AGENT_PORT_BASE)"; }        # Private
 online_agent_port_range() { port_range_from "$(online_agent_port_base)"; } # Online
+preview_port_range() { port_range_from "$(($(env_get AGENT_PORT_BASE) + PREVIEW_PORT_OFFSET))"; }
+online_preview_port_range() { port_range_from "$(($(online_agent_port_base) + PREVIEW_PORT_OFFSET))"; }
 
 # True unless ONLINE_WORKSPACES turns Online workspaces off for the whole portal (the gateway's default is on).
 online_enabled() {
@@ -362,7 +366,7 @@ portal_sources() {
 portal_rich_rules() {
   local source port
   for source in $(portal_sources); do
-    for port in "$(web_port)" "$(agent_port_range)" "$(online_agent_port_range)"; do
+    for port in "$(web_port)" "$(agent_port_range)" "$(online_agent_port_range)" "$(preview_port_range)" "$(online_preview_port_range)"; do
       printf 'rule family="ipv4" source address="%s" port port="%s" protocol="tcp" accept\n' "$source" "$port"
     done
   done

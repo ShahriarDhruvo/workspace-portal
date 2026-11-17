@@ -5,10 +5,11 @@
 import type http from "node:http";
 import { getDatabase, loadSessionContext, WORKSPACE_KINDS, type WorkspaceKind } from "@portal/db";
 import { createAgentServerFactory } from "./agent-proxy.ts";
+import { createPreviewServerFactory } from "./preview-proxy.ts";
 import { AgentUpdater } from "./agent-updater.ts";
 import { AgentVersions } from "./agent-versions.ts";
 import { AgentConfigError, driverFor } from "./agents/index.ts";
-import { ConfigError, loadConfig, type Config } from "./config.ts";
+import { ConfigError, loadConfig, PREVIEW_PORT_OFFSET, type Config } from "./config.ts";
 import { ConnectionRegistry } from "./connections.ts";
 import { createControlServer } from "./control-api.ts";
 import { DockerImageBuilder } from "./docker-image-builder.ts";
@@ -188,12 +189,15 @@ async function main(log: Logger): Promise<void> {
       : withPageCache(createReaderBackend({ baseUrl: config.reader.url, timeoutMs: config.reader.timeoutMs }), { ttlMs: config.reader.cacheMs });
   const control = createControlServer({ config, db, manager, versions, updater, engine, llm, live, prices, sessions, connections, log });
   const createAgentServer = createAgentServerFactory({ config, manager, sessions, connections, log });
+  const createPreviewServer = createPreviewServerFactory({ config, manager, sessions, connections, log });
   const servers: http.Server[] = [control];
 
   await listen(control, { host: "127.0.0.1", port: config.controlPort });
-  // One port per user and kind: each workspace, and each of a user's two kinds, is its own browser origin. Online's
-  // ports listen even while Online is off (they answer that the workspace is stopped).
+  // One port per user and kind: each workspace, and each of a user's two kinds, is its own browser origin, and so
+  // are the web apps running in it (its preview port, PREVIEW_PORT_OFFSET above). Online's ports listen even while
+  // Online is off (they answer that the workspace is stopped).
   const portRanges: Record<string, string> = {};
+  const previewRanges: Record<string, string> = {};
   for (const kind of WORKSPACE_KINDS) {
     const firstPort = config.workspace.kinds[kind].agentPortBase + 1;
     const lastPort = firstPort + config.agentPortCount - 2;
@@ -201,12 +205,17 @@ async function main(log: Logger): Promise<void> {
       const agent = createAgentServer();
       await listen(agent, { host: config.agentBind, port });
       servers.push(agent);
+      const preview = createPreviewServer();
+      await listen(preview, { host: config.agentBind, port: port + PREVIEW_PORT_OFFSET });
+      servers.push(preview);
     }
     portRanges[kind] = `${config.agentBind}:${firstPort}-${lastPort}`;
+    previewRanges[kind] = `${config.agentBind}:${firstPort + PREVIEW_PORT_OFFSET}-${lastPort + PREVIEW_PORT_OFFSET}`;
   }
   log.info("gateway listening", {
     control: `127.0.0.1:${config.controlPort}`,
     workspaces: portRanges,
+    previews: previewRanges,
     agents: config.workspace.agents.map((agent) => versions.selection(agent).image),
     maxRunning: config.maxRunning,
     idleTimeoutMinutes: config.idleTimeoutMs / 60_000,

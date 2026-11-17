@@ -151,7 +151,7 @@ async function handleRequest(deps: AgentDeps, req: IncomingMessage, res: ServerR
   });
 }
 
-function trackStream(deps: AgentDeps, res: ServerResponse, userId: number, context: SessionContext): void {
+export function trackStream(deps: AgentDeps, res: ServerResponse, userId: number, context: SessionContext): void {
   const unregister = deps.connections.add({
     userId,
     sessionId: context.session.id,
@@ -167,7 +167,15 @@ function trackStream(deps: AgentDeps, res: ServerResponse, userId: number, conte
  * reloads), the other kind running, the error with "Try again", or stopped with a link to the portal; anything
  * else gets the JSON error (409 for the other kind, else 503).
  */
-function handleUnavailable(deps: AgentDeps, res: ServerResponse, userId: number, kind: WorkspaceKind, host: HostParts, navigation: boolean): void {
+export function handleUnavailable(
+  deps: AgentDeps,
+  res: ServerResponse,
+  userId: number,
+  kind: WorkspaceKind,
+  host: HostParts,
+  navigation: boolean,
+  frame: FramePolicy = framing(deps, host),
+): void {
   const info = deps.manager.info(userId);
   const other = otherKindError(info, kind);
   const portal = `//${host.hostname}:${deps.config.webPort}/`;
@@ -176,18 +184,18 @@ function handleUnavailable(deps: AgentDeps, res: ServerResponse, userId: number,
     const { code, message, headers } = unavailableError(info.kind === kind ? info.status : "stopped");
     return sendError(res, 503, code, message, headers);
   }
-  if (other) return sendPage(res, 409, otherKindPage(other.running, kind, portal), framing(deps, host));
+  if (other) return sendPage(res, 409, otherKindPage(other.running, kind, portal), frame);
   if (info.kind === kind && (info.status === "starting" || info.status === "running")) {
-    return sendPage(res, 503, startingPage(kind), framing(deps, host), { "retry-after": "2" });
+    return sendPage(res, 503, startingPage(kind), frame, { "retry-after": "2" });
   }
   if (info.kind === kind && info.status === "error") {
-    return sendPage(res, 503, errorPage("Something went wrong while it was starting.", info.lastError), framing(deps, host));
+    return sendPage(res, 503, errorPage("Something went wrong while it was starting.", info.lastError), frame);
   }
-  sendPage(res, 503, stoppedPage(kind, portal), framing(deps, host));
+  sendPage(res, 503, stoppedPage(kind, portal), frame);
 }
 
 /** Gateway-owned paths: the "Try again" form of the capacity and error pages, for this port's kind. */
-function handlePortalPath(
+export function handlePortalPath(
   deps: AgentDeps,
   req: IncomingMessage,
   res: ServerResponse,
@@ -224,11 +232,11 @@ function refusalPage(deps: AgentDeps, error: StartRefusal, kind: WorkspaceKind, 
   return errorPage(error.message, null);
 }
 
-function framing(deps: AgentDeps, host: HostParts): FramePolicy {
+export function framing(deps: AgentDeps, host: HostParts): FramePolicy {
   return { hostname: host.hostname, webPort: deps.config.webPort };
 }
 
-function sendPage(res: ServerResponse, status: number, html: string, frame: FramePolicy, headers: Record<string, string> = {}): void {
+export function sendPage(res: ServerResponse, status: number, html: string, frame: FramePolicy, headers: Record<string, string> = {}): void {
   res.writeHead(status, {
     "content-type": "text/html; charset=utf-8",
     "content-length": Buffer.byteLength(html),
