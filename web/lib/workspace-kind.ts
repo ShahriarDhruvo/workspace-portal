@@ -1,11 +1,7 @@
 // The two kinds of workspace in the browser: their names, which one a Start offers first, why Online can't be
-// chosen, and what a refused start says. Pure (client components can't import values from @portal/core); unit
-// tested, including that the names match WORKSPACE_KIND_NAMES.
-import type { WorkspaceKind, WorkspaceStatus } from "@portal/core";
+// chosen, and what a refused start says. Pure; unit tested.
+import { WORKSPACE_KIND_NAMES, type WorkspaceKind, type WorkspaceStatus } from "@portal/core/wire";
 import type { ApiError, OnlineAccess, WorkspaceInfo } from "./gateway-types.ts";
-
-/** WORKSPACE_KIND_NAMES, for client components. */
-export const KIND_NAMES: Readonly<Record<WorkspaceKind, string>> = { private: "Private", online: "Online" };
 
 export function otherKind(kind: WorkspaceKind): WorkspaceKind {
   return kind === "online" ? "private" : "online";
@@ -51,7 +47,7 @@ export function startErrorText(error: ApiError, kind: WorkspaceKind, whose: stri
     case "capacity":
       return "All workspace slots are busy. Try again in a minute.";
     case "kind_mismatch":
-      return `${whose} ${KIND_NAMES[otherKind(kind)]} workspace is running. Stop it before starting the ${KIND_NAMES[kind]} one.`;
+      return `${whose} ${WORKSPACE_KIND_NAMES[otherKind(kind)]} workspace is running. Stop it before starting the ${WORKSPACE_KIND_NAMES[kind]} one.`;
     default: {
       const online = onlineAccessAfter(error);
       return online ? ONLINE_BLOCKED[online] : error.message;

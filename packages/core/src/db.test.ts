@@ -10,7 +10,7 @@ import { MIGRATIONS } from "./migrations.ts";
 import { eq } from "drizzle-orm";
 import { energyPrices, hostDaily, portalSettings, users, sessions, workspaceSessions } from "./schema.ts";
 import { readSetting, writeSetting } from "./settings.ts";
-import { ENERGY_LOCATIONS, energyLocation, energyLocationLabel, isEnergyLocationId } from "./energy-locations.ts";
+import { ENERGY_LOCATIONS, energyLocation, energyLocationLabel, isEnergyLocationId } from "./wire/index.ts";
 import { countSessionsUsingWorkspace, hashSessionToken, loadSessionContext, readCookie } from "./sessions.ts";
 import { usageDay } from "./usage-day.ts";
 

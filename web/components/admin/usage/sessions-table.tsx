@@ -8,7 +8,7 @@ import { formatCount, formatDuration } from "@/lib/format";
 import { formatCost, formatElapsed, formatNumber, formatWatts, formatWh } from "@/lib/live-format";
 import type { LlmLive } from "@/lib/live-types";
 import { SESSION_PAGE_SIZE, type SessionPage, type SessionRow } from "@/lib/session-types";
-import { KIND_NAMES } from "@/lib/workspace-kind";
+import { WORKSPACE_KIND_NAMES } from "@portal/core/wire";
 import { DataTable, DataTableEmpty, DataTableHead, DataTablePagination } from "@/components/common/data-table";
 import { LocalTime } from "@/components/local-time";
 import { GlobeIcon, LockIcon } from "@/components/ui/icons";
@@ -162,9 +162,9 @@ function Quiet({ className, children }: { className?: string; children: ReactNod
 function KindIcon({ kind }: { kind: SessionRow["kind"] }) {
   const Icon = kind === "online" ? GlobeIcon : LockIcon;
   return (
-    <span className="inline-flex h-5 shrink-0 items-center text-muted-foreground" title={KIND_NAMES[kind]}>
+    <span className="inline-flex h-5 shrink-0 items-center text-muted-foreground" title={WORKSPACE_KIND_NAMES[kind]}>
       <Icon aria-hidden="true" className="size-3.5" />
-      <span className="sr-only">{KIND_NAMES[kind]}</span>
+      <span className="sr-only">{WORKSPACE_KIND_NAMES[kind]}</span>
     </span>
   );
 }

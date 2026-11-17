@@ -2,10 +2,10 @@
 
 import { useRef, useState, type RefObject } from "react";
 import { useFormStatus } from "react-dom";
-import type { WorkspaceKind } from "@portal/core";
+import { WORKSPACE_KIND_NAMES, type WorkspaceKind } from "@portal/core/wire";
 import { returnFocus } from "@/lib/focus";
 import type { OnlineAccess } from "@/lib/gateway-types";
-import { KIND_NAMES, onlineBlockedReason, otherKind } from "@/lib/workspace-kind";
+import { onlineBlockedReason, otherKind } from "@/lib/workspace-kind";
 import { SubmitButton } from "@/components/forms/submit-button";
 import {
   AlertDialog,
@@ -81,7 +81,7 @@ export function KindPicker({ value, onValueChange, onlineBlocked, idPrefix, clas
               <FieldContent>
                 <FieldTitle>
                   <Icon className="shrink-0" />
-                  {KIND_NAMES[kind]}
+                  {WORKSPACE_KIND_NAMES[kind]}
                 </FieldTitle>
                 <FieldDescription className="text-13">{blocked ?? KIND_LINES[kind]}</FieldDescription>
               </FieldContent>
@@ -118,7 +118,7 @@ export function StartWorkspaceButton({ kind, onSwitch, whose, retry = false, dis
     <>
       <Button ref={startButton} type="button" onClick={() => setConfirming(true)} disabled={disabled} className={className}>
         <PlayIcon />
-        {retry ? "Try again" : `Start ${KIND_NAMES[kind]}`}
+        {retry ? "Try again" : `Start ${WORKSPACE_KIND_NAMES[kind]}`}
       </Button>
       <StartDialog
         open={confirming}
@@ -191,7 +191,7 @@ function StartDialog({ open, onOpenChange, kind, onSwitch, whose, onConfirm, ret
               <Icon />
             </AlertDialogMedia>
             <AlertDialogTitle>
-              Start {whose} {KIND_NAMES[kind]} workspace?
+              Start {whose} {WORKSPACE_KIND_NAMES[kind]} workspace?
             </AlertDialogTitle>
             <AlertDialogDescription asChild>
               <div className="flex flex-col gap-2">
@@ -218,11 +218,11 @@ function FooterButtons({ kind, other, onSwitch }: { kind: WorkspaceKind; other: 
       {onSwitch ? (
         <Button type="button" variant="outline" disabled={pending} onClick={onSwitch}>
           <OtherIcon />
-          Use {KIND_NAMES[other]}
+          Use {WORKSPACE_KIND_NAMES[other]}
         </Button>
       ) : null}
       <SubmitButton icon={<PlayIcon />} pendingLabel="Starting…">
-        Start {KIND_NAMES[kind]}
+        Start {WORKSPACE_KIND_NAMES[kind]}
       </SubmitButton>
     </>
   );

@@ -3,12 +3,12 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useReducer, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import type { AgentKind, WorkspaceKind } from "@portal/core";
+import { WORKSPACE_KIND_NAMES, type AgentKind, type WorkspaceKind } from "@portal/core/wire";
 import { agentFrameUrl, type AgentFrame } from "@/lib/agent-url";
 import { fetchJson, needsReauth } from "@/lib/fetch-json";
 import { stopReasonText, workspaceState, type WorkspaceState } from "@/lib/format";
 import type { ApiError, OnlineAccess, WorkspaceStatusResponse } from "@/lib/gateway-types";
-import { hasContainer, initialKind, KIND_NAMES, onlineAccessAfter, otherKind, startErrorText } from "@/lib/workspace-kind";
+import { hasContainer, initialKind, onlineAccessAfter, otherKind, startErrorText } from "@/lib/workspace-kind";
 import { stopWarnings } from "@/lib/workspace-stop";
 import { PortalMark } from "@/components/brand";
 import { HOME_LINK, portalLinks } from "@/components/layout/portal-links";
@@ -219,7 +219,7 @@ function idleCopy(
     case "stopped": {
       const reason = stopReasonText(idle.reason, idleTimeoutMinutes, target.isViewer ? "owner" : "other");
       return {
-        title: `${whose} ${KIND_NAMES[kind]} workspace was stopped`,
+        title: `${whose} ${WORKSPACE_KIND_NAMES[kind]} workspace was stopped`,
         body: reason ? `It was stopped ${reason}.` : null,
         warning: false,
         retry: false,
@@ -234,7 +234,7 @@ function idleCopy(
       };
     case "failed":
       return {
-        title: `The ${KIND_NAMES[kind]} workspace couldn't start`,
+        title: `The ${WORKSPACE_KIND_NAMES[kind]} workspace couldn't start`,
         body: idle.message ?? "Something went wrong while starting it.",
         warning: true,
         retry: true,

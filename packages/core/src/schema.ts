@@ -2,7 +2,7 @@
 // All timestamps are integer milliseconds since the Unix epoch.
 // The SQL in migrations.ts must stay in sync with this file.
 import { sql } from "drizzle-orm";
-import { ENERGY_CURRENCIES, ENERGY_PRICE_SOURCES } from "./energy-locations.ts";
+import { AGENT_KINDS, ENERGY_CURRENCIES, ENERGY_PRICE_SOURCES, HOST_ROLES, ROLES, WORKSPACE_KINDS, WORKSPACE_STATUSES } from "./wire/index.ts";
 import {
   sqliteTable,
   integer,
@@ -12,34 +12,6 @@ import {
   primaryKey,
   real,
 } from "drizzle-orm/sqlite-core";
-
-export const ROLES = ["admin", "user"] as const;
-export type Role = (typeof ROLES)[number];
-
-export const WORKSPACE_STATUSES = ["stopped", "starting", "running", "stopping", "error"] as const;
-export type WorkspaceStatus = (typeof WORKSPACE_STATUSES)[number];
-
-/** The agents a workspace can run. A user's workspace runs one of them at a time. */
-export const AGENT_KINDS = ["qwen", "dsh"] as const;
-export type AgentKind = (typeof AGENT_KINDS)[number];
-export const AGENT_NAMES: Readonly<Record<AgentKind, string>> = { qwen: "Qwen Code", dsh: "DeepSeek Harness" };
-
-export function isAgentKind(value: unknown): value is AgentKind {
-  return typeof value === "string" && (AGENT_KINDS as readonly string[]).includes(value);
-}
-
-/**
- * The two workspaces every user has. Each has its own files, UID, container, network and browser origin, and only
- * one of a user's two runs at a time. Private (the original kind) has no internet; Online reaches the public
- * internet but never the LAN, the servers or another container.
- */
-export const WORKSPACE_KINDS = ["private", "online"] as const;
-export type WorkspaceKind = (typeof WORKSPACE_KINDS)[number];
-export const WORKSPACE_KIND_NAMES: Readonly<Record<WorkspaceKind, string>> = { private: "Private", online: "Online" };
-
-export function isWorkspaceKind(value: unknown): value is WorkspaceKind {
-  return typeof value === "string" && (WORKSPACE_KINDS as readonly string[]).includes(value);
-}
 
 export const users = sqliteTable(
   "users",
@@ -145,10 +117,6 @@ export const llmUsage = sqliteTable(
   },
   (t) => [primaryKey({ columns: [t.userId, t.day] })],
 );
-
-/** The two servers portal-hostd reports on: the portal's own and the LLM server. */
-export const HOST_ROLES = ["portal", "llm"] as const;
-export type HostRole = (typeof HOST_ROLES)[number];
 
 // Written by the gateway's energy meter: each server's totals per local day (YYYY-MM-DD, usageDay()), from its
 // portal-hostd's running counters. Kept for good (two rows a day): Admin > Energy prices them per day.

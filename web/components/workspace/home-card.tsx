@@ -3,11 +3,11 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import type { AgentKind, WorkspaceKind, WorkspaceStatus } from "@portal/core";
+import { WORKSPACE_KIND_NAMES, type AgentKind, type WorkspaceKind, type WorkspaceStatus } from "@portal/core/wire";
 import { fetchJson, needsReauth } from "@/lib/fetch-json";
 import { formatVersion, stopReasonText, workspaceState } from "@/lib/format";
 import type { WorkspaceStatusResponse } from "@/lib/gateway-types";
-import { initialKind, KIND_NAMES, onlineAccessAfter, otherKind, startErrorText } from "@/lib/workspace-kind";
+import { initialKind, onlineAccessAfter, otherKind, startErrorText } from "@/lib/workspace-kind";
 import { stopWarnings } from "@/lib/workspace-stop";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -227,7 +227,7 @@ export function HomeCard({ initial, initialError, idleTimeoutMinutes, agentNames
         </CardAction>
         {/* The buttons show the state; this says it to screen readers as it changes. */}
         <p role="status" className="sr-only">
-          {ready || starting || stopping ? `${KIND_NAMES[kind]} workspace` : "Workspace"}{" "}
+          {ready || starting || stopping ? `${WORKSPACE_KIND_NAMES[kind]} workspace` : "Workspace"}{" "}
           {state.activity ? `${state.label.toLowerCase()}, ${state.activity}` : state.label.toLowerCase()}
         </p>
       </CardHeader>
@@ -236,7 +236,7 @@ export function HomeCard({ initial, initialError, idleTimeoutMinutes, agentNames
           {failed ? (
             <Alert variant="destructive">
               <WarningIcon />
-              <AlertTitle>The {KIND_NAMES[info.kind]} workspace couldn&apos;t start</AlertTitle>
+              <AlertTitle>The {WORKSPACE_KIND_NAMES[info.kind]} workspace couldn&apos;t start</AlertTitle>
               <AlertDescription>{info.lastError ?? "Something went wrong while starting it."}</AlertDescription>
             </Alert>
           ) : null}

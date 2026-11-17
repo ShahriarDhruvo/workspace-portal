@@ -8,7 +8,7 @@
 // derived, session-bound token. The gateway checks it together with the portal session cookie and
 // replaces it with the container's real token, which never leaves the server.
 import crypto from "node:crypto";
-import type { WorkspaceKind } from "./schema.ts";
+import type { WorkspaceKind } from "./wire/index.ts";
 
 /** Port of user `userId`'s workspace, or null when the id is outside the configured range. */
 export function agentPortFor(base: number, count: number, userId: number): number | null {

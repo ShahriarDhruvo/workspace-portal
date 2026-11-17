@@ -1,10 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { WORKSPACE_KIND_NAMES } from "@portal/core";
-import { hasContainer, initialKind, KIND_NAMES, onlineAccessAfter, onlineBlockedReason, otherKind, startErrorText } from "./workspace-kind.ts";
+import { hasContainer, initialKind, onlineAccessAfter, onlineBlockedReason, otherKind, startErrorText } from "./workspace-kind.ts";
 
-test("the browser's kind names are the database package's", () => {
-  assert.deepEqual(KIND_NAMES, WORKSPACE_KIND_NAMES);
+test("otherKind is the other of a user's two workspaces", () => {
   assert.equal(otherKind("private"), "online");
   assert.equal(otherKind("online"), "private");
 });

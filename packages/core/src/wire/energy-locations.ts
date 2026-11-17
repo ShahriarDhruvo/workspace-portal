@@ -6,8 +6,6 @@
 //   * Europe: Eurostat's household price with all taxes, consumption band 2,500-4,999 kWh a year, per half year
 //     (nrg_pc_204), in euros per kWh. Eurostat's codes, so Greece is EL and Kosovo XK; some of its countries are
 //     not in the EU.
-// No imports: the web app's client components load this file on its own (@portal/core/energy-locations), as the
-// package's main entry brings SQLite with it.
 
 export const ENERGY_PRICE_SOURCES = ["eia", "eurostat"] as const;
 export type EnergyPriceSource = (typeof ENERGY_PRICE_SOURCES)[number];
