@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AGENT_KINDS } from "@portal/core";
 import { driverFor } from "./agents/index.ts";
@@ -35,87 +34,15 @@ test("parseByteSize accepts plain bytes and k/m/g", () => {
   }
 });
 
-test("defaults match .env.example", () => {
+test("the defaults are .env.example's", () => {
+  const example = fs.readFileSync(new URL("../../.env.example", import.meta.url), "utf8");
+  const settings = Object.fromEntries(Array.from(example.matchAll(/^([A-Z0-9_]+)=(.*)$/gm), ([, key, value]) => [key, value]));
   const config = loadConfig(secrets);
-  assert.equal(config.dataDir, "/srv/workspace-portal");
+  assert.deepEqual(config, loadConfig({ ...settings, ...secrets }));
   assert.equal(config.dbFile, "/srv/workspace-portal/db/portal.sqlite");
   assert.equal(config.qwenConfigDir, "/srv/workspace-portal/config/qwen");
   assert.equal(config.agentVersionsFile, "/srv/workspace-portal/config/agent-versions.env");
-  assert.equal(
-    config.imageContextDir,
-    path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../workspace-image"),
-    "workspace-image/ next to the gateway's code (/app/workspace-image in the container)",
-  );
-  assert.deepEqual(
-    [config.webPort, config.agentBind, config.agentPortCount, config.controlPort, config.servicePort],
-    [3000, "0.0.0.0", 200, 4002, 4001],
-  );
-  assert.equal(config.controlSecret, "c".repeat(64));
-  assert.equal(config.llm.upstreamUrl, "http://127.0.0.1:8080");
-  assert.equal(config.llm.apiKey, "");
-  assert.deepEqual(config.llm, { upstreamUrl: "http://127.0.0.1:8080", apiKey: "", maxConcurrency: 3, maxConcurrencyPerUser: 2 });
-  assert.deepEqual(config.search, {
-    url: "http://127.0.0.1:8888",
-    authorization: "",
-    timeoutMs: 20_000,
-    maxConcurrentPerUser: 2,
-    fallbackEngines: ["duckduckgo", "swisscows", "privacywall", "mojeek"],
-    fallbackBelow: 3,
-    cacheMs: 15 * 60_000,
-  });
-  // Without READER_URL there is no page reader (.env.example sets it for the reader container).
-  assert.deepEqual(config.reader, {
-    url: "",
-    timeoutMs: 60_000,
-    policy: "shown",
-    trustedHosts: DEFAULT_TRUSTED_HOSTS.split(","),
-    pageChars: 20_000,
-    cacheMs: 15 * 60_000,
-    maxConcurrentPerUser: 2,
-  });
-  assert.ok(config.reader.trustedHosts.includes("github.com") && config.reader.trustedHosts.includes("docs.rs"));
-  assert.deepEqual(config.hostd, { portal: { url: "", token: "" }, llm: { url: "", token: "" } }, "not set up without tokens");
-  assert.deepEqual(config.engine, { releaseNotesRepo: "gufo-org/gufo", drainMs: 15 * 60_000 });
-  assert.deepEqual(config.workspace, {
-    defaultEffort: "low",
-    agents: ["qwen", "dsh"],
-    defaultVersions: { qwen: "0.27.0", dsh: "0.2.2-rc.1" },
-    kinds: {
-      private: {
-        kind: "private",
-        network: "workspace-portal-ws",
-        subnet: "172.29.0.0/16",
-        gatewayIp: "172.29.0.1",
-        ipRange: "172.29.128.0/17",
-        bridge: "br-wportal",
-        uidBase: 200_000,
-        agentPortBase: 3100,
-        dns: [],
-      },
-      online: {
-        kind: "online",
-        network: "workspace-portal-online",
-        subnet: "172.28.0.0/16",
-        gatewayIp: "172.28.0.1",
-        ipRange: "172.28.128.0/17",
-        bridge: "br-wonline",
-        uidBase: 2_000_000_000,
-        agentPortBase: 3300,
-        dns: ["1.1.1.1", "9.9.9.9"],
-      },
-    },
-    onlineEnabled: true,
-    memoryBytes: 3 * 1024 * MIB,
-    nanoCpus: 4e9,
-    pidsLimit: 1024,
-    shmBytes: 1024 * MIB,
-    tmpBytes: 1024 * MIB,
-    browser: true,
-  });
-  assert.equal(config.maxRunning, 4);
-  assert.equal(config.idleTimeoutMs, 30 * 60_000);
-  assert.equal(config.maxBusyMs, 24 * HOUR);
-  assert.equal(config.uploadLimitBytes, 100 * MIB);
+  assert.equal(config.imageContextDir, fileURLToPath(new URL("../../workspace-image", import.meta.url)), "/app/workspace-image in the container");
 });
 
 test("values are parsed and normalised", () => {
