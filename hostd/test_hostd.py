@@ -1392,13 +1392,13 @@ class TestInstaller(TmpRoot):
 
     def test_portal_token_stdin_and_idempotent_rerun(self):
         tok = 'e' * 64
-        r = self.run_install('portal', '--token-stdin', '--port', str(self.port), '--name', 'locust', stdin=f'  {tok}  \n')
+        r = self.run_install('portal', '--token-stdin', '--port', str(self.port), stdin=f'  {tok}  \n')
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
         self.assertNotIn(tok, r.stdout + r.stderr)
         self.assertEqual(self.read('etc/portal-hostd/token'), tok + '\n')
         self.assertEqual(os.stat(os.path.join(self.prefix, 'etc/portal-hostd/token')).st_mode & 0o777, 0o600)
         conf = self.read('etc/portal-hostd/hostd.conf')
-        for line in ('ROLE=portal', 'BIND=127.0.0.1', f'PORT={self.port}', 'INTERVAL_MS=500', 'HOSTD_NAME=locust'):
+        for line in ('ROLE=portal', 'BIND=127.0.0.1', f'PORT={self.port}', 'INTERVAL_MS=500'):
             self.assertIn(line + '\n', conf)
         self.assertNotIn('FIREWALL_SOURCE', conf)
         unit = self.read('etc/systemd/system/portal-hostd.service')
@@ -1409,12 +1409,11 @@ class TestInstaller(TmpRoot):
         self.assertEqual(self.restarts(), 1)
         self.assertTrue(os.path.exists(os.path.join(self.prefix, 'usr/local/lib/portal-hostd/portal-hostd.py')))
 
-        # same token again: nothing changes, no restart; --name is remembered
+        # same token again: nothing changes, no restart
         r = self.run_install('portal', '--token-stdin', '--port', str(self.port), stdin=tok + '\n')
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn('unchanged and running', r.stdout)
         self.assertEqual(self.restarts(), 1)
-        self.assertIn('HOSTD_NAME=locust\n', self.read('etc/portal-hostd/hostd.conf'))
         # no --token-stdin: the stored token is kept, still no restart
         r = self.run_install('portal', '--port', str(self.port))
         self.assertEqual((r.returncode, self.restarts()), (0, 1), r.stderr)
@@ -1439,7 +1438,7 @@ class TestInstaller(TmpRoot):
             self.assertIn('--token-stdin', r.stderr)
         r = self.run_install('portal', '--token', 'x' * 64, '--port', str(self.port))
         self.assertNotEqual(r.returncode, 0)
-        self.assertIn('--token-stdin', r.stderr)
+        self.assertIn('unknown option --token', r.stderr)
         self.assertEqual(self.restarts(), 0)
         self.assertFalse(os.path.exists(os.path.join(self.prefix, 'etc/portal-hostd/hostd.conf')))
 

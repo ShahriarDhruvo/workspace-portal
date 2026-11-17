@@ -1,8 +1,8 @@
 #!/bin/bash
 # portal-hostd installer, both roles. Idempotent; run as root. See hostd/README.md.
-#   sudo bash hostd/install.sh portal [--token-stdin] [--port 9180] [--name NAME]
+#   sudo bash hostd/install.sh portal [--token-stdin] [--port 9180]
 #   sudo bash hostd/install.sh llm --portal <portal server IPv4> [--engine-unit gufo.service|none]
-#                                  [--engine-user USER] [--token-stdin] [--port 9180] [--name NAME]
+#                                  [--engine-user USER] [--token-stdin] [--port 9180]
 #   sudo bash hostd/install.sh uninstall
 # --token-stdin reads the token as one line from stdin (never pass secrets as arguments: /proc/*/cmdline
 # is world-readable). Without it an existing /etc/portal-hostd/token is kept, else a new one is generated.
@@ -108,16 +108,14 @@ case $role in
     *) die "unknown role '$role' (portal, llm or uninstall)" ;;
 esac
 
-token="" token_stdin=0 port=9180 portal="" engine_unit="__default__" engine_user="${SUDO_USER:-}" name=""
+token="" token_stdin=0 port=9180 portal="" engine_unit="__default__" engine_user="${SUDO_USER:-}"
 while [[ $# -gt 0 ]]; do
     case $1 in
         --token-stdin) token_stdin=1; shift ;;
-        --token) die "--token is gone: pass the token on stdin with --token-stdin (arguments are world-readable)" ;;
         --port) port=${2:?--port needs a value}; shift 2 ;;
         --portal) portal=${2:?--portal needs a value}; shift 2 ;;
         --engine-unit) engine_unit=${2?--engine-unit needs a value}; shift 2 ;;
         --engine-user) engine_user=${2:?--engine-user needs a value}; shift 2 ;;
-        --name) name=${2:?--name needs a value}; shift 2 ;;
         -h | --help) usage ;;
         *) die "unknown option $1" ;;
     esac
@@ -188,15 +186,12 @@ mv -f "$TOKEN_FILE.new" "$TOKEN_FILE"
 old_ip=$(conf_get FIREWALL_SOURCE)
 old_port=$(conf_get PORT)
 interval=$(conf_get INTERVAL_MS)
-name=${name:-$(conf_get HOSTD_NAME)}
-[[ -z $name || $name =~ ^[A-Za-z0-9._-]{1,64}$ ]] || die "--name may only contain letters, digits, . _ -"
 {
     echo "# portal-hostd configuration (written by hostd/install.sh; not secret)"
     echo "ROLE=$role"
     echo "BIND=$bind"
     echo "PORT=$port"
     echo "INTERVAL_MS=${interval:-500}"
-    if [[ -n $name ]]; then echo "HOSTD_NAME=$name"; fi
     if [[ -n $engine_unit ]]; then
         echo "ENGINE_UNIT=$engine_unit"
         echo "ENGINE_QUADLET=$quadlet"

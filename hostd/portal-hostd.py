@@ -585,9 +585,8 @@ def r2(x):
 
 
 class Host:
-    def __init__(self, fs, role, interval_ms, engine_unit=None, name=None):
+    def __init__(self, fs, role, interval_ms, engine_unit=None):
         self.fs, self.role, self.interval_ms, self.engine_unit = fs, role, interval_ms, engine_unit
-        self.name = name or socket.gethostname().split('.')[0]
         self.stat = Src(fs.p('/proc/stat'), 65536)
         self.meminfo = Src(fs.p('/proc/meminfo'), 8192)
         self.ncpu = self._count_cpus()
@@ -739,7 +738,7 @@ class Host:
         power_label = {'socket': 'APU socket power', 'rapl': 'CPU package + DRAM (RAPL)'}.get(src['power'])
         return {
             'hostd': API_VERSION,
-            'hostname': self.name,
+            'hostname': socket.gethostname().split('.')[0],
             'role': self.role,
             'os': m.group(1) if m else None,
             'kernel': (self.fs.text('/proc/sys/kernel/osrelease') or os.uname().release).strip(),
@@ -1948,7 +1947,7 @@ def config(env):
     return {'role': role, 'bind': bind, 'port': port, 'interval_ms': interval, 'engine_unit': unit,
             'engine_quadlet': os.path.expanduser(quadlet), 'engine_url': env.get('ENGINE_URL', '').strip() or 'http://127.0.0.1:8080',
             'state_dir': env.get('HOSTD_STATE_DIR', '').strip() or os.path.join(home, '.local/state/portal-hostd'),
-            'root': env.get('HOSTD_ROOT', ''), 'name': env.get('HOSTD_NAME', '').strip() or None}
+            'root': env.get('HOSTD_ROOT', '')}
 
 
 def sd_notify(msg):
@@ -1965,7 +1964,7 @@ def sd_notify(msg):
 
 
 def build(cfg, token, runner=None):
-    host = Host(Fs(cfg['root']), cfg['role'], cfg['interval_ms'], cfg['engine_unit'] or None, cfg['name'])
+    host = Host(Fs(cfg['root']), cfg['role'], cfg['interval_ms'], cfg['engine_unit'] or None)
     sampler = Sampler(host, cfg['interval_ms'] / 1000.0)
     engine = None
     if cfg['engine_unit']:
