@@ -1056,6 +1056,7 @@ IMAGE_RE = re.compile(r'^(?P<repo>[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+)?'
 DIGEST_RE = re.compile(r'^sha256:[0-9a-f]{64}$')
 VERSION_RE = re.compile(r'^\d+\.\d+\.\d+$')
 IMAGE_LINE_RE = re.compile(r'^(\s*Image\s*=\s*)(.*?)(\s*)$')
+DOC_LINE_RE = re.compile(r'^\s*Documentation\s*=')
 DOC_VERSION_RE = re.compile(r'/v(\d+\.\d+\.\d+)/')
 
 
@@ -1077,39 +1078,38 @@ def repository_of(image):
     return ref
 
 
+def digest_of(image):
+    return image.split('@', 1)[1] if image and '@' in image else None
+
+
+def image_with(images, digest):
+    return next((i for i in images if digest in i['digests']), None)
+
+
 def quadlet_image(text):
     """-> (index of the Image= line, value); StepError unless exactly one Image= line."""
-    hits = [(i, IMAGE_LINE_RE.match(line.rstrip('\r\n')))
-            for i, line in enumerate(text.splitlines(keepends=True))
-            if re.match(r'^\s*Image\s*=', line)]
+    hits = [(i, m.group(2)) for i, line in enumerate(text.splitlines()) if (m := IMAGE_LINE_RE.match(line))]
     if len(hits) != 1:
         raise StepError(f'quadlet must contain exactly one Image= line (found {len(hits)})')
-    i, m = hits[0]
-    return i, m.group(2)
+    return hits[0]
 
 
 def quadlet_rewrite(text, image, version):
     """Only the Image= value changes (plus a /vX.Y.Z/ Documentation= segment when version is given)."""
-    idx, _ = quadlet_image(text)
     lines = text.splitlines(keepends=True)
-    line = lines[idx]
-    body = line.rstrip('\r\n')
-    ending = line[len(body):]
+    idx, _ = quadlet_image(text)
+    body = lines[idx].rstrip('\r\n')
     m = IMAGE_LINE_RE.match(body)
-    lines[idx] = m.group(1) + image + m.group(3) + ending
+    lines[idx] = m.group(1) + image + m.group(3) + lines[idx][len(body):]
     if version:
-        for i, l in enumerate(lines):
-            if re.match(r'^\s*Documentation\s*=', l):
-                lines[i] = DOC_VERSION_RE.sub('/v' + version + '/', l)
+        lines = [DOC_VERSION_RE.sub('/v' + version + '/', l) if DOC_LINE_RE.match(l) else l for l in lines]
     return ''.join(lines)
 
 
 def doc_version(text):
     for line in text.splitlines():
-        if re.match(r'^\s*Documentation\s*=', line):
-            m = DOC_VERSION_RE.search(line)
-            if m:
-                return m.group(1)
+        if DOC_LINE_RE.match(line) and (m := DOC_VERSION_RE.search(line)):
+            return m.group(1)
     return None
 
 
@@ -1173,7 +1173,7 @@ class Runner:
         try:
             buf = b''
             while True:
-                chunk = p.stdout.read1(4096) if hasattr(p.stdout, 'read1') else p.stdout.read(4096)
+                chunk = p.stdout.read1(4096)
                 if not chunk:
                     break
                 buf += chunk
@@ -1219,8 +1219,7 @@ class Engine:
     def __init__(self, unit, quadlet, url, state_dir, runner=None, ready_timeout=600.0, restart_timeout=900.0,
                  poll=2.0, http_timeout=2.0, pull_timeout=3600.0):
         self.unit, self.quadlet, self.url = unit, quadlet, url.rstrip('/')
-        self.stem = unit[:-len('.service')] if unit.endswith('.service') else unit
-        self.prev_path = os.path.join(state_dir, self.stem + '.container.prev')
+        self.prev_path = os.path.join(state_dir, unit.removesuffix('.service') + '.container.prev')
         self.state_dir = state_dir
         self.runner = runner or Runner()
         self.ready_timeout, self.restart_timeout = ready_timeout, restart_timeout
@@ -1238,10 +1237,12 @@ class Engine:
         except OSError as e:
             raise StepError(f'cannot read {self.quadlet}: {e.strerror}')
 
-    def _current(self):
-        text = self._read_quadlet()
-        _, image = quadlet_image(text)
-        return text, image
+    def _image(self):
+        """The quadlet's Image= value, for an API call: without one the answer is quadlet_invalid."""
+        try:
+            return quadlet_image(self._read_quadlet())[1]
+        except StepError as e:
+            raise ApiError(500, 'quadlet_invalid', str(e))
 
     def _http(self, path):
         try:
@@ -1293,7 +1294,7 @@ class Engine:
             refs = list(im.get('RepoDigests') or [])
             digests = [r.split('@', 1)[1] for r in refs if r.startswith(repository + '@')]
             names = im.get('Names') or im.get('RepoTags') or []
-            if not digests and not any(n.startswith(repository + ':') or n.startswith(repository + '@') for n in names):
+            if not digests and not any(n.startswith((repository + ':', repository + '@')) for n in names):
                 continue
             seen.add(iid)
             labels = im.get('Labels') or {}
@@ -1302,7 +1303,7 @@ class Engine:
             # RepoDigests is sorted and, for a multi-arch image, also holds the platform manifest digest;
             # podman's Digest field is the one the image was pulled by (the index digest a quadlet names).
             primary = im.get('Digest')
-            result.append({'id': iid[:12], 'fullId': iid, 'digests': digests,
+            result.append({'id': iid[:12], 'digests': digests,
                            'digest': primary if primary in digests else (digests[0] if digests else None),
                            'version': labels.get('org.opencontainers.image.version') or None,
                            'revision': None if not rev or rev == 'unknown' else rev,
@@ -1327,18 +1328,16 @@ class Engine:
     def status(self):
         job = self.job
         job_json = job.to_json() if job else None  # snapshot first: a finished job implies the quadlet below is final
-        text, image = self._current()
-        repo = repository_of(image)
-        cur_digest = image.split('@', 1)[1] if '@' in image else None
+        image = self._image()
+        repo, cur_digest = repository_of(image), digest_of(image)
         prev_text, prev_image = self._previous_image()
-        prev_digest = prev_image.split('@', 1)[1] if prev_image and '@' in prev_image else None
+        prev_digest = digest_of(prev_image)
         try:
             imgs = self.images(repo)
         except StepError as e:
             log(f'engine: {e}')
             imgs = []
-        cur_img = next((i for i in imgs if cur_digest and cur_digest in i['digests']), None)
-        prev_img = next((i for i in imgs if prev_digest and prev_digest in i['digests']), None)
+        cur_img, prev_img = image_with(imgs, cur_digest), image_with(imgs, prev_digest)
         out_images = []
         for i in imgs:
             digest = cur_digest if cur_img is i else (prev_digest if prev_img is i else i['digest'])
@@ -1364,26 +1363,21 @@ class Engine:
     def _validate(self, image):
         if not isinstance(image, str) or not IMAGE_RE.match(image):
             raise ApiError(400, 'invalid_image', 'image must be <repository>@sha256:<64 hex>')
-        try:
-            _, current = self._current()
-        except StepError as e:
-            raise ApiError(500, 'quadlet_invalid', str(e))
-        if IMAGE_RE.match(image).group('repo') != repository_of(current):
-            raise ApiError(400, 'wrong_repository', f'repository must be {repository_of(current)}')
+        repo = repository_of(self._image())
+        if IMAGE_RE.match(image).group('repo') != repo:
+            raise ApiError(400, 'wrong_repository', f'repository must be {repo}')
+
+    def _busy(self):
+        if self.job is not None and self.job.phase == 'running':
+            raise ApiError(409, 'job_running', 'another engine job is running')
 
     def _start(self, job, target):
         with self.lock:
-            if self.job is not None and self.job.phase == 'running':
-                raise ApiError(409, 'job_running', 'another engine job is running')
+            self._busy()
             self.job = job
             snapshot = job.to_json()
         threading.Thread(target=self._wrap, args=(job, target), name='job-' + job.id, daemon=True).start()
         return snapshot
-
-    def _busy(self):
-        with self.lock:
-            if self.job is not None and self.job.phase == 'running':
-                raise ApiError(409, 'job_running', 'another engine job is running')
 
     def _wrap(self, job, target):
         try:
@@ -1402,22 +1396,24 @@ class Engine:
 
     def start_pull(self, image):
         self._validate(image)
-        self._busy()
-        return self._start(Job('pull', image, None), lambda job: self._pull(job, image))
+        return self._start(Job('pull', image, None), self._pull)
 
-    def _pull(self, job, image):
-        job.set_step(f'Pulling {image}')
-        rc = self.runner.stream(self.runner.podman(['pull', image], unit=f'portal-hostd-{job.id}'), job.add,
+    def _stop_pull(self, job):
+        return self.runner.run(['systemctl', '--user', 'stop', f'portal-hostd-{job.id}.service'], 60)
+
+    def _pull(self, job):
+        job.set_step(f'Pulling {job.image}')
+        rc = self.runner.stream(self.runner.podman(['pull', job.image], unit=f'portal-hostd-{job.id}'), job.add,
                                 self.pull_timeout)
         if rc < 0:  # our timeout killed systemd-run; stop the transient unit as well
-            self.runner.run(['systemctl', '--user', 'stop', f'portal-hostd-{job.id}.service'], 60)
+            self._stop_pull(job)
         if job.cancel_requested:
             job.phase, job.step, job.error = 'cancelled', 'Cancelled', 'cancelled by request'
             job.add('cancelled')
         elif rc != 0:
             job.phase, job.error = 'failed', f'podman pull exited with status {rc}'
             job.add(job.error)
-        elif not self.image_exists(image):
+        elif not self.image_exists(job.image):
             job.phase, job.error = 'failed', 'pull finished but the image is not present'
         else:
             job.set_step('Pulled')
@@ -1427,7 +1423,7 @@ class Engine:
         if job is None or job.phase != 'running' or job.kind != 'pull':
             return {'cancelled': False}
         job.cancel_requested = True
-        rc, _, err = self.runner.run(['systemctl', '--user', 'stop', f'portal-hostd-{job.id}.service'], 60)
+        rc, _, err = self._stop_pull(job)
         if rc != 0:
             job.cancel_requested = False
             job.add(f'cancel failed: {err.strip()}')
@@ -1441,9 +1437,9 @@ class Engine:
         self._busy()
         if not self.image_exists(image):
             raise ApiError(409, 'not_pulled', 'pull the image first')
-        return self._start(Job('apply', image, version), lambda job: self._apply(job, image, version, True))
+        return self._start(Job('apply', image, version), self._apply)
 
-    def _restart_and_verify(self, job, version, check_version):
+    def _restart_and_verify(self, job, version):
         job.set_step('Reloading systemd')
         rc, _, err = self.runner.run(['systemctl', '--user', 'daemon-reload'], 120)
         if rc != 0:
@@ -1458,24 +1454,20 @@ class Engine:
             if time.monotonic() > deadline:
                 raise StepError(f'/ready did not answer 200 within {self.ready_timeout:.0f} s')
             time.sleep(self.poll)
-        if check_version and version:
+        if version:
             job.set_step('Checking version')
             info = self.build_info()
             if not info or not info.startswith(version + ' '):
                 raise StepError(f'build_info is {info!r}, expected it to start with "{version} "')
             job.add(f'build_info {info}')
 
-    def _apply(self, job, image, version, check_version):
+    def _apply(self, job):
         job.set_step('Checking image')
-        if not self.image_exists(image):
+        if not self.image_exists(job.image):
             raise StepError('image is not local')
-        try:
-            text = self._read_quadlet()
-            quadlet_image(text)
-        except StepError as e:
-            job.phase, job.error = 'failed', str(e)
-            job.add(str(e))
-            return
+        text = self._read_quadlet()
+        old = text.encode('utf-8', 'surrogateescape')
+        new = quadlet_rewrite(text, job.image, job.version).encode('utf-8', 'surrogateescape')
         job.set_step('Saving current quadlet')
         os.makedirs(self.state_dir, exist_ok=True)
         try:
@@ -1483,17 +1475,17 @@ class Engine:
                 saved_prev = f.read()
         except FileNotFoundError:
             saved_prev = None
-        atomic_write(self.prev_path, text.encode('utf-8', 'surrogateescape'), 0o600)
+        atomic_write(self.prev_path, old, 0o600)
         try:
             job.set_step('Writing quadlet')
-            atomic_write(self.quadlet, quadlet_rewrite(text, image, version).encode('utf-8', 'surrogateescape'))
-            self._restart_and_verify(job, version, check_version)
+            atomic_write(self.quadlet, new)
+            self._restart_and_verify(job, job.version)
         except (StepError, OSError) as e:
             job.add(f'failed: {e}')
             job.set_step('Rolling back')
             try:
-                atomic_write(self.quadlet, text.encode('utf-8', 'surrogateescape'))
-                self._restart_and_verify(job, None, False)
+                atomic_write(self.quadlet, old)
+                self._restart_and_verify(job, None)
                 job.rolled_back = True
                 job.error = str(e)
                 job.add('rolled back to the previous quadlet')
@@ -1502,8 +1494,7 @@ class Engine:
                 job.error = f'{e}; rollback failed too: {e2}'
                 job.add(f'rollback failed: {e2}')
                 job.set_step('Failed; the rollback failed too')
-            # The new image never took over, so the previous version on record stays what it was (a later
-            # Roll back still reaches it).
+            # The new image never took over, so the previous version on record stays what it was.
             try:
                 if saved_prev is None:
                     os.remove(self.prev_path)
@@ -1519,21 +1510,16 @@ class Engine:
         if not isinstance(digest, str) or not DIGEST_RE.match(digest):
             raise ApiError(400, 'invalid_image', 'digest must be sha256:<64 hex>')
         self._busy()
-        try:
-            _, current = self._current()
-        except StepError as e:
-            raise ApiError(500, 'quadlet_invalid', str(e))
+        current = self._image()
         repo = repository_of(current)
-        cur_digest = current.split('@', 1)[1] if '@' in current else None
         try:
             imgs = self.images(repo, fresh=True)
         except StepError as e:
             raise ApiError(503, 'podman_failed', str(e))
-        target = next((i for i in imgs if digest in i['digests']), None)
+        target = image_with(imgs, digest)
         if target is None:
             raise ApiError(404, 'not_found', 'no such local image of the engine repository')
-        current_img = next((i for i in imgs if cur_digest and cur_digest in i['digests']), None)
-        if digest == cur_digest or (current_img is not None and current_img['fullId'] == target['fullId']):
+        if target is image_with(imgs, digest_of(current)):
             raise ApiError(409, 'image_current', 'this is the engine image in use')
         rc, out, err = self.runner.run(self.runner.podman(['rmi', f'{repo}@{digest}']), 300)
         self._images_cache = (0.0, None)
@@ -1568,6 +1554,10 @@ class _DeadlineReader:
         return getattr(self.raw, name)
 
 
+def compact(obj):
+    return json.dumps(obj, separators=(',', ':'), allow_nan=False).encode()
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.1'
     server_version = 'portal-hostd/1'
@@ -1575,15 +1565,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
     timeout = HEADER_TIMEOUT
 
     def log_message(self, fmt, *args):
-        if os.environ.get('HOSTD_DEBUG'):
-            log('http: ' + fmt % args)
+        pass
 
     def handle_one_request(self):
         raw = self.rfile
         self.rfile = _DeadlineReader(raw, self.connection, time.monotonic() + HEADER_TIMEOUT)
         try:
             super().handle_one_request()
-        except (TimeoutError, socket.timeout):
+        except TimeoutError:
             self.close_connection = True
         finally:
             self.rfile = raw
@@ -1592,9 +1581,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             except OSError:
                 pass
 
-    # -- responses
     def send_json(self, status, obj, extra=None):
-        body = json.dumps(obj, separators=(',', ':'), allow_nan=False).encode()
+        body = compact(obj)
         self.send_response(status)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(body)))
@@ -1602,26 +1590,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         for k, v in (extra or {}).items():
             self.send_header(k, v)
         self.end_headers()
-        if self.command != 'HEAD':
-            self.wfile.write(body)
+        self.wfile.write(body)
 
     def send_error_json(self, status, code, message, extra=None):
         self.send_json(status, {'error': code, 'message': message}, extra)
-
-    def do_GET(self):
-        self.route('GET')
-
-    def do_POST(self):
-        self.route('POST')
-
-    def do_DELETE(self):
-        self.route('DELETE')
-
-    def do_PUT(self):
-        self.route('PUT')
-
-    def do_PATCH(self):
-        self.route('PATCH')
 
     def body_json(self):
         if 'chunked' in (self.headers.get('Transfer-Encoding') or '').lower():
@@ -1645,65 +1617,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             raise ApiError(400, 'invalid_json', 'body must be a JSON object')
         return obj
 
-    def route(self, method):
-        app = self.server.app
-        path = self.path.split('?', 1)[0]
-        try:
-            if method in ('POST', 'PUT', 'PATCH', 'DELETE'):
-                body = self.body_json()  # always consume the body (keep-alive safety, size limit)
-            else:
-                body = {}
-            self.connection.settimeout(HEADER_TIMEOUT)  # writes (and stalled stream consumers) get 10 s each
-            if path == '/v1/health':
-                if method != 'GET':
-                    raise ApiError(405, 'method_not_allowed', 'use GET')
-                return self.send_json(200, {'ok': True})
-            if not app.authorized(self.headers.get('Authorization')):
-                return self.send_error_json(401, 'unauthorized', 'missing or wrong bearer token',
-                                            {'WWW-Authenticate': 'Bearer'})
-            routes = {
-                ('GET', '/v1/info'): lambda: self.send_json(200, app.info()),
-                ('GET', '/v1/sample'): self.get_sample,
-                ('GET', '/v1/stream'): self.get_stream,
-                ('GET', '/v1/meter'): lambda: self.send_json(200, app.meter.snapshot()),
-                ('GET', '/v1/engine'): lambda: self.send_json(200, app.need_engine().status()),
-                ('POST', '/v1/engine/pull'): lambda: self.send_json(202, app.need_engine().start_pull(body.get('image'))),
-                ('POST', '/v1/engine/apply'): lambda: self.send_json(
-                    202, app.need_engine().start_apply(body.get('image'), body.get('version'))),
-                ('POST', '/v1/engine/cancel'): lambda: self.send_json(200, app.need_engine().cancel()),
-            }
-            fn = routes.get((method, path))
-            if fn is not None:
-                return fn()
-            if path.startswith('/v1/engine/images/'):
-                if method != 'DELETE':
-                    raise ApiError(405, 'method_not_allowed', 'use DELETE')
-                digest = urllib.parse.unquote(path[len('/v1/engine/images/'):])
-                return self.send_json(200, app.need_engine().delete_image(digest))
-            if any(p == path for _, p in routes):
-                raise ApiError(405, 'method_not_allowed', f'{method} is not allowed here')
-            raise ApiError(404, 'not_found', 'no such endpoint')
-        except ApiError as e:
-            self.send_error_json(e.status, e.code, e.message)
-        except StepError as e:
-            self.send_error_json(500, 'quadlet_invalid', str(e))
-        except (BrokenPipeError, ConnectionResetError, TimeoutError, socket.timeout):
-            self.close_connection = True
-        except Exception as e:
-            log(f'http: {method} {path}: {type(e).__name__}: {e}')
-            try:
-                self.send_error_json(500, 'internal', f'{type(e).__name__}')
-            except OSError:
-                self.close_connection = True
-
-    def get_sample(self):
-        s = self.server.app.sampler.current()
+    def get_sample(self, app, body):
+        s = app.sampler.current()
         if s is None:
             raise ApiError(503, 'no_sample', 'no sample available yet')
         self.send_json(200, s)
 
-    def get_stream(self):
-        app = self.server.app
+    def get_stream(self, app, body):
         if not app.sampler.add_stream():
             raise ApiError(429, 'too_many_streams', f'at most {MAX_STREAMS} streams')
         try:
@@ -1713,21 +1633,65 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_header('Connection', 'close')
             self.send_header('X-Accel-Buffering', 'no')
             self.end_headers()
-            self.close_connection = True
-            self.wfile.write(b'event: info\ndata: ' + json.dumps(app.info(), separators=(',', ':')).encode() + b'\n\n')
+            self.wfile.write(b'event: info\ndata: ' + compact(app.host.info()) + b'\n\n')
             seq = 0
             while not app.sampler.stopping:
-                seq2, sample = app.sampler.wait_newer(seq, PING_EVERY)
-                if sample is None:
-                    self.wfile.write(b': ping\n\n')
-                else:
-                    seq = seq2
-                    self.wfile.write(b'event: sample\ndata: ' +
-                                     json.dumps(sample, separators=(',', ':'), allow_nan=False).encode() + b'\n\n')
-        except (BrokenPipeError, ConnectionResetError, TimeoutError, socket.timeout, OSError):
+                seq, sample = app.sampler.wait_newer(seq, PING_EVERY)
+                self.wfile.write(b': ping\n\n' if sample is None else b'event: sample\ndata: ' + compact(sample) + b'\n\n')
+        except OSError:
             pass
         finally:
             app.sampler.remove_stream()
+
+    ROUTES = {
+        ('GET', '/v1/info'): lambda self, app, body: self.send_json(200, app.host.info()),
+        ('GET', '/v1/sample'): get_sample,
+        ('GET', '/v1/stream'): get_stream,
+        ('GET', '/v1/meter'): lambda self, app, body: self.send_json(200, app.meter.snapshot()),
+        ('GET', '/v1/engine'): lambda self, app, body: self.send_json(200, app.need_engine().status()),
+        ('POST', '/v1/engine/pull'): lambda self, app, body: self.send_json(
+            202, app.need_engine().start_pull(body.get('image'))),
+        ('POST', '/v1/engine/apply'): lambda self, app, body: self.send_json(
+            202, app.need_engine().start_apply(body.get('image'), body.get('version'))),
+        ('POST', '/v1/engine/cancel'): lambda self, app, body: self.send_json(200, app.need_engine().cancel()),
+    }
+
+    def route(self):
+        app, method = self.server.app, self.command
+        path = self.path.split('?', 1)[0]
+        try:
+            body = {} if method == 'GET' else self.body_json()   # read even if unused: keep-alive, the size limit
+            self.connection.settimeout(HEADER_TIMEOUT)  # for each write, so a stalled stream reader is dropped
+            if path == '/v1/health':
+                if method != 'GET':
+                    raise ApiError(405, 'method_not_allowed', 'use GET')
+                return self.send_json(200, {'ok': True})
+            if not app.authorized(self.headers.get('Authorization')):
+                return self.send_error_json(401, 'unauthorized', 'missing or wrong bearer token',
+                                            {'WWW-Authenticate': 'Bearer'})
+            handler = self.ROUTES.get((method, path))
+            if handler is not None:
+                return handler(self, app, body)
+            if path.startswith('/v1/engine/images/'):
+                if method != 'DELETE':
+                    raise ApiError(405, 'method_not_allowed', 'use DELETE')
+                digest = urllib.parse.unquote(path[len('/v1/engine/images/'):])
+                return self.send_json(200, app.need_engine().delete_image(digest))
+            if any(p == path for _, p in self.ROUTES):
+                raise ApiError(405, 'method_not_allowed', f'{method} is not allowed here')
+            raise ApiError(404, 'not_found', 'no such endpoint')
+        except ApiError as e:
+            self.send_error_json(e.status, e.code, e.message)
+        except (BrokenPipeError, ConnectionResetError, TimeoutError):
+            self.close_connection = True
+        except Exception as e:
+            log(f'http: {method} {path}: {type(e).__name__}: {e}')
+            try:
+                self.send_error_json(500, 'internal', f'{type(e).__name__}')
+            except OSError:
+                self.close_connection = True
+
+    do_GET = do_POST = do_DELETE = route
 
 
 class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
@@ -1770,17 +1734,9 @@ class App:
     def __init__(self, host, sampler, meter, token, engine=None):
         self.host, self.sampler, self.meter, self.engine = host, sampler, meter, engine
         self.token = token.encode()
-        self._info = None
 
     def authorized(self, header):
-        if not header or not header.startswith('Bearer '):
-            return False
-        return hmac.compare_digest(header[7:].strip().encode(), self.token)
-
-    def info(self):
-        if self._info is None:
-            self._info = self.host.info()
-        return {**self._info, **self.host.inventory()}
+        return (header or '').startswith('Bearer ') and hmac.compare_digest(header[7:].strip().encode(), self.token)
 
     def need_engine(self):
         if self.engine is None:
@@ -1823,9 +1779,8 @@ def config(env):
     if unit and not unit.endswith('.service'):
         unit += '.service'
     home = pwd.getpwuid(os.getuid()).pw_dir
-    stem = unit[:-len('.service')] if unit else ''
     quadlet = env.get('ENGINE_QUADLET', '').strip() or (
-        os.path.join(home, '.config/containers/systemd', stem + '.container') if unit else '')
+        os.path.join(home, '.config/containers/systemd', unit.removesuffix('.service') + '.container') if unit else '')
     return {'role': role, 'bind': bind, 'port': port, 'interval_ms': interval, 'engine_unit': unit,
             'engine_quadlet': os.path.expanduser(quadlet), 'engine_url': env.get('ENGINE_URL', '').strip() or 'http://127.0.0.1:8080',
             'state_dir': env.get('HOSTD_STATE_DIR', '').strip() or os.path.join(home, '.local/state/portal-hostd'),
@@ -1845,13 +1800,12 @@ def sd_notify(msg):
         pass
 
 
-def build(cfg, token, runner=None):
+def build(cfg, token):
     host = Host(Fs(cfg['root']), cfg['role'], cfg['interval_ms'], cfg['engine_unit'] or None)
-    sampler = Sampler(host, cfg['interval_ms'] / 1000.0)
     engine = None
     if cfg['engine_unit']:
-        engine = Engine(cfg['engine_unit'], cfg['engine_quadlet'], cfg['engine_url'], cfg['state_dir'], runner)
-    return App(host, sampler, Meter(host), token, engine)
+        engine = Engine(cfg['engine_unit'], cfg['engine_quadlet'], cfg['engine_url'], cfg['state_dir'])
+    return App(host, Sampler(host, cfg['interval_ms'] / 1000.0), Meter(host), token, engine)
 
 
 def main(argv):
@@ -1859,33 +1813,28 @@ def main(argv):
     if '--print-info' in argv or '--print-sample' in argv:
         app = build(cfg, 'x' * 32)
         if '--print-info' in argv:
-            print(json.dumps(app.info(), indent=1))
+            print(json.dumps(app.host.info(), indent=1))
         if '--print-sample' in argv:
             app.host.open_perf()
             a = app.host.read()
             time.sleep(cfg['interval_ms'] / 1000.0)
             print(json.dumps(app.host.compute(a, app.host.read(), app.host.fans.read()), indent=1))
         return 0
-    token = load_token()
-    app = build(cfg, token)
+    app = build(cfg, load_token())
     if app.engine and not os.path.exists(app.engine.quadlet):
         log(f'portal-hostd: warning: quadlet {app.engine.quadlet} does not exist')
     server = Server((cfg['bind'], cfg['port']), app)
     app.sampler.start()
     app.meter.start()
-
-    def stop(signum, frame):
-        raise KeyboardInterrupt
-
-    signal.signal(signal.SIGTERM, stop)
-    signal.signal(signal.SIGINT, stop)
+    for sig in (signal.SIGTERM, signal.SIGINT):     # both end serve_forever with a KeyboardInterrupt
+        signal.signal(sig, signal.default_int_handler)
     src = app.host.sources()
     log(f'portal-hostd: role={cfg["role"]} listening on {cfg["bind"]}:{cfg["port"]} interval={cfg["interval_ms"]}ms '
         f'perf={src["perf"]} bandwidth={src["bandwidth"]} power={src["power"]} gpuBusy={src["gpuBusy"]} '
         f'energy={"on" if app.meter.energy is not None else "off"} engine={cfg["engine_unit"] or "-"}')
     sd_notify('READY=1')
     try:
-        server.serve_forever(poll_interval=None)  # blocks in select() without periodic wakeups
+        server.serve_forever(poll_interval=None)  # no periodic wakeups
     except KeyboardInterrupt:
         pass
     finally:
