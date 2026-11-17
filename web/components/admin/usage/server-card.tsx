@@ -26,6 +26,7 @@ import { ArrowDownIcon, ArrowUpIcon, ChevronDownIcon } from "@/components/ui/ico
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { LiveChart } from "./live-chart";
+import { ReadoutsSkeleton } from "./usage-skeleton";
 
 const TITLES = { llm: "LLM server", portal: "Portal server" } as const;
 
@@ -39,8 +40,9 @@ const STATES: Record<HostLive["state"], ReactNode> = {
 /**
  * One server's readings from its portal-hostd, every 500 ms. Its power draw is the card's focal number (charted
  * over the last minute); under it five metrics that each read at a glance: one figure, a bar where it is a share of
- * a whole, at most two quiet facts. Everything else (clocks, temperatures, per-part power, swap, bandwidth, fans,
- * the system) is one click away under Details, which works the same on touch screens. A reading the server can't
+ * a whole, at most two quiet facts. Under them the readings behind CPU, GPU and memory (clocks, temperatures,
+ * per-part power, swap, bandwidth) and the fans; the disks, interfaces and the system are one click away under
+ * Details, which works the same on touch screens. A reading the server can't
  * give (an older portal-hostd has no network or disk) shows "—"; a server without portal-hostd says how to set it up.
  */
 export function ServerCard({ host, history, now }: { host: HostLive; history: readonly HostSample[]; now: number }) {
@@ -113,6 +115,7 @@ function Readings({ host, sample, history, now }: { host: HostLive; sample: Host
             </div>
           </section>
         </div>
+        <Readouts host={host} sample={sample} />
         <CollapsibleContent>
           <Details host={host} sample={sample} />
         </CollapsibleContent>
@@ -160,15 +163,15 @@ function Direction({ icon, rate, today }: { icon: ReactNode; rate: number | null
   );
 }
 
-/** The readings behind the five metrics, grouped like them; the system's own facts take two columns. */
-function Details({ host, sample }: { host: HostLive; sample: HostSample }) {
+/** The readings behind CPU, GPU and memory, grouped like them, and the fans that turn; always shown. */
+function Readouts({ host, sample }: { host: HostLive; sample: HostSample }) {
   const info = host.info;
-  const { cpu, gpu, memory, disk } = sample;
+  const { cpu, gpu, memory } = sample;
   const free = memoryFree(sample);
   const fans = sample.fans.filter((fan) => fan.rpm !== null && fan.rpm > 0);
   const gpuMemory = memory.gpuBytes ?? gpu?.memUsedBytes ?? null;
   return (
-    <div className="grid grid-cols-2 gap-x-6 gap-y-4 border-t pt-4 @lg:grid-cols-3">
+    <div className={cn(DETAIL_GRID, "border-t pt-4")}>
       <DetailGroup title="CPU">
         <Reading label="Clock" value={formatClockOrIdle(cpu.mhz, cpu.usage)} />
         <Reading label="Fastest core" value={formatClockOrIdle(cpu.mhzPeak, cpu.usage)} />
@@ -193,6 +196,23 @@ function Details({ host, sample }: { host: HostLive; sample: HostSample }) {
           value={memory.readBps === null && memory.writeBps === null ? "—" : formatBandwidth((memory.readBps ?? 0) + (memory.writeBps ?? 0))}
         />
       </DetailGroup>
+      {fans.length > 0 ? (
+        <DetailGroup title="Fans">
+          {fans.map((fan) => (
+            <Reading key={fan.label} label={fan.label} value={`${formatNumber(fan.rpm)} rpm`} />
+          ))}
+        </DetailGroup>
+      ) : null}
+    </div>
+  );
+}
+
+/** Under Details: the disks, the network interfaces and the system's own facts (two columns). */
+function Details({ host, sample }: { host: HostLive; sample: HostSample }) {
+  const info = host.info;
+  const { disk } = sample;
+  return (
+    <div className={DETAIL_GRID}>
       <DetailGroup title="Disk">
         <Reading
           label="Used"
@@ -203,13 +223,6 @@ function Details({ host, sample }: { host: HostLive; sample: HostSample }) {
       <DetailGroup title="Network">
         <Reading label="Interfaces" value={info?.network?.interfaces.join(", ") || "—"} />
       </DetailGroup>
-      {fans.length > 0 ? (
-        <DetailGroup title="Fans">
-          {fans.map((fan) => (
-            <Reading key={fan.label} label={fan.label} value={`${formatNumber(fan.rpm)} rpm`} />
-          ))}
-        </DetailGroup>
-      ) : null}
       {info ? (
         <DetailGroup title="System" className="col-span-2">
           <Reading label="Power sensor" value={info.power?.label ?? "—"} />
@@ -220,6 +233,8 @@ function Details({ host, sample }: { host: HostLive; sample: HostSample }) {
     </div>
   );
 }
+
+const DETAIL_GRID = "grid grid-cols-2 gap-x-6 gap-y-4 @lg:grid-cols-3";
 
 function DetailGroup({ title, className, children }: { title: string; className?: string; children: ReactNode }) {
   return (
@@ -251,6 +266,7 @@ function NoReadings({ host }: { host: HostLive }) {
           ))}
           <Skeleton className="col-span-2 h-28 rounded-lg" />
         </div>
+        <ReadoutsSkeleton />
       </CardContent>
     );
   }

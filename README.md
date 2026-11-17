@@ -714,18 +714,18 @@ an update in the admin console, run `sudo bash deploy/verify-isolation.sh` yours
 2. **Two workspaces per user, one running at a time:** **Private** has no internet access (only the portal's web
    search and page reader reach the internet for it), **Online** reaches the public internet. Each has its own
    files, container, network and browser origin; they never share files and can't reach each other.
-3. Signing in opens **Home**: the workspace card with a **Private | Online** switch (Online by default) and
-   **Start**. Start asks first, saying what the chosen kind means; **Use Private** / **Use Online** in that
-   dialog flips to the other one, **Start Online** / **Start Private** starts it with the user's harness (chosen
-   in **Settings**, Qwen Code by default) in a few seconds and opens it. Online can't be chosen (its tooltip says
-   why) when the admin barred the user or `ONLINE_WORKSPACES=off`. While a workspace runs, its kind shows as a
+3. Signing in opens **Home**: the workspace card with **Start Online** / **Start Private** and, under it, the
+   two kinds as cards that say what each allows (Online chosen by default). Start asks first, saying what the
+   chosen kind means; **Use Private** / **Use Online** in that dialog flips to the other one, and confirming
+   starts it with the user's harness (chosen in **Settings**, Qwen Code by default) in a few seconds and opens it.
+   Online can't be chosen (its card says why) when the admin barred the user or `ONLINE_WORKSPACES=off`. While a workspace runs, its kind shows as a
    badge (on Home and in the workspace's bar) and **Open workspace** goes back to it. The page loads the agent
    from that user's own port for that kind (Private `3100 + user id`, Online `3300 + user id` by default), which
-   must be reachable. **Stop** (in the workspace's bar or on Home) asks first only if the agent is
+   must be reachable. **Stop** (in the workspace's bar or on Home) always asks first, saying whether the agent is
    working or the workspace is open elsewhere, then returns to Home; the other kind can start after that.
 4. **One container per user, one harness.** More sign-ins (another tab, browser or device) attach to the same
    container and see the same sessions live. Changing the harness in Settings applies at the next Start, or
-   right away with **Restart now** (the same kind again); files are kept. Settings also holds the password and
+   right away with **Restart now** (the same kind again, after a confirmation); files are kept. Settings also holds the password and
    the dark or light theme.
 5. **When it stops:**
    - after `IDLE_TIMEOUT_MINUTES` (30) without use, when nothing is running;

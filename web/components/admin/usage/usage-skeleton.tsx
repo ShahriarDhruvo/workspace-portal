@@ -66,11 +66,26 @@ function ServerSkeleton() {
           <Skeleton className="h-28 rounded-lg" />
           <Skeleton className="col-span-2 h-28 rounded-lg" />
         </div>
+        <ReadoutsSkeleton />
       </CardContent>
       <CardFooter className="h-10 justify-center p-0">
         <Skeleton className="h-4 w-16" />
       </CardFooter>
     </Card>
+  );
+}
+
+/**
+ * A server card's CPU, GPU and memory readouts (in a card's @container): one row of three from @lg, else CPU and
+ * GPU over memory, at the real groups' heights (a server with fans adds a row the skeleton can't know of).
+ */
+export function ReadoutsSkeleton() {
+  return (
+    <div className="grid grid-cols-2 gap-x-6 gap-y-4 border-t pt-4 @lg:grid-cols-3">
+      <Skeleton className="h-[138px]" />
+      <Skeleton className="h-[138px]" />
+      <Skeleton className="h-[98px] @lg:h-[138px]" />
+    </div>
   );
 }
 

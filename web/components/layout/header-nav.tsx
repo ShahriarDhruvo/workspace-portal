@@ -6,13 +6,13 @@ import type { ReactNode } from "react";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 
-// The portal's pages as links: text tabs in the top bar, and the same links as items of a bar's menu (on phones,
-// and in the workspace bar), the current page marked in both.
+// The portal's pages as links: tabs in the top bar, and the same links as items of a bar's menu (on phones, and in
+// the workspace bar), each with its icon, the current page marked in both.
 
 export interface NavLink {
   href: string;
   label: string;
-  /** Shown in a menu's item (the top bar's tabs are text only). */
+  /** Before the label, in the tab and in the menu's item. */
   icon?: ReactNode;
   /** Pages under these paths count as this link's too (a user's page under Users). */
   prefixes?: string[];
@@ -23,8 +23,9 @@ function isCurrent(pathname: string, link: NavLink): boolean {
 }
 
 /**
- * Web Shell text tabs (as on Daemon Status): 13px/500, muted until hovered or current; the current one gets a
- * 2px primary underline on the bar's bottom rule.
+ * Web Shell tabs (as on Daemon Status): icon and label, 13px/500, muted until hovered or current; the current one
+ * gets a 2px primary underline on the bar's bottom rule. Below `lg` (a tablet) the icons give way so that the
+ * admin's six tabs fit the bar.
  */
 export function HeaderNav({ label, links, className }: { label: string; links: NavLink[]; className?: string }) {
   const pathname = usePathname();
@@ -38,10 +39,11 @@ export function HeaderNav({ label, links, className }: { label: string; links: N
             href={link.href}
             aria-current={current ? "page" : undefined}
             className={cn(
-              "-mb-px inline-flex shrink-0 items-center border-b-2 px-3 text-13 font-medium whitespace-nowrap transition-colors focus-visible:-outline-offset-2 max-lg:px-2.5",
+              "-mb-px inline-flex shrink-0 items-center gap-1.5 border-b-2 px-3 text-13 font-medium whitespace-nowrap transition-colors focus-visible:-outline-offset-2 max-lg:px-2.5 max-lg:[&_svg]:hidden",
               current ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground",
             )}
           >
+            {link.icon}
             {link.label}
           </Link>
         );

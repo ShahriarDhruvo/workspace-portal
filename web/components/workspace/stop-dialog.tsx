@@ -35,8 +35,9 @@ const COPY = {
 } as const;
 
 /**
- * Confirms the user's own stop when it would interrupt something: the agent's task, the workspace open in another
- * tab or on another device, an administrator in it. Files are kept either way. Closes itself once done.
+ * Confirms every stop (and restart) of the user's own workspace, and says what it would interrupt: the agent's task,
+ * the workspace open in another tab or on another device, an administrator in it. Files are kept either way.
+ * Closes itself once done.
  */
 export function StopDialog({ open, onOpenChange, kind, warnings, onConfirm, returnFocusTo }: StopDialogProps) {
   return (

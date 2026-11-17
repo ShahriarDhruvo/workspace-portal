@@ -9,7 +9,7 @@ import { fetchJson, needsReauth } from "@/lib/fetch-json";
 import { stopReasonText, workspaceState, type WorkspaceState } from "@/lib/format";
 import type { ApiError, OnlineAccess, WorkspaceStatusResponse } from "@/lib/gateway-types";
 import { hasContainer, initialKind, KIND_NAMES, onlineAccessAfter, otherKind, startErrorText } from "@/lib/workspace-kind";
-import { stopNeedsConfirm, stopWarnings } from "@/lib/workspace-stop";
+import { stopWarnings } from "@/lib/workspace-stop";
 import { PortalMark } from "@/components/brand";
 import { HOME_LINK, portalLinks } from "@/components/layout/portal-links";
 import { NavMenuItems } from "@/components/layout/header-nav";
@@ -21,7 +21,7 @@ import { HeaderBar } from "@/components/layout/header-bar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DropdownMenuLabel, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
-import { CloseIcon, EyeIcon, HomeIcon, StopIcon, WarningIcon } from "@/components/ui/icons";
+import { EyeIcon, HomeIcon, StopIcon } from "@/components/ui/icons";
 import { Separator } from "@/components/ui/separator";
 import { Spinner } from "@/components/ui/spinner";
 import { BootScreen } from "./boot-screen";
@@ -36,7 +36,8 @@ import { StopDialog } from "./stop-dialog";
 // ONLINE_AGENT_PORT_BASE + user id). It polls /api/workspace/status (2 s until ready, then 10 s) and only mounts
 // the iframe once the agent is ready. Nothing here starts a workspace by itself: stopped, it says so and offers
 // the Private and Online cards and Start, which confirms the kind (the owner's harness from Settings). Stop (own
-// workspace only) asks first when it would interrupt something, then goes back to Home.
+// workspace only) always asks first, saying what it would interrupt, then goes back to Home. The harness is named
+// in the bar's menu (the agent's own page names it too).
 
 interface WorkspaceShellProps {
   viewer: Viewer;
@@ -64,8 +65,6 @@ interface State {
   active: boolean;
   /** The user's own Stop is under way or done: the page shows "Stopping" until Home takes over. */
   leaving: boolean;
-  /** Why the last Stop without a confirmation failed, until dismissed. */
-  stopError: string | null;
 }
 
 type Action =
@@ -76,8 +75,7 @@ type Action =
   /** `online`: what a refusal for Online access says about it, so the picker shows it unavailable at once. */
   | { type: "startFailed"; error: ApiError; online: OnlineAccess | null }
   | { type: "stopRequested" }
-  | { type: "stopFailed"; message: string | null }
-  | { type: "stopErrorDismissed" };
+  | { type: "stopFailed" };
 
 const INITIAL: State = {
   info: null,
@@ -87,7 +85,6 @@ const INITIAL: State = {
   startError: null,
   active: false,
   leaving: false,
-  stopError: null,
 };
 
 function reducer(state: State, action: Action): State {
@@ -118,11 +115,9 @@ function reducer(state: State, action: Action): State {
       };
     }
     case "stopRequested":
-      return { ...state, leaving: true, stopError: null };
+      return { ...state, leaving: true };
     case "stopFailed":
-      return { ...state, leaving: false, stopError: action.message };
-    case "stopErrorDismissed":
-      return { ...state, stopError: null };
+      return { ...state, leaving: false };
   }
 }
 
@@ -338,17 +333,8 @@ export function WorkspaceShell({ viewer, target, frames, idleTimeoutMinutes, age
       router.refresh();
       return null;
     }
-    dispatch({ type: "stopFailed", message: null });
+    dispatch({ type: "stopFailed" });
     return result.error.message;
-  }
-
-  async function onStop() {
-    if (warnings && stopNeedsConfirm(warnings)) {
-      setConfirmOpen(true);
-      return;
-    }
-    const problem = await stop();
-    if (problem) dispatch({ type: "stopFailed", message: problem });
   }
 
   const home = target.isViewer ? (
@@ -472,12 +458,6 @@ export function WorkspaceShell({ viewer, target, frames, idleTimeoutMinutes, age
         <div className="flex min-w-0 items-center gap-3 overflow-hidden max-sm:gap-2">
           <StatusPill state={pill} className="min-w-0 shrink" />
           {shownKind ? <KindBadge kind={shownKind} compact /> : null}
-          {runningAgent ? (
-            <span className="min-w-0 truncate text-13 font-medium max-sm:hidden">
-              <span className="sr-only">Harness: </span>
-              {agentNames[runningAgent]}
-            </span>
-          ) : null}
           {adminConnected ? (
             <Badge role="status" title={ADMIN_CONNECTED} variant="warning">
               <EyeIcon />
@@ -488,7 +468,14 @@ export function WorkspaceShell({ viewer, target, frames, idleTimeoutMinutes, age
         <div className="ml-auto flex shrink-0 items-center gap-2">
           {canStop ? (
             // Only its icon on phones, as icon-sm's square.
-            <Button ref={stopButton} type="button" variant="outline" size="sm" onClick={onStop} className="max-sm:w-7 max-sm:px-0">
+            <Button
+              ref={stopButton}
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setConfirmOpen(true)}
+              className="max-sm:w-7 max-sm:px-0"
+            >
               <StopIcon />
               <span className="max-sm:sr-only">Stop</span>
             </Button>
@@ -517,18 +504,6 @@ export function WorkspaceShell({ viewer, target, frames, idleTimeoutMinutes, age
           </BarMenu>
         </div>
       </HeaderBar>
-      {state.stopError ? (
-        <div
-          role="alert"
-          className="flex min-h-9 shrink-0 items-center gap-2.5 border-b bg-card px-5 py-1 text-13 text-foreground max-sm:px-4"
-        >
-          <WarningIcon className="shrink-0 text-attention" />
-          <span className="min-w-0 flex-1">{state.stopError}</span>
-          <Button type="button" variant="ghost" size="icon-sm" aria-label="Dismiss" onClick={() => dispatch({ type: "stopErrorDismissed" })}>
-            <CloseIcon />
-          </Button>
-        </div>
-      ) : null}
       <main className="relative min-h-0 flex-1">
         {phase.kind === "ready" ? (
           content

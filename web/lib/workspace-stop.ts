@@ -1,6 +1,6 @@
-// When the user's own Stop (or "Restart now") asks first. A stop is immediate, even mid-task, so the pages confirm
-// when it would cut work short or pull the workspace from under someone. And what "Restart now" starts again.
-// Pure; unit tested.
+// What the confirmation of the user's own Stop (or "Restart now") warns about: a stop is immediate, even mid-task,
+// so every one asks first and says when it would cut work short or pull the workspace from under someone. And what
+// "Restart now" starts again. Pure; unit tested.
 import type { WorkspaceKind } from "@portal/db";
 import type { WorkspaceInfo } from "./gateway-types.ts";
 
@@ -23,11 +23,6 @@ export function stopWarnings(info: Pick<WorkspaceInfo, "busy" | "connections">, 
     openElsewhere: info.connections.owner > (openHere ? 1 : 0),
     admin: info.connections.admin > 0,
   };
-}
-
-/** Whether to confirm before stopping: anything at all would be interrupted. */
-export function stopNeedsConfirm(warnings: StopWarnings): boolean {
-  return warnings.busy || warnings.openElsewhere || warnings.admin;
 }
 
 /**

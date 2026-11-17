@@ -8,7 +8,7 @@ import { fetchJson, needsReauth } from "@/lib/fetch-json";
 import { formatVersion, stopReasonText, workspaceState } from "@/lib/format";
 import type { WorkspaceStatusResponse } from "@/lib/gateway-types";
 import { initialKind, KIND_NAMES, onlineAccessAfter, otherKind, startErrorText } from "@/lib/workspace-kind";
-import { stopNeedsConfirm, stopWarnings } from "@/lib/workspace-stop";
+import { stopWarnings } from "@/lib/workspace-stop";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
@@ -134,14 +134,6 @@ export function HomeCard({ initial, initialError, idleTimeoutMinutes, agentNames
     return result.error.message;
   }
 
-  async function onStop() {
-    if (info && stopNeedsConfirm(stopWarnings(info, false))) {
-      setConfirmOpen(true);
-      return;
-    }
-    const problem = await stop();
-    if (problem) setActionError({ message: problem, status });
-  }
 
   if (!info) {
     return (
@@ -202,7 +194,7 @@ export function HomeCard({ initial, initialError, idleTimeoutMinutes, agentNames
           {ready || starting || stopping ? <KindBadge kind={kind} /> : null}
           {ready ? (
             <>
-              <Button ref={stopButton} type="button" variant="outline" onClick={onStop}>
+              <Button ref={stopButton} type="button" variant="outline" onClick={() => setConfirmOpen(true)}>
                 <StopIcon />
                 Stop
               </Button>

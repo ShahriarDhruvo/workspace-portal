@@ -5,14 +5,13 @@ import type { AgentKind } from "@portal/db";
 import { restartWorkspace, saveHarness } from "@/lib/actions/settings";
 import { formatVersion } from "@/lib/format";
 import type { AgentInfo, WorkspaceInfo } from "@/lib/gateway-types";
-import { stopNeedsConfirm, stopWarnings } from "@/lib/workspace-stop";
+import { stopWarnings } from "@/lib/workspace-stop";
 import { FormError } from "@/components/forms/form-error";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Field, FieldContent, FieldLabel, FieldTitle } from "@/components/ui/field";
 import { CheckIcon, RefreshIcon } from "@/components/ui/icons";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { Spinner } from "@/components/ui/spinner";
 import { StopDialog } from "@/components/workspace/stop-dialog";
 
 interface HarnessPickerProps {
@@ -29,13 +28,12 @@ interface HarnessPickerProps {
 /**
  * Settings' harness choice: a radio card per enabled agent (its name and version, side by side on wider screens),
  * saved as soon as it changes. A running workspace keeps its harness until it starts again; the card says so and
- * offers "Restart now".
+ * offers "Restart now", which confirms first (the restart runs in the dialog).
  */
 export function HarnessPicker({ agents, chosen, running, agentNames, labelledBy }: HarnessPickerProps) {
   const [value, setValue] = useOptimistic(chosen);
   const [saving, startSaving] = useTransition();
   const [error, setError] = useState<string | null>(null);
-  const [restarting, startRestart] = useTransition();
   const [restarted, setRestarted] = useState<AgentKind | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const restartButton = useRef<HTMLButtonElement>(null);
@@ -59,17 +57,6 @@ export function HarnessPicker({ agents, chosen, running, agentNames, labelledBy 
     return null;
   }
 
-  function onRestart() {
-    if (running && stopNeedsConfirm(stopWarnings(running, false))) {
-      setConfirmOpen(true);
-      return;
-    }
-    startRestart(async () => {
-      const problem = await restart();
-      if (problem) setError(problem);
-    });
-  }
-
   const differs = running?.agent != null && running.agent !== value;
   return (
     <div className="flex flex-col gap-4">
@@ -78,7 +65,6 @@ export function HarnessPicker({ agents, chosen, running, agentNames, labelledBy 
         onValueChange={choose}
         aria-labelledby={labelledBy}
         aria-busy={saving || undefined}
-        disabled={restarting}
         className="sm:grid-cols-2"
       >
         {agents.map((agent) => (
@@ -105,12 +91,11 @@ export function HarnessPicker({ agents, chosen, running, agentNames, labelledBy 
               ref={restartButton}
               type="button"
               variant="outline"
-              onClick={onRestart}
-              disabled={restarting || saving}
-              aria-busy={restarting || undefined}
+              onClick={() => setConfirmOpen(true)}
+              disabled={saving}
             >
-              {restarting ? <Spinner aria-hidden="true" /> : <RefreshIcon />}
-              {restarting ? "Restarting…" : "Restart now"}
+              <RefreshIcon />
+              Restart now
             </Button>
           </div>
         </Alert>

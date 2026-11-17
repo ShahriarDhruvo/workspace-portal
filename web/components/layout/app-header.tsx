@@ -18,7 +18,7 @@ export interface Viewer {
 
 /**
  * The one top bar of every signed-in page but the workspace: the mark and name (to Home), the page tabs (Settings,
- * and for the admin Usage, Users, Updates and Audit log), then the theme switch, who is signed in and Sign out.
+ * and for the admin Usage, Energy, Users, Updates and Audit log), then the theme switch, who is signed in and Sign out.
  * Below `md` the tabs, the user and Sign out move into the bar's menu. It stays on screen while the page scrolls.
  */
 export function AppHeader({ viewer }: { viewer: Viewer }) {
@@ -34,8 +34,8 @@ export function AppHeader({ viewer }: { viewer: Viewer }) {
         <div className="ml-auto flex min-w-0 items-center gap-2">
           <ThemeToggle />
           <div className="flex min-w-0 items-center gap-2 max-md:hidden">
-            {/* With the admin's five tabs, the name shows from `lg`; the avatar always. */}
-            <UserChip name={viewer.name} initials={viewer.initials} nameClassName={viewer.isAdmin ? "max-lg:sr-only" : undefined} />
+            {/* With the admin's six tabs and their icons, the name shows from `xl`; the avatar always. */}
+            <UserChip name={viewer.name} initials={viewer.initials} nameClassName={viewer.isAdmin ? "max-xl:sr-only" : undefined} />
             <form action={signOut}>
               <SubmitButton variant="outline" size="sm" icon={<LogOutIcon />}>
                 Sign out
