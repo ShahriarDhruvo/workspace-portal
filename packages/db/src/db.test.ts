@@ -7,7 +7,8 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import { openDatabase, openForOwnershipChange, migrate } from "./db.ts";
 import { MIGRATIONS } from "./migrations.ts";
-import { energyPrices, hostDaily, portalSettings, users, sessions } from "./schema.ts";
+import { eq } from "drizzle-orm";
+import { energyPrices, hostDaily, portalSettings, users, sessions, workspaceSessions } from "./schema.ts";
 import { readSetting, writeSetting } from "./settings.ts";
 import { ENERGY_LOCATIONS, energyLocation, energyLocationLabel, isEnergyLocationId } from "./energy-locations.ts";
 import { countSessionsUsingWorkspace, hashSessionToken, loadSessionContext, readCookie } from "./sessions.ts";
@@ -117,6 +118,20 @@ test("migration 6: the hand-kept prices go, published prices per place and perio
   assert.equal(readSetting(db, "energy_price_location"), "EU-DE");
   writeSetting(db, "energy_price_location", null);
   assert.equal(readSetting(db, "energy_price_location"), null);
+});
+
+test("migration 7: workspace sessions, one open per user, gone with their user", () => {
+  const db = tempDb();
+  const userId = addUser(db, "ana").id;
+  const open = { userId, kind: "private", agent: "qwen", startedAt: 1 } as const;
+  db.insert(workspaceSessions).values({ ...open, endedAt: 5 }).run();
+  const id = db.insert(workspaceSessions).values(open).returning({ id: workspaceSessions.id }).get().id;
+  assert.throws(() => db.insert(workspaceSessions).values({ ...open, kind: "online", startedAt: 6 }).run(), /UNIQUE/, "one open session per user");
+  const row = db.select().from(workspaceSessions).where(eq(workspaceSessions.id, id)).get()!;
+  assert.deepEqual([row.requests, row.promptTokens, row.llmMs, row.energyJ, row.energyMs], [0, 0, 0, null, 0], "nothing counted yet");
+  assert.throws(() => db.insert(workspaceSessions).values({ ...open, kind: "shared" } as unknown as typeof workspaceSessions.$inferInsert).run(), /CHECK/);
+  db.delete(users).where(eq(users.id, userId)).run();
+  assert.equal(db.select().from(workspaceSessions).all().length, 0);
 });
 
 test("energy locations: the 50 states and DC, Eurostat's countries, unique ids, a label that tells the two Georgias apart", () => {

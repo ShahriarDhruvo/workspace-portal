@@ -89,20 +89,6 @@ export interface LlmWaiting {
   stage: "portal" | "engine";
 }
 
-export interface LlmFinished {
-  userId: number;
-  userName: string | null;
-  finishedAt: number;
-  durationMs: number;
-  ttftMs: number | null;
-  promptTokens: number | null;
-  cachedTokens: number | null;
-  generatedTokens: number | null;
-  readTps: number | null;
-  writeTps: number | null;
-  ok: boolean;
-}
-
 export interface LlmLive {
   engine: EngineState;
   sessionsReported: boolean;
@@ -114,13 +100,14 @@ export interface LlmLive {
   sessions: LlmSession[];
   waiting: LlmWaiting[];
   totals: { readTps: number; writeTps: number };
-  recent: LlmFinished[];
 }
 
 export interface LiveFrame {
   t: number;
   hosts: Record<HostRole, HostLive>;
   llm: LlmLive;
+  /** Changes whenever the workspace sessions do: the sessions table reads its page again. */
+  sessionsVersion: number;
 }
 
 export interface LlmTotalsPoint {

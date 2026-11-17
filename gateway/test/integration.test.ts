@@ -7,9 +7,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import WebSocket from "ws";
-import { hashSessionToken, llmUsage, sessions, workspaces } from "@portal/db";
+import { hashSessionToken, llmUsage, sessions, workspaceSessions, workspaces } from "@portal/db";
 import { closeEndedSessions, PRESENCE_MS } from "../src/connections.ts";
 import { userPaths, userRoot } from "../src/paths.ts";
 import { AGENT_UNKNOWN_GRACE_MS } from "../src/policy.ts";
@@ -672,6 +672,25 @@ test("stop records the acting admin in the audit log", async () => {
   assert.equal(again.stopReason, "deactivated", "stopping a stopped workspace changes nothing");
 });
 
+test("each run of a workspace is a session: it opens at Start and closes at the stop", async () => {
+  const { dave } = g.ids;
+  const sessionsOf = () => g.db.select().from(workspaceSessions).where(eq(workspaceSessions.userId, dave)).all();
+  const before = sessionsOf().length;
+  const version = g.sessionLog.version;
+  const started = json<WorkspaceInfo>(await g.control("POST", `/control/workspaces/${dave}/start`));
+  await g.waitReady(dave);
+  const open = sessionsOf().at(-1)!;
+  assert.equal(sessionsOf().length, before + 1);
+  assert.deepEqual(pick(open, ["kind", "agent", "startedAt", "endedAt", "requests"]), { kind: "private", agent: "qwen", startedAt: started.startedAt, endedAt: null, requests: 0 });
+  assert.ok(g.sessionLog.version > version, "the live view hears of it");
+  assert.equal(g.live.frame().sessionsVersion, g.sessionLog.version);
+
+  g.clock.now += MIN;
+  json(await g.control("POST", `/control/workspaces/${dave}/stop`));
+  assert.equal(sessionsOf().at(-1)!.endedAt, g.clock.now);
+  assert.equal(sessionsOf().length, before + 1, "the stop closes it, adds none");
+});
+
 // ------------------------------------------------------------------ capacity and reaper
 
 test("start returns while Qwen Code boots; capacity 409 and eviction of an idle workspace", async () => {
@@ -757,6 +776,9 @@ test("the LLM proxy streams, swaps the key and records usage", async () => {
   g.caller.userId = alice;
   g.clock.now += MIN;
   const llmHeaders = { authorization: "Bearer portal", "content-type": "application/json", "accept-encoding": "gzip" };
+  const openSession = () =>
+    g.db.select().from(workspaceSessions).where(and(eq(workspaceSessions.userId, alice), isNull(workspaceSessions.endedAt))).get();
+  const sessionBefore = openSession()!;
 
   const models = await request(g.ports.service, { path: "/llm/v1/models", headers: llmHeaders });
   assert.equal(models.status, 200);
@@ -783,10 +805,11 @@ test("the LLM proxy streams, swaps the key and records usage", async () => {
   assert.equal(g.llm.requests.at(-1)!.url, "/v1/chat/completions?trace=1");
   assert.ok(streamed.endsWith("data: [DONE]\n\n"));
   assert.ok(timeline.length >= 2 && timeline.at(-1)!.at - timeline[0]!.at >= 100, "chunks are not buffered");
-  // The admin's live view saw the request: its tokens (not the empty role delta) and the engine's timings.
-  const seen = g.llmRequests.recent()[0]!;
+  // The request was seen: its tokens (not the empty role delta), the engine's timings and the answer's usage.
+  const seen = g.finishedRequests[0]!;
   assert.deepEqual(pick(seen, ["userId", "ok", "ttftMs", "queueMs"]), { userId: alice, ok: true, ttftMs: 0, queueMs: 0 });
   assert.deepEqual(seen.timings, { promptTokens: 10, cachedTokens: 2, promptMs: 20, generatedTokens: 34, generationMs: 170 });
+  assert.deepEqual(seen.usage, { promptTokens: 12, completionTokens: 34 });
   assert.deepEqual(g.llmRequests.active(), []);
 
   const plain = await request(g.ports.service, {
@@ -804,6 +827,15 @@ test("the LLM proxy streams, swaps the key and records usage", async () => {
     promptTokens: 12 + 11,
     completionTokens: 34 + 22,
   });
+  // Alice's running session counts both: tokens as their usage says, Read and Write from the engine's timings.
+  const session = openSession()!;
+  assert.equal(session.id, sessionBefore.id);
+  const counted = (key: "requests" | "failed" | "promptTokens" | "outputTokens" | "cachedTokens" | "readTokens" | "readMs" | "writeTokens" | "writeMs") =>
+    session[key] - sessionBefore[key];
+  assert.deepEqual(
+    Object.fromEntries((["requests", "failed", "promptTokens", "outputTokens", "cachedTokens", "readTokens", "readMs", "writeTokens", "writeMs"] as const).map((key) => [key, counted(key)])),
+    { requests: 2, failed: 0, promptTokens: 23, outputTokens: 56, cachedTokens: 2, readTokens: 10, readMs: 20, writeTokens: 34, writeMs: 170 },
+  );
   assert.equal(g.info(alice).lastActivityAt, g.clock.now, "LLM requests are activity");
 });
 
@@ -825,7 +857,7 @@ test("a workspace that hangs up frees its LLM slot and the upstream request", as
   assert.equal(g.llmQueue.inFlight, 1);
   assert.equal(g.info(alice).llmInFlight, 1);
   await waitFor(() => g.llmRequests.active()[0]?.tokens === 1, "the live view to count the first token");
-  const recentBefore = g.llmRequests.recent().length;
+  const finishedBefore = g.finishedRequests.length;
   assert.deepEqual(pick(g.info(alice), ["busy", "busyReason", "idleSeconds"]), { busy: true, busyReason: "llm", idleSeconds: 0 }, "waiting on the LLM is work");
 
   // Per-user limit is 1: a second request from alice queues behind the first.
@@ -842,8 +874,8 @@ test("a workspace that hangs up frees its LLM slot and the upstream request", as
   await waitFor(() => g.llm.abandoned === abandonedBefore + 1, "the upstream request to be aborted");
   assert.equal(g.info(alice).busy, false);
   assert.deepEqual(g.llmRequests.active(), []);
-  assert.equal(g.llmRequests.recent().length, recentBefore + 1, "a request that never left the gateway is not listed");
-  assert.equal(g.llmRequests.recent()[0]!.ok, false);
+  assert.equal(g.finishedRequests.length, finishedBefore + 1, "a request that never left the gateway is not one");
+  assert.equal(g.finishedRequests[0]!.ok, false);
 });
 
 test("the service API refuses unknown callers and odd paths", async () => {

@@ -126,7 +126,7 @@ export class EnergyMeter {
   async #read(role: HostRole, source: MeterSource): Promise<MeterReading | null> {
     try {
       const reading = await source.get<unknown>("/v1/meter");
-      if (!isReading(reading)) throw new HostdError(200, "bad_answer", `${source.url} sent a meter reading of another shape`);
+      if (!isMeterReading(reading)) throw new HostdError(200, "bad_answer", `${source.url} sent a meter reading of another shape`);
       this.#setState(role, source, "ok");
       return reading;
     } catch (error) {
@@ -226,7 +226,7 @@ function shareOut(total: number, parts: ReadonlyArray<{ share: number }>): numbe
   });
 }
 
-function isReading(value: unknown): value is MeterReading {
+export function isMeterReading(value: unknown): value is MeterReading {
   if (typeof value !== "object" || value === null) return false;
   const r = value as Record<string, unknown>;
   const total = (v: unknown, integer: boolean): boolean =>

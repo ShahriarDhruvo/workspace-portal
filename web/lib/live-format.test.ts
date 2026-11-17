@@ -17,7 +17,9 @@ import {
   formatPercent,
   formatRate,
   formatTemp,
+  formatCost,
   formatMoney,
+  formatWh,
   formatPricePeriod,
   formatUnitPrice,
   priceUnit,
@@ -162,4 +164,20 @@ test("a frame adds each server's newest reading and the LLM totals", () => {
   assert.deepEqual(next.portal.map((s) => s.t), [0, 400]);
   assert.deepEqual(next.llm, []);
   assert.deepEqual(next.tokens.at(-1), { t: 500, readTps: 1370, writeTps: 22 });
+});
+
+test("a session's cost: cents for dollars, four or three places for euros, money from one up", () => {
+  assert.equal(formatCost(0.0047, "USD"), "0.47¢");
+  assert.equal(formatCost(0.123, "USD"), "12.3¢");
+  assert.equal(formatCost(0, "USD"), "0.00¢");
+  assert.equal(formatCost(1.234, "USD"), "$1.23");
+  assert.equal(formatCost(0.0047, "EUR"), "€0.0047");
+  assert.equal(formatCost(0.0472, "EUR"), "€0.047");
+  assert.equal(formatCost(null, "USD"), "—");
+  assert.equal(formatCost(0.5, null), "—");
+});
+
+test("energy in Wh, then kWh", () => {
+  assert.deepEqual([0.714, 31.42, 882.4, 1243].map(formatWh), ["0.71 Wh", "31.4 Wh", "882 Wh", "1.24 kWh"]);
+  assert.equal(formatWh(null), "—");
 });

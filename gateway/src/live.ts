@@ -1,8 +1,9 @@
 // The admin's live view (GET /control/live, server-sent events, for Admin > Usage): both servers' hardware
 // readings and today's energy and traffic, and the LLM server's sessions with their Read and Write speeds, in one
-// frame every FRAME_MS. The running workspaces are not in it: Admin > Users polls the workspace list. Everything
-// behind it (hostd streams, /slots polling) runs only while someone watches; today's totals come from the energy
-// meter's memory, which runs all the time.
+// frame every FRAME_MS. The running workspaces are not in it: Admin > Users polls the workspace list. Nor are the
+// workspace sessions (session-log.ts): the page reads them from the database when the frame's `sessionsVersion`
+// changes. Everything behind it (hostd streams, /slots polling) runs only while someone watches; today's totals
+// come from the energy meter's memory, which runs all the time.
 //
 // Events: `init` once (the frames' interval and the last minute of history for the charts), then
 // `frame` every FRAME_MS (LiveFrame).
@@ -14,6 +15,7 @@ import type { HostLive, HostMonitor, HostRole } from "./host-monitor.ts";
 import type { HostSample } from "./hostd.ts";
 import type { LlmLive, LlmMonitor } from "./llm-monitor.ts";
 import type { Logger } from "./log.ts";
+import type { SessionLog } from "./session-log.ts";
 
 const FRAME_MS = 500;
 /** LLM totals kept for a new viewer's chart. */
@@ -29,6 +31,8 @@ export interface LiveFrame {
   t: number;
   hosts: Record<HostRole, LiveHost>;
   llm: LlmLive;
+  /** Changes whenever the workspace sessions do (0 without them). */
+  sessionsVersion: number;
 }
 
 export interface LiveInit {
@@ -44,6 +48,8 @@ export interface LiveDeps {
   hosts: Record<HostRole, HostMonitor>;
   /** Today's totals per server; without it (tests that don't need them) every `today` is null. */
   energy?: Pick<EnergyMeter, "today">;
+  /** The workspace sessions' version; without it (tests that don't need it) it stays 0. */
+  sessions?: Pick<SessionLog, "version">;
   log: Logger;
   now?: () => number;
 }
@@ -112,9 +118,9 @@ export class LiveHub {
 
   /** The current state (also each viewer's first frame). */
   frame(): LiveFrame {
-    const { llm, hosts, energy } = this.#deps;
+    const { llm, hosts, energy, sessions } = this.#deps;
     const host = (role: HostRole): LiveHost => ({ ...hosts[role].live(), today: energy?.today(role) ?? null });
-    return { t: this.#now(), hosts: { portal: host("portal"), llm: host("llm") }, llm: llm.snapshot() };
+    return { t: this.#now(), hosts: { portal: host("portal"), llm: host("llm") }, llm: llm.snapshot(), sessionsVersion: sessions?.version ?? 0 };
   }
 
   /** Stops everything (gateway shutdown); open streams end with their sockets. */

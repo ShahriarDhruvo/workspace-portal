@@ -159,4 +159,30 @@ export const MIGRATIONS: readonly string[] = [
 
   DROP TABLE energy_rates;
   `,
+  // 7: each run of a workspace, from Start to its stop, with what its LLM requests added up to (the gateway's
+  // session-log.ts): Admin > Usage lists them. At most one is open (no ended_at) per user, the running one.
+  `
+  CREATE TABLE workspace_sessions (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id       INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    kind          TEXT    NOT NULL CHECK (kind IN ('private', 'online')),
+    agent         TEXT    CHECK (agent IN ('qwen', 'dsh')),
+    started_at    INTEGER NOT NULL,
+    ended_at      INTEGER,
+    requests      INTEGER NOT NULL DEFAULT 0,
+    failed        INTEGER NOT NULL DEFAULT 0,
+    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cached_tokens INTEGER NOT NULL DEFAULT 0,
+    read_tokens   INTEGER NOT NULL DEFAULT 0,
+    read_ms       REAL    NOT NULL DEFAULT 0,
+    write_tokens  INTEGER NOT NULL DEFAULT 0,
+    write_ms      REAL    NOT NULL DEFAULT 0,
+    llm_ms        INTEGER NOT NULL DEFAULT 0,
+    energy_j      REAL,
+    energy_ms     INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE UNIQUE INDEX workspace_sessions_open ON workspace_sessions (user_id) WHERE ended_at IS NULL;
+  CREATE INDEX workspace_sessions_order ON workspace_sessions (ended_at, started_at);
+  `,
 ];

@@ -570,10 +570,11 @@ engine container (the gufo quadlet) when the admin asks. Details: [hostd/README.
 
 **Admin > Usage** then shows, twice a second: each server's total power draw, CPU and GPU usage, clocks,
 temperatures and power, memory used and free, memory bandwidth and fans, network upload and download (and the
-day's totals), disk read and write and the free space; every LLM session with its
-read speed (prompt tokens per second) and write speed (answer tokens per second), with the totals charted over
-the last minute; the requests waiting; and the last finished requests with the engine's own timings. Readings a
-machine can't provide show "—". On a wide screen the sessions and both servers sit side by side.
+day's totals), disk read and write and the free space; the LLM's total read speed (prompt tokens per second)
+and write speed (answer tokens per second), each charted over the last minute; and every workspace session (a
+run from Start to its stop), with what the LLM is doing for it now and what its requests added up to: requests,
+average read and write speed, tokens in and out, time on the LLM, its share of the LLM server's energy with the
+average draw, and that energy's cost. Readings a machine can't provide show "—". On a wide screen the sessions and both servers sit side by side.
 
 **Admin > Energy** keeps both servers' energy per day, for good, with its cost at the published electricity price
 of the place the admin picks under **Settings > Electricity price** (EIA's monthly residential average for US

@@ -268,13 +268,21 @@ names it (`2026-08`, `2026-S1`), `price` per kWh, `currency` `USD` | `EUR`, `sou
 The places and their sources are `packages/db/src/energy-locations.ts`, which imports nothing, so the web app's
 client components load it on its own (`@portal/db/energy-locations`); the package's main entry brings SQLite.
 
+Migration 7 adds `workspace_sessions`, one row per run of a user's workspace, from Start to its stop (`user_id`,
+`kind`, `agent`, `started_at`, `ended_at` null while it runs: at most one open row per user), with what its LLM
+requests added up to: `requests` and `failed`, `prompt_tokens` (cached ones included), `output_tokens`,
+`cached_tokens`, `read_tokens`/`read_ms` and `write_tokens`/`write_ms` (the engine's own `timings`; Read and
+Write are their quotients), `llm_ms` (forwarded to finished), and `energy_j`/`energy_ms` (its share of the LLM
+server's measured energy, null until there is any, and the measured time it had a request running: its average
+draw is their quotient). See Workspace sessions.
+
 Ownership:
 * web writes `users`, `sessions`, `login_attempts`, `portal_settings`, and `audit_log` (user and admin actions,
   among them `agent_preference_changed` with `{ from, to }`, agent kinds or null for the default,
   `user_online_access_changed` with `{ allowed }`, and `energy_price_location_set` with
   `{ location: { from, to } }`, the places by name ("Florida, US"); older logs may hold `energy_rate_set` from the hand-kept rates).
-* gateway writes `workspaces`, `llm_usage`, `host_daily` and `host_meter` (the energy meter), `energy_prices`
-  (Electricity prices), and
+* gateway writes `workspaces`, `llm_usage`, `workspace_sessions` (Workspace sessions), `host_daily` and
+  `host_meter` (the energy meter), `energy_prices` (Electricity prices), and
   `audit_log` (`workspace_started` with `{ agent, version, kind }`, `workspace_stopped` with `{ reason, kind }`,
   `workspace_error` with `{ error, kind }` (plus `reason` when a stop failed), `workspace_files_erased` with
   `{ kind }` and the admin as actor, `agent_updated` with `{ agent, from, to, rebuild }`,
@@ -615,7 +623,8 @@ old build whose tag a rebuild moved while a workspace still used it). It logs wh
 
 Admin > Usage opens it through the web app (`/api/admin/live`). Server-sent events: `init` once, then
 `frame` every 500 ms. The running workspaces are not in it: Admin > Users polls the workspace list
-(`/api/admin/overview`), which costs hostd nothing. Everything behind it runs only while at least one viewer is connected (at most 8):
+(`/api/admin/overview`), which costs hostd nothing. Nor are the workspace sessions: a frame carries their
+`sessionsVersion`, and the page reads its table again (`/api/admin/llm-sessions`) when that changes. Everything behind it runs only while at least one viewer is connected (at most 8):
 
 * **Server readings** (`host-monitor.ts`): one event stream per portal-hostd (`GET /v1/stream`), opened at
   the first viewer, closed 15 s after the last left, reconnecting with backoff (1 s doubling to 5 s). The
@@ -634,7 +643,6 @@ Admin > Usage opens it through the web app (`/api/admin/live`). Server-sent even
     counts from then on: what it read before isn't spread over the first seconds. Write = generated tokens per
     second over the last 3 s.
     Totals add up the sessions still reading (Read) and those writing (Write).
-  * Recent finished requests show the engine's own figures (`timings`: compute time only).
   * A server without `/slots` (another engine): the rows come from the gateway alone (Write from the
     streamed tokens; Read only for finished requests). `503` = the engine is loading; no answer = offline.
   * Cost: the response stream is read for token usage anyway; the record adds a counter per event.
@@ -653,8 +661,8 @@ type LiveFrame = {
                       readTps: number | null; writeTps: number | null; startedAt: number }>;
     waiting: Array<{ userId; userName; since; stage: "portal" | "engine" }>;   // portal: the gateway's queue; engine: no free engine session
     totals: { readTps: number; writeTps: number };
-    recent: Array<{ userId; userName; finishedAt; durationMs; ttftMs; promptTokens; cachedTokens; generatedTokens; readTps; writeTps; ok }>;
   };
+  sessionsVersion: number;                         // changes whenever workspace_sessions does
 };
 ```
 
@@ -663,6 +671,26 @@ hostd API version 2 on, a sample has `net` (`rxBps`, `txBps`: the physical inter
 (`readBps`, `writeBps`: the whole disks together; `totalBytes`, `freeBytes`: the local filesystems together),
 and the info lists what they count (`network.interfaces`, `disks.devices`, `disks.mounts`). An older hostd
 leaves them out; a source a machine lacks is null.
+
+## Workspace sessions
+
+Admin > Usage's table: each run of a workspace and what its LLM requests added up to (`workspace_sessions`).
+
+* `session-log.ts` opens a row when a workspace starts (the workspace manager hands it every state it saves)
+  and closes it when the workspace stops or fails; a start that fails before the workspace ran leaves no row. At the
+  gateway's start it closes the rows of workspaces that are no longer running.
+* Each generation request belongs to the session that was open when the gateway forwarded it, so one still
+  running at the stop counts too. When it finishes the row adds one request (and one failed, if it failed),
+  its tokens (the stream's `usage`, else the engine's `timings`), the engine's read and write tokens and times,
+  and its time from forwarded to finished.
+* Energy (`llm-energy.ts`): while requests run, the LLM server's portal-hostd meter (`GET /v1/meter`, kept
+  every 2 s) is read every 2 s; each stretch's energy is shared among the requests running in it in proportion
+  to their time in it (by the meter's own clock, unless it is more than 5 s off the gateway's), and added to
+  their sessions with the time each had a request running (a session's parallel requests count once). Idle, it reads nothing. Without a meter (no token, or hostd before API version 2) the energy
+  stays null.
+* Cost (web, `lib/workspace-sessions.ts`): the energy at the chosen place's price on the day the session
+  started; a price standing in for a month not yet published is marked as an estimate.
+* Every write bumps a version, which the live frame carries.
 
 ## Energy meter
 
@@ -1210,7 +1238,7 @@ For each running workspace, it computes a verdict, re-checks the agent state bef
 | `/workspace` | signed in | Slim top bar (status pill, the kind's badge, "Admin connected", Stop, menu with the harness and the portal's pages) + iframe on the running kind's port (`workspaceFrame(session, kind)`: Private `:AGENT_PORT_BASE+target.id`, Online `:ONLINE_AGENT_PORT_BASE+target.id`). Nothing starts by itself: a stopped workspace shows the same kind choice and Start with the same confirmation. Stop always asks first, saying when the agent is working, the workspace is open elsewhere or an admin is in it (`web/lib/workspace-stop.ts`), then goes to `/` |
 | `/settings` | signed in | Account (username, role and the dark / light theme; the names, with Save, audited `user_updated`), Harness (radio cards, saved at once; "Restart now", the same kind again after a confirmation, when the running one differs), Password (`#password`); for the admin, Electricity price (`#electricity`: the place, saved on change, with its latest price and source; a place with no prices stored yet asks the gateway to download them). Nothing about Private / Online |
 | `/change-password` | signed in | Only the forced change (`must_change_password`); otherwise redirects to `/settings#password` |
-| `/admin` (Usage) | admin | Live (GET `/api/admin/live`, frames every 500 ms while the tab is visible): LLM sessions with total Read and Write tok/s (the selected one charted over the last minute) and Running / Waiting / Recent tables; the LLM server and portal server cards (power draw, CPU, GPU, memory with free GiB and %, network, disks, fans). The sessions span the width over the two servers; from 1800 px wide the page grows into the margins and the three sit side by side |
+| `/admin` (Usage) | admin | Live (GET `/api/admin/live`, frames every 500 ms while the tab is visible): LLM sessions with total Read and Write tok/s (each charted over the last minute, stacked on one time axis) and the workspace sessions table (8 a page, the running ones first: user and kind, live status or start and length, requests, Read and Write tok/s, tokens in and out, LLM time, energy with the average draw, cost; GET `/api/admin/llm-sessions?page=` on paging and when the frame's `sessionsVersion` changes); the LLM server and portal server cards (power draw, CPU, GPU, memory with free GiB and %, network, disks, fans). The sessions span the width over the two servers; from 1800 px wide the page grows into the margins and the three sit side by side |
 | `/admin/energy` | admin | Both servers' energy per day (the servers' own sensors, not the wall): today and the month so far with their cost, the month's days as bars and as a table (kWh per server, price, cost); the month picker in the heading. GET `/api/admin/energy` every 60 s while visible and on a change of month |
 | `/admin/users` | admin | Users table: role, account, the harness (the running agent and version, or the one the next Start launches), last sign-in, Open workspace and the actions menu (Stop workspace among them). Under it the running workspaces: user, kind, harness, status (Starting, Working with why, Idle for how long, Stopping, Error with the reason), memory, LLM requests, viewers, up for, Open workspace. Both from GET `/api/admin/overview` every 5 s |
 | `/admin/users/new` | admin | Names, username, temporary password and the "Online workspace" permission (on by default; `users.online_allowed`, in `user_created`'s details) |
@@ -1222,7 +1250,8 @@ For each running workspace, it computes a verdict, re-checks the agent state bef
 The admin pages read the gateway on the server and then follow admin-only routes for live data:
 `GET /api/admin/live` (Usage: the gateway's `/control/live` event stream passed through; the session is
 checked again every 30 s and the stream ends when it no longer holds), `GET /api/admin/overview` (the users
-table and the running workspaces, every 5 s), `GET /api/admin/energy` (Energy), `GET /api/admin/agents` and `GET /api/admin/engine` (the Updates page). "Check for updates"
+table and the running workspaces, every 5 s), `GET /api/admin/llm-sessions` (Usage's sessions table, a page),
+`GET /api/admin/energy` (Energy), `GET /api/admin/agents` and `GET /api/admin/engine` (the Updates page). "Check for updates"
 is a POST to those two, which asks the gateway with `refresh=1` (the registries again, not the cache); a POST so
 that it gets the same-origin check of the state-changing routes, and a workspace page the admin has open can't
 make the server query a registry in a loop. The Updates page polls every second while a job runs, else less

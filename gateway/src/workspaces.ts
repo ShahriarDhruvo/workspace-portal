@@ -39,6 +39,7 @@ import type { FenceState } from "./fence.ts";
 import { parseWorkspaceImage } from "./image-names.ts";
 import type { LlmQueue } from "./llm-queue.ts";
 import { errorMessage, type Logger } from "./log.ts";
+import type { SessionLog } from "./session-log.ts";
 import {
   assessActivity,
   averageCores,
@@ -254,6 +255,8 @@ export interface WorkspaceManagerOptions {
    * run only while it says "loaded"; without it, never.
    */
   fence?: () => Promise<FenceState>;
+  /** Told each state saved, so each run of a workspace is a session (session-log.ts). */
+  sessions?: Pick<SessionLog, "sync">;
   now?: () => number;
 }
 
@@ -364,6 +367,7 @@ export class WorkspaceManager {
   readonly #fenceCheck: () => Promise<FenceState>;
   /** The last fence check's answer; "unknown" until there is one (Online runs only on "loaded"). */
   #fence: FenceState = "unknown";
+  readonly #sessions: Pick<SessionLog, "sync"> | null;
   #fenceChecks = 0;
   #fenceApplied = 0;
   #fenceLogged: FenceState | null = null;
@@ -377,6 +381,7 @@ export class WorkspaceManager {
     this.#connections = options.connections;
     this.#log = options.log;
     this.#fenceCheck = options.fence ?? (() => Promise.resolve("unknown"));
+    this.#sessions = options.sessions ?? null;
     this.#now = options.now ?? Date.now;
   }
 
@@ -1380,6 +1385,7 @@ export class WorkspaceManager {
     } catch (error) {
       this.#log.error("could not save workspace state", { userId: entry.userId, error });
     }
+    this.#sessions?.sync(entry);
   }
 
   #audit(action: AuditAction, userId: number, details?: unknown, actorUserId: number | null = null): void {

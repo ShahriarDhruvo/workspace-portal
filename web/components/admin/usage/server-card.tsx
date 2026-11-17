@@ -103,8 +103,8 @@ function Readings({ host, sample, history, now }: { host: HostLive; sample: Host
             unit={disk?.freeBytes == null ? undefined : "free"}
             share={usedPercent(diskUsed, disk?.totalBytes)}
           >
-            <span>Read {formatRate(disk?.readBps)}</span>
-            <span>Write {formatRate(disk?.writeBps)}</span>
+            <Fact short="R" name="Read" value={formatRate(disk?.readBps)} />
+            <Fact short="W" name="Write" value={formatRate(disk?.writeBps)} />
           </Metric>
           <section className="col-span-2 flex min-w-0 flex-col gap-2 rounded-lg bg-muted/40 p-3">
             <h3 className="text-12 text-muted-foreground">Network</h3>
@@ -133,7 +133,9 @@ function Readings({ host, sample, history, now }: { host: HostLive; sample: Host
 
 /**
  * One metric: its name, one figure (an optional quiet unit after it), a bar when the figure is a share of a whole
- * (null draws an empty bar: unknown) and at most two quiet facts, side by side or, when narrow, one under the other.
+ * (null draws an empty bar: unknown) and at most two quiet facts: one under the other in a phone's narrow card,
+ * side by side from 22rem, where the widest pair fits a tile. Never wrapped by their length, so the tiles keep
+ * their height whatever the figures (the skeleton's tiles change at the same width).
  */
 function Metric({ label, value, unit, share, children }: { label: string; value: string; unit?: string; share?: number | null; children?: ReactNode }) {
   return (
@@ -144,8 +146,18 @@ function Metric({ label, value, unit, share, children }: { label: string; value:
         {unit ? <span className="ml-1 text-13 font-normal text-muted-foreground">{unit}</span> : null}
       </p>
       {share !== undefined ? <Progress value={share ?? 0} aria-label={`${label} used`} /> : null}
-      {children ? <p className="flex flex-wrap gap-x-3 text-12 text-muted-foreground tabular-nums">{children}</p> : null}
+      {children ? <p className="flex flex-col gap-x-2 overflow-hidden text-12 whitespace-nowrap text-muted-foreground tabular-nums @[22rem]:flex-row">{children}</p> : null}
     </section>
+  );
+}
+
+/** A fact with a one-letter name ("R 69 kB/s"); screen readers hear the whole word. */
+function Fact({ short, name, value }: { short: string; name: string; value: string }) {
+  return (
+    <span title={`${name} ${value}`}>
+      <span aria-hidden="true">{short}</span>
+      <span className="sr-only">{name}</span> {value}
+    </span>
   );
 }
 

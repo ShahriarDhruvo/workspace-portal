@@ -13,7 +13,7 @@ export interface LivePoint {
 interface LiveChartProps {
   /** Oldest first, within the last minute. */
   points: readonly LivePoint[];
-  /** The series' name (the card's title or the selected total names it, so there is no legend). */
+  /** The series' name, for the tooltip (the card or a label above names the chart, so there is no legend). */
   label: string;
   /** A chart token: var(--chart-1) ... */
   color: string;
@@ -23,6 +23,11 @@ interface LiveChartProps {
   format: (value: number) => string;
   /** Upper end of the y axis when it is fixed (percentages); otherwise it follows the data. */
   max?: number;
+  /** Charts stacked on one time axis share it: hovering one shows the same moment in each. */
+  syncId?: string;
+  /** The time axis under the chart; a chart stacked over another leaves it to the one below (and keeps room for
+   * its lowest tick's label). */
+  timeAxis?: boolean;
   className?: string;
 }
 
@@ -33,12 +38,12 @@ const axisNumber = new Intl.NumberFormat("en", { notation: "compact", maximumFra
  * One reading over the last minute, as a thin area with a crosshair tooltip: the x axis is seconds before now, the
  * y axis keeps three recessive ticks over solid hairlines. Animation is off: a new point arrives every 500 ms.
  */
-export function LiveChart({ points, label, color, now, format, max, className }: LiveChartProps) {
+export function LiveChart({ points, label, color, now, format, max, syncId, timeAxis = true, className }: LiveChartProps) {
   const config = { value: { label, color } } satisfies ChartConfig;
   const data = points.map((point) => ({ t: point.t, value: point.value }));
   return (
     <ChartContainer config={config} className={cn("aspect-auto h-32 w-full", className)}>
-      <AreaChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: 0 }} accessibilityLayer>
+      <AreaChart data={data} syncId={syncId} margin={{ top: 8, right: 4, bottom: timeAxis ? 0 : 8, left: 0 }} accessibilityLayer>
         <CartesianGrid vertical={false} />
         <XAxis
           dataKey="t"
@@ -51,10 +56,12 @@ export function LiveChart({ points, label, color, now, format, max, className }:
           axisLine={false}
           tickMargin={6}
           allowDataOverflow
+          hide={!timeAxis}
         />
         <YAxis
           domain={[0, max ?? "auto"]}
           tickCount={3}
+          interval={0}
           width={44}
           tickLine={false}
           axisLine={false}

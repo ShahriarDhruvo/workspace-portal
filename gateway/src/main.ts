@@ -25,6 +25,7 @@ import { listen } from "./listen.ts";
 import { LiveHub, userNames } from "./live.ts";
 import { LlmMonitor } from "./llm-monitor.ts";
 import { LlmQueue } from "./llm-queue.ts";
+import { LlmEnergy } from "./llm-energy.ts";
 import { LlmRequests } from "./llm-requests.ts";
 import { createLogger, type Logger } from "./log.ts";
 import { createNpmRegistry } from "./npm-registry.ts";
@@ -33,6 +34,7 @@ import { ReleaseCache } from "./release-cache.ts";
 import { createSearxngBackend } from "./search-mcp.ts";
 import { createServiceServer } from "./service-api.ts";
 import { SessionCache } from "./session-cache.ts";
+import { SessionLog } from "./session-log.ts";
 import { WorkspaceManager } from "./workspaces.ts";
 
 /** How long the service listeners wait for the workspace bridge address to appear. */
@@ -89,13 +91,32 @@ async function main(log: Logger): Promise<void> {
   }
 
   const llm = new LlmQueue(config.llm.maxConcurrency, config.llm.maxConcurrencyPerUser);
-  const requests = new LlmRequests();
+  // Each run of a workspace and what its LLM requests added up to, energy included (Admin > Usage).
+  const sessionLog = new SessionLog({ db, log });
+  const llmEnergy = new LlmEnergy({
+    source: config.hostd.llm.token === "" ? null : new HostdClient(config.hostd.llm),
+    onShares: (shares) => sessionLog.addEnergy(shares),
+    log,
+  });
+  const requests = new LlmRequests({
+    listener: {
+      forwarded: (request) => {
+        const sessionId = sessionLog.forwarded(request.id, request.userId);
+        if (sessionId !== null) llmEnergy.started(request.id, sessionId, request.forwardedAt);
+      },
+      finished: (request) => {
+        llmEnergy.ended(request.id, request.finishedAt);
+        sessionLog.finished(request);
+      },
+    },
+  });
   const connections = new ConnectionRegistry();
   const sessions = new SessionCache((tokenHash) => loadSessionContext(db, tokenHash));
   // Online workspaces run only while the host firewall that fences them in answers (deploy/firewall.sh, fence.ts).
   const fence = fenceCheck(config.servicePort);
-  const manager = new WorkspaceManager({ config, db, runtime, versions, llm, connections, log, fence });
+  const manager = new WorkspaceManager({ config, db, runtime, versions, llm, connections, log, fence, sessions: sessionLog });
   await manager.init();
+  sessionLog.reconcile(manager.list());
   manager.startBackgroundTasks();
   const registry = createNpmRegistry();
   const updater = new AgentUpdater({
@@ -138,7 +159,7 @@ async function main(log: Logger): Promise<void> {
   // The published electricity prices Admin > Energy prices those days at (every place's, for the one the admin picks).
   const prices = new EnergyPrices({ db, log });
   prices.start();
-  const live = new LiveHub({ llm: llmMonitor, hosts, energy, log });
+  const live = new LiveHub({ llm: llmMonitor, hosts, energy, sessions: sessionLog, log });
   const engine = new EngineUpdater({
     config,
     host: config.hostd.llm.token === "" ? null : createEngineHost(new HostdClient(config.hostd.llm)),
@@ -226,6 +247,7 @@ async function main(log: Logger): Promise<void> {
     connections.closeAll(1001, "gateway restarting");
     live.close();
     energy.stop();
+    llmEnergy.stop();
     prices.stop();
     hosts.portal.close();
     hosts.llm.close();

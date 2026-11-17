@@ -119,6 +119,31 @@ export function formatMoney(amount: number | null | undefined, currency: EnergyC
   return amount > 0 && amount < 0.005 ? `<${format.format(0.01)}` : format.format(Math.max(0, amount));
 }
 
+const cost2 = new Intl.NumberFormat("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const cost1 = new Intl.NumberFormat("en", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+const euro4 = new Intl.NumberFormat("en", { minimumFractionDigits: 4, maximumFractionDigits: 4 });
+const euro3 = new Intl.NumberFormat("en", { minimumFractionDigits: 3, maximumFractionDigits: 3 });
+
+/**
+ * A small cost, such as one session's: dollars under one in cents ("0.47¢", "12.3¢"), euros under one to four or
+ * three places ("€0.0047", "€0.047"), like their prices per kWh; from one up, as formatMoney. "—" when unknown.
+ */
+export function formatCost(amount: number | null | undefined, currency: EnergyCurrency | null | undefined): string {
+  if (amount === null || amount === undefined || !Number.isFinite(amount) || !currency) return "—";
+  const value = Math.max(0, amount);
+  if (value >= 1) return formatMoney(value, currency);
+  if (currency === "USD") return `${(value < 0.1 ? cost2 : cost1).format(value * 100)}¢`;
+  return `€${(value < 0.01 ? euro4 : euro3).format(value)}`;
+}
+
+/** Energy in watt-hours, with its unit: "0.71 Wh", "31.4 Wh", "882 Wh", then "1.24 kWh". "—" when unknown. */
+export function formatWh(wh: number | null | undefined): string {
+  if (wh === null || wh === undefined || !Number.isFinite(wh)) return "—";
+  const value = Math.max(0, wh);
+  if (value >= 1000) return `${cost2.format(value / 1000)} kWh`;
+  return `${(value < 10 ? cost2 : value < 100 ? cost1 : integer).format(value)} Wh`;
+}
+
 /** The unit prices are shown in: "¢/kWh" for dollars, "€/kWh" for euros. */
 export function priceUnit(currency: EnergyCurrency): string {
   return unitPrice[currency].unit;

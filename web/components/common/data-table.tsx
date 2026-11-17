@@ -85,7 +85,10 @@ export interface DataTablePaginationProps {
   pageSize: number;
   total: number;
   onPageChange: (page: number) => void;
-  onPageSizeChange: (pageSize: number) => void;
+  /** Not needed by a table with one page size. */
+  onPageSizeChange?: (pageSize: number) => void;
+  /** The page sizes on offer (PAGE_SIZES); with one, the table has a fixed size and no picker. */
+  pageSizes?: readonly number[];
   /** The address of a page, for its link (opening it in a new tab); without it the links only call onPageChange. */
   hrefFor?: (page: number) => string;
   /** A page change is on its way (a server-paged table): the pager is dimmed meanwhile. */
@@ -108,6 +111,7 @@ export function DataTablePagination({
   total,
   onPageChange,
   onPageSizeChange,
+  pageSizes = PAGE_SIZES,
   hrefFor,
   pending = false,
   label = "Pages",
@@ -150,29 +154,31 @@ export function DataTablePagination({
         {announcement}
       </p>
       <div className="flex items-center gap-4 sm:gap-6">
-        <div className="flex items-center gap-2">
-          <Label htmlFor={sizeId} className="text-13 font-normal text-muted-foreground max-sm:sr-only">
-            Rows per page
-          </Label>
-          <Select
-            value={String(pageSize)}
-            onValueChange={(value) => {
-              setAsked({ page: 1, pageSize: Number(value) });
-              onPageSizeChange(Number(value));
-            }}
-          >
-            <SelectTrigger id={sizeId} size="sm" className="min-w-16 tabular-nums">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent align="end">
-              {PAGE_SIZES.map((size) => (
-                <SelectItem key={size} value={String(size)} className="tabular-nums">
-                  {size}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+        {pageSizes.length > 1 ? (
+          <div className="flex items-center gap-2">
+            <Label htmlFor={sizeId} className="text-13 font-normal text-muted-foreground max-sm:sr-only">
+              Rows per page
+            </Label>
+            <Select
+              value={String(pageSize)}
+              onValueChange={(value) => {
+                setAsked({ page: 1, pageSize: Number(value) });
+                onPageSizeChange?.(Number(value));
+              }}
+            >
+              <SelectTrigger id={sizeId} size="sm" className="min-w-16 tabular-nums">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent align="end">
+                {pageSizes.map((size) => (
+                  <SelectItem key={size} value={String(size)} className="tabular-nums">
+                    {size}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        ) : null}
         <Pagination aria-label={label} className="mx-0 w-auto">
           <PaginationContent>
             <PaginationItem>

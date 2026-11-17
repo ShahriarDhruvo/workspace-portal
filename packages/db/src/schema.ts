@@ -213,6 +213,48 @@ export const portalSettings = sqliteTable("portal_settings", {
   updatedAt: integer("updated_at").notNull(),
 });
 
+// Written by the gateway (session-log.ts): each run of a user's workspace, from Start to its stop, and what its LLM
+// requests added up to. Kept for good; Admin > Usage lists them, the running ones first.
+export const workspaceSessions = sqliteTable(
+  "workspace_sessions",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    kind: text("kind", { enum: WORKSPACE_KINDS }).notNull(),
+    agent: text("agent", { enum: AGENT_KINDS }),
+    /** The workspace's startedAt: when Start was pressed. */
+    startedAt: integer("started_at").notNull(),
+    /** When it stopped; null while it runs. */
+    endedAt: integer("ended_at"),
+    /** Requests that reached the LLM server, and those of them that failed. */
+    requests: integer("requests").notNull().default(0),
+    failed: integer("failed").notNull().default(0),
+    /** As the answers' `usage` counts them, like llm_usage: tokens in (cached ones included) and out. */
+    promptTokens: integer("prompt_tokens").notNull().default(0),
+    outputTokens: integer("output_tokens").notNull().default(0),
+    /** From the engine's timings: prompt tokens served from its cache, read, and written, with its compute time. */
+    cachedTokens: integer("cached_tokens").notNull().default(0),
+    readTokens: integer("read_tokens").notNull().default(0),
+    readMs: real("read_ms").notNull().default(0),
+    writeTokens: integer("write_tokens").notNull().default(0),
+    writeMs: real("write_ms").notNull().default(0),
+    /** The requests' time from reaching the LLM server to their last byte, added up. */
+    llmMs: integer("llm_ms").notNull().default(0),
+    /**
+     * Its share of the LLM server's measured energy while its requests ran (shared with the requests running at the
+     * same time), and the time that share covers; null while none was measured.
+     */
+    energyJ: real("energy_j"),
+    energyMs: integer("energy_ms").notNull().default(0),
+  },
+  (t) => [
+    uniqueIndex("workspace_sessions_open").on(t.userId).where(sql`${t.endedAt} IS NULL`),
+    index("workspace_sessions_order").on(t.endedAt, t.startedAt),
+  ],
+);
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type Session = typeof sessions.$inferSelect;
@@ -220,3 +262,4 @@ export type Workspace = typeof workspaces.$inferSelect;
 export type AuditEntry = typeof auditLog.$inferSelect;
 export type HostDaily = typeof hostDaily.$inferSelect;
 export type EnergyPrice = typeof energyPrices.$inferSelect;
+export type WorkspaceSession = typeof workspaceSessions.$inferSelect;

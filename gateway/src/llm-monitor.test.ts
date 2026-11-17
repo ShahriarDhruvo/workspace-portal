@@ -172,7 +172,7 @@ test("the live view joins the engine's sessions with the gateway's requests", as
   assert.equal(b!.writeTps, 20, "10 tokens per 500 ms");
   assert.deepEqual(live.totals, { readTps: a!.readTps, writeTps: 20 }, "Read counts sessions still reading, Write those writing");
 
-  // Bob's request ends: it leaves the sessions and joins the recent list with the engine's timings.
+  // Bob's request ends: it leaves the sessions.
   bob.timings({ promptTokens: 100, cachedTokens: 700, promptMs: 50, generatedTokens: 40, generationMs: 2000 });
   bob.finish(true);
   releaseB();
@@ -180,7 +180,6 @@ test("the live view joins the engine's sessions with the gateway's requests", as
   await monitor.poll();
   live = monitor.snapshot();
   assert.deepEqual(live.sessions.map((s) => s.userName), ["Alice"]);
-  assert.deepEqual(live.recent.map((r) => [r.userName, r.readTps, r.writeTps, r.ok]), [["Bob", 2000, 20, true]]);
   alice.finish(false);
   releaseA();
 });

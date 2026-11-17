@@ -104,15 +104,16 @@ function dailyTotals(day, role) {
  * @param {{ workspaces: () => Array<{ userId: number; status: string; agent: string | null; kind: string; agentVersion: string | null;
  *   busy: boolean; busyReason: string | null; memoryBytes: number | null; llmInFlight: number; connections: { owner: number; admin: number };
  *   startedAt: number | null }>; userName: (id: number) => string | null;
- *   audit: (action: string, actorUserId: number | null, details: unknown) => void }} deps
+ *   audit: (action: string, actorUserId: number | null, details: unknown) => void;
+ *   finished: (request: { userId: number; durationMs: number; promptTokens: number; cachedTokens: number; readMs: number;
+ *     generatedTokens: number; generationMs: number; energyJ: number }) => void;
+ *   sessionsVersion: () => number }} deps
  */
 export function createMockLive(deps) {
   const hosts = { portal: "online", llm: "online" };
   let load = 4;
   /** @type {Array<{ slot: number; userId: number; promptTokens: number; cachedTokens: number; processed: number; generated: number; target: number; startedAt: number; readUntil: number | null }>} */
   let sessions = [];
-  /** @type {any[]} */
-  let recent = [];
   /** @type {Record<"portal" | "llm", any[]>} */
   const history = { portal: [], llm: [] };
   const tokens = [];
@@ -203,22 +204,20 @@ export function createMockLive(deps) {
     }
     const done = sessions.filter((s) => s.generated >= s.target);
     for (const session of done) {
-      const readMs = (session.readUntil ?? t) - session.startedAt;
-      recent.unshift({
+      // Its workspace session counts it, with a share of a ~130 W draw while it ran (the real gateway measures it).
+      const durationMs = t - session.startedAt;
+      const readMs = Math.max(1, ((session.readUntil ?? t) - session.startedAt) * 0.6);
+      deps.finished({
         userId: session.userId,
-        userName: deps.userName(session.userId),
-        finishedAt: t,
-        durationMs: t - session.startedAt,
-        ttftMs: readMs,
-        promptTokens: session.promptTokens - session.cachedTokens,
+        durationMs,
+        promptTokens: session.promptTokens,
         cachedTokens: session.cachedTokens,
+        readMs,
         generatedTokens: session.generated,
-        readTps: round(((session.promptTokens - session.cachedTokens) * 1000) / Math.max(1, readMs * 0.6), 0),
-        writeTps: round(31 - sessions.length, 1),
-        ok: true,
+        generationMs: (session.generated * 1000) / Math.max(1, 31 - sessions.length),
+        energyJ: (130 * durationMs) / 1000 / Math.max(1, sessions.length),
       });
     }
-    recent = recent.slice(0, 10);
     sessions = sessions.filter((s) => s.generated < s.target);
     if (running.length === 0 || queuePaused) return;
     const free = [0, 1, 2, 3, 4, 5, 6].filter((slot) => !sessions.some((s) => s.slot === slot));
@@ -295,8 +294,8 @@ export function createMockLive(deps) {
         sessions: rows,
         waiting,
         totals,
-        recent,
       },
+      sessionsVersion: deps.sessionsVersion(),
     };
   }
 

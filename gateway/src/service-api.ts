@@ -298,7 +298,8 @@ async function proxyLlm(
   } finally {
     release();
     deps.manager.noteAgentActivity(userId);
-    progress?.finish(result !== null && result.outcome === "completed" && result.status !== null && result.status >= 200 && result.status < 300);
+    const ok = result !== null && result.outcome === "completed" && result.status !== null && result.status >= 200 && result.status < 300;
+    progress?.finish(ok, tapped.parser?.usage ?? null);
   }
 
   const usage = tapped.parser?.usage ?? null;

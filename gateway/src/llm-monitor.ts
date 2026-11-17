@@ -1,6 +1,6 @@
-// The live view of the LLM server for the admin's Overview: for each request it is working on, how
-// fast it reads the prompt ("Read": prompt tokens processed per second) and writes the answer ("Write":
-// generated tokens per second), the totals, and who is waiting.
+// The live view of the LLM server for Admin > Usage: for each request it is working on, how fast it reads the
+// prompt ("Read": prompt tokens processed per second) and writes the answer ("Write": generated tokens per
+// second), the totals, and who is waiting. (What each workspace session added up to is session-log.ts's.)
 //
 // Two sources, joined:
 // - The engine's own sessions, from `GET /slots` (llama.cpp's server and engines derived from it, such
@@ -25,7 +25,6 @@ const WRITE_WINDOW_MS = 3_000;
 const MIN_SPAN_MS = 800;
 /** A forwarded request without an engine session for this long is shown as waiting in the engine. */
 const ENGINE_WAIT_GRACE_MS = 1_000;
-const RECENT_SHOWN = 10;
 
 export type EngineState = "ready" | "loading" | "offline" | "unknown";
 export type SessionPhase = "preparing" | "reading" | "writing";
@@ -58,21 +57,6 @@ export interface LlmWaiting {
   stage: "portal" | "engine";
 }
 
-export interface LlmFinished {
-  userId: number;
-  userName: string | null;
-  finishedAt: number;
-  durationMs: number;
-  ttftMs: number | null;
-  promptTokens: number | null;
-  cachedTokens: number | null;
-  generatedTokens: number | null;
-  /** From the engine's timings: its compute time only (time shared with other sessions not counted). */
-  readTps: number | null;
-  writeTps: number | null;
-  ok: boolean;
-}
-
 export interface LlmLive {
   engine: EngineState;
   /** The engine reports its sessions (/slots); otherwise rows come from the gateway alone. */
@@ -87,7 +71,6 @@ export interface LlmLive {
   sessions: LlmSession[];
   waiting: LlmWaiting[];
   totals: { readTps: number; writeTps: number };
-  recent: LlmFinished[];
 }
 
 /** One engine session as /slots reports it. */
@@ -363,29 +346,9 @@ export class LlmMonitor {
       }
     }
 
-    const recent: LlmFinished[] = requests
-      .recent()
-      .slice(0, RECENT_SHOWN)
-      .map((finished) => {
-        const timings = finished.timings;
-        return {
-          userId: finished.userId,
-          userName: null,
-          finishedAt: finished.finishedAt,
-          durationMs: finished.durationMs,
-          ttftMs: finished.ttftMs,
-          promptTokens: timings?.promptTokens ?? null,
-          cachedTokens: timings?.cachedTokens ?? null,
-          generatedTokens: timings?.generatedTokens ?? null,
-          readTps: timings && timings.promptMs > 0 ? (timings.promptTokens * 1000) / timings.promptMs : null,
-          writeTps: timings && timings.generationMs > 0 ? (timings.generatedTokens * 1000) / timings.generationMs : null,
-          ok: finished.ok,
-        };
-      });
-
-    const ids = [...sessions, ...waiting, ...recent].map((row) => row.userId).filter((id): id is number => id !== null);
+    const ids = [...sessions, ...waiting].map((row) => row.userId).filter((id): id is number => id !== null);
     const names = ids.length > 0 ? this.#options.names([...new Set(ids)]) : new Map<number, string>();
-    for (const row of [...sessions, ...waiting, ...recent]) row.userName = row.userId === null ? null : (names.get(row.userId) ?? null);
+    for (const row of [...sessions, ...waiting]) row.userName = row.userId === null ? null : (names.get(row.userId) ?? null);
 
     let readTps = 0;
     let writeTps = 0;
@@ -404,7 +367,6 @@ export class LlmMonitor {
       sessions,
       waiting,
       totals: { readTps, writeTps },
-      recent,
     };
   }
 

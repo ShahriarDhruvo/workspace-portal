@@ -34,7 +34,8 @@ import { createControlServer, type ControlDeps } from "../src/control-api.ts";
 import type { FenceState } from "../src/fence.ts";
 import { BEARER_SUBPROTOCOL_PREFIX } from "../src/headers.ts";
 import { LlmQueue } from "../src/llm-queue.ts";
-import { LlmRequests } from "../src/llm-requests.ts";
+import { LlmRequests, type FinishedLlmRequest } from "../src/llm-requests.ts";
+import { SessionLog } from "../src/session-log.ts";
 import type { Logger } from "../src/log.ts";
 import type { ReaderBackend } from "../src/reader.ts";
 import { ReleaseCache } from "../src/release-cache.ts";
@@ -198,6 +199,9 @@ export interface Gateway {
   updater: AgentUpdater;
   llmQueue: LlmQueue;
   llmRequests: LlmRequests;
+  /** The requests that reached the LLM server and ended, newest first. */
+  finishedRequests: FinishedLlmRequest[];
+  sessionLog: SessionLog;
   engineHost: FakeEngineHost | null;
   engineRegistry: FakeEngineRegistry;
   engine: EngineUpdater;
@@ -327,7 +331,18 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
   for (const kind of AGENT_KINDS) builder.install(kind, versions.current(kind));
   const registry = new FakeRegistry();
   const llmQueue = new LlmQueue(config.llm.maxConcurrency, config.llm.maxConcurrencyPerUser);
-  const llmRequests = new LlmRequests({ now: () => clock.now });
+  const sessionLog = new SessionLog({ db, log, now: () => clock.now });
+  const finishedRequests: FinishedLlmRequest[] = [];
+  const llmRequests = new LlmRequests({
+    now: () => clock.now,
+    listener: {
+      forwarded: (request) => void sessionLog.forwarded(request.id, request.userId),
+      finished: (request) => {
+        finishedRequests.unshift(request);
+        sessionLog.finished(request);
+      },
+    },
+  });
   const connections = new ConnectionRegistry(() => clock.now);
   const sessionCache = new SessionCache((hash) => loadSessionContext(db, hash));
   const fence: FakeFence = {
@@ -338,8 +353,9 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
       return Promise.resolve(fence.state);
     },
   };
-  let manager = new WorkspaceManager({ config, db, runtime, versions, llm: llmQueue, connections, log, fence: fence.check, now: () => clock.now });
+  let manager = new WorkspaceManager({ config, db, runtime, versions, llm: llmQueue, connections, log, fence: fence.check, sessions: sessionLog, now: () => clock.now });
   await manager.init();
+  sessionLog.reconcile(manager.list());
   const updater = new AgentUpdater({
     config,
     versions,
@@ -379,6 +395,7 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
       portal: new HostMonitor({ role: "portal", config: config.hostd.portal, log }),
       llm: new HostMonitor({ role: "llm", config: config.hostd.llm, log }),
     },
+    sessions: sessionLog,
     log,
     now: () => clock.now,
   });
@@ -419,6 +436,8 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
     updater,
     llmQueue,
     llmRequests,
+    finishedRequests,
+    sessionLog,
     engineHost,
     engineRegistry,
     engine,

@@ -201,8 +201,59 @@ function onlineRefusal(userId) {
   return null;
 }
 
+let sessionsVersion = 0;
+
+/** Each run of a workspace is a session, as the real gateway's session-log.ts keeps them. */
+function syncSession(userId, w) {
+  const open = db.prepare("SELECT id, started_at FROM workspace_sessions WHERE user_id = ? AND ended_at IS NULL").get(userId);
+  if (w && w.status !== "stopped" && w.status !== "error") {
+    if (open?.started_at === w.startedAt) return;
+    if (open) db.prepare("UPDATE workspace_sessions SET ended_at = ? WHERE id = ?").run(w.startedAt, open.id);
+    db.prepare("INSERT INTO workspace_sessions (user_id, kind, agent, started_at) VALUES (?, ?, ?, ?)").run(userId, w.kind ?? "private", w.agent ?? null, w.startedAt ?? Date.now());
+  } else if (open) {
+    db.prepare("UPDATE workspace_sessions SET ended_at = ? WHERE id = ?").run(Date.now(), open.id);
+  } else {
+    return;
+  }
+  sessionsVersion++;
+}
+
+/** The workspaces; each change of one keeps its session in step. */
+class Workspaces extends Map {
+  set(userId, w) {
+    super.set(userId, w);
+    syncSession(userId, w);
+    return this;
+  }
+}
+
+/** A week of ended sessions for the users there are, the first time the mock runs on a database. */
+function seedSessions() {
+  if (db.prepare("SELECT count(*) AS n FROM workspace_sessions").get().n > 0) return;
+  const ids = db.prepare("SELECT id FROM users ORDER BY id").all().map((row) => row.id);
+  const insert = db.prepare(
+    `INSERT INTO workspace_sessions (user_id, kind, agent, started_at, ended_at, requests, failed, prompt_tokens, output_tokens,
+       cached_tokens, read_tokens, read_ms, write_tokens, write_ms, llm_ms, energy_j, energy_ms)
+     VALUES (?, ?, 'qwen', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const now = Date.now();
+  db.transaction(() => {
+    for (let i = 0; i < 14; i++) {
+      const startedAt = now - (i + 1) * 9.5 * 3600_000;
+      const minutes = 12 + ((i * 37) % 140);
+      const requests = 8 + ((i * 13) % 90);
+      const readTokens = requests * 2_100;
+      const writeTokens = requests * 310;
+      const llmMs = requests * 14_000;
+      insert.run(ids[i % ids.length], i % 3 === 0 ? "private" : "online", startedAt, startedAt + minutes * 60_000, requests, i % 5 === 0 ? 1 : 0,
+        requests * 24_000, writeTokens, requests * 21_900, readTokens, readTokens / 0.61, writeTokens, writeTokens / 0.049, llmMs, (llmMs / 1000) * 128, llmMs);
+    }
+  })();
+}
+seedSessions();
+
 /** @type {Map<number, any>} */
-const workspaces = new Map();
+const workspaces = new Workspaces();
 const log = [];
 /** Control API calls with their JSON bodies, for tests that check what the portal asked for. */
 const calls = [];
@@ -213,6 +264,17 @@ const live = createMockLive({
     return row ? [row.first_name, row.middle_name, row.last_name].filter(Boolean).join(" ") : null;
   },
   audit,
+  finished: (r) => {
+    db.prepare(
+      `UPDATE workspace_sessions SET requests = requests + 1, prompt_tokens = prompt_tokens + ?, output_tokens = output_tokens + ?,
+         cached_tokens = cached_tokens + ?, read_tokens = read_tokens + ?, read_ms = read_ms + ?, write_tokens = write_tokens + ?,
+         write_ms = write_ms + ?, llm_ms = llm_ms + ?, energy_j = coalesce(energy_j, 0) + ?, energy_ms = energy_ms + ?
+       WHERE user_id = ? AND ended_at IS NULL`,
+    ).run(r.promptTokens, r.generatedTokens, r.cachedTokens, r.promptTokens - r.cachedTokens, r.readMs, r.generatedTokens, r.generationMs,
+      Math.round(r.durationMs), r.energyJ, Math.round(r.durationMs), r.userId);
+    sessionsVersion++;
+  },
+  sessionsVersion: () => sessionsVersion,
 });
 
 function info(userId) {
