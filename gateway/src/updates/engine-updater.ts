@@ -15,14 +15,12 @@
 import crypto from "node:crypto";
 import {
   isStableVersion,
-  writeAudit,
-  type AuditAction,
   type EngineHostState,
   type EngineJob,
-  type EngineJobStage,
   type EngineOverview,
   type EngineStatus,
   type EngineUpdateJob,
+  type EngineUpdatePhase,
   type PortalDb,
 } from "@portal/core";
 import type { Config } from "../config.ts";
@@ -30,6 +28,7 @@ import { EngineReleaseError, EngineReleases } from "./engine-releases.ts";
 import { HostdClient, HostdError } from "../monitor/hostd.ts";
 import type { LlmQueue } from "../service/llm-queue.ts";
 import { errorMessage, type Logger } from "../lib/log.ts";
+import { appendLog, finishJob } from "./update-job.ts";
 
 const POLL_MS = 1_000;
 const DRAIN_POLL_MS = 250;
@@ -107,7 +106,7 @@ export class EngineUpdater {
   readonly #now: () => number;
   readonly #pollMs: number;
   #job: EngineUpdateJob | null = null;
-  /** The hostd job the current stage follows, for its live log. */
+  /** The hostd job the current phase follows, for its live log. */
   #hostJob: EngineJob | null = null;
   #cancelRequested = false;
   #restartNow = false;
@@ -174,7 +173,7 @@ export class EngineUpdater {
           this.#note(job, `Using the image already on the LLM server (${image}).`);
           return;
         }
-        this.#stage(job, "pulling", `Downloading ${version}`, true);
+        this.#phase(job, "pulling", `Downloading ${version}`, true);
         const pulled = await this.#follow(job, await host.pull(image), host, PULL_TIMEOUT_MS);
         if (pulled.phase === "cancelled" || this.#cancelRequested) throw new Cancelled();
         if (pulled.phase !== "succeeded") throw new Error(pulled.error ?? "The download failed.");
@@ -189,13 +188,13 @@ export class EngineUpdater {
     const job = this.#job;
     if (!job || job.finishedAt !== null || !job.cancellable) return false;
     this.#cancelRequested = true;
-    if (job.stage === "pulling") await this.#options.host?.cancel().catch(() => false);
+    if (job.phase === "pulling") await this.#options.host?.cancel().catch(() => false);
     return true;
   }
 
   /** Ends the drain now: the engine restarts even though requests are still running. */
   restartNow(): boolean {
-    if (this.#job?.stage !== "draining" || this.#job.finishedAt !== null) return false;
+    if (this.#job?.phase !== "draining" || this.#job.finishedAt !== null) return false;
     this.#restartNow = true;
     return true;
   }
@@ -238,7 +237,7 @@ export class EngineUpdater {
       toVersion,
       image,
       reuse,
-      stage: reuse ? "draining" : "pulling",
+      phase: reuse ? "draining" : "pulling",
       step: "Starting",
       log: [],
       startedAt: this.#now(),
@@ -260,7 +259,7 @@ export class EngineUpdater {
     try {
       await plan.beforeDrain();
       await this.#drain(job);
-      this.#stage(job, "restarting", `Restarting the engine with ${job.toVersion}`, false);
+      this.#phase(job, "restarting", `Restarting the engine with ${job.toVersion}`, false);
       const result = await this.#follow(job, await plan.restart(), host, APPLY_TIMEOUT_MS);
       if (result.phase !== "succeeded") {
         job.rolledBack = result.rolledBack;
@@ -291,7 +290,7 @@ export class EngineUpdater {
     queue.pause();
     this.#paused = true;
     job.drain = { since, deadline, inFlight: queue.inFlight };
-    this.#stage(job, "draining", "Waiting for running requests to finish", true);
+    this.#phase(job, "draining", "Waiting for running requests to finish", true);
     this.#note(job, `New LLM requests wait in the portal's queue; ${queue.inFlight} still running.`);
     while (queue.inFlight > 0) {
       if (this.#cancelRequested || job.finishedAt !== null) throw new Cancelled();
@@ -310,8 +309,8 @@ export class EngineUpdater {
     job.cancellable = false;
   }
 
-  #stage(job: EngineUpdateJob, stage: EngineJobStage, step: string, cancellable: boolean): void {
-    job.stage = stage;
+  #phase(job: EngineUpdateJob, phase: EngineUpdatePhase, step: string, cancellable: boolean): void {
+    job.phase = phase;
     job.step = step;
     job.cancellable = cancellable;
     this.#note(job, `${step}.`);
@@ -351,36 +350,16 @@ export class EngineUpdater {
   }
 
   #note(job: EngineUpdateJob, line: string): void {
-    job.log.push(line);
-    if (job.log.length > LOG_LINES) job.log.splice(0, job.log.length - LOG_LINES);
+    appendLog(job, [line], LOG_LINES);
   }
 
-  #finish(job: EngineUpdateJob, stage: "succeeded" | "failed" | "cancelled", error: string | null): void {
-    job.stage = stage;
-    job.finishedAt = this.#now();
-    job.error = error;
+  #finish(job: EngineUpdateJob, phase: "succeeded" | "failed" | "cancelled", error: string | null): void {
     job.drain = null;
     job.cancellable = false;
-    job.step = stage === "succeeded" ? "Done" : stage === "cancelled" ? "Cancelled" : job.rolledBack ? "Failed; the previous version runs again" : "Failed";
+    const step = phase === "succeeded" ? "Done" : phase === "cancelled" ? "Cancelled" : job.rolledBack ? "Failed; the previous version runs again" : "Failed";
     const details = { from: job.fromVersion, to: job.toVersion };
-    if (stage === "succeeded") {
-      this.#audit("engine_updated", job.actorUserId, details);
-      this.#options.log.info("engine updated", { ...details, seconds: Math.round((job.finishedAt - job.startedAt) / 1000) });
-    } else {
-      this.#audit("engine_update_failed", job.actorUserId, { ...details, error, rolledBack: job.rolledBack });
-      this.#options.log.warn(stage === "cancelled" ? "engine update cancelled" : "engine update failed", { ...details, error, rolledBack: job.rolledBack });
-    }
-  }
-
-  #audit(action: AuditAction, actorUserId: number | null, details: unknown): void {
-    try {
-      writeAudit(this.#options.db, { action, actorUserId, details });
-      return;
-    } catch (error) {
-      // The admin may have been deleted while the job ran (the actor is a foreign key): keep the entry.
-      if (actorUserId === null) return void this.#options.log.error("could not write audit entry", { action, error });
-    }
-    this.#audit(action, null, details);
+    const { db, log } = this.#options;
+    finishJob(db, log, "engine", job, this.#now(), { phase, error, step }, error === null ? details : { ...details, error, rolledBack: job.rolledBack });
   }
 }
 

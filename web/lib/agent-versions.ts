@@ -188,13 +188,13 @@ export function agentJobStep(job: Pick<AgentUpdateJob, "phase" | "reuse">): { in
  */
 export type JobKind = "update" | "rebuild" | "build" | "check";
 
-export function jobKind(job: Pick<AgentUpdateJob, "fromVersion" | "version" | "rebuild" | "reuse">): JobKind {
-  if (job.fromVersion !== job.version) return "update";
+export function jobKind(job: Pick<AgentUpdateJob, "fromVersion" | "toVersion" | "rebuild" | "reuse">): JobKind {
+  if (job.fromVersion !== job.toVersion) return "update";
   if (job.rebuild) return "rebuild";
   return job.reuse ? "check" : "build";
 }
 
-type JobTitleFields = Pick<AgentUpdateJob, "phase" | "fromVersion" | "version" | "rebuild" | "reuse">;
+type JobTitleFields = Pick<AgentUpdateJob, "phase" | "fromVersion" | "toVersion" | "rebuild" | "reuse">;
 
 /** How a job on the current version is named: while it runs, once it succeeded, and as a noun. */
 const SAME_VERSION_WORDS: Record<Exclude<JobKind, "update">, { running: string; done: string; noun: string }> = {
@@ -215,17 +215,17 @@ export function jobTitle(job: JobTitleFields, name: string): string {
     switch (job.phase) {
       case "building":
       case "verifying":
-        return `Updating ${name} ${job.fromVersion} → ${job.version}`;
+        return `Updating ${name} ${job.fromVersion} → ${job.toVersion}`;
       case "succeeded":
-        return `${name} updated to ${job.version}`;
+        return `${name} updated to ${job.toVersion}`;
       case "failed":
-        return `Update of ${name} to ${job.version} failed`;
+        return `Update of ${name} to ${job.toVersion} failed`;
       case "cancelled":
-        return `Update of ${name} to ${job.version} cancelled`;
+        return `Update of ${name} to ${job.toVersion} cancelled`;
     }
   }
   const words = SAME_VERSION_WORDS[kind];
-  const subject = `${name} ${job.version}`;
+  const subject = `${name} ${job.toVersion}`;
   switch (job.phase) {
     case "building":
     case "verifying":
@@ -249,20 +249,20 @@ export function jobOutcome(job: JobTitleFields, agent: Pick<AgentVersionInfo, "n
   const kind = jobKind(job);
   if (job.phase !== "succeeded") {
     return kind === "build"
-      ? `Nothing changed: the ${job.version} image is still missing, so new workspaces can't start.`
+      ? `Nothing changed: the ${job.toVersion} image is still missing, so new workspaces can't start.`
       : `Nothing changed: new workspaces still start with ${job.fromVersion}.`;
   }
-  if (kind === "check") return `Nothing changed: the image on this server reports ${job.version}, and new workspaces still start with it.`;
+  if (kind === "check") return `Nothing changed: the image on this server reports ${job.toVersion}, and new workspaces still start with it.`;
   const rebuilt = kind === "rebuild";
   // Running containers started before the job ended keep their image; after a rebuild that is the same version.
   const older = (agent?.running ?? [])
-    .filter((group) => rebuilt || group.version !== job.version)
+    .filter((group) => rebuilt || group.version !== job.toVersion)
     .reduce((sum, group) => sum + group.count, 0);
   const now = rebuilt
     ? `New ${name} workspaces start from the rebuilt image.`
     : kind === "build"
-      ? `New ${name} workspaces can start again, with ${job.version}.`
-      : `New ${name} workspaces start with ${job.version}.`;
+      ? `New ${name} workspaces can start again, with ${job.toVersion}.`
+      : `New ${name} workspaces start with ${job.toVersion}.`;
   if (older === 0) return now;
   const what = rebuilt ? "the previous build" : older === 1 ? "its version" : "their version";
   const until = older === 1 ? "until it restarts" : "until they restart";

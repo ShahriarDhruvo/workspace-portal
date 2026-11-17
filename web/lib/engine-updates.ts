@@ -149,7 +149,7 @@ export function engineRemoveBlocker(overview: EngineOverview | null, unreachable
 
 // ---- The job ---------------------------------------------------------------------------------------------------
 
-const STAGE_LABELS: Record<EngineUpdateJob["stage"], string> = {
+const STAGE_LABELS: Record<EngineUpdateJob["phase"], string> = {
   pulling: "Downloading the image",
   draining: "Waiting for running requests",
   restarting: "Restarting the engine",
@@ -159,9 +159,9 @@ const STAGE_LABELS: Record<EngineUpdateJob["stage"], string> = {
 };
 
 /** The stage in words; once a restart failed (`rolledBack`), the LLM server is putting the previous version back. */
-export function engineStageLabel(job: Pick<EngineUpdateJob, "stage" | "rolledBack" | "fromVersion">): string {
-  if (job.rolledBack && job.stage === "restarting") return `Putting ${version(job.fromVersion)} back`;
-  return STAGE_LABELS[job.stage];
+export function engineStageLabel(job: Pick<EngineUpdateJob, "phase" | "rolledBack" | "fromVersion">): string {
+  if (job.rolledBack && job.phase === "restarting") return `Putting ${version(job.fromVersion)} back`;
+  return STAGE_LABELS[job.phase];
 }
 
 export interface EngineJobStep {
@@ -173,15 +173,15 @@ export interface EngineJobStep {
 }
 
 /** Where a running job is: it downloads, drains and restarts; with the image on the LLM server already, only the last two. */
-export function engineJobStep(job: Pick<EngineUpdateJob, "reuse" | "stage">): EngineJobStep {
+export function engineJobStep(job: Pick<EngineUpdateJob, "reuse" | "phase">): EngineJobStep {
   const stages = job.reuse ? ["draining", "restarting"] : ["pulling", "draining", "restarting"];
-  const found = stages.indexOf(job.stage);
+  const found = stages.indexOf(job.phase);
   const index = found === -1 ? stages.length : found + 1;
-  const done = job.stage === "succeeded" || job.stage === "failed" || job.stage === "cancelled";
+  const done = job.phase === "succeeded" || job.phase === "failed" || job.phase === "cancelled";
   return { index, count: stages.length, progress: done ? 100 : Math.round(((index - 0.5) / stages.length) * 100) };
 }
 
-type JobWords = Pick<EngineUpdateJob, "stage" | "fromVersion" | "toVersion">;
+type JobWords = Pick<EngineUpdateJob, "phase" | "fromVersion" | "toVersion">;
 
 const version = (value: string | null) => value ?? "an unknown version";
 
@@ -192,7 +192,7 @@ const version = (value: string | null) => value ?? "an unknown version";
 export function engineJobTitle(job: JobWords): string {
   const older = job.fromVersion !== null && job.toVersion !== null && compareEngineVersions(job.toVersion, job.fromVersion) < 0;
   const [verb, done, noun] = older ? ["Switching", "switched", "Switch"] : ["Updating", "updated", "Update"];
-  switch (job.stage) {
+  switch (job.phase) {
     case "pulling":
     case "draining":
     case "restarting":
@@ -208,7 +208,7 @@ export function engineJobTitle(job: JobWords): string {
 
 /** What a finished job means for the engine and its requests. */
 export function engineJobOutcome(job: JobWords & Pick<EngineUpdateJob, "rolledBack">): string {
-  switch (job.stage) {
+  switch (job.phase) {
     case "succeeded":
       return `The engine runs ${version(job.toVersion)}. Requests that waited during the restart went to it.`;
     case "cancelled":

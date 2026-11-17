@@ -113,7 +113,7 @@ const ROUTES: Route[] = [
     method: "GET",
     pattern: /^\/control\/updates\/running$/,
     handler: (deps) => {
-      const agent = ["building", "verifying"].includes(deps.updater.job()?.phase ?? "");
+      const agent = deps.updater.job()?.finishedAt === null;
       const engine = deps.engine.snapshot()?.finishedAt === null;
       return { running: agent || engine, agent, engine };
     },

@@ -140,35 +140,46 @@ export interface AgentVersionInfo {
 }
 
 /**
+ * An update job, an agent's or the LLM engine's. Each of the two updaters runs one at a time, and its last job stays
+ * visible until the next starts. A job runs while `finishedAt` is null.
+ */
+export interface UpdateJob<Phase extends string> {
+  id: string;
+  /** The version in use when the job started; null when unknown. */
+  fromVersion: string | null;
+  /** The exact version being installed. */
+  toVersion: string;
+  /** That version's image was on the server already: it is used as it is, nothing is built or downloaded. */
+  reuse: boolean;
+  phase: Phase;
+  /** What it is doing right now, in words. */
+  step: string | null;
+  /** The last lines of its output. */
+  log: string[];
+  startedAt: number;
+  finishedAt: number | null;
+  /** Why it failed, or that it was cancelled; null while it runs and after it succeeded. */
+  error: string | null;
+  /** The admin who asked for it. */
+  actorUserId: number | null;
+}
+
+/**
  * An agent update's phases: building → verifying → succeeded, or failed / cancelled from either (the current
  * version then stays as it was).
  */
 export type UpdatePhase = "building" | "verifying" | "succeeded" | "failed" | "cancelled";
 
-/** POST /control/agents/:agent/update, and GET /control/agents/versions → job. */
-export interface AgentUpdateJob {
-  id: string;
+/**
+ * POST /control/agents/:agent/update, and GET /control/agents/versions → job. With `reuse` nothing is built: only the
+ * version check runs. `step` is the build step it is at, e.g. "[dsh 3/6] RUN npm install -g …", null before the first
+ * and once finished; `log` the last 200 lines of build output.
+ */
+export interface AgentUpdateJob extends UpdateJob<UpdatePhase> {
   agent: AgentKind;
-  /** The current version when the job started. */
   fromVersion: string;
-  /** The exact version being installed (X.Y.Z, as listed in Package images). */
-  version: string;
   /** Built without the cache: fresh system packages and npm install. */
   rebuild: boolean;
-  /**
-   * The job uses the image already on the server: no build, only the version check (it starts in
-   * `verifying`; its log says so too).
-   */
-  reuse: boolean;
-  actorUserId: number | null;
-  phase: UpdatePhase;
-  /** The build step it is at, e.g. "[dsh 3/6] RUN npm install -g …"; null once finished. */
-  step: string | null;
-  /** The last 200 lines of build output. */
-  log: string[];
-  startedAt: number;
-  finishedAt: number | null;
-  error: string | null;
 }
 
 /** GET /control/agents/versions[?refresh=1]. */
@@ -262,30 +273,25 @@ export interface EngineReleaseList {
   error: string | null;
 }
 
-export type EngineJobStage = "pulling" | "draining" | "restarting" | "succeeded" | "failed" | "cancelled";
+/**
+ * An engine update's phases: pulling (skipped with `reuse`) → draining → restarting → succeeded, or failed from any of
+ * them, or cancelled while pulling or draining.
+ */
+export type EngineUpdatePhase = "pulling" | "draining" | "restarting" | "succeeded" | "failed" | "cancelled";
 
-/** POST /control/engine/update, and GET /control/engine → job. */
-export interface EngineUpdateJob {
-  id: string;
-  fromVersion: string | null;
-  /** The version asked for; once it succeeded, the one the engine reports. */
-  toVersion: string | null;
-  image: string | null;
-  /** The LLM server had an image of that version: no download, it is used as it is. */
-  reuse: boolean;
-  stage: EngineJobStage;
+/**
+ * POST /control/engine/update, and GET /control/engine → job. `toVersion` is the version asked for and, once it
+ * succeeded, the one the engine reports; `log` the last 400 lines, portal-hostd's among them.
+ */
+export interface EngineUpdateJob extends UpdateJob<EngineUpdatePhase> {
   step: string;
-  log: string[];
-  startedAt: number;
-  finishedAt: number | null;
-  error: string | null;
+  image: string | null;
   /** hostd put the previous image back after the new one failed. */
   rolledBack: boolean;
   /** While draining: since when, until when at most, and how many requests are still running. */
   drain: { since: number; deadline: number; inFlight: number } | null;
   /** The update can still be cancelled with nothing changed. */
   cancellable: boolean;
-  actorUserId: number | null;
 }
 
 /** off: no portal-hostd for the LLM server; offline: it can't be reached; no_engine: it controls no engine. */

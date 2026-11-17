@@ -1,84 +1,43 @@
-// One agent update as the admin console sees it, and the only ways it can move:
-//
-//   building ──▶ verifying ──▶ succeeded
-//      │             │
-//      └─────────────┴──▶ failed | cancelled      (the current version stays as it was)
-//
-// Pure state: the updater (agent-updater.ts) drives it and serves snapshots of it.
-import type { AgentKind, AgentUpdateJob, UpdatePhase } from "@portal/core";
+// What the two updaters (agent-updater.ts, engine-updater.ts) do alike to their job record, an UpdateJob of
+// @portal/core: add to its log, and end it with an audit entry. Each keeps its own phases, its own order through them
+// and its own way to cancel. A job runs while its `finishedAt` is null.
+import { writeAudit, type AuditAction, type PortalDb, type UpdateJob } from "@portal/core";
+import type { Logger } from "../lib/log.ts";
 
-export const JOB_LOG_LINES = 200;
-export const CANCELLED = "Cancelled";
+/** Adds lines to a running job's log, which keeps its last `cap` lines. A finished job's log stays as it is. */
+export function appendLog(job: UpdateJob<string>, lines: readonly string[], cap: number): void {
+  if (job.finishedAt !== null) return;
+  job.log.push(...lines.slice(-cap));
+  if (job.log.length > cap) job.log.splice(0, job.log.length - cap);
+}
 
-export type JobStart = Pick<AgentUpdateJob, "id" | "agent" | "fromVersion" | "version" | "rebuild" | "reuse" | "actorUserId" | "startedAt">;
+/**
+ * Ends a job at `at` (`error` null: it succeeded) and records the end with `details`: in the audit log for the admin
+ * who asked, as `agent_updated` or `agent_update_failed`, and in the gateway's log, as "agent updated", "agent update
+ * failed" or "agent update cancelled" (the engine's alike).
+ */
+export function finishJob<Phase extends string>(
+  db: PortalDb,
+  log: Logger,
+  subject: "agent" | "engine",
+  job: UpdateJob<Phase>,
+  at: number,
+  end: { phase: Phase; error: string | null; step: string | null },
+  details: Record<string, unknown>,
+): void {
+  Object.assign(job, end, { finishedAt: at });
+  audit(db, log, `${subject}_${end.error === null ? "updated" : "update_failed"}`, job.actorUserId, details);
+  if (end.error === null) log.info(`${subject} updated`, { ...details, seconds: Math.round((at - job.startedAt) / 1000) });
+  else log.warn(`${subject} update ${end.phase}`, details);
+}
 
-export class UpdateJob {
-  readonly #state: AgentUpdateJob;
-
-  constructor(start: JobStart) {
-    this.#state = { ...start, phase: "building", step: null, log: [], finishedAt: null, error: null };
+function audit(db: PortalDb, log: Logger, action: AuditAction, actorUserId: number | null, details: unknown): void {
+  try {
+    writeAudit(db, { action, actorUserId, details });
+    return;
+  } catch (error) {
+    // The admin may have been deleted while the job ran (the actor is a foreign key): keep the entry.
+    if (actorUserId === null) return void log.error("could not write audit entry", { action, error });
   }
-
-  get agent(): AgentKind {
-    return this.#state.agent;
-  }
-
-  get version(): string {
-    return this.#state.version;
-  }
-
-  get phase(): UpdatePhase {
-    return this.#state.phase;
-  }
-
-  /** Still building or verifying. */
-  get active(): boolean {
-    return this.#state.phase === "building" || this.#state.phase === "verifying";
-  }
-
-  setStep(step: string): void {
-    if (this.active) this.#state.step = step;
-  }
-
-  appendLog(lines: readonly string[]): void {
-    if (!this.active || lines.length === 0) return;
-    const log = this.#state.log;
-    log.push(...lines.slice(-JOB_LOG_LINES));
-    if (log.length > JOB_LOG_LINES) log.splice(0, log.length - JOB_LOG_LINES);
-  }
-
-  /** The image is there (just built, or the one already on the server); its version is checked next. */
-  verifying(step: string): void {
-    this.#expect("building");
-    this.#state.phase = "verifying";
-    this.#state.step = step;
-  }
-
-  succeed(at: number): void {
-    this.#expect("verifying");
-    this.#finish("succeeded", null, at);
-  }
-
-  fail(error: string, at: number): void {
-    this.#expect("building", "verifying");
-    this.#finish("failed", error, at);
-  }
-
-  cancel(at: number): void {
-    this.#expect("building", "verifying");
-    this.#finish("cancelled", CANCELLED, at);
-  }
-
-  /** A copy for the API: later changes to the job don't show in it. */
-  snapshot(): AgentUpdateJob {
-    return { ...this.#state, log: [...this.#state.log] };
-  }
-
-  #finish(phase: UpdatePhase, error: string | null, at: number): void {
-    Object.assign(this.#state, { phase, error, finishedAt: at, step: null });
-  }
-
-  #expect(...phases: UpdatePhase[]): void {
-    if (!phases.includes(this.#state.phase)) throw new Error(`update job ${this.#state.id} is ${this.#state.phase}, not ${phases.join(" or ")}`);
-  }
+  audit(db, log, action, null, details);
 }

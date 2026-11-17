@@ -58,7 +58,7 @@ function job(patch: Partial<EngineUpdateJob> = {}): EngineUpdateJob {
     toVersion: "0.34.0",
     image: null,
     reuse: false,
-    stage: "pulling",
+    phase: "pulling",
     step: "",
     log: [],
     startedAt: 0,
@@ -114,7 +114,7 @@ test("the status badge: not set up, can't reach, updating, update available, up 
   assert.equal(engineStatusBadge(overview({ state: "offline", engine: null }), false).variant, "destructive");
   assert.equal(engineStatusBadge(null, true).label, "Can't reach");
   assert.deepEqual(engineStatusBadge(overview({ job: job() }), false), { label: "Updating…", variant: "info", pending: true });
-  assert.equal(engineStatusBadge(overview({ job: job({ stage: "restarting", rolledBack: true }) }), false).label, "Rolling back…");
+  assert.equal(engineStatusBadge(overview({ job: job({ phase: "restarting", rolledBack: true }) }), false).label, "Rolling back…");
   assert.equal(engineStatusBadge(overview(), false).label, "Update available");
   assert.equal(engineStatusBadge(overview({}, "0.34.0"), false).label, "Up to date");
   assert.equal(engineStatusBadge(overview({ releases: null }), false).label, "Latest unknown");
@@ -132,21 +132,21 @@ test("one job at a time; the running image can't be removed", () => {
 
 test("job steps, titles and outcomes", () => {
   assert.deepEqual(engineJobStep(job()), { index: 1, count: 3, progress: 17 });
-  assert.equal(engineStageLabel(job({ stage: "draining" })), "Waiting for running requests");
-  assert.equal(engineStageLabel(job({ stage: "restarting", rolledBack: true })), "Putting 0.31.0 back");
-  assert.deepEqual(engineJobStep(job({ reuse: true, stage: "restarting" })), { index: 2, count: 2, progress: 75 }, "no download");
-  assert.equal(engineJobStep(job({ stage: "succeeded" })).progress, 100);
-  assert.equal(engineJobTitle(job({ stage: "draining" })), "Updating the LLM engine 0.31.0 → 0.34.0");
-  assert.equal(engineJobTitle(job({ stage: "succeeded" })), "LLM engine updated to 0.34.0");
-  assert.equal(engineJobTitle(job({ fromVersion: "0.34.0", toVersion: "0.31.0", stage: "draining" })), "Switching the LLM engine 0.34.0 → 0.31.0");
-  assert.equal(engineJobTitle(job({ fromVersion: "0.34.0", toVersion: "0.31.0", stage: "failed" })), "Switch of the LLM engine to 0.31.0 failed");
-  assert.match(engineJobOutcome(job({ stage: "failed", rolledBack: true })), /0.34.0 didn't start properly, so 0.31.0 runs again/);
-  assert.match(engineJobOutcome(job({ stage: "cancelled" })), /still runs 0.31.0/);
+  assert.equal(engineStageLabel(job({ phase: "draining" })), "Waiting for running requests");
+  assert.equal(engineStageLabel(job({ phase: "restarting", rolledBack: true })), "Putting 0.31.0 back");
+  assert.deepEqual(engineJobStep(job({ reuse: true, phase: "restarting" })), { index: 2, count: 2, progress: 75 }, "no download");
+  assert.equal(engineJobStep(job({ phase: "succeeded" })).progress, 100);
+  assert.equal(engineJobTitle(job({ phase: "draining" })), "Updating the LLM engine 0.31.0 → 0.34.0");
+  assert.equal(engineJobTitle(job({ phase: "succeeded" })), "LLM engine updated to 0.34.0");
+  assert.equal(engineJobTitle(job({ fromVersion: "0.34.0", toVersion: "0.31.0", phase: "draining" })), "Switching the LLM engine 0.34.0 → 0.31.0");
+  assert.equal(engineJobTitle(job({ fromVersion: "0.34.0", toVersion: "0.31.0", phase: "failed" })), "Switch of the LLM engine to 0.31.0 failed");
+  assert.match(engineJobOutcome(job({ phase: "failed", rolledBack: true })), /0.34.0 didn't start properly, so 0.31.0 runs again/);
+  assert.match(engineJobOutcome(job({ phase: "cancelled" })), /still runs 0.31.0/);
 });
 
 test("polling, merging and input", () => {
   assert.equal(enginePollDelay(job()), ENGINE_ACTIVE_POLL_MS);
-  assert.equal(enginePollDelay(job({ finishedAt: 5, stage: "succeeded" })), ENGINE_IDLE_POLL_MS);
+  assert.equal(enginePollDelay(job({ finishedAt: 5, phase: "succeeded" })), ENGINE_IDLE_POLL_MS);
   assert.equal(enginePollDelay(null), ENGINE_IDLE_POLL_MS);
   const before = { engine: overview(), error: null };
   const failed = { engine: null, error: { error: "unreachable", message: "down" } };

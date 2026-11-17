@@ -949,7 +949,7 @@ const reusesImage = (kind, version, rebuild) => !rebuild && agentVersions.images
  * (built: false, logged first as the gateway does), a build's last phase.
  */
 function verifyAndPromote(job, at, { built }) {
-  const { agent: kind, version, rebuild, actorUserId } = job;
+  const { agent: kind, toVersion: version, rebuild, actorUserId } = job;
   const { cli } = AGENTS[kind];
   if (!built) job.log.push(`Using the image already on this server (${workspaceImage(kind, version)}).`);
   Object.assign(job, { phase: "verifying", step: `${cli} --version` });
@@ -969,7 +969,7 @@ function startJob(kind, version, rebuild, actorUserId) {
     id: crypto.randomUUID(),
     agent: kind,
     fromVersion: agentVersions.current[kind],
-    version,
+    toVersion: version,
     rebuild,
     reuse: reusesImage(kind, version, rebuild),
     actorUserId,
@@ -1059,7 +1059,7 @@ async function startUpdate(kind, body) {
   if (agentVersions.pending || jobActive()) {
     const job = jobActive() ? agentVersions.job : null;
     const message = job
-      ? `${AGENTS[job.agent].name} is being updated to ${job.version}. Wait for it to finish, or cancel it.`
+      ? `${AGENTS[job.agent].name} is being updated to ${job.toVersion}. Wait for it to finish, or cancel it.`
       : "An agent update is already running. Wait for it to finish, or cancel it.";
     return { status: 409, error: "update_running", message };
   }
@@ -1083,7 +1083,7 @@ function cancelUpdate() {
   agentVersions.timers.push(
     setTimeout(() => {
       finishJob("cancelled", "Cancelled");
-      audit("agent_update_failed", job.actorUserId, { agent: job.agent, version: job.version, error: "Cancelled" });
+      audit("agent_update_failed", job.actorUserId, { agent: job.agent, version: job.toVersion, error: "Cancelled" });
     }, 800),
   );
   return true;

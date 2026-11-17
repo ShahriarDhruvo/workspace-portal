@@ -94,7 +94,7 @@ test("engine overview, updates (a download, or the image already there) and imag
     const running = async () => json<{ running: boolean; agent: boolean; engine: boolean }>(await g.control("GET", "/control/updates/running"));
     const during = await running();
     assert.equal(during.engine, g.engine.snapshot()?.finishedAt === null, "the deploy scripts' check follows the job");
-    await waitFor(() => g.engine.snapshot()?.stage === "succeeded", "the update");
+    await waitFor(() => g.engine.snapshot()?.phase === "succeeded", "the update");
     assert.deepEqual(await running(), { running: false, agent: false, engine: false });
     assert.equal(g.engineHost!.version, "0.34.0");
     assert.equal(json<{ engine: { version: string } }>(await g.control("GET", "/control/engine")).engine.version, "0.34.0");
@@ -104,7 +104,7 @@ test("engine overview, updates (a download, or the image already there) and imag
     // Back to the version before: its image is on the LLM server, so nothing is downloaded.
     const back = json<{ reuse: boolean }>(await g.control("POST", "/control/engine/update", { version: "0.31.0", actorUserId: admin }));
     assert.equal(back.reuse, true);
-    await waitFor(() => g.engine.snapshot()?.toVersion === "0.31.0" && g.engine.snapshot()?.stage === "succeeded", "the switch back");
+    await waitFor(() => g.engine.snapshot()?.toVersion === "0.31.0" && g.engine.snapshot()?.phase === "succeeded", "the switch back");
     assert.equal(g.engineHost!.version, "0.31.0");
 
     await refused("DELETE", `/control/engine/images/${encodeURIComponent(engineDigest("0.31.0"))}`, undefined, 409, "image_current");

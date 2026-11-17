@@ -26,7 +26,7 @@ interface EngineJobProps {
  */
 export function EngineJob({ job, onChanged, onRestartNow, onDismiss }: EngineJobProps) {
   if (!isEngineJobActive(job)) {
-    const outcome = job.stage === "succeeded" ? "succeeded" : job.stage === "cancelled" ? "cancelled" : "failed";
+    const outcome = job.phase === "succeeded" ? "succeeded" : job.phase === "cancelled" ? "cancelled" : "failed";
     return (
       <JobOutcome
         outcome={outcome}
@@ -46,12 +46,12 @@ export function EngineJob({ job, onChanged, onRestartNow, onDismiss }: EngineJob
       stage={`Step ${step.index} of ${step.count} · ${engineStageLabel(job)}`}
       progress={step.progress}
       // While draining, the requests still running say more than the step does.
-      step={job.stage === "draining" ? null : job.step}
+      step={job.phase === "draining" ? null : job.step}
       startedAt={job.startedAt}
       log={job.log}
       actions={<JobButtons job={job} onChanged={onChanged} onRestartNow={onRestartNow} />}
     >
-      {job.stage === "draining" && job.drain ? (
+      {job.phase === "draining" && job.drain ? (
         <p className="text-13 text-muted-foreground">
           <span className="font-medium text-foreground tabular-nums">
             {job.drain.inFlight} {job.drain.inFlight === 1 ? "request" : "requests"}
@@ -59,12 +59,12 @@ export function EngineJob({ job, onChanged, onRestartNow, onDismiss }: EngineJob
           still running. New requests wait in the portal&apos;s queue; the engine restarts once these finish, or at{" "}
           <LocalTime at={job.drain.deadline} /> at the latest.
         </p>
-      ) : job.stage === "restarting" && job.rolledBack ? (
+      ) : job.phase === "restarting" && job.rolledBack ? (
         <p className="text-13 text-muted-foreground">
           {job.toVersion ?? "The new version"} didn&apos;t start properly, so the LLM server is putting{" "}
           {job.fromVersion ?? "the previous version"} back. New requests keep waiting in the portal&apos;s queue.
         </p>
-      ) : job.stage === "restarting" ? (
+      ) : job.phase === "restarting" ? (
         <p className="text-13 text-muted-foreground">
           New requests wait in the portal&apos;s queue until the engine answers again. If the new version doesn&apos;t start properly, the
           LLM server puts the previous one back by itself.
@@ -77,7 +77,7 @@ export function EngineJob({ job, onChanged, onRestartNow, onDismiss }: EngineJob
 function JobButtons({ job, onChanged, onRestartNow }: Omit<EngineJobProps, "onDismiss">) {
   const [cancelling, startCancel] = useTransition();
   const [error, setError] = useState<string | null>(null);
-  if (!job.cancellable && job.stage !== "draining") return null;
+  if (!job.cancellable && job.phase !== "draining") return null;
   return (
     <div className="flex flex-col items-end gap-2">
       <div className="flex flex-wrap items-center gap-2">
@@ -103,7 +103,7 @@ function JobButtons({ job, onChanged, onRestartNow }: Omit<EngineJobProps, "onDi
             {cancelling ? "Cancelling…" : "Cancel"}
           </Button>
         ) : null}
-        {job.stage === "draining" ? (
+        {job.phase === "draining" ? (
           <Button type="button" variant="destructive" size="sm" onClick={(event) => onRestartNow(event.currentTarget)}>
             Restart now…
           </Button>

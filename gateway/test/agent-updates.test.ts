@@ -82,7 +82,7 @@ test("an update over the control API: the job, the new current version, and new 
     const started = await update(g, "qwen", { version: "0.27.4", actorUserId: admin });
     assert.equal(started.status, 200, started.body);
     const job = json<AgentUpdateJob>(started);
-    assert.deepEqual([job.agent, job.fromVersion, job.version, job.rebuild, job.reuse, job.actorUserId, job.phase], ["qwen", "0.27.0", "0.27.4", false, false, admin, "building"]);
+    assert.deepEqual([job.agent, job.fromVersion, job.toVersion, job.rebuild, job.reuse, job.actorUserId, job.phase], ["qwen", "0.27.0", "0.27.4", false, false, admin, "building"]);
     const done = await finished(g);
     assert.equal(done.id, job.id);
     assert.equal(done.phase, "succeeded", done.error ?? "");
@@ -164,7 +164,7 @@ test("one job at a time; it can be cancelled, and a cancelled or failed job leav
     const building = gate();
     g.builder.buildGate = building.promise;
     const first = json<AgentUpdateJob>(await update(g, "dsh", { version: "0.2.2-rc.3", rebuild: true, actorUserId: admin }));
-    assert.deepEqual([first.version, first.rebuild, first.phase], ["0.2.2-rc.3", true, "building"]);
+    assert.deepEqual([first.toVersion, first.rebuild, first.phase], ["0.2.2-rc.3", true, "building"]);
     const step = await pollJob(g, (job) => job.step !== null, "the build step");
     assert.equal(step.step, '[dsh 1/2] RUN npm install -g --no-fund --no-audit "@deepseek-ai/dsh@0.2.2-rc.3"');
     assert.deepEqual(failure(await update(g, "qwen", { version: "0.27.4" })), [409, "update_running"], "for all agents");

@@ -66,7 +66,7 @@ test("an update builds a staging image, checks it, tags it and makes it current"
     const job = await t.updater.startUpdate({ ...update, agent: "qwen", version: "0.27.4" });
     assert.deepEqual(
       { ...job, log: [], step: null },
-      { id: "job-1", agent: "qwen", fromVersion: "0.27.0", version: "0.27.4", rebuild: false, reuse: false, actorUserId: ADMIN, phase: "building", step: null, log: [], startedAt: 1_000_000, finishedAt: null, error: null },
+      { id: "job-1", agent: "qwen", fromVersion: "0.27.0", toVersion: "0.27.4", rebuild: false, reuse: false, actorUserId: ADMIN, phase: "building", step: null, log: [], startedAt: 1_000_000, finishedAt: null, error: null },
     );
     t.clock.now += 5_000;
     await t.updater.settled();
@@ -75,6 +75,8 @@ test("an update builds a staging image, checks it, tags it and makes it current"
     assert.deepEqual([done.finishedAt, done.error, done.step], [1_005_000, null, null]);
     assert.ok(done.log.includes("#2 added 14 packages in 7s"), "the build output");
     assert.equal(done.log.at(-1), "qwen --version: 0.27.4");
+    done.log.push("changed by the caller");
+    assert.equal(t.updater.job()!.log.at(-1), "qwen --version: 0.27.4", "the job is served as a copy");
     assert.deepEqual(t.builder.builds.map(({ outcome, ...spec }) => [spec, outcome]), [
       [{ kind: "qwen", version: "0.27.4", versionKey: "QWEN_CODE_VERSION", image: stagingImage("qwen", "0.27.4"), noCache: false }, "built"],
     ]);
@@ -251,6 +253,7 @@ test("a gateway shutdown records the running job as failed at once (not as the a
     assert.deepEqual(t.audits(), [{ action: "agent_update_failed", actorUserId: ADMIN, details: { agent: "qwen", version: "0.27.4", error: GATEWAY_RESTARTED } }]);
     await t.updater.settled();
     assert.deepEqual([t.updater.job()!.phase, t.updater.job()!.error], ["failed", GATEWAY_RESTARTED], "recorded once");
+    assert.deepEqual([t.updater.job()!.step, t.updater.job()!.log], [null, []], "what the build still reported doesn't show");
     assert.equal(t.audits().length, 1);
     assert.equal(t.builder.builds[0]!.outcome, "aborted");
     assert.equal(t.versions.current("qwen"), "0.27.0");
@@ -335,7 +338,7 @@ test("one job at a time, for all agents, including while a request is still bein
     building.open();
     await t.updater.settled();
     const next = await t.updater.startUpdate({ ...update, agent: "dsh", version: "0.2.2-rc.3" });
-    assert.equal(next.version, "0.2.2-rc.3", "the next job may start once the first is done");
+    assert.equal(next.toVersion, "0.2.2-rc.3", "the next job may start once the first is done");
     await t.updater.settled();
   } finally {
     t.cleanup();

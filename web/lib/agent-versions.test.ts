@@ -50,7 +50,7 @@ function job(overrides: Partial<AgentUpdateJob> = {}): AgentUpdateJob {
     id: "job-1",
     agent: "dsh",
     fromVersion: "0.2.2-rc.1",
-    version: "0.2.2-rc.3",
+    toVersion: "0.2.2-rc.3",
     rebuild: false,
     reuse: false,
     actorUserId: 1,
@@ -149,10 +149,10 @@ test("an image can't be removed while current, in use, or while its agent is bei
 test("what a job does: a version change, or for the current version a rebuild, a build or a check", () => {
   assert.equal(jobKind(job()), "update");
   assert.equal(jobKind(job({ rebuild: true })), "update", "another version, from scratch");
-  assert.equal(jobKind(job({ fromVersion: "0.2.2-rc.1", version: "0.2.2-rc.1", rebuild: true })), "rebuild");
+  assert.equal(jobKind(job({ fromVersion: "0.2.2-rc.1", toVersion: "0.2.2-rc.1", rebuild: true })), "rebuild");
   // The same version without rebuild: the gateway built it because its image was missing, or used the image it has.
-  assert.equal(jobKind(job({ fromVersion: "0.2.2-rc.1", version: "0.2.2-rc.1" })), "build");
-  assert.equal(jobKind(job({ fromVersion: "0.2.2-rc.1", version: "0.2.2-rc.1", reuse: true })), "check");
+  assert.equal(jobKind(job({ fromVersion: "0.2.2-rc.1", toVersion: "0.2.2-rc.1" })), "build");
+  assert.equal(jobKind(job({ fromVersion: "0.2.2-rc.1", toVersion: "0.2.2-rc.1", reuse: true })), "check");
   assert.equal(jobKind(job({ reuse: true })), "update", "a switch to an image on the server");
 });
 
@@ -164,12 +164,12 @@ test("job titles by phase: a version change, a rebuild from scratch, a build of 
   assert.equal(jobTitle(job({ phase: "cancelled" }), name), "Update of DeepSeek Harness to 0.2.2-rc.3 cancelled");
   // From scratch to another version: still a version change ("from scratch" is said beside it).
   assert.equal(jobTitle(job({ rebuild: true }), name), "Updating DeepSeek Harness 0.2.2-rc.1 → 0.2.2-rc.3");
-  const rebuild = job({ fromVersion: "0.2.2-rc.1", version: "0.2.2-rc.1", rebuild: true });
+  const rebuild = job({ fromVersion: "0.2.2-rc.1", toVersion: "0.2.2-rc.1", rebuild: true });
   assert.equal(jobTitle(rebuild, name), "Rebuilding DeepSeek Harness 0.2.2-rc.1");
   assert.equal(jobTitle({ ...rebuild, phase: "succeeded" }, name), "DeepSeek Harness 0.2.2-rc.1 rebuilt");
   assert.equal(jobTitle({ ...rebuild, phase: "failed" }, name), "Rebuild of DeepSeek Harness 0.2.2-rc.1 failed");
   // The current version without rebuild is no rebuild: its missing image built with the cache, or a check.
-  const build = job({ fromVersion: "0.2.2-rc.1", version: "0.2.2-rc.1" });
+  const build = job({ fromVersion: "0.2.2-rc.1", toVersion: "0.2.2-rc.1" });
   assert.equal(jobTitle(build, name), "Building DeepSeek Harness 0.2.2-rc.1");
   assert.equal(jobTitle({ ...build, phase: "succeeded" }, name), "DeepSeek Harness 0.2.2-rc.1 built");
   assert.equal(jobTitle({ ...build, phase: "cancelled" }, name), "Build of DeepSeek Harness 0.2.2-rc.1 cancelled");
@@ -196,13 +196,13 @@ test("a finished job says what it means for new and running workspaces", () => {
     "New DeepSeek Harness workspaces start with 0.2.2-rc.3. 1 running workspace keeps its version until it restarts.",
     "another version from scratch",
   );
-  const rebuilt = job({ phase: "succeeded", fromVersion: "0.2.2-rc.1", version: "0.2.2-rc.1", rebuild: true });
+  const rebuilt = job({ phase: "succeeded", fromVersion: "0.2.2-rc.1", toVersion: "0.2.2-rc.1", rebuild: true });
   assert.equal(
     jobOutcome(rebuilt, { ...dsh, running: [{ version: "0.2.2-rc.1", count: 1 }] }),
     "New DeepSeek Harness workspaces start from the rebuilt image. 1 running workspace keeps the previous build until it restarts.",
   );
   // A missing image built again: there was no previous build to keep.
-  const built = job({ phase: "succeeded", fromVersion: "0.2.2-rc.1", version: "0.2.2-rc.1" });
+  const built = job({ phase: "succeeded", fromVersion: "0.2.2-rc.1", toVersion: "0.2.2-rc.1" });
   assert.equal(jobOutcome(built, dsh), "New DeepSeek Harness workspaces can start again, with 0.2.2-rc.1.");
   assert.equal(
     jobOutcome(built, { ...dsh, running: [{ version: "0.2.2-rc.1", count: 1 }] }),

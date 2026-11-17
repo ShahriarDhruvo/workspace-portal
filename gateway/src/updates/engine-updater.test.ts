@@ -85,7 +85,7 @@ test("an update downloads, drains the queue, restarts, then opens the queue agai
   await assert.rejects(updater.startUpdate({ version: "0.33.0", actorUserId: null }), EngineJobRunningError);
 
   // Draining: new requests wait, the running one may finish.
-  const draining = await waitFor(() => (updater.snapshot()?.stage === "draining" ? updater.snapshot() : null), "the drain");
+  const draining = await waitFor(() => (updater.snapshot()?.phase === "draining" ? updater.snapshot() : null), "the drain");
   assert.equal(draining!.drain?.inFlight, 1);
   assert.equal(queue.paused, true);
   let granted = false;
@@ -99,7 +99,7 @@ test("an update downloads, drains the queue, restarts, then opens the queue agai
   running();
 
   const finished = await done();
-  assert.equal(finished!.stage, "succeeded");
+  assert.equal(finished!.phase, "succeeded");
   assert.equal(finished!.toVersion, "0.34.0");
   assert.equal(host.version, "0.34.0");
   assert.equal(host.previous, "0.31.0");
@@ -120,7 +120,7 @@ test("a failed restart reports hostd's rollback; an image on the LLM server is u
   host.failApply = "the engine reports 0.31.0, not 0.33.0";
   await updater.startUpdate({ version: "0.33.0", actorUserId: null });
   const failed = await done();
-  assert.deepEqual([failed!.stage, failed!.rolledBack, failed!.error, failed!.step], ["failed", true, "the engine reports 0.31.0, not 0.33.0", "Failed; the previous version runs again"]);
+  assert.deepEqual([failed!.phase, failed!.rolledBack, failed!.error, failed!.step], ["failed", true, "the engine reports 0.31.0, not 0.33.0", "Failed; the previous version runs again"]);
   assert.equal(host.version, "0.31.0");
   assert.equal(queue.paused, false, "the queue opens again after a failure too");
 
@@ -128,12 +128,12 @@ test("a failed restart reports hostd's rollback; an image on the LLM server is u
   registry.failing = true;
   host.calls.length = 0;
   const again = await updater.startUpdate({ version: "0.33.0", actorUserId: null });
-  assert.deepEqual([again.reuse, again.stage], [true, "draining"]);
+  assert.deepEqual([again.reuse, again.phase], [true, "draining"]);
   await done();
   assert.equal(host.version, "0.33.0");
   const back = await updater.startUpdate({ version: "0.31.0", actorUserId: null });
   const switched = await done();
-  assert.deepEqual([back.reuse, switched!.stage, switched!.fromVersion, switched!.toVersion], [true, "succeeded", "0.33.0", "0.31.0"]);
+  assert.deepEqual([back.reuse, switched!.phase, switched!.fromVersion, switched!.toVersion], [true, "succeeded", "0.33.0", "0.31.0"]);
   assert.ok(switched!.log.includes(`Using the image already on the LLM server (${ENGINE_REPOSITORY}@${engineDigest("0.31.0")}).`));
   assert.equal(host.version, "0.31.0");
   assert.deepEqual(host.calls, [`apply ${ENGINE_REPOSITORY}@${engineDigest("0.33.0")} 0.33.0`, `apply ${ENGINE_REPOSITORY}@${engineDigest("0.31.0")} 0.31.0`], "no pull");
@@ -155,25 +155,25 @@ test("cancel during the download or the drain leaves the engine as it was; Resta
   await waitFor(() => host.calls.length === 1, "the download");
   assert.equal(await updater.cancel(), true);
   const cancelled = await done();
-  assert.deepEqual([cancelled!.stage, cancelled!.error], ["cancelled", CANCELLED]);
+  assert.deepEqual([cancelled!.phase, cancelled!.error], ["cancelled", CANCELLED]);
   assert.ok(host.calls.includes("cancel"));
   assert.equal(host.version, "0.31.0");
 
   host.jobPolls = 1;
   const running = await queue.acquire(1);
   await updater.startUpdate({ version: "0.34.0", actorUserId: null });
-  await waitFor(() => updater.snapshot()?.stage === "draining", "the drain");
+  await waitFor(() => updater.snapshot()?.phase === "draining", "the drain");
   assert.equal(await updater.cancel(), true);
   await done();
-  assert.equal(updater.snapshot()!.stage, "cancelled");
+  assert.equal(updater.snapshot()!.phase, "cancelled");
   assert.equal(queue.paused, false);
   assert.equal(host.version, "0.31.0");
 
   await updater.startUpdate({ version: "0.34.0", actorUserId: null });
-  await waitFor(() => updater.snapshot()?.stage === "draining", "the drain");
+  await waitFor(() => updater.snapshot()?.phase === "draining", "the drain");
   assert.equal(updater.restartNow(), true);
   const restarted = await done();
-  assert.equal(restarted!.stage, "succeeded");
+  assert.equal(restarted!.phase, "succeeded");
   assert.ok(restarted!.log.some((line) => line.startsWith("Restarting now on request; 1 running")));
   assert.equal(await updater.cancel(), false, "nothing to cancel");
   assert.equal(updater.restartNow(), false);
@@ -185,17 +185,17 @@ test("the drain ends at ENGINE_DRAIN_MINUTES; shutdown records a running job as 
   const { updater, host, queue, clock, done, cleanup } = setup({ drainMinutes: 1 });
   const running = await queue.acquire(1);
   await updater.startUpdate({ version: "0.34.0", actorUserId: null });
-  await waitFor(() => updater.snapshot()?.stage === "draining", "the drain");
+  await waitFor(() => updater.snapshot()?.phase === "draining", "the drain");
   clock.now += 60_000;
   const finished = await done();
-  assert.equal(finished!.stage, "succeeded");
+  assert.equal(finished!.phase, "succeeded");
   assert.ok(finished!.log.some((line) => line.startsWith("Still 1 running after 1 minutes")));
   running();
 
   host.jobPolls = 1_000_000;
   await updater.startUpdate({ version: "0.33.0", actorUserId: null });
   updater.shutdown();
-  assert.deepEqual([updater.snapshot()!.stage, updater.snapshot()!.error], ["failed", GATEWAY_STOPPED]);
+  assert.deepEqual([updater.snapshot()!.phase, updater.snapshot()!.error], ["failed", GATEWAY_STOPPED]);
   cleanup();
 });
 

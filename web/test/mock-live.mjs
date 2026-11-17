@@ -125,7 +125,7 @@ export function createMockLive(deps) {
     const busy = sessions.length / 7;
     const writing = sessions.filter((s) => s.readUntil !== null).length;
     const reading = sessions.length - writing;
-    const pulling = engine.job?.stage === "pulling";
+    const pulling = engine.job?.phase === "pulling";
     if (role === "llm") {
       const gpuUsage = sessions.length === 0 ? 2 : Math.min(99, 55 + 40 * busy + 4 * wave(t, 3000));
       return {
@@ -464,7 +464,7 @@ export function createMockLive(deps) {
   async function runEngineJob(target, actorUserId) {
     const job = engine.job;
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-    const stage = (name, step, cancellable) => Object.assign(job, { stage: name, step, cancellable });
+    const stage = (name, step, cancellable) => Object.assign(job, { phase: name, step, cancellable });
     try {
       if (job.reuse) note(`Using the image already on the LLM server (${job.image}).`);
       else {
@@ -506,13 +506,13 @@ export function createMockLive(deps) {
       engine.previous = engine.version;
       engine.version = target;
       note("The engine is ready.");
-      Object.assign(job, { stage: "succeeded", step: "Done", finishedAt: Date.now(), toVersion: target, cancellable: false });
+      Object.assign(job, { phase: "succeeded", step: "Done", finishedAt: Date.now(), toVersion: target, cancellable: false });
       deps.audit("engine_updated", actorUserId, { from: job.fromVersion, to: target });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const cancelled = message === "Cancelled.";
       Object.assign(job, {
-        stage: cancelled ? "cancelled" : "failed",
+        phase: cancelled ? "cancelled" : "failed",
         step: cancelled ? "Cancelled" : job.rolledBack ? "Failed; the previous version runs again" : "Failed",
         error: message,
         finishedAt: Date.now(),
@@ -534,7 +534,7 @@ export function createMockLive(deps) {
       toVersion: target,
       image: `${REPOSITORY}@${digestOf(target)}`,
       reuse,
-      stage: reuse ? "draining" : "pulling",
+      phase: reuse ? "draining" : "pulling",
       step: "Starting",
       log: [],
       startedAt: Date.now(),
@@ -578,7 +578,7 @@ export function createMockLive(deps) {
       return [200, { cancelled: ok }];
     }
     if (action === "restart-now" && method === "POST") {
-      const ok = engineBusy() && engine.job.stage === "draining";
+      const ok = engineBusy() && engine.job.phase === "draining";
       if (ok) engine.job.restartNow = true;
       return [200, { ok }];
     }

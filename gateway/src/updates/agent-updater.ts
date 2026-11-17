@@ -19,7 +19,7 @@
 // The seams (ImageBuilder, NpmRegistry, ReleaseCache, AgentVersions, the clock) are injected, so the
 // flow is tested with fakes.
 import crypto from "node:crypto";
-import { isVersion, writeAudit, type AgentKind, type AgentUpdateJob, type AgentVersionsOverview, type AuditAction, type PortalDb, type WorkspaceInfo } from "@portal/core";
+import { isVersion, type AgentKind, type AgentUpdateJob, type AgentVersionsOverview, type PortalDb, type WorkspaceInfo } from "@portal/core";
 import { describeAgentVersions } from "./agent-overview.ts";
 import type { AgentVersions } from "./agent-versions.ts";
 import { driverFor } from "../agents/index.ts";
@@ -29,7 +29,7 @@ import { stagingImage, workspaceImage } from "../docker/image-names.ts";
 import { errorMessage, type Logger } from "../lib/log.ts";
 import type { NpmRegistry } from "./npm-registry.ts";
 import type { ReleaseCache } from "./release-cache.ts";
-import { CANCELLED, UpdateJob } from "./update-job.ts";
+import { appendLog, finishJob } from "./update-job.ts";
 import { AgentUnavailableError } from "../workspaces/manager.ts";
 
 /**
@@ -37,6 +37,9 @@ import { AgentUnavailableError } from "../workspaces/manager.ts";
  * npm) on a small host.
  */
 const BUILD_TIMEOUT_MS = 30 * 60_000;
+/** Lines of build output a job keeps. */
+const LOG_LINES = 200;
+const CANCELLED = "Cancelled";
 /** The error of a job the gateway's shutdown abandoned. */
 export const GATEWAY_RESTARTED = "The gateway restarted during the update.";
 
@@ -116,7 +119,7 @@ export class AgentUpdater {
   readonly #newId: () => string;
   readonly #buildTimeoutMs: number;
   /** The running job, else the last finished one. */
-  #job: UpdateJob | null = null;
+  #job: AgentUpdateJob | null = null;
   /** An update request still being checked (its image on the server, the registry); it counts as running. */
   #pending: AgentKind | null = null;
   #cancel: AbortController | null = null;
@@ -162,9 +165,9 @@ export class AgentUpdater {
     };
   }
 
-  /** The running job, else the last finished one; null before the first. */
+  /** The running job, else the last finished one; null before the first. A copy: later changes don't show in it. */
   job(): AgentUpdateJob | null {
-    return this.#job?.snapshot() ?? null;
+    return this.#job && { ...this.#job, log: [...this.#job.log] };
   }
 
   /**
@@ -179,27 +182,32 @@ export class AgentUpdater {
     this.#pending = agent;
     try {
       const { version, reuse } = await this.#plan(agent, request.version.trim(), request.rebuild);
-      const job = new UpdateJob({
+      const job: AgentUpdateJob = {
         id: this.#newId(),
         agent,
         fromVersion: this.#versions.current(agent),
-        version,
+        toVersion: version,
         rebuild: request.rebuild,
         reuse,
         actorUserId: request.actorUserId,
         startedAt: this.#now(),
-      });
+        phase: "building",
+        step: null,
+        log: [],
+        finishedAt: null,
+        error: null,
+      };
       const cancel = new AbortController();
       this.#job = job;
       this.#cancel = cancel;
       this.#cancellable = true;
-      this.#log.info("agent update started", { agent, from: job.snapshot().fromVersion, to: version, rebuild: request.rebuild, reuse });
+      this.#log.info("agent update started", { agent, from: job.fromVersion, to: version, rebuild: request.rebuild, reuse });
       this.#running = this.#run(job, cancel).finally(() => {
         this.#running = null;
         this.#cancel = null;
         this.#cancellable = false;
       });
-      return job.snapshot();
+      return this.job()!;
     } finally {
       this.#pending = null;
     }
@@ -207,7 +215,7 @@ export class AgentUpdater {
 
   /** Cancels the running job; false when there is none (or it is already making the image current). */
   cancel(): boolean {
-    if (!this.#job?.active || !this.#cancel || !this.#cancellable) return false;
+    if (this.#job?.finishedAt !== null || !this.#cancel || !this.#cancellable) return false;
     this.#cancel.abort();
     return true;
   }
@@ -226,7 +234,7 @@ export class AgentUpdater {
    */
   shutdown(): void {
     const job = this.#job;
-    if (!job?.active || !this.#cancel || !this.#cancellable) return;
+    if (job?.finishedAt !== null || !this.#cancel || !this.#cancellable) return;
     this.#recordFailure(job, GATEWAY_RESTARTED, false);
     this.#cancel.abort();
   }
@@ -251,7 +259,7 @@ export class AgentUpdater {
   async removeImage(agent: AgentKind, version: string): Promise<void> {
     const { name } = driverFor(agent);
     if (!isVersion(version)) throw new InvalidVersionError(`"${version}" is not a version (like 0.27.4).`);
-    if (this.#pending === agent || (this.#job?.active && this.#job.agent === agent)) {
+    if (this.#pending === agent || (this.#job?.finishedAt === null && this.#job.agent === agent)) {
       throw new UpdateRunningError(`An update of ${name} is running. Wait for it to finish, or cancel it.`);
     }
     if (this.#versions.current(agent) === version) throw new ImageCurrentError(name, version);
@@ -269,8 +277,8 @@ export class AgentUpdater {
   }
 
   #runningError(): UpdateRunningError {
-    const job = this.#job?.active ? this.#job : null;
-    if (job) return new UpdateRunningError(`${driverFor(job.agent).name} is being updated to ${job.version}. Wait for it to finish, or cancel it.`);
+    const job = this.#job?.finishedAt === null ? this.#job : null;
+    if (job) return new UpdateRunningError(`${driverFor(job.agent).name} is being updated to ${job.toVersion}. Wait for it to finish, or cancel it.`);
     if (this.#running) return new UpdateRunningError("The last update is still cleaning up; try again in a moment.");
     return new UpdateRunningError();
   }
@@ -288,10 +296,10 @@ export class AgentUpdater {
   }
 
   /** A job that reuses an image checks and uses the image on the server instead of building one. */
-  async #run(job: UpdateJob, cancel: AbortController): Promise<void> {
-    const { agent, version } = job;
+  async #run(job: AgentUpdateJob, cancel: AbortController): Promise<void> {
+    const { agent, toVersion: version, fromVersion, rebuild, reuse } = job;
     const { name, release } = driverFor(agent);
-    const { fromVersion, rebuild, reuse, actorUserId, startedAt } = job.snapshot();
+    const append = (lines: readonly string[]): void => appendLog(job, lines, LOG_LINES);
     const image = workspaceImage(agent, version);
     const staging = stagingImage(agent, version);
     // Leftovers of interrupted jobs (a staging tag, a version-check container) go before the build: in
@@ -302,27 +310,32 @@ export class AgentUpdater {
     const signal = AbortSignal.any([cancel.signal, deadline]);
     try {
       if (reuse) {
-        job.appendLog([`Using the image already on this server (${image}).`]);
+        append([`Using the image already on this server (${image}).`]);
       } else {
         await this.#builder.build(
           { kind: agent, version, versionKey: release.versionKey, image: staging, noCache: rebuild },
-          { onStep: (step) => job.setStep(step), onLog: (lines) => job.appendLog(lines) },
+          {
+            onStep: (step) => {
+              if (job.finishedAt === null) job.step = step;
+            },
+            onLog: append,
+          },
           signal,
         );
         signal.throwIfAborted();
       }
-      job.verifying(`${release.cli} --version`);
+      // The image is there (just built, or the one already on the server); its version is checked next.
+      job.phase = "verifying";
+      job.step = `${release.cli} --version`;
       const reported = await this.#builder.cliVersion(reuse ? image : staging, release.cli, signal);
       if (reported !== version) throw new VersionMismatchError(`The ${reuse ? "" : "new "}image reports ${name} ${reported ?? "(no version)"}, not ${version}.`);
-      job.appendLog([`${release.cli} --version: ${reported}`]);
+      append([`${release.cli} --version: ${reported}`]);
       signal.throwIfAborted();
       // From here on the job finishes: the image becomes current.
       this.#cancellable = false;
       const replaced = reuse ? null : await this.#builder.promote(staging, image);
       this.#versions.set(agent, version);
-      job.succeed(this.#now());
-      this.#audit("agent_updated", actorUserId, { agent, from: fromVersion, to: version, rebuild });
-      this.#log.info("agent updated", { agent, from: fromVersion, to: version, rebuild, seconds: Math.round((this.#now() - startedAt) / 1000) });
+      finishJob(this.#db, this.#log, "agent", job, this.#now(), { phase: "succeeded", error: null, step: null }, { agent, from: fromVersion, to: version, rebuild });
       // Only now the build a rebuild replaced, best effort: removing a large image can outlast the second
       // a shutting-down gateway has left, and the outcome above must not depend on it. One that a
       // workspace still uses (or that a shutdown cut short) is removed by a later sweep.
@@ -330,8 +343,8 @@ export class AgentUpdater {
         await this.#builder.removeUntagged(replaced).catch((error: unknown) => this.#log.warn("could not remove the build a rebuild replaced", { image: replaced, error }));
       }
     } catch (error) {
-      // Not active any more: shutdown() has recorded it already.
-      if (job.active) {
+      // Finished already: shutdown() has recorded it.
+      if (job.finishedAt === null) {
         const cancelled = cancel.signal.aborted;
         const message = cancelled
           ? CANCELLED
@@ -349,22 +362,8 @@ export class AgentUpdater {
   }
 
   /** Ends a job that didn't make it: failed (with `message`) or cancelled, audited and logged. */
-  #recordFailure(job: UpdateJob, message: string, cancelled: boolean): void {
-    const { agent, version, actorUserId } = job.snapshot();
-    if (cancelled) job.cancel(this.#now());
-    else job.fail(message, this.#now());
-    this.#audit("agent_update_failed", actorUserId, { agent, version, error: message });
-    this.#log.warn(cancelled ? "agent update cancelled" : "agent update failed", { agent, version, error: message });
-  }
-
-  #audit(action: AuditAction, actorUserId: number | null, details: unknown): void {
-    try {
-      writeAudit(this.#db, { action, actorUserId, details });
-      return;
-    } catch (error) {
-      // The admin may have been deleted while the job ran (the actor is a foreign key): keep the entry.
-      if (actorUserId === null) return void this.#log.error("could not write audit entry", { action, error });
-    }
-    this.#audit(action, null, details);
+  #recordFailure(job: AgentUpdateJob, message: string, cancelled: boolean): void {
+    const end = { phase: cancelled ? "cancelled" : "failed", error: message, step: null } as const;
+    finishJob(this.#db, this.#log, "agent", job, this.#now(), end, { agent: job.agent, version: job.toVersion, error: message });
   }
 }
