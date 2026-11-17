@@ -4,7 +4,7 @@ import type { EnergyCurrency } from "@portal/db/energy-locations";
 import type { WorkspaceKind } from "@portal/db";
 
 /** Rows per page of the sessions table. */
-export const SESSION_PAGE_SIZE = 8;
+export const SESSION_PAGE_SIZE = 6;
 
 /** One run of a user's workspace, from Start to its stop, and what its LLM requests added up to. */
 export interface SessionRow {

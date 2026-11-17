@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import { formatNumber } from "@/lib/live-format";
 import type { LlmLive, LlmTotalsPoint } from "@/lib/live-types";
 import type { SessionPage } from "@/lib/session-types";
+import { cn } from "@/lib/utils";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -38,14 +39,15 @@ const ENGINE_BADGES: Record<LlmLive["engine"], ReactNode> = {
 
 /**
  * Usage's focal card: the LLM server's total Read and Write rates, each charted over the last minute (stacked on
- * one time axis, each on its own scale: reading runs about ten times faster than writing), then the workspace
- * sessions with what their LLM requests added up to (SessionsTable).
+ * one time axis, each on its own scale: reading runs about ten times faster than writing; they take the height
+ * the card gets beyond its own), then the workspace sessions with what their LLM requests added up to
+ * (SessionsTable).
  */
 export function LlmCard({ llm, tokens, now, sessions, sessionsVersion }: LlmCardProps) {
   const busy = llm.sessionsReported && llm.engineSessions !== null ? llm.sessions.length : llm.inFlight;
   const capacity = llm.sessionsReported && llm.engineSessions !== null ? llm.engineSessions : llm.maxConcurrency;
   return (
-    <Card className="gap-0 py-0">
+    <Card className="h-full gap-0 py-0">
       <CardHeader className="flex flex-col items-stretch gap-0 border-b px-0 sm:flex-row">
         <div className="flex flex-1 flex-col justify-center gap-1 px-4 py-3">
           <CardTitle className="flex items-center gap-2">
@@ -72,7 +74,7 @@ export function LlmCard({ llm, tokens, now, sessions, sessionsVersion }: LlmCard
           ))}
         </div>
       </CardHeader>
-      <CardContent className="flex flex-col gap-4 p-4">
+      <CardContent className="flex flex-1 flex-col gap-4 p-4">
         {llm.paused ? (
           <Alert variant="warning">
             <WarningIcon />
@@ -88,9 +90,9 @@ export function LlmCard({ llm, tokens, now, sessions, sessionsVersion }: LlmCard
             </AlertDescription>
           </Alert>
         ) : null}
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-1 flex-col gap-3">
           {TOTAL_KEYS.map((key, index) => (
-            <figure key={key} className="flex flex-col gap-1">
+            <figure key={key} className="flex flex-1 flex-col gap-1">
               <figcaption>
                 <SeriesName total={key} />
               </figcaption>
@@ -102,7 +104,7 @@ export function LlmCard({ llm, tokens, now, sessions, sessionsVersion }: LlmCard
                 format={formatNumber}
                 syncId="llm-totals"
                 timeAxis={index === TOTAL_KEYS.length - 1}
-                className={index === TOTAL_KEYS.length - 1 ? "h-21" : "h-15"}
+                className={cn("h-auto flex-1", index === TOTAL_KEYS.length - 1 ? "min-h-21" : "min-h-15")}
               />
             </figure>
           ))}

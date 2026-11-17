@@ -10,9 +10,13 @@ import { TableBody, TableCell, TableHeader, TableRow } from "@/components/ui/tab
 
 /**
  * The cards' layout (UsageLive and its skeleton): the sessions over the two servers, which sit side by side from
- * xl; on a wide desktop (3xl) all three in a row, the sessions a little wider for their table.
+ * xl; on a wide desktop (3xl) all three in a row, the sessions a little wider for their table. Cards in a row are
+ * as tall as the tallest: each gives the extra height to its charts.
  */
-export const USAGE_GRID = "grid items-start gap-4 xl:grid-cols-2 3xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)]";
+export const USAGE_GRID = "grid gap-4 xl:grid-cols-2 3xl:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)_minmax(0,1fr)]";
+
+/** The sessions table's height with a full page (its heading row, the rows and the pager), kept whatever it shows. */
+export const SESSIONS_TABLE_HEIGHT = 36 + SESSION_PAGE_SIZE * 55 + 53;
 
 /** The whole page: heading and the live cards. */
 export function UsageSkeleton() {
@@ -51,11 +55,11 @@ export function LiveSkeleton({ rows = SESSION_PAGE_SIZE }: { rows?: number }) {
           </div>
         </CardHeader>
         {/* The Read and Write charts, each under its caption; the lower one has the time axis. */}
-        <CardContent className="flex flex-col gap-3 p-4">
-          {["h-15", "h-21"].map((height) => (
-            <div key={height} className="flex flex-col gap-1">
+        <CardContent className="flex flex-1 flex-col gap-3 p-4">
+          {["min-h-15", "min-h-21"].map((height) => (
+            <div key={height} className="flex flex-1 flex-col gap-1">
               <Skeleton className="my-0.5 h-3 w-12" />
-              <Skeleton className={height} />
+              <Skeleton className={cn("flex-1", height)} />
             </div>
           ))}
         </CardContent>
@@ -70,51 +74,54 @@ export function LiveSkeleton({ rows = SESSION_PAGE_SIZE }: { rows?: number }) {
 /** SessionsTable: its heading row and two-line rows (built from the same parts) and the pager, or its empty state. */
 function SessionsSkeleton({ rows }: { rows: number }) {
   return (
-    <DataTable
-      variant="flush"
-      footer={
-        rows > 0 ? (
-          <div className="flex items-center justify-between border-t px-4 py-2.5">
-            <Skeleton className="h-4 w-16" />
-            <Skeleton className="h-8 w-24" />
-          </div>
-        ) : null
-      }
-    >
-      <TableHeader>
-        <TableRow className="hover:bg-transparent">
-          <DataTableHead>
-            <Skeleton className="h-3 w-14" />
-          </DataTableHead>
-          <DataTableHead colSpan={8}>
-            <Skeleton className="ml-auto h-3 w-full max-w-sm" />
-          </DataTableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {rows === 0 ? (
-          <DataTableEmpty colSpan={2}>
-            <Skeleton className="mx-auto my-0.5 h-4 w-28" />
-          </DataTableEmpty>
-        ) : (
-          Array.from({ length: rows }, (_, row) => (
-            <TableRow key={row} className="hover:bg-transparent [&>td]:align-top">
-              <TableCell>
-                <span className="flex h-5 items-center">
-                  <Skeleton className="h-4 w-28" />
-                </span>
-                <span className="mt-0.5 flex h-5 items-center">
-                  <Skeleton className="h-3 w-20" />
-                </span>
-              </TableCell>
-              <TableCell colSpan={8}>
-                <Skeleton className="my-0.5 ml-auto h-4 w-full max-w-sm" />
-              </TableCell>
-            </TableRow>
-          ))
-        )}
-      </TableBody>
-    </DataTable>
+    <div className="flex flex-col" style={{ minHeight: SESSIONS_TABLE_HEIGHT }}>
+      <DataTable
+        variant="flush"
+        className="flex flex-1 flex-col"
+        footer={
+          rows > 0 ? (
+            <div className="mt-auto flex items-center justify-between border-t px-4 py-2.5">
+              <Skeleton className="h-4 w-16" />
+              <Skeleton className="h-8 w-24" />
+            </div>
+          ) : null
+        }
+      >
+        <TableHeader>
+          <TableRow className="hover:bg-transparent">
+            <DataTableHead>
+              <Skeleton className="h-3 w-14" />
+            </DataTableHead>
+            <DataTableHead colSpan={8}>
+              <Skeleton className="ml-auto h-3 w-full max-w-sm" />
+            </DataTableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows === 0 ? (
+            <DataTableEmpty colSpan={2}>
+              <Skeleton className="mx-auto my-0.5 h-4 w-28" />
+            </DataTableEmpty>
+          ) : (
+            Array.from({ length: rows }, (_, row) => (
+              <TableRow key={row} className="hover:bg-transparent [&>td]:align-top">
+                <TableCell>
+                  <span className="flex h-5 items-center">
+                    <Skeleton className="h-4 w-28" />
+                  </span>
+                  <span className="mt-0.5 flex h-4 items-center">
+                    <Skeleton className="h-3 w-20" />
+                  </span>
+                </TableCell>
+                <TableCell colSpan={8}>
+                  <Skeleton className="my-0.5 ml-auto h-4 w-full max-w-sm" />
+                </TableCell>
+              </TableRow>
+            ))
+          )}
+        </TableBody>
+      </DataTable>
+    </div>
   );
 }
 
@@ -144,13 +151,13 @@ export const DETAIL_GRID = "grid grid-cols-2 gap-x-6 gap-y-4 @lg:grid-cols-3";
 /**
  * A server card under its header until its readings arrive (also ServerCard's own, while it waits for the first):
  * the chart, the five metrics, the CPU, GPU and memory readings and the Details footer, each at its real height in
- * a phone's card, a narrow card and from @lg. A server with fans has one group more, which the skeleton can't know of.
+ * a phone's card, a narrow card and from @lg.
  */
 export function ServerBodySkeleton({ busyLabel }: { busyLabel?: string }) {
   return (
     <>
       <CardContent className="@container flex flex-1 flex-col gap-4 p-4" aria-busy={busyLabel ? true : undefined} aria-label={busyLabel}>
-        <Skeleton className="h-24" />
+        <Skeleton className="min-h-24 flex-1" />
         <div className={METRIC_GRID}>
           <Skeleton className="h-[86.4px] rounded-lg @lg:h-[110.4px]" />
           <Skeleton className="h-[86.4px] rounded-lg @lg:h-[110.4px]" />
@@ -159,9 +166,9 @@ export function ServerBodySkeleton({ busyLabel }: { busyLabel?: string }) {
           <Skeleton className="col-span-2 h-[98.4px] rounded-lg @lg:h-[111px]" />
         </div>
         <div className={cn(DETAIL_GRID, "border-t pt-4")}>
-          <Skeleton className="h-[138px]" />
-          <Skeleton className="h-[138px]" />
-          <Skeleton className="h-[98px] @lg:h-[138px]" />
+          <Skeleton className="h-[118px]" />
+          <Skeleton className="h-[118px]" />
+          <Skeleton className="h-[98px] @lg:h-[118px]" />
         </div>
       </CardContent>
       <CardFooter className="justify-center p-0">

@@ -37,11 +37,12 @@ const STATES: Record<HostLive["state"], ReactNode> = {
 };
 
 /**
- * One server's readings from its portal-hostd, every 500 ms. Its power draw is the card's focal number (charted
- * over the last minute); under it five metrics that each read at a glance: one figure, a bar where it is a share of
- * a whole, at most two quiet facts. Under them the readings behind CPU, GPU and memory (clocks, temperatures,
- * per-part power, swap, bandwidth) and the fans; the disks, interfaces and the system are one click away under
- * Details, which works the same on touch screens. A reading the server can't give (an older portal-hostd has no
+ * One server's readings from its portal-hostd, every 500 ms. Its power draw is the card's focal number, charted
+ * over the last minute (the chart takes the height the card gets beyond its own, level with its neighbours); under
+ * it five metrics that each read at a glance: one figure, a bar where it is a share of a whole, at most two quiet
+ * facts. Under them the readings behind CPU, GPU and memory (clocks, temperatures, per-part power, swap,
+ * bandwidth); the disks, interfaces, fans and the system are one click away under Details, which works the same
+ * on touch screens. A reading the server can't give (an older portal-hostd has no
  * network or disk) shows "—"; a server without portal-hostd says how to set it up.
  */
 export function ServerCard({ host, history, now }: { host: HostLive; history: readonly HostSample[]; now: number }) {
@@ -88,7 +89,7 @@ function Readings({ host, sample, history, now }: { host: HostLive; sample: Host
             color="var(--chart-1)"
             now={now}
             format={formatWatts}
-            className="h-24"
+            className="h-auto min-h-24 flex-1"
           />
         ) : null}
         <div className={METRIC_GRID}>
@@ -174,18 +175,16 @@ function Direction({ icon, rate, today }: { icon: ReactNode; rate: number | null
   );
 }
 
-/** The readings behind CPU, GPU and memory, grouped like them, and the fans that turn; always shown. */
+/** The readings behind CPU, GPU and memory, grouped like them; always shown. */
 function Readouts({ host, sample }: { host: HostLive; sample: HostSample }) {
   const info = host.info;
   const { cpu, gpu, memory } = sample;
   const free = memoryFree(sample);
-  const fans = sample.fans.filter((fan) => fan.rpm !== null && fan.rpm > 0);
   const gpuMemory = memory.gpuBytes ?? gpu?.memUsedBytes ?? null;
   return (
     <div className={cn(DETAIL_GRID, "border-t pt-4")}>
       <DetailGroup title="CPU">
         <Reading label="Clock" value={formatClockOrIdle(cpu.mhz, cpu.usage)} />
-        <Reading label="Fastest core" value={formatClockOrIdle(cpu.mhzPeak, cpu.usage)} />
         <Reading label="Up to" value={formatClock(info?.cpu.maxMhz)} />
         <Reading label="Temperature" value={formatTemp(cpu.tempC)} />
         <Reading label="Power" value={formatWatts(cpu.powerW)} />
@@ -207,21 +206,15 @@ function Readouts({ host, sample }: { host: HostLive; sample: HostSample }) {
           value={memory.readBps === null && memory.writeBps === null ? "—" : formatBandwidth((memory.readBps ?? 0) + (memory.writeBps ?? 0))}
         />
       </DetailGroup>
-      {fans.length > 0 ? (
-        <DetailGroup title="Fans">
-          {fans.map((fan) => (
-            <Reading key={fan.label} label={fan.label} value={`${formatNumber(fan.rpm)} rpm`} />
-          ))}
-        </DetailGroup>
-      ) : null}
     </div>
   );
 }
 
-/** Under Details: the disks, the network interfaces and the system's own facts (two columns). */
+/** Under Details: the disks, the network interfaces, the fans that turn and the system's own facts. */
 function Details({ host, sample }: { host: HostLive; sample: HostSample }) {
   const info = host.info;
   const { disk } = sample;
+  const fans = sample.fans.filter((fan) => fan.rpm !== null && fan.rpm > 0);
   return (
     <div className={DETAIL_GRID}>
       <DetailGroup title="Disk">
@@ -234,6 +227,13 @@ function Details({ host, sample }: { host: HostLive; sample: HostSample }) {
       <DetailGroup title="Network">
         <Reading label="Interfaces" value={info?.network?.interfaces.join(", ") || "—"} />
       </DetailGroup>
+      {fans.length > 0 ? (
+        <DetailGroup title="Fans">
+          {fans.map((fan) => (
+            <Reading key={fan.label} label={fan.label} value={`${formatNumber(fan.rpm)} rpm`} />
+          ))}
+        </DetailGroup>
+      ) : null}
       {info ? (
         <DetailGroup title="System" className="col-span-2">
           <Reading label="Power sensor" value={info.power?.label ?? "—"} />
