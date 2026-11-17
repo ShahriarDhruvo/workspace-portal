@@ -64,7 +64,7 @@ const PORTAL_INFO = {
 const wave = (t, periodMs, phase = 0) => (Math.sin((t / periodMs) * 2 * Math.PI + phase) + 1) / 2;
 const round = (value, digits = 1) => Math.round(value * 10 ** digits) / 10 ** digits;
 const pad = (n) => String(n).padStart(2, "0");
-/** YYYY-MM-DD in the local time zone, as @portal/db's usageDay(). */
+/** YYYY-MM-DD in the local time zone, as @portal/core's usageDay(). */
 const localDay = (date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 
 /** A number in [0, 1) that depends only on the text, so the seeded history is the same on every start. */

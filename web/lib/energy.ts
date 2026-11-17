@@ -16,7 +16,7 @@ import {
   writeSetting,
   type EnergyLocation,
   type PortalDb,
-} from "@portal/db";
+} from "@portal/core";
 import { formatPricePeriod, formatUnitPrice, priceUnit } from "./live-format.ts";
 
 /** A published price, for the days from `periodStart` up to (not including) `periodEnd`. */

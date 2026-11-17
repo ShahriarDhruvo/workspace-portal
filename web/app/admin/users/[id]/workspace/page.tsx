@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { notFound, redirect } from "next/navigation";
 import { eq } from "drizzle-orm";
-import { AGENT_NAMES, displayName, users } from "@portal/db";
+import { AGENT_NAMES, displayName, users } from "@portal/core";
 import { config } from "@/lib/config";
 import { workspaceFrame } from "@/lib/workspace-frame";
 import { getDb } from "@/lib/db";

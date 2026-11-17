@@ -16,7 +16,7 @@ WORKDIR /src
 # Manifests first so the dependency layer is cached. web/package.json is only read so the
 # workspace lockfile stays consistent; none of the web app's dependencies are installed.
 COPY package.json package-lock.json ./
-COPY packages/db/package.json packages/db/
+COPY packages/core/package.json packages/core/
 COPY gateway/package.json gateway/
 COPY web/package.json web/
 RUN npm ci --workspace @portal/gateway --include-workspace-root=false --no-audit --no-fund
@@ -26,7 +26,7 @@ RUN npm ci --workspace @portal/gateway --include-workspace-root=false --no-audit
 RUN node -e "require('better-sqlite3')(':memory:')" \
  || npm --prefix node_modules/better-sqlite3 run build-release
 
-COPY packages/db/ packages/db/
+COPY packages/core/ packages/core/
 COPY gateway/ gateway/
 # Bundles dist/main.js and copies the externals with their dependencies to /out/node_modules.
 RUN node gateway/build.mjs --runtime-deps /out

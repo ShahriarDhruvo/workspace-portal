@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { AGENT_NAMES } from "@portal/db";
+import { AGENT_NAMES } from "@portal/core";
 import { loadAdminAgents, loadAdminEngine } from "@/lib/overview";
 import { requireAdmin } from "@/lib/session";
 import { PageMain } from "@/components/layout/page-main";

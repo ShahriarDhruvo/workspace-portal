@@ -1,6 +1,6 @@
 // Gateway control API types (docs/ARCHITECTURE.md) plus the shapes of the portal's own JSON routes.
 // Type-only module: safe to import from client components.
-import type { AgentKind, WorkspaceKind, WorkspaceStatus } from "@portal/db";
+import type { AgentKind, WorkspaceKind, WorkspaceStatus } from "@portal/core";
 
 /** GET /control/agents: one of the agents enabled on this install (Settings' choices, in display order). */
 export interface AgentInfo {

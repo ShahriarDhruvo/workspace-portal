@@ -1,5 +1,5 @@
 // Human-readable audit log entries. Pure; unit tested.
-import { AGENT_NAMES, isAgentKind, isWorkspaceKind, WORKSPACE_KIND_NAMES, type AuditAction } from "@portal/db";
+import { AGENT_NAMES, isAgentKind, isWorkspaceKind, WORKSPACE_KIND_NAMES, type AuditAction } from "@portal/core";
 
 const ACTION_LABELS: Record<AuditAction, string> = {
   login: "Signed in",

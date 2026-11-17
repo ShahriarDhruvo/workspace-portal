@@ -1,4 +1,4 @@
-// Bundles the gateway (and @portal/db, drizzle) into dist/main.js.
+// Bundles the gateway (and @portal/core, drizzle) into dist/main.js.
 //   node build.mjs                       bundle only
 //   node build.mjs --runtime-deps <dir>  also copy the external packages and everything they depend
 //                                        on into <dir>/node_modules (used by the Dockerfile)

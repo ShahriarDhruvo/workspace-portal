@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { displayName } from "@portal/db";
+import { displayName } from "@portal/core";
 import { initials } from "@/lib/format";
 import { requireUser } from "@/lib/session";
 import { AppHeader } from "@/components/layout/app-header";

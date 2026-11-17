@@ -7,9 +7,9 @@
 //   * how the gateway learns that the agent is up and whether it is working;
 //   * where its releases come from, so the admin can update it (release).
 import type { IncomingHttpHeaders } from "node:http";
-import type { AgentKind, WorkspaceKind } from "@portal/db";
+import type { AgentKind, WorkspaceKind } from "@portal/core";
 import type { Config } from "../config.ts";
-import type { HeaderMap } from "../headers.ts";
+import type { HeaderMap } from "../proxy/headers.ts";
 
 /**
  * Name of the env var holding the placeholder LLM key in every workspace. The gateway's LLM proxy

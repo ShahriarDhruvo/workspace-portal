@@ -6,10 +6,10 @@ import http, { type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { WebSocketServer } from "ws";
-import type { AgentKind, WorkspaceKind } from "@portal/db";
+import type { AgentKind, WorkspaceKind } from "@portal/core";
 import { driverFor } from "../src/agents/index.ts";
 import type { SettingsObject } from "../src/agents/qwen-settings.ts";
-import type { WorkspaceStartOptions } from "../src/container-spec.ts";
+import type { WorkspaceStartOptions } from "../src/docker/container-spec.ts";
 import {
   BuildError,
   ImageInUseError,
@@ -20,14 +20,14 @@ import {
   type ImageBuilder,
   type SweepResult,
   type WorkspaceImageSummary,
-} from "../src/image-builder.ts";
-import type { NotesClient, RegistryClient, ReleaseNotes } from "../src/engine-releases.ts";
-import type { EngineHost } from "../src/engine-updater.ts";
-import { HostdError, type EngineJob, type EngineStatus } from "../src/hostd.ts";
-import { parseWorkspaceImage, STAGING_REPOSITORY, workspaceImage } from "../src/image-names.ts";
-import { RegistryError, type NpmPackage, type NpmRegistry } from "../src/npm-registry.ts";
-import { userPaths } from "../src/paths.ts";
-import type { ContainerRuntime, ContainerSample, ContainerState, ContainerSummary, StartedContainer } from "../src/runtime.ts";
+} from "../src/docker/image-builder.ts";
+import type { NotesClient, RegistryClient, ReleaseNotes } from "../src/updates/engine-releases.ts";
+import type { EngineHost } from "../src/updates/engine-updater.ts";
+import { HostdError, type EngineJob, type EngineStatus } from "../src/monitor/hostd.ts";
+import { parseWorkspaceImage, STAGING_REPOSITORY, workspaceImage } from "../src/docker/image-names.ts";
+import { RegistryError, type NpmPackage, type NpmRegistry } from "../src/updates/npm-registry.ts";
+import { userPaths } from "../src/workspaces/paths.ts";
+import type { ContainerRuntime, ContainerSample, ContainerState, ContainerSummary, StartedContainer } from "../src/docker/runtime.ts";
 
 export async function listenLocal(server: http.Server, port = 0, host = "127.0.0.1"): Promise<number> {
   await new Promise<void>((resolve, reject) => {

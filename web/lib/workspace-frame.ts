@@ -1,5 +1,5 @@
 import "server-only";
-import { agentBrowserToken, agentPortFor, type SessionContext, type WorkspaceKind } from "@portal/db";
+import { agentBrowserToken, agentPortFor, type SessionContext, type WorkspaceKind } from "@portal/core";
 import type { AgentFrame } from "./agent-url";
 import { config } from "./config";
 

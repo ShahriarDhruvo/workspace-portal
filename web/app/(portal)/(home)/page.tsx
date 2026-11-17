@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { AGENT_NAMES, displayName } from "@portal/db";
+import { AGENT_NAMES, displayName } from "@portal/core";
 import { openMyWorkspace } from "@/lib/actions/admin";
 import { startingAgent } from "@/lib/agent-choice";
 import { config } from "@/lib/config";

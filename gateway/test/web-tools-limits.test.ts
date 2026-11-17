@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import net from "node:net";
-import { withPageCache, type ReaderBackend } from "../src/reader.ts";
+import { withPageCache, type ReaderBackend } from "../src/service/reader.ts";
 import { json, request, startGateway } from "./harness.ts";
 
 const rpc = (method: string, params?: unknown) => ({ jsonrpc: "2.0", id: 1, method, ...(params === undefined ? {} : { params }) });

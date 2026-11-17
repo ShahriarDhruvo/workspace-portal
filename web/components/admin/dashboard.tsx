@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import type { AgentKind } from "@portal/db";
+import type { AgentKind } from "@portal/core";
 import { startingAgent } from "@/lib/agent-choice";
 import { fetchJson } from "@/lib/fetch-json";
 import { agentLabel, formatVersion } from "@/lib/format";
@@ -34,7 +34,7 @@ interface DashboardProps {
   users: UserSummary[];
   initialOverview: AdminOverview;
   currentAdminId: number;
-  /** AGENT_NAMES, which this client component can't import from @portal/db. */
+  /** AGENT_NAMES, which this client component can't import from @portal/core. */
   agentNames: Readonly<Record<AgentKind, string>>;
   /** The enabled agents in display order; null when the gateway can't say. */
   enabledAgents: ReadonlyArray<{ id: AgentKind }> | null;

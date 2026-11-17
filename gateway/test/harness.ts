@@ -23,33 +23,33 @@ import {
   type AgentKind,
   type PortalDb,
   type WorkspaceKind,
-} from "@portal/db";
-import type { AgentDeps } from "../src/agent-access.ts";
-import { createAgentServerFactory } from "../src/agent-proxy.ts";
-import { createPreviewServerFactory } from "../src/preview-proxy.ts";
-import { AgentUpdater } from "../src/agent-updater.ts";
-import { AgentVersions } from "../src/agent-versions.ts";
+} from "@portal/core";
+import type { AgentDeps } from "../src/proxy/agent-access.ts";
+import { createAgentServerFactory } from "../src/proxy/agent-proxy.ts";
+import { createPreviewServerFactory } from "../src/proxy/preview-proxy.ts";
+import { AgentUpdater } from "../src/updates/agent-updater.ts";
+import { AgentVersions } from "../src/updates/agent-versions.ts";
 import { loadConfig, PREVIEW_PORT_OFFSET, type Config } from "../src/config.ts";
-import { ConnectionRegistry } from "../src/connections.ts";
+import { ConnectionRegistry } from "../src/proxy/connections.ts";
 import { createControlServer, type ControlDeps } from "../src/control-api.ts";
-import type { FenceState } from "../src/fence.ts";
-import { BEARER_SUBPROTOCOL_PREFIX } from "../src/headers.ts";
-import { LlmQueue } from "../src/llm-queue.ts";
-import { LlmRequests, type FinishedLlmRequest } from "../src/llm-requests.ts";
-import { SessionLog } from "../src/session-log.ts";
-import type { Logger } from "../src/log.ts";
-import type { ReaderBackend } from "../src/reader.ts";
-import { ReleaseCache } from "../src/release-cache.ts";
-import type { SearchBackend, SearchQuery } from "../src/search-mcp.ts";
-import { createServiceServer, type ServiceDeps } from "../src/service-api.ts";
-import { SessionCache } from "../src/session-cache.ts";
-import { WorkspaceManager, type WorkspaceInfo } from "../src/workspaces.ts";
-import { EngineReleases } from "../src/engine-releases.ts";
-import { EnergyPrices, type FetchText } from "../src/energy-prices.ts";
-import { EngineUpdater } from "../src/engine-updater.ts";
-import { HostMonitor } from "../src/host-monitor.ts";
-import { LiveHub, userNames } from "../src/live.ts";
-import { LlmMonitor } from "../src/llm-monitor.ts";
+import type { FenceState } from "../src/workspaces/fence.ts";
+import { BEARER_SUBPROTOCOL_PREFIX } from "../src/proxy/headers.ts";
+import { LlmQueue } from "../src/service/llm-queue.ts";
+import { LlmRequests, type FinishedLlmRequest } from "../src/monitor/llm-requests.ts";
+import { SessionLog } from "../src/monitor/session-log.ts";
+import type { Logger } from "../src/lib/log.ts";
+import type { ReaderBackend } from "../src/service/reader.ts";
+import { ReleaseCache } from "../src/updates/release-cache.ts";
+import type { SearchBackend, SearchQuery } from "../src/service/search-mcp.ts";
+import { createServiceServer, type ServiceDeps } from "../src/service/service-api.ts";
+import { SessionCache } from "../src/proxy/session-cache.ts";
+import { WorkspaceManager, type WorkspaceInfo } from "../src/workspaces/manager.ts";
+import { EngineReleases } from "../src/updates/engine-releases.ts";
+import { EnergyPrices, type FetchText } from "../src/monitor/energy-prices.ts";
+import { EngineUpdater } from "../src/updates/engine-updater.ts";
+import { HostMonitor } from "../src/monitor/host-monitor.ts";
+import { LiveHub, userNames } from "../src/monitor/live.ts";
+import { LlmMonitor } from "../src/monitor/llm-monitor.ts";
 import {
   closeServer,
   FakeEngineHost,

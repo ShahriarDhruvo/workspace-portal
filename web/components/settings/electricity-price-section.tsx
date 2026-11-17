@@ -1,4 +1,4 @@
-import { usageDay } from "@portal/db";
+import { usageDay } from "@portal/core";
 import { getDb } from "@/lib/db";
 import { loadEnergyLocation, loadPricePeriods, priceOn, priceSummary } from "@/lib/energy";
 import { gateway } from "@/lib/gateway";

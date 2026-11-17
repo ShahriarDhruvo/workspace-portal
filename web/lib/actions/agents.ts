@@ -1,6 +1,6 @@
 "use server";
 
-import { writeAudit } from "@portal/db";
+import { writeAudit } from "@portal/core";
 import { agentActionError, type AgentAction } from "../agent-versions";
 import { getDb } from "../db";
 import { gateway, toApiError } from "../gateway";

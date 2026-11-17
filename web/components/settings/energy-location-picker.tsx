@@ -1,7 +1,7 @@
 "use client";
 
 import { useOptimistic, useState, useTransition } from "react";
-import { ENERGY_LOCATIONS, ENERGY_REGION_NAMES, type EnergyRegion } from "@portal/db/energy-locations";
+import { ENERGY_LOCATIONS, ENERGY_REGION_NAMES, type EnergyRegion } from "@portal/core/energy-locations";
 import { setEnergyLocation } from "@/lib/actions/energy";
 import { FormError } from "@/components/forms/form-error";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";

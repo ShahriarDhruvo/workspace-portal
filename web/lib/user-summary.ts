@@ -1,4 +1,4 @@
-import { displayName, type AgentKind, type User } from "@portal/db";
+import { displayName, type AgentKind, type User } from "@portal/core";
 import { initials } from "./format";
 
 /** The serializable slice of a user that client components get (never the password hash). */

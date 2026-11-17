@@ -10,7 +10,7 @@ import {
   loadSessionContext,
   sessions,
   type SessionContext,
-} from "@portal/db";
+} from "@portal/core";
 import { config } from "./config";
 import { getDb } from "./db";
 

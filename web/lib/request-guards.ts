@@ -1,6 +1,6 @@
 // Request checks for the JSON Route Handlers. Pure (no request context, no server-only imports), so they
 // can be unit tested; lib/api.ts applies them.
-import type { User } from "@portal/db";
+import type { User } from "@portal/core";
 import type { ApiError } from "./gateway-types.ts";
 
 /**

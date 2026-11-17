@@ -1,6 +1,6 @@
 import "server-only";
 import { and, eq } from "drizzle-orm";
-import { llmUsage, usageDay } from "@portal/db";
+import { llmUsage, usageDay } from "@portal/core";
 import { getDb } from "./db";
 
 export interface UsageToday {

@@ -1,5 +1,5 @@
 import "server-only";
-import type { SessionContext } from "@portal/db";
+import type { SessionContext } from "@portal/core";
 import { startingAgent } from "./agent-choice";
 import { GatewayError, gateway, toApiError } from "./gateway";
 import type { ApiError, WorkspaceInfo, WorkspaceStatusResponse } from "./gateway-types";

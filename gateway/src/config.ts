@@ -3,8 +3,8 @@
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { AGENT_KINDS, isAgentKind, WORKSPACE_KINDS, type AgentKind, type WorkspaceKind } from "@portal/db";
-import { isVersion } from "./versions.ts";
+import { AGENT_KINDS, isAgentKind, WORKSPACE_KINDS, type AgentKind, type WorkspaceKind } from "@portal/core";
+import { isVersion } from "./lib/versions.ts";
 
 /**
  * A workspace's preview port (preview-proxy.ts: the person's browser reaching the web app running in the workspace)

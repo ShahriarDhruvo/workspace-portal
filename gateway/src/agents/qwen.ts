@@ -7,8 +7,8 @@
 //     QWEN_CODE_SYSTEM_SETTINGS_PATH / QWEN_CODE_SYSTEM_DEFAULTS_PATH point.
 import crypto from "node:crypto";
 import http from "node:http";
-import { AGENT_NAMES } from "@portal/db";
-import { workspaceRequestHeaders } from "../headers.ts";
+import { AGENT_NAMES } from "@portal/core";
+import { workspaceRequestHeaders } from "../proxy/headers.ts";
 import type { AgentDriver, AgentEndpoint } from "./driver.ts";
 import { serviceBaseUrl } from "./driver.ts";
 import { loadAdminQwenConfig, renderQwenSettings } from "./qwen-settings.ts";

@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { eq } from "drizzle-orm";
-import { auditLog, openDatabase, users } from "@portal/db";
+import { auditLog, openDatabase, users } from "@portal/core";
 import { verifyPassword } from "./passwords.ts";
 import { seedAdmin, type AdminSeedSettings } from "./seed.ts";
 

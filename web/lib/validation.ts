@@ -1,7 +1,7 @@
 // Input rules shared by the server actions, the admin seed and the forms.
 // Pure module (no server-only imports) so it can be unit tested with `node --test`.
 import { z } from "zod";
-import { AGENT_KINDS, WORKSPACE_KINDS } from "@portal/db";
+import { AGENT_KINDS, WORKSPACE_KINDS } from "@portal/core";
 import { isAgentVersion, NAME_MAX_LENGTH, PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, USERNAME_PATTERN } from "./limits.ts";
 
 // Letters from any script (with combining marks), spaces, hyphens, straight and curly apostrophes, periods.

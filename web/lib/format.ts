@@ -1,5 +1,5 @@
 // Display formatting shared by server and client components. Pure; unit tested.
-import type { AgentKind } from "@portal/db";
+import type { AgentKind } from "@portal/core";
 import type { WorkspaceInfo } from "./gateway-types.ts";
 
 const BYTE_UNITS = ["B", "KiB", "MiB", "GiB", "TiB"] as const;
@@ -98,7 +98,7 @@ export function formatVersion(version: string): string {
 
 /**
  * The workspace's agent in a few words: its name while a container runs it, "last: <name>" once stopped, null
- * if it never started. `names` is AGENT_NAMES (passed in, as client components can't import @portal/db values).
+ * if it never started. `names` is AGENT_NAMES (passed in, as client components can't import @portal/core values).
  */
 export function agentLabel(
   info: Pick<WorkspaceInfo, "status" | "agent"> | null,

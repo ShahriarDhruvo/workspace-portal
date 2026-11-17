@@ -6,9 +6,9 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import WebSocket, { WebSocketServer } from "ws";
-import { hashSessionToken } from "@portal/db";
+import { hashSessionToken } from "@portal/core";
 import { cookie, json, request, startGateway, type Gateway, type Reply } from "./harness.ts";
-import { previewCookieName } from "../src/preview-proxy.ts";
+import { previewCookieName } from "../src/proxy/preview-proxy.ts";
 
 interface Seen {
   method: string;

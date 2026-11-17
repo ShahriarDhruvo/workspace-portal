@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { loginAttempts, openDatabase } from "@portal/db";
+import { loginAttempts, openDatabase } from "@portal/core";
 import {
   FAILURE_WINDOW_MS,
   LOCKOUT_MS,

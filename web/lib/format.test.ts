@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { AGENT_NAMES } from "@portal/db";
+import { AGENT_NAMES } from "@portal/core";
 import {
   agentLabel,
   formatBytes,

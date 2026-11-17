@@ -3,7 +3,7 @@
 import crypto from "node:crypto";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import { eq } from "drizzle-orm";
-import { AGENT_KINDS, isAgentKind, isWorkspaceKind, users, WORKSPACE_KINDS, type AgentKind, type PortalDb, type WorkspaceKind } from "@portal/db";
+import { AGENT_KINDS, isAgentKind, isWorkspaceKind, users, WORKSPACE_KINDS, type AgentKind, type PortalDb, type WorkspaceKind } from "@portal/core";
 import {
   ImageCurrentError,
   InvalidVersionError,
@@ -11,27 +11,27 @@ import {
   VersionNotFoundError,
   type AgentUpdater,
   type UpdateRequest,
-} from "./agent-updater.ts";
-import type { AgentVersions } from "./agent-versions.ts";
+} from "./updates/agent-updater.ts";
+import type { AgentVersions } from "./updates/agent-versions.ts";
 import { driverFor } from "./agents/index.ts";
 import type { Config } from "./config.ts";
-import { SESSION_DISCONNECTED, type ConnectionRegistry } from "./connections.ts";
+import { SESSION_DISCONNECTED, type ConnectionRegistry } from "./proxy/connections.ts";
 import {
   EngineJobRunningError,
   EngineRequestError,
   EngineUnavailableError,
   type EngineUpdater,
-} from "./engine-updater.ts";
-import { readHostStats } from "./host-stats.ts";
-import { HostdError } from "./hostd.ts";
-import { HttpError, readJsonBody, sendError, sendJson, splitTarget } from "./http-util.ts";
-import { ImageInUseError, ImageNotFoundError } from "./image-builder.ts";
-import { TooManyViewersError, type LiveHub } from "./live.ts";
-import type { EnergyPrices } from "./energy-prices.ts";
-import type { LlmQueue } from "./llm-queue.ts";
-import type { Logger } from "./log.ts";
-import { RegistryError } from "./npm-registry.ts";
-import type { SessionCache } from "./session-cache.ts";
+} from "./updates/engine-updater.ts";
+import { readHostStats } from "./monitor/host-stats.ts";
+import { HostdError } from "./monitor/hostd.ts";
+import { HttpError, readJsonBody, sendError, sendJson, splitTarget } from "./lib/http-util.ts";
+import { ImageInUseError, ImageNotFoundError } from "./docker/image-builder.ts";
+import { TooManyViewersError, type LiveHub } from "./monitor/live.ts";
+import type { EnergyPrices } from "./monitor/energy-prices.ts";
+import type { LlmQueue } from "./service/llm-queue.ts";
+import type { Logger } from "./lib/log.ts";
+import { RegistryError } from "./updates/npm-registry.ts";
+import type { SessionCache } from "./proxy/session-cache.ts";
 import {
   AgentMismatchError,
   AgentUnavailableError,
@@ -45,7 +45,7 @@ import {
   StopError,
   WorkspaceRunningError,
   type WorkspaceManager,
-} from "./workspaces.ts";
+} from "./workspaces/manager.ts";
 
 export interface ControlDeps {
   config: Config;

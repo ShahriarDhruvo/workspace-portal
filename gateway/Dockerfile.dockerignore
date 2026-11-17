@@ -2,9 +2,9 @@
 *
 !package.json
 !package-lock.json
-!packages/db/package.json
-!packages/db/tsconfig.json
-!packages/db/src/
+!packages/core/package.json
+!packages/core/tsconfig.json
+!packages/core/src/
 !gateway/package.json
 !gateway/tsconfig.json
 !gateway/build.mjs

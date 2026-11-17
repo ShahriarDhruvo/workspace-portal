@@ -2,7 +2,7 @@
 
 import { eq } from "drizzle-orm";
 import { refresh } from "next/cache";
-import { users, writeAudit } from "@portal/db";
+import { users, writeAudit } from "@portal/core";
 import { getDb } from "../db";
 import { gateway, toApiError } from "../gateway";
 import { requireUser } from "../session";

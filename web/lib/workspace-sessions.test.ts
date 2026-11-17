@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { energyLocation, energyPrices, openDatabase, users, workspaceSessions } from "@portal/db";
+import { energyLocation, energyPrices, openDatabase, users, workspaceSessions } from "@portal/core";
 import { saveEnergyLocation } from "./energy.ts";
 import { SESSION_PAGE_SIZE } from "./session-types.ts";
 import { loadSessionPage, sessionRow } from "./workspace-sessions.ts";

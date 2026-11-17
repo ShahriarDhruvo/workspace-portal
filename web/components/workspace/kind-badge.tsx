@@ -1,4 +1,4 @@
-import type { WorkspaceKind } from "@portal/db";
+import type { WorkspaceKind } from "@portal/core";
 import { KIND_NAMES } from "@/lib/workspace-kind";
 import { Badge } from "@/components/ui/badge";
 import { GlobeIcon, LockIcon } from "@/components/ui/icons";

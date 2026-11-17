@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { AGENT_NAMES, displayName } from "@portal/db";
+import { AGENT_NAMES, displayName } from "@portal/core";
 import { config } from "@/lib/config";
 import { workspaceFrame } from "@/lib/workspace-frame";
 import { initials } from "@/lib/format";

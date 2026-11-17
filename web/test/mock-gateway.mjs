@@ -66,7 +66,7 @@ const agentPortCount = Number(env.AGENT_PORT_COUNT || 20);
 const onlineAgentPortBase = Number(env.ONLINE_AGENT_PORT_BASE || agentPortBase + agentPortCount);
 const secret = env.GATEWAY_CONTROL_SECRET || "";
 
-/** The two workspaces every user has (@portal/db WORKSPACE_KINDS), with their display names. */
+/** The two workspaces every user has (@portal/core WORKSPACE_KINDS), with their display names. */
 const KIND_NAMES = { private: "Private", online: "Online" };
 const isWorkspaceKind = (value) => typeof value === "string" && Object.hasOwn(KIND_NAMES, value);
 
@@ -1174,7 +1174,7 @@ function sessionTarget(cookieHeader) {
   return target ? { ...target, sessionId: hash } : null;
 }
 
-/** The gateway's agentBrowserToken (@portal/db): the iframe's fragment must carry this one for the port's kind. */
+/** The gateway's agentBrowserToken (@portal/core): the iframe's fragment must carry this one for the port's kind. */
 const browserToken = (sessionId, userId, kind) =>
   crypto.createHmac("sha256", secret).update(`workspace-portal/agent-token/v2\n${sessionId}\n${userId}\n${kind}`).digest("base64url");
 

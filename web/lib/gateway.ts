@@ -1,6 +1,6 @@
 import "server-only";
 import { after } from "next/server";
-import type { AgentKind, WorkspaceKind } from "@portal/db";
+import type { AgentKind, WorkspaceKind } from "@portal/core";
 import { config } from "./config";
 import type {
   AgentInfo,

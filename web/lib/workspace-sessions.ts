@@ -2,7 +2,7 @@
 // running sessions first, newest first, then the ended ones by when they ended. Costs use the chosen place's price
 // on the day each session started (prices are monthly or half-yearly, so a session past midnight costs the same).
 import { count, eq, sql } from "drizzle-orm";
-import { displayName, usageDay, users, workspaceSessions, type PortalDb, type WorkspaceSession } from "@portal/db";
+import { displayName, usageDay, users, workspaceSessions, type PortalDb, type WorkspaceSession } from "@portal/core";
 import { loadEnergyLocation, loadPricePeriods, priceOn, type DayPrice } from "./energy.ts";
 import { clampPage } from "./pagination.ts";
 import { SESSION_PAGE_SIZE, type SessionPage, type SessionRow } from "./session-types.ts";

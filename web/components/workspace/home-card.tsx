@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import type { AgentKind, WorkspaceKind, WorkspaceStatus } from "@portal/db";
+import type { AgentKind, WorkspaceKind, WorkspaceStatus } from "@portal/core";
 import { fetchJson, needsReauth } from "@/lib/fetch-json";
 import { formatVersion, stopReasonText, workspaceState } from "@/lib/format";
 import type { WorkspaceStatusResponse } from "@/lib/gateway-types";

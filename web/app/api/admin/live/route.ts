@@ -1,5 +1,5 @@
 import { cookies } from "next/headers";
-import { SESSION_COOKIE_NAME, hashSessionToken, loadSessionContext } from "@portal/db";
+import { SESSION_COOKIE_NAME, hashSessionToken, loadSessionContext } from "@portal/core";
 import { apiSession, jsonError } from "@/lib/api";
 import { config } from "@/lib/config";
 import { getDb } from "@/lib/db";

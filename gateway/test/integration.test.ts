@@ -9,15 +9,15 @@ import http from "node:http";
 import path from "node:path";
 import { and, eq, isNull } from "drizzle-orm";
 import WebSocket from "ws";
-import { hashSessionToken, llmUsage, sessions, workspaceSessions, workspaces } from "@portal/db";
-import { closeEndedSessions, PRESENCE_MS } from "../src/connections.ts";
-import { userPaths, userRoot } from "../src/paths.ts";
-import { AGENT_UNKNOWN_GRACE_MS } from "../src/policy.ts";
+import { hashSessionToken, llmUsage, sessions, workspaceSessions, workspaces } from "@portal/core";
+import { closeEndedSessions, PRESENCE_MS } from "../src/proxy/connections.ts";
+import { userPaths, userRoot } from "../src/workspaces/paths.ts";
+import { AGENT_UNKNOWN_GRACE_MS } from "../src/workspaces/policy.ts";
 import type { SettingsObject } from "../src/agents/qwen-settings.ts";
-import { WorkspaceImageMissingError } from "../src/runtime.ts";
-import { formatResults, type SearchQuery } from "../src/search-mcp.ts";
-import { createServiceServer } from "../src/service-api.ts";
-import { DeletingError, WorkspaceManager, type WorkspaceInfo } from "../src/workspaces.ts";
+import { WorkspaceImageMissingError } from "../src/docker/runtime.ts";
+import { formatResults, type SearchQuery } from "../src/service/search-mcp.ts";
+import { createServiceServer } from "../src/service/service-api.ts";
+import { DeletingError, WorkspaceManager, type WorkspaceInfo } from "../src/workspaces/manager.ts";
 import { closeServer, listenLocal } from "./fakes.ts";
 import {
   bearerSubprotocol,

@@ -6,10 +6,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { llmUsage, users, workspaces, type WorkspaceKind } from "@portal/db";
+import { llmUsage, users, workspaces, type WorkspaceKind } from "@portal/core";
 import { eq } from "drizzle-orm";
-import { userPaths, userRoot } from "../src/paths.ts";
-import { WorkspaceManager, type WorkspaceInfo } from "../src/workspaces.ts";
+import { userPaths, userRoot } from "../src/workspaces/paths.ts";
+import { WorkspaceManager, type WorkspaceInfo } from "../src/workspaces/manager.ts";
 import { bearerSubprotocol, cookie, json, request, startGateway, waitFor, type Gateway, type GatewayOptions, type Reply } from "./harness.ts";
 
 async function withGateway(options: GatewayOptions, run: (gateway: Gateway) => Promise<void>): Promise<void> {

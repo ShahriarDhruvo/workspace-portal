@@ -1,7 +1,7 @@
 "use client";
 
 import { useOptimistic, useRef, useState, useTransition } from "react";
-import type { AgentKind } from "@portal/db";
+import type { AgentKind } from "@portal/core";
 import { restartWorkspace, saveHarness } from "@/lib/actions/settings";
 import { formatVersion } from "@/lib/format";
 import type { AgentInfo, WorkspaceInfo } from "@/lib/gateway-types";

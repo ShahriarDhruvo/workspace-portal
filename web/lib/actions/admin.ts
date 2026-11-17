@@ -3,7 +3,7 @@
 import { eq } from "drizzle-orm";
 import { refresh, revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { displayName, sessions, users, WORKSPACE_KIND_NAMES, writeAudit, type SessionContext, type User } from "@portal/db";
+import { displayName, sessions, users, WORKSPACE_KIND_NAMES, writeAudit, type SessionContext, type User } from "@portal/core";
 import { getDb } from "../db";
 import { attachWorkspaceInBackground, describeError, endSessionsInBackground, gateway, releaseInBackground, toApiError } from "../gateway";
 import { clearLoginFailures } from "../login-throttle";

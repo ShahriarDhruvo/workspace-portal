@@ -1,7 +1,7 @@
 "use client";
 
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
-import type { EnergyCurrency } from "@portal/db";
+import type { EnergyCurrency } from "@portal/core";
 import type { EnergyDay } from "@/lib/energy";
 import { axisTicks, daysOfMonth, formatAxisTick, formatDay, formatKwh, formatMoney } from "@/lib/live-format";
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart";

@@ -16,7 +16,7 @@ const nextConfig: NextConfig = {
   distDir: process.env.NEXT_DIST_DIR || ".next",
   output: "standalone",
   outputFileTracingRoot: repoRoot,
-  transpilePackages: ["@portal/db"],
+  transpilePackages: ["@portal/core"],
   serverExternalPackages: ["better-sqlite3", "@node-rs/argon2"],
   poweredByHeader: false,
   reactStrictMode: true,

@@ -3,8 +3,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { energyPrices } from "@portal/db";
-import { EIA_URL } from "../src/energy-prices.ts";
+import { energyPrices } from "@portal/core";
+import { EIA_URL } from "../src/monitor/energy-prices.ts";
 import { startGateway } from "./harness.ts";
 
 const FIXTURES = path.join(import.meta.dirname, "fixtures");

@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { eq } from "drizzle-orm";
-import { AGENT_NAMES, displayName, users, WORKSPACE_KIND_NAMES, type WorkspaceKind } from "@portal/db";
+import { AGENT_NAMES, displayName, users, WORKSPACE_KIND_NAMES, type WorkspaceKind } from "@portal/core";
 import { updateProfile } from "@/lib/actions/admin";
 import { startingAgent } from "@/lib/agent-choice";
 import { config } from "@/lib/config";

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ENERGY_SOURCE_NAMES, type EnergyCurrency, type EnergyLocation } from "@portal/db/energy-locations";
+import { ENERGY_SOURCE_NAMES, type EnergyCurrency, type EnergyLocation } from "@portal/core/energy-locations";
 import type { DayPrice, EnergyMonth, EnergyTotal } from "@/lib/energy";
 import { fetchJson, needsReauth } from "@/lib/fetch-json";
 import { formatDay, formatKwh, formatMoney, formatMonth, formatPricePeriod, formatUnitPrice, priceUnit } from "@/lib/live-format";

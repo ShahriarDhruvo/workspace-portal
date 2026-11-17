@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
-import { AGENT_NAMES } from "@portal/db";
+import { AGENT_NAMES } from "@portal/core";
 import { saveName } from "@/lib/actions/settings";
 import { startingAgent } from "@/lib/agent-choice";
 import { formatVersion } from "@/lib/format";

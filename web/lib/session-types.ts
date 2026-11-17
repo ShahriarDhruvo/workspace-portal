@@ -1,7 +1,7 @@
 // The workspace sessions as Admin > Usage's sessions table gets them (lib/workspace-sessions.ts loads them, the
 // API route sends them). Types and constants only, so client components can import it.
-import type { EnergyCurrency } from "@portal/db/energy-locations";
-import type { WorkspaceKind } from "@portal/db";
+import type { EnergyCurrency } from "@portal/core/energy-locations";
+import type { WorkspaceKind } from "@portal/core";
 
 /** Rows per page of the sessions table. */
 export const SESSION_PAGE_SIZE = 6;

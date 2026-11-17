@@ -2,7 +2,7 @@
 
 import { useRef, useState, type RefObject } from "react";
 import { useFormStatus } from "react-dom";
-import type { WorkspaceKind } from "@portal/db";
+import type { WorkspaceKind } from "@portal/core";
 import { returnFocus } from "@/lib/focus";
 import type { OnlineAccess } from "@/lib/gateway-types";
 import { KIND_NAMES, onlineBlockedReason, otherKind } from "@/lib/workspace-kind";

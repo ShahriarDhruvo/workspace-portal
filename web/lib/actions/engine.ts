@@ -1,6 +1,6 @@
 "use server";
 
-import { writeAudit } from "@portal/db";
+import { writeAudit } from "@portal/core";
 import { getDb } from "../db";
 import { engineActionError, engineImageSchema, engineVersionSchema, type EngineAction } from "../engine-updates";
 import { gateway, toApiError } from "../gateway";

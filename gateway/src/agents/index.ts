@@ -1,5 +1,5 @@
 // The agents a workspace can run, by kind.
-import type { AgentKind } from "@portal/db";
+import type { AgentKind } from "@portal/core";
 import type { AgentDriver } from "./driver.ts";
 import { dshDriver } from "./dsh.ts";
 import { qwenDriver } from "./qwen.ts";

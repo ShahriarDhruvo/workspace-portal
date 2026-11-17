@@ -1,6 +1,6 @@
 // Session-row helpers that need no request (no cookies or headers), so they can be unit tested.
 import { lte, type SQL } from "drizzle-orm";
-import { sessions, type PortalDb } from "@portal/db";
+import { sessions, type PortalDb } from "@portal/core";
 
 export interface DeletedSessions {
   /** The deleted `sessions.id` values: the gateway must close each one's open agent connections. */

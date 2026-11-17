@@ -1,7 +1,7 @@
 // The two kinds of workspace in the browser: their names, which one a Start offers first, why Online can't be
-// chosen, and what a refused start says. Pure (client components can't import values from @portal/db); unit
+// chosen, and what a refused start says. Pure (client components can't import values from @portal/core); unit
 // tested, including that the names match WORKSPACE_KIND_NAMES.
-import type { WorkspaceKind, WorkspaceStatus } from "@portal/db";
+import type { WorkspaceKind, WorkspaceStatus } from "@portal/core";
 import type { ApiError, OnlineAccess, WorkspaceInfo } from "./gateway-types.ts";
 
 /** WORKSPACE_KIND_NAMES, for client components. */

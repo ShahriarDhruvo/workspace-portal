@@ -17,13 +17,13 @@ WORKDIR /repo
 
 # Dependencies first, for layer caching. npm needs every workspace manifest to validate the lockfile.
 COPY package.json package-lock.json ./
-COPY packages/db/package.json packages/db/
+COPY packages/core/package.json packages/core/
 COPY gateway/package.json gateway/
 COPY web/package.json web/
 RUN npm ci --workspace @portal/web --no-audit --no-fund \
  && node -e "new (require('better-sqlite3'))(':memory:').close(); require('@node-rs/argon2').hashSync('ok')"
 
-COPY packages/db packages/db
+COPY packages/core packages/core
 COPY web web
 RUN npm run build --workspace @portal/web
 

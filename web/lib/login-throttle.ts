@@ -1,7 +1,7 @@
 // Failed-login throttling: a username is locked for 15 minutes after 5 failures within 15 minutes.
 // Unknown usernames are tracked the same way, so the lock reveals nothing about which names exist.
 import { eq, lte, sql } from "drizzle-orm";
-import { loginAttempts, type PortalDb } from "@portal/db";
+import { loginAttempts, type PortalDb } from "@portal/core";
 
 export const MAX_FAILURES = 5;
 export const FAILURE_WINDOW_MS = 15 * 60_000;

@@ -1,6 +1,6 @@
 "use client";
 
-import type { AgentKind } from "@portal/db";
+import type { AgentKind } from "@portal/core";
 import type { ActionContext } from "@/lib/agent-versions";
 import type { AdminEngine } from "@/lib/engine-types";
 import type { AdminAgents } from "@/lib/gateway-types";
@@ -19,7 +19,7 @@ import { UnreachableAlert, VersionCard } from "./version-card";
 interface UpdatesConsoleProps {
   initialAgents: AdminAgents;
   initialEngine: AdminEngine;
-  /** AGENT_NAMES, which this client component can't import from @portal/db. */
+  /** AGENT_NAMES, which this client component can't import from @portal/core. */
   agentNames: Readonly<Record<AgentKind, string>>;
 }
 

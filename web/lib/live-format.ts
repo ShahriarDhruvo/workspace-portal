@@ -1,6 +1,6 @@
 // Formatting and history for Admin > Usage's live view and Admin > Energy. Pure; unit tested.
 import { formatBytes } from "./format.ts";
-import type { EnergyCurrency } from "@portal/db";
+import type { EnergyCurrency } from "@portal/core";
 import type { HostSample, LiveFrame, LiveInit, LlmTotalsPoint } from "./live-types.ts";
 
 /** How much history the charts show. */

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { auditLog, energyLocation, energyPrices, hostDaily, openDatabase, readSetting, users, writeSetting } from "@portal/db";
+import { auditLog, energyLocation, energyPrices, hostDaily, openDatabase, readSetting, users, writeSetting } from "@portal/core";
 import { isMonth, loadEnergyLocation, loadEnergyMonth, loadPricePeriods, priceDay, priceOn, priceSummary, saveEnergyLocation, totalOf, type PricePeriod } from "./energy.ts";
 
 function tempDb() {

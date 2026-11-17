@@ -1,7 +1,7 @@
 "use server";
 
 import { refresh } from "next/cache";
-import { energyLocation } from "@portal/db";
+import { energyLocation } from "@portal/core";
 import { getDb } from "../db";
 import { loadPricePeriods, saveEnergyLocation } from "../energy";
 import { gateway } from "../gateway";

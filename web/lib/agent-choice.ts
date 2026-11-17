@@ -1,7 +1,7 @@
 // Which agent ("harness") a workspace starts with. Each user picks one in Settings (users.agent); a start never
 // names an agent, and the gateway launches the user's choice when it is enabled, else the first enabled agent.
 // Pure, with type-only imports, so client components can use it too; unit tested.
-import type { AgentKind } from "@portal/db";
+import type { AgentKind } from "@portal/core";
 import type { AgentInfo } from "./gateway-types.ts";
 
 type Offered = readonly Pick<AgentInfo, "id">[];

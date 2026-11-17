@@ -246,9 +246,9 @@ both folders (nothing is overwritten; that start fails until an admin merges the
 
 The installer labels the tree `container_file_t` (SELinux), so binds need no `:z`.
 
-## Database (packages/db)
+## Database (packages/core)
 
-Schema: `packages/db/src/schema.ts` (Drizzle) plus `migrations.ts` (SQL, applied with `PRAGMA user_version`).
+Schema: `packages/core/src/schema.ts` (Drizzle) plus `migrations.ts` (SQL, applied with `PRAGMA user_version`).
 Open it only through `getDatabase(PORTAL_DATA_DIR + "/db/portal.sqlite")`. Both services call it at startup,
 and migrations are safe to run concurrently.
 
@@ -266,8 +266,8 @@ Migration 6 replaces the hand-kept `energy_rates` with published prices: `energy
 period: `location` such as `US-FL` or `EU-DE`, `period_start`/`period_end` (end exclusive), `period` as the source
 names it (`2026-08`, `2026-S1`), `price` per kWh, `currency` `USD` | `EUR`, `source` `eia` | `eurostat`,
 `fetched_at`) and `portal_settings` (key/value; `energy_price_location`, unset until the admin picks a place).
-The places and their sources are `packages/db/src/energy-locations.ts`, which imports nothing, so the web app's
-client components load it on its own (`@portal/db/energy-locations`); the package's main entry brings SQLite.
+The places and their sources are `packages/core/src/energy-locations.ts`, which imports nothing, so the web app's
+client components load it on its own (`@portal/core/energy-locations`); the package's main entry brings SQLite.
 
 Migration 7 adds `workspace_sessions`, one row per run of a user's workspace, from Start to its stop (`user_id`,
 `kind`, `agent`, `started_at`, `ended_at` null while it runs: at most one open row per user), with what its LLM
@@ -460,8 +460,8 @@ Other error codes:
 * 503: `engine_unavailable`.
 
 ```ts
-type AgentKind = "qwen" | "dsh";   // @portal/db AGENT_KINDS; display names in AGENT_NAMES
-type WorkspaceKind = "private" | "online";   // @portal/db WORKSPACE_KINDS; display names in WORKSPACE_KIND_NAMES
+type AgentKind = "qwen" | "dsh";   // @portal/core AGENT_KINDS; display names in AGENT_NAMES
+type WorkspaceKind = "private" | "online";   // @portal/core WORKSPACE_KINDS; display names in WORKSPACE_KIND_NAMES
 type AgentInfo = { id: AgentKind; name: string; description: string; version: string };
 type WorkspaceInfo = {
   userId: number;

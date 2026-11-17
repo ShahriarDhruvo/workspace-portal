@@ -17,8 +17,8 @@
 import crypto from "node:crypto";
 import http from "node:http";
 import WebSocket from "ws";
-import { AGENT_NAMES } from "@portal/db";
-import { workspaceRequestHeaders } from "../headers.ts";
+import { AGENT_NAMES } from "@portal/core";
+import { workspaceRequestHeaders } from "../proxy/headers.ts";
 import { serviceBaseUrl, type AgentDriver, type AgentEndpoint, type AgentStatus } from "./driver.ts";
 import { DSH_PATCH_FILE, fitDshModels, renderDshPatch } from "./dsh-settings.ts";
 import { portalModels } from "./models.ts";

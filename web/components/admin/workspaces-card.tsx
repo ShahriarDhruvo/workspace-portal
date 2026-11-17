@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import type { AgentKind } from "@portal/db";
+import type { AgentKind } from "@portal/core";
 import { formatBytes, formatDuration, formatVersion } from "@/lib/format";
 import type { WorkspaceInfo } from "@/lib/gateway-types";
 import { formatElapsed } from "@/lib/live-format";

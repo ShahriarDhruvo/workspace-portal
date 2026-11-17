@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { eq } from "drizzle-orm";
-import { hashSessionToken, openDatabase, sessions, users } from "@portal/db";
+import { hashSessionToken, openDatabase, sessions, users } from "@portal/core";
 import { deleteSessions, pruneExpiredSessions } from "./session-store.ts";
 
 function tempDb() {

@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { count, desc, eq } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
-import { auditLog, displayName, users } from "@portal/db";
+import { auditLog, displayName, users } from "@portal/core";
 import { auditActionLabel, auditActorFallback, auditDetailsSubject, formatAuditDetails } from "@/lib/audit";
 import { getDb } from "@/lib/db";
 import { clampPage, pageSlice, parsePage, parsePageSize } from "@/lib/pagination";

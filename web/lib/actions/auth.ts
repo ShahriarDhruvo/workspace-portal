@@ -2,7 +2,7 @@
 
 import { and, eq, ne } from "drizzle-orm";
 import { redirect } from "next/navigation";
-import { countSessionsUsingWorkspace, sessions, users, writeAudit, type PortalDb, type SessionContext } from "@portal/db";
+import { countSessionsUsingWorkspace, sessions, users, writeAudit, type PortalDb, type SessionContext } from "@portal/core";
 import { getDb } from "../db";
 import { attachWorkspaceInBackground, endSessionsInBackground, gateway } from "../gateway";
 import { clearLoginFailures, lockRemaining, lockoutMessage, pruneLoginAttempts, reserveLoginAttempt } from "../login-throttle";

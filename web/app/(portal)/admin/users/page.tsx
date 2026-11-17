@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { asc, desc } from "drizzle-orm";
-import { AGENT_NAMES, users } from "@portal/db";
+import { AGENT_NAMES, users } from "@portal/core";
 import { getDb } from "@/lib/db";
 import { gateway } from "@/lib/gateway";
 import { loadAdminOverview } from "@/lib/overview";
