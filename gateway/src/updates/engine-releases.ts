@@ -3,6 +3,7 @@
 // use), their image digests, and their release notes from GitHub (github-releases.ts). Cached for 10
 // minutes like the agents' releases (release-cache.ts): the console polls, and GitHub allows 60
 // anonymous requests an hour.
+import { byNewestVersion, compareVersions, isStableVersion } from "@portal/core";
 import { readBoundedText } from "../lib/bounded-body.ts";
 import { createGitHubReleases, type GitHubReleases, type ReleaseNotes } from "./github-releases.ts";
 import { errorMessage, type Logger } from "../lib/log.ts";
@@ -18,7 +19,6 @@ const MAX_BYTES = 4 * 1024 * 1024;
 export const RELEASES_OFFERED = 5;
 /** The newest tags whose digests are read: those offered, and enough to find what `latest` points at. */
 const VERSIONS_CHECKED = 8;
-const STABLE_TAG = /^v?(\d+)\.(\d+)\.(\d+)$/;
 const MANIFEST_TYPES = [
   "application/vnd.oci.image.index.v1+json",
   "application/vnd.docker.distribution.manifest.list.v2+json",
@@ -59,20 +59,11 @@ export function splitRepository(repository: string): { registry: string; path: s
   return { registry: "registry-1.docker.io", path: rest.length === 0 ? `library/${first}` : repository };
 }
 
-/** Compares X.Y.Z versions (a leading v is ignored); non-versions sort first. */
-export function compareVersions(a: string, b: string): number {
-  const pa = STABLE_TAG.exec(a);
-  const pb = STABLE_TAG.exec(b);
-  if (!pa || !pb) return pa ? 1 : pb ? -1 : 0;
-  for (let i = 1; i <= 3; i++) {
-    const diff = Number(pa[i]) - Number(pb[i]);
-    if (diff !== 0) return diff;
-  }
-  return 0;
-}
-
-export function isStableVersion(value: string): boolean {
-  return STABLE_TAG.test(value) && !value.startsWith("v");
+/** Newest first, a leading v ignored; a label that is no X.Y.Z release (an image's own, whatever it says) goes last. */
+function byNewestRelease(a: string, b: string): number {
+  const [x, y] = [a.replace(/^v/, ""), b.replace(/^v/, "")];
+  const [stableX, stableY] = [isStableVersion(x), isStableVersion(y)];
+  return stableX && stableY ? compareVersions(y, x)! : Number(stableY) - Number(stableX);
 }
 
 export interface RegistryClient {
@@ -163,7 +154,8 @@ export function createNotesClient(github: GitHubReleases = createGitHubReleases(
     async notes(repo) {
       const notes = new Map<string, ReleaseNotes>();
       for (const release of await github.list(repo)) {
-        if (STABLE_TAG.test(release.tag) && !release.prerelease) notes.set(release.tag.replace(/^v/, ""), release.notes);
+        const version = release.tag.replace(/^v/, "");
+        if (isStableVersion(version) && !release.prerelease) notes.set(version, release.notes);
       }
       return notes;
     },
@@ -185,7 +177,7 @@ export function withLocalVersions(
     if (version === null || listed.has(version)) continue;
     listed.set(version, { version, digest, latest: false, notes: notes.get(version) ?? null });
   }
-  return [...listed.values()].sort((a, b) => compareVersions(b.version, a.version));
+  return [...listed.values()].sort((a, b) => byNewestRelease(a.version, b.version));
 }
 
 export interface EngineReleasesOptions {
@@ -252,7 +244,7 @@ export class EngineReleases {
     const previous = this.#list?.repository === repository ? this.#list : null;
     try {
       const tags = await registry.tags(repository);
-      const versions = tags.filter(isStableVersion).sort((a, b) => compareVersions(b, a)).slice(0, VERSIONS_CHECKED);
+      const versions = tags.filter(isStableVersion).sort(byNewestVersion).slice(0, VERSIONS_CHECKED);
       const [digests, latest, notesByVersion] = await Promise.all([
         Promise.all(versions.map((version) => registry.digest(repository, version))),
         tags.includes("latest") ? registry.digest(repository, "latest") : Promise.resolve(null),

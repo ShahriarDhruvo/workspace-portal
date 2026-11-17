@@ -2,8 +2,7 @@
 // image they started from while new starts use another, and rolling back to a version whose image is
 // still there just checks and uses it (no build, no registry). deploy/lib.sh (workspace_image) names
 // them the same way.
-import { isAgentKind, type AgentKind } from "@portal/core";
-import { isVersion } from "../lib/versions.ts";
+import { isAgentKind, isVersion, type AgentKind } from "@portal/core";
 
 export const WORKSPACE_REPOSITORY = "workspace-portal/workspace";
 /**

@@ -6,7 +6,7 @@
 // Whether notes announce breaking changes is read from the conventions changelogs use, never guessed from a word
 // alone: Qwen Code's notes always have a "Breaking Changes" heading, mostly followed by "No known breaking changes."
 import { readBoundedText } from "../lib/bounded-body.ts";
-import { isVersion } from "../lib/versions.ts";
+import { isVersion } from "@portal/core";
 
 const TIMEOUT_MS = 10_000;
 /**

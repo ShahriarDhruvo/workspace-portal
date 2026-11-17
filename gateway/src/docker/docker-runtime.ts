@@ -1,9 +1,8 @@
 // ContainerRuntime backed by the Docker Engine API (dockerode, /var/run/docker.sock or DOCKER_HOST).
 import Docker from "dockerode";
-import { isAgentKind, WORKSPACE_KINDS, type AgentKind, type WorkspaceKind } from "@portal/core";
+import { compareVersions, isAgentKind, isVersion, WORKSPACE_KINDS, type AgentKind, type WorkspaceKind } from "@portal/core";
 import { driverFor } from "../agents/index.ts";
 import type { Config, KindConfig } from "../config.ts";
-import { isVersion } from "../lib/versions.ts";
 import {
   AGENT_LABEL,
   containerKind,
@@ -36,8 +35,7 @@ export const DOCKER_API_TIMEOUT_MS = 60_000;
  * Older engines forward DNS queries for outside names from internal networks (CVE-2024-29018),
  * which would give workspaces a way out. Fixed in 25.0.5 and 26.0.0.
  */
-const MIN_DOCKER_VERSION = [25, 0, 5] as const;
-export const MIN_DOCKER_VERSION_TEXT = MIN_DOCKER_VERSION.join(".");
+export const MIN_DOCKER_VERSION_TEXT = "25.0.5";
 
 export class DockerRuntime implements ContainerRuntime {
   readonly #docker: Docker;
@@ -227,15 +225,13 @@ export function networkMismatches(network: Docker.NetworkInspectInfo, own: KindC
   return problems;
 }
 
-/** Whether a Docker Engine version (`26.1.4`, `27.0.0-rc.1`, …) is at least MIN_DOCKER_VERSION. Unparseable is not. */
+/**
+ * Whether a Docker Engine version (`26.1.4`, `27.0.0-rc.1`, …) is at least MIN_DOCKER_VERSION_TEXT, by its X.Y.Z alone:
+ * whatever a distribution appends (`-ce`, `~rc1`) doesn't count. Unparseable is not.
+ */
 export function isSupportedDockerVersion(version: string): boolean {
-  const match = /^(\d+)\.(\d+)\.(\d+)/.exec(version.trim());
-  if (!match) return false;
-  const parts = match.slice(1, 4).map(Number);
-  for (let i = 0; i < MIN_DOCKER_VERSION.length; i++) {
-    if (parts[i]! !== MIN_DOCKER_VERSION[i]) return parts[i]! > MIN_DOCKER_VERSION[i]!;
-  }
-  return true;
+  const core = /^\d+\.\d+\.\d+/.exec(version.trim())?.[0];
+  return core !== undefined && compareVersions(core, MIN_DOCKER_VERSION_TEXT)! >= 0;
 }
 
 /** Joins the stdout/stderr frames of a non-TTY log stream (8-byte headers); TTY output passes as is. */

@@ -1,13 +1,12 @@
 // What the admin console shows per agent (GET /control/agents/versions): the current and default versions, the
 // releases it offers (the Package images table), the images Docker has, and which versions running workspaces use.
 // Pure: the updater gathers the inputs.
-import type { AgentKind } from "@portal/core";
+import { byNewestVersion, compareVersions, isNewerVersion, isStableVersion, isVersion, type AgentKind } from "@portal/core";
 import { driverFor } from "../agents/index.ts";
 import type { ReleaseNotes } from "./github-releases.ts";
 import type { WorkspaceImageSummary } from "../docker/image-builder.ts";
 import type { PackageReleases } from "./release-cache.ts";
 import type { AgentUpdateJob } from "./update-job.ts";
-import { byNewestVersion, compareVersions, isNewerVersion, isVersion } from "../lib/versions.ts";
 import type { WorkspaceInfo } from "../workspaces/manager.ts";
 
 /** How many of the newest stable releases the Updates page offers to build. */
@@ -92,7 +91,7 @@ export function offeredReleases(releases: PackageReleases | undefined, keep: rea
   const published = new Map((releases?.versions ?? []).map((entry) => [entry.version, entry]));
   const notNewer = (version: string) => latest === null || (compareVersions(version, latest) ?? 1) <= 0;
   const stable = [...published.values()]
-    .filter(({ version, deprecated }) => version === latest || (!deprecated && RELEASE.test(version) && notNewer(version)))
+    .filter(({ version, deprecated }) => version === latest || (!deprecated && isStableVersion(version) && notNewer(version)))
     .map((entry) => entry.version)
     .sort(byNewestVersion)
     .slice(0, RELEASES_OFFERED);
@@ -119,9 +118,6 @@ export function offeredReleases(releases: PackageReleases | undefined, keep: rea
     notes: releases?.notes.get(version) ?? null,
   }));
 }
-
-/** A release (X.Y.Z), no prerelease or build suffix. */
-const RELEASE = /^\d+\.\d+\.\d+$/;
 
 /** A prerelease's first identifier ("0.2.1-rc.5" → "rc"); null for a release or anything else. */
 function prereleaseChannel(version: string): string | null {

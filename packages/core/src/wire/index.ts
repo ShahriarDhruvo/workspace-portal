@@ -3,3 +3,4 @@
 // main entry re-exports it and brings SQLite along.
 export * from "./kinds.ts";
 export * from "./energy-locations.ts";
+export * from "./versions.ts";

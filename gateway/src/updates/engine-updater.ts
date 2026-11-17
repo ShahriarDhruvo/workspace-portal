@@ -13,9 +13,9 @@
 //   4. the queue opens again; the held requests go to the (new or restored) engine.
 // One job at a time; the last one stays visible until the next starts.
 import crypto from "node:crypto";
-import { writeAudit, type AuditAction, type PortalDb } from "@portal/core";
+import { isStableVersion, writeAudit, type AuditAction, type PortalDb } from "@portal/core";
 import type { Config } from "../config.ts";
-import { EngineReleaseError, EngineReleases, isStableVersion, type EngineReleaseList } from "./engine-releases.ts";
+import { EngineReleaseError, EngineReleases, type EngineReleaseList } from "./engine-releases.ts";
 import { HostdClient, HostdError, type EngineJob, type EngineStatus } from "../monitor/hostd.ts";
 import type { LlmQueue } from "../service/llm-queue.ts";
 import { errorMessage, type Logger } from "../lib/log.ts";

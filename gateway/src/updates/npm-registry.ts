@@ -9,7 +9,7 @@
 // the release cache (release-cache.ts) downloads it again only after a release.
 import { readBoundedText } from "../lib/bounded-body.ts";
 import { isGitHubRepo } from "./github-releases.ts";
-import { isVersion } from "../lib/versions.ts";
+import { isVersion } from "@portal/core";
 
 /** One published version (an unpublished one is gone from the document). */
 export interface PublishedVersion {

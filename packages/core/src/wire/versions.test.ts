@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { byNewestVersion, compareVersions, findVersion, isNewerVersion, isVersion } from "./versions.ts";
+import { byNewestVersion, compareVersions, findVersion, isNewerVersion, isStableVersion, isVersion } from "./versions.ts";
 
 test("isVersion accepts npm versions and nothing that could leave an image tag or a KEY=VALUE line", () => {
   for (const good of ["0.27.4", "0.2.2-rc.3", "0.27.2-nightly.20261113.6f754be654", "1.0.0-alpha", "10.20.30", "0.28.1-beta.2"]) {
@@ -9,6 +9,12 @@ test("isVersion accepts npm versions and nothing that could leave an image tag o
   for (const bad of ["", "latest", "1.2", "v1.2.3", "1.2.3 ", "1.2.3\n", "1.2.3;rm", "1.2.3-a b", "../1.2.3", "1.2.3:x", "1.2.3-x/y", "1.2.3=4", `1.2.3-${"a".repeat(100)}`, 1, null]) {
     assert.equal(isVersion(bad), false, JSON.stringify(bad));
   }
+});
+
+test("isStableVersion: X.Y.Z only, compared numerically", () => {
+  assert.deepEqual(["0.9.0", "0.10.0", "0.31.0", "1.0.0", "0.31.1"].sort((a, b) => compareVersions(a, b)!), ["0.9.0", "0.10.0", "0.31.0", "0.31.1", "1.0.0"]);
+  for (const version of ["0.34.0", "10.0.1"]) assert.equal(isStableVersion(version), true, version);
+  for (const tag of ["latest", "edge", "sha-abc", "v0.34.0", "0.34", "0.34.0-rc.1", "0.34.0 "]) assert.equal(isStableVersion(tag), false, tag);
 });
 
 test("findVersion takes the first version in a CLI's output, with the syntax isVersion accepts", () => {

@@ -15,13 +15,12 @@
 // the gateway runs as root, so both are root's, like the rest of config/.
 import fs from "node:fs";
 import path from "node:path";
-import { AGENT_KINDS, type AgentKind } from "@portal/core";
+import { AGENT_KINDS, isVersion, type AgentKind } from "@portal/core";
 import { driverFor } from "../agents/index.ts";
 import type { Config } from "../config.ts";
 import { workspaceImage } from "../docker/image-names.ts";
 import type { Logger } from "../lib/log.ts";
 import { writeFileAtomic } from "../workspaces/paths.ts";
-import { isVersion } from "../lib/versions.ts";
 
 const HEADER = [
   "# The agent versions new workspaces start with (the admin console and deploy/update-image.sh write",

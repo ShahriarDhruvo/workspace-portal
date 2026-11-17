@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { FakeEngineRegistry, FakeNotes } from "../../test/fakes.ts";
-import { compareVersions, createNotesClient, createRegistryClient, EngineReleases, isStableVersion, splitRepository, withLocalVersions } from "./engine-releases.ts";
+import { createNotesClient, createRegistryClient, EngineReleases, splitRepository, withLocalVersions } from "./engine-releases.ts";
 import { createGitHubReleases } from "./github-releases.ts";
 import type { Logger } from "../lib/log.ts";
 
@@ -11,12 +11,6 @@ test("splitRepository finds the registry host, Docker Hub by default", () => {
   assert.deepEqual(splitRepository("docker.io/vllm/vllm-openai"), { registry: "registry-1.docker.io", path: "vllm/vllm-openai" });
   assert.deepEqual(splitRepository("vllm/vllm-openai"), { registry: "registry-1.docker.io", path: "vllm/vllm-openai" });
   assert.deepEqual(splitRepository("ollama"), { registry: "registry-1.docker.io", path: "library/ollama" });
-});
-
-test("versions: X.Y.Z only, compared numerically", () => {
-  assert.deepEqual(["0.9.0", "0.10.0", "0.31.0", "1.0.0", "0.31.1"].sort(compareVersions), ["0.9.0", "0.10.0", "0.31.0", "0.31.1", "1.0.0"]);
-  for (const version of ["0.34.0", "10.0.1"]) assert.equal(isStableVersion(version), true, version);
-  for (const tag of ["latest", "edge", "sha-abc", "v0.34.0", "0.34", "0.34.0-rc.1", "0.34.0 "]) assert.equal(isStableVersion(tag), false, tag);
 });
 
 /** A fetch that answers from a table of URL → handler, recording the calls. */

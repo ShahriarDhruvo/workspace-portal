@@ -1,8 +1,8 @@
 // Input rules shared by the server actions, the admin seed and the forms.
 // Pure module (no server-only imports) so it can be unit tested with `node --test`.
 import { z } from "zod";
-import { AGENT_KINDS, WORKSPACE_KINDS } from "@portal/core";
-import { isAgentVersion, NAME_MAX_LENGTH, PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, USERNAME_PATTERN } from "./limits.ts";
+import { AGENT_KINDS, isVersion, WORKSPACE_KINDS } from "@portal/core";
+import { NAME_MAX_LENGTH, PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, USERNAME_PATTERN } from "./limits.ts";
 
 // Letters from any script (with combining marks), spaces, hyphens, straight and curly apostrophes, periods.
 const NAME_PATTERN = /^[\p{L}\p{M} .'’-]+$/u;
@@ -141,7 +141,7 @@ export const agentImageSchema = z.object({
   version: z
     .string()
     .trim()
-    .refine(isAgentVersion, AGENT_VERSION_ERROR),
+    .refine(isVersion, AGENT_VERSION_ERROR),
 });
 
 /**
@@ -153,7 +153,7 @@ export const agentUpdateSchema = z.object({
   version: z
     .string()
     .trim()
-    .refine(isAgentVersion, AGENT_VERSION_ERROR),
+    .refine(isVersion, AGENT_VERSION_ERROR),
   rebuild: checkboxSchema,
 });
 

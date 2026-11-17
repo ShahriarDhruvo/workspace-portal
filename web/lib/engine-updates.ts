@@ -3,6 +3,7 @@
 // how often to poll, and the gateway's errors in plain words. Pure; unit tested. The gateway's side:
 // docs/ARCHITECTURE.md, "LLM engine updates".
 import { z } from "zod";
+import { compareVersions, isStableVersion } from "@portal/core/wire";
 import type { AdminEngine, EngineImage, EngineOverview, EngineRelease, EngineStatus, EngineUpdateJob } from "./engine-types.ts";
 import type { ApiError, ReleaseNotes } from "./gateway-types.ts";
 
@@ -42,10 +43,8 @@ export const engineImageSchema = z.object({
 
 /** Compares X.Y.Z versions numerically (anything else sorts as 0.0.0). */
 export function compareEngineVersions(a: string, b: string): number {
-  const parts = (version: string) => (/^\d+\.\d+\.\d+$/.test(version) ? version.split(".").map(Number) : [0, 0, 0]);
-  const [x, y] = [parts(a), parts(b)];
-  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return (x[i] ?? 0) - (y[i] ?? 0);
-  return 0;
+  const release = (version: string) => (isStableVersion(version) ? version : "0.0.0");
+  return compareVersions(release(a), release(b))!;
 }
 
 /** The release `latest` points at, else the newest one listed. */

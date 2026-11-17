@@ -42,7 +42,7 @@ import {
   type WorkspaceImageSummary,
 } from "./image-builder.ts";
 import { parseWorkspaceImage, STAGING_REPOSITORY, WORKSPACE_REPOSITORY } from "./image-names.ts";
-import { findVersion } from "../lib/versions.ts";
+import { findVersion } from "@portal/core";
 
 /** BuildKit's session for one build (see above). */
 export interface BuildSession {

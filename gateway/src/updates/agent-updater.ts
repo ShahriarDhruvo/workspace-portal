@@ -19,7 +19,7 @@
 // The seams (ImageBuilder, NpmRegistry, ReleaseCache, AgentVersions, the clock) are injected, so the
 // flow is tested with fakes.
 import crypto from "node:crypto";
-import { writeAudit, type AgentKind, type AuditAction, type PortalDb } from "@portal/core";
+import { isVersion, writeAudit, type AgentKind, type AuditAction, type PortalDb } from "@portal/core";
 import { describeAgentVersions, type AgentVersionsOverview } from "./agent-overview.ts";
 import type { AgentVersions } from "./agent-versions.ts";
 import { driverFor } from "../agents/index.ts";
@@ -30,7 +30,6 @@ import { errorMessage, type Logger } from "../lib/log.ts";
 import type { NpmRegistry } from "./npm-registry.ts";
 import type { ReleaseCache } from "./release-cache.ts";
 import { CANCELLED, UpdateJob, type AgentUpdateJob } from "./update-job.ts";
-import { isVersion } from "../lib/versions.ts";
 import { AgentUnavailableError, type WorkspaceInfo } from "../workspaces/manager.ts";
 
 /**
