@@ -1,9 +1,9 @@
 // ImageBuilder backed by the Docker Engine API: the gateway already holds the Docker socket, so the admin console
 // can update agents without a shell on the host.
 //   * BuildKit (`version: "2"`): workspace-image/Dockerfile uses `COPY --chmod`, which the classic builder refuses.
-//   * The context is the project's workspace-image/ directory, mounted read-only (docker-compose.yml;
-//     WORKSPACE_IMAGE_CONTEXT), so an edit there applies to the next build. dockerode tars it into the request:
-//     nothing is written to disk (the gateway's root filesystem is read-only and its /tmp a small tmpfs).
+//   * The context is the project's workspace-image/ directory, mounted read-only (docker-compose.yml), so an edit
+//     there applies to the next build. dockerode tars it into the request: nothing is written to disk (the
+//     gateway's root filesystem is read-only and its /tmp a small tmpfs).
 //   * A BuildKit build needs a session: a second connection to the engine, hijacked for a gRPC server on our side.
 //     dockerode's buildImage closes it only when the build stream emits "end", which a refused, aborted or broken
 //     build never does. So the builder opens the session itself (with dockerode's own session code), sends the build
