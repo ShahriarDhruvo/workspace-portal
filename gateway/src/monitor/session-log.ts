@@ -1,10 +1,9 @@
-// Each run of a user's workspace, from Start to its stop (workspace_sessions), and what its LLM requests added up
-// to, for Admin > Usage's sessions table. The workspace manager reports every state it saves (sync): a session
-// opens when the workspace starts and closes once it has stopped; a start that fails before the workspace ran
-// leaves none. A request that reaches the LLM server belongs to its user's session open at that moment, which counts its
-// tokens and the engine's timings when it ends; llm-energy.ts adds each request's share of the LLM server's
-// energy as it is measured. `version` changes with every write, so the live view tells the page to read the table
-// again.
+// Each run of a user's workspace, from Start to its stop (workspace_sessions), and what its LLM requests added up to,
+// for Admin > Usage's sessions table. The workspace manager reports every state it saves (sync): a session opens when
+// the workspace starts and closes once it has stopped; a start that fails before the workspace ran leaves none. A
+// request that reaches the LLM server belongs to its user's session open at that moment, which counts its tokens and
+// the engine's timings when it ends; llm-energy.ts adds each request's share of the LLM server's energy as it is
+// measured. `version` changes with every write, so the live view tells the page to read the table again.
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { workspaceSessions, type AgentKind, type PortalDb, type WorkspaceKind, type WorkspaceStatus } from "@portal/core";
 import type { FinishedLlmRequest } from "./llm-requests.ts";
@@ -21,20 +20,11 @@ export interface WorkspaceRunState {
   stoppedAt?: number | null;
 }
 
-/**
- * Energy a session's requests used in one stretch of time, and how long it had a request running in it (parallel
- * ones count once) (llm-energy.ts).
- */
+/** Energy a session's requests used in one stretch of time, and how long it had a request running in it (parallel ones count once). */
 export interface EnergyShare {
   sessionId: number;
   joules: number;
   ms: number;
-}
-
-export interface SessionLogOptions {
-  db: PortalDb;
-  log: Logger;
-  now?: () => number;
 }
 
 export class SessionLog {
@@ -50,7 +40,7 @@ export class SessionLog {
   readonly #requests = new Map<number, number>();
   #version = 0;
 
-  constructor(options: SessionLogOptions) {
+  constructor(options: { db: PortalDb; log: Logger; now?: () => number }) {
     this.#db = options.db;
     this.#log = options.log;
     this.#now = options.now ?? Date.now;
@@ -76,10 +66,7 @@ export class SessionLog {
     }
   }
 
-  /**
-   * After the gateway starts: running workspaces get their session (one from before sessions were kept starts
-   * now), and a session left open by a workspace that is gone closes.
-   */
+  /** After the gateway starts: running workspaces get their session, and a session left open by a workspace that is gone closes. */
   reconcile(states: readonly WorkspaceRunState[]): void {
     const known = new Set(states.map((state) => state.userId));
     for (const [userId, open] of [...this.#open]) {

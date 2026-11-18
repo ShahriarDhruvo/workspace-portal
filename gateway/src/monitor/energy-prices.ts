@@ -191,39 +191,29 @@ export async function fetchText(url: string): Promise<string> {
   return text;
 }
 
-export interface EnergyPricesOptions {
-  db: PortalDb;
-  log: Logger;
-  fetchText?: FetchText;
-  now?: () => number;
-  refreshMs?: number;
-}
-
 export class EnergyPrices {
   readonly #db: PortalDb;
   readonly #log: Logger;
   readonly #fetch: FetchText;
   readonly #now: () => number;
-  readonly #refreshMs: number;
   readonly #status: EnergyPriceStatus = {
     eia: { at: null, okAt: null, rows: 0, error: null },
     eurostat: { at: null, okAt: null, rows: 0, error: null },
   };
   #timer: ReturnType<typeof setInterval> | null = null;
 
-  constructor(options: EnergyPricesOptions) {
+  constructor(options: { db: PortalDb; log: Logger; fetchText?: FetchText; now?: () => number }) {
     this.#db = options.db;
     this.#log = options.log;
     this.#fetch = options.fetchText ?? fetchText;
     this.#now = options.now ?? Date.now;
-    this.#refreshMs = options.refreshMs ?? REFRESH_MS;
   }
 
   /** Downloads now (not awaited) and then every 24 h until stop(). */
   start(): void {
     if (this.#timer !== null) return;
     void this.refresh({ force: true });
-    this.#timer = setInterval(() => void this.refresh({ force: true }), this.#refreshMs);
+    this.#timer = setInterval(() => void this.refresh({ force: true }), REFRESH_MS);
     this.#timer.unref();
   }
 

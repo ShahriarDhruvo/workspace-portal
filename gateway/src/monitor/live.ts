@@ -1,12 +1,9 @@
-// The admin's live view (GET /control/live, server-sent events, for Admin > Usage): both servers' hardware
-// readings and today's energy and traffic, and the LLM server's sessions with their Read and Write speeds, in one
-// frame every FRAME_MS. The running workspaces are not in it: Admin > Users polls the workspace list. Nor are the
-// workspace sessions (session-log.ts): the page reads them from the database when the frame's `sessionsVersion`
-// changes. Everything behind it (hostd streams, /slots polling) runs only while someone watches; today's totals
-// come from the energy meter's memory, which runs all the time.
-//
-// Events: `init` once (the frames' interval and the last minute of history for the charts), then
-// `frame` every FRAME_MS (LiveFrame).
+// The admin's live view (GET /control/live, server-sent events, for Admin > Usage): `init` once (the frames' interval
+// and the last minute of history for the charts), then a `frame` every FRAME_MS with both servers' hardware readings
+// and today's energy and traffic, and the LLM server's sessions with their Read and Write speeds. The workspace
+// sessions (session-log.ts) are not in it: the page reads them from the database when the frame's `sessionsVersion`
+// changes. Everything behind it (hostd streams, /slots polling) runs only while someone watches; today's totals come
+// from the energy meter's memory, which runs all the time.
 import type { ServerResponse } from "node:http";
 import { inArray } from "drizzle-orm";
 import { displayName, users, type HostLive, type HostRole, type LiveFrame, type LiveInit, type LlmTotalsPoint, type PortalDb } from "@portal/core";
@@ -26,10 +23,8 @@ const MAX_VIEWERS = 8;
 export interface LiveDeps {
   llm: LlmMonitor;
   hosts: Record<HostRole, HostMonitor>;
-  /** Today's totals per server; without it (tests that don't need them) every `today` is null. */
-  energy?: Pick<EnergyMeter, "today">;
-  /** The workspace sessions' version; without it (tests that don't need it) it stays 0. */
-  sessions?: Pick<SessionLog, "version">;
+  energy: Pick<EnergyMeter, "today">;
+  sessions: Pick<SessionLog, "version">;
   log: Logger;
   now?: () => number;
 }
@@ -68,8 +63,7 @@ export class LiveHub {
       if (res.writableNeedDrain) return;
       res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     };
-    const stop = this.subscribe(send);
-    res.on("close", stop);
+    res.on("close", this.subscribe(send));
   }
 
   /** Adds a viewer: it gets `init` and the current frame at once, then a frame every FRAME_MS. */
@@ -92,8 +86,8 @@ export class LiveHub {
   /** The current state (also each viewer's first frame). */
   frame(): LiveFrame {
     const { llm, hosts, energy, sessions } = this.#deps;
-    const host = (role: HostRole): HostLive => ({ ...hosts[role].live(), today: energy?.today(role) ?? null });
-    return { t: this.#now(), hosts: { portal: host("portal"), llm: host("llm") }, llm: llm.snapshot(), sessionsVersion: sessions?.version ?? 0 };
+    const host = (role: HostRole): HostLive => ({ ...hosts[role].live(), today: energy.today(role) });
+    return { t: this.#now(), hosts: { portal: host("portal"), llm: host("llm") }, llm: llm.snapshot(), sessionsVersion: sessions.version };
   }
 
   /** Stops everything (gateway shutdown); open streams end with their sockets. */
