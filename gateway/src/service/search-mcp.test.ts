@@ -155,6 +155,8 @@ test("the SearXNG backend sends only the query to the configured instance", asyn
 
   const refused = createSearxngBackend({ baseUrl: "http://s", authorization: "", timeoutMs: 1000, fetchImpl: (async () => new Response("", { status: 403 })) as typeof fetch });
   await assert.rejects(refused.search({ query: "x", page: 1, timeRange: null, language: null }, new AbortController().signal), /JSON format/);
+  const thrown = createSearxngBackend({ baseUrl: "http://s", authorization: "", timeoutMs: 1000, fetchImpl: () => { throw new TypeError("fetch failed"); } });
+  await assert.rejects(thrown.search({ query: "x", page: 1, timeRange: null, language: null }, new AbortController().signal), /did not answer/, "a fetch that throws instead of rejecting");
 });
 
 test("formatResults handles answers, infoboxes and no results", () => {

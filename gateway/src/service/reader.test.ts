@@ -32,6 +32,8 @@ test("the reader backend posts the URL and turns refusals into ReadErrors", asyn
 
   const down = createReaderBackend({ baseUrl: "http://127.0.0.1:4003", timeoutMs: 1000, fetchImpl: (async () => Promise.reject(new Error("refused"))) as typeof fetch });
   await assert.rejects(down.read("https://docs.example/x", never), /did not answer/);
+  const thrown = createReaderBackend({ baseUrl: "http://127.0.0.1:4003", timeoutMs: 1000, fetchImpl: () => { throw new TypeError("fetch failed"); } });
+  await assert.rejects(thrown.read("https://docs.example/x", never), /did not answer/, "a fetch that throws instead of rejecting");
 
   // The reader cuts pages at 400,000 characters: an answer of many megabytes is not taken into memory.
   const huge = createReaderBackend({ baseUrl: "http://127.0.0.1:4003", timeoutMs: 1000, fetchImpl: (async () => Response.json({ ok: true, url: "https://docs.example/x", text: "x".repeat(5 * 1024 * 1024) })) as typeof fetch });

@@ -41,9 +41,13 @@ export class ReadError extends Error {
  * One request to a service that works for the workspaces (SearXNG, the reader), under its base URL and never
  * following a redirect. Null when it did not answer in time, or `signal` aborted first.
  */
-export function askService(service: { baseUrl: string; timeoutMs: number; fetchImpl?: typeof fetch }, path: string, init: RequestInit, signal: AbortSignal): Promise<Response | null> {
+export async function askService(service: { baseUrl: string; timeoutMs: number; fetchImpl?: typeof fetch }, path: string, init: RequestInit, signal: AbortSignal): Promise<Response | null> {
   const url = new URL(path, service.baseUrl.endsWith("/") ? service.baseUrl : `${service.baseUrl}/`);
-  return (service.fetchImpl ?? fetch)(url, { ...init, redirect: "error", signal: AbortSignal.any([signal, AbortSignal.timeout(service.timeoutMs)]) }).catch(() => null);
+  try {
+    return await (service.fetchImpl ?? fetch)(url, { ...init, redirect: "error", signal: AbortSignal.any([signal, AbortSignal.timeout(service.timeoutMs)]) });
+  } catch {
+    return null;
+  }
 }
 
 /** The reader cuts a page at 400,000 characters; an answer far beyond that is not one of its own. */
