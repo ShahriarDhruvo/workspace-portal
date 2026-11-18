@@ -55,19 +55,19 @@ test("hostTrusted matches a site and its subdomains, not look-alikes", () => {
 test("ShownUrls remembers per workspace and drops the oldest when full", () => {
   const shown = new ShownUrls({ urlsPerUser: 3 });
   shown.add(1, ["https://a.example/1", "https://a.example/2", "nonsense"]);
-  assert.equal(shown.has(1, "http://A.example/1/"), true, "same page, different spelling");
+  assert.equal(shown.find(1, "http://A.example/1/") !== null, true, "same page, different spelling");
   assert.equal(shown.find(1, "http://A.example/1/#top"), "https://a.example/1", "and it is requested the way it was shown");
   assert.equal(shown.find(1, "https://a.example/x/../1"), "https://a.example/1");
-  assert.equal(shown.has(2, "https://a.example/1"), false, "another workspace was not shown it");
-  assert.equal(shown.has(1, "https://a.example/1?x=secret"), false, "a URL the workspace composed");
+  assert.equal(shown.find(2, "https://a.example/1") !== null, false, "another workspace was not shown it");
+  assert.equal(shown.find(1, "https://a.example/1?x=secret") !== null, false, "a URL the workspace composed");
   for (const composed of ["https://a.example/1//", "https://a.example/1/secret/..%2f", "https://a.example:8443/1", "https://a.example/1?", "https://a.example//1"]) {
     const found = shown.find(1, composed);
     assert.ok(found === null || found === "https://a.example/1", `${composed} -> ${found}`);
   }
-  assert.equal(shown.has(1, "https://a.example/1//"), false, "one trailing slash more or less, not any number");
+  assert.equal(shown.find(1, "https://a.example/1//") !== null, false, "one trailing slash more or less, not any number");
   shown.add(1, ["https://a.example/1", "https://a.example/3", "https://a.example/4"]);
   assert.deepEqual(
-    [1, 2, 3, 4].map((n) => shown.has(1, `https://a.example/${n}`)),
+    [1, 2, 3, 4].map((n) => shown.find(1, `https://a.example/${n}`) !== null),
     [true, false, true, true],
     "2 was the oldest; 1 had just been shown again",
   );
@@ -77,15 +77,15 @@ test("ShownUrls is bounded by characters and by workspaces, whatever is thrown a
   const shown = new ShownUrls({ charsPerUser: 1000, users: 2 });
   const long = (n: number) => `https://a.example/${String(n).padStart(4, "0")}${"x".repeat(180)}`;
   shown.add(1, Array.from({ length: 50 }, (_, n) => long(n)));
-  assert.equal(shown.has(1, long(49)), true);
-  assert.equal(shown.has(1, long(40)), false, "about five URLs of 200 characters fit in 1000");
+  assert.equal(shown.find(1, long(49)) !== null, true);
+  assert.equal(shown.find(1, long(40)) !== null, false, "about five URLs of 200 characters fit in 1000");
   shown.add(1, [`https://a.example/${"y".repeat(MAX_URL_CHARS)}`]);
-  assert.equal(shown.has(1, long(49)), true, "a URL too long to read is not remembered");
+  assert.equal(shown.find(1, long(49)) !== null, true, "a URL too long to read is not remembered");
 
   shown.add(2, ["https://b.example/"]);
-  shown.has(1, long(49)); // workspace 1 is in use
+  shown.find(1, long(49)); // workspace 1 is in use
   shown.add(3, ["https://c.example/"]);
-  assert.deepEqual([shown.has(1, long(49)), shown.has(2, "https://b.example/"), shown.has(3, "https://c.example/")], [true, false, true], "the workspace unused for longest was dropped");
+  assert.deepEqual([shown.find(1, long(49)) !== null, shown.find(2, "https://b.example/") !== null, shown.find(3, "https://c.example/") !== null], [true, false, true], "the workspace unused for longest was dropped");
 });
 
 test("urlsShownInLlmRequest takes what the model is shown, never what it wrote", () => {

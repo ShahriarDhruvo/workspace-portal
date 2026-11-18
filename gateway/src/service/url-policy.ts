@@ -163,11 +163,6 @@ export class ShownUrls {
     return spellings(canonical).find((form) => entry.urls.has(form)) ?? null;
   }
 
-  has(userId: number, url: string): boolean {
-    return this.find(userId, url) !== null;
-  }
-
-
   /** The workspace's entry, moved to the recently used end. */
   #touch(userId: number): { urls: Set<string>; chars: number } | undefined {
     const entry = this.#byUser.get(userId);
