@@ -18,7 +18,7 @@ import { createNotesClient, createRegistryClient, EngineReleases, type NotesClie
 import { createEngineHost, EngineUpdater, type EngineHost } from "./updates/engine-updater.ts";
 import { createGitHubReleases } from "./updates/github-releases.ts";
 import { HostMonitor } from "./monitor/host-monitor.ts";
-import { HostdClient } from "./monitor/hostd.ts";
+import { hostdClient } from "./monitor/hostd.ts";
 import { LiveHub, userNames } from "./monitor/live.ts";
 import { LlmMonitor } from "./monitor/llm-monitor.ts";
 import { LlmQueue } from "./service/llm-queue.ts";
@@ -62,8 +62,9 @@ export function compose(
   const llm = new LlmQueue(config.llm.maxConcurrency, config.llm.maxConcurrencyPerUser);
   // Each run of a workspace and what its LLM requests added up to, energy included (Admin > Usage).
   const sessionLog = new SessionLog({ db, log, now });
+  const hostd = { portal: hostdClient(config.hostd.portal), llm: hostdClient(config.hostd.llm) };
   const llmEnergy = new LlmEnergy({
-    source: config.hostd.llm.token === "" ? null : new HostdClient(config.hostd.llm),
+    source: hostd.llm,
     onShares: (shares) => sessionLog.addEnergy(shares),
     log,
   });
@@ -101,8 +102,8 @@ export function compose(
 
   // The admin's live view and engine updates, through each server's portal-hostd.
   const hosts = {
-    portal: new HostMonitor({ role: "portal", config: config.hostd.portal, log }),
-    llm: new HostMonitor({ role: "llm", config: config.hostd.llm, log }),
+    portal: new HostMonitor({ role: "portal", client: hostd.portal, log }),
+    llm: new HostMonitor({ role: "llm", client: hostd.llm, log }),
   };
   const llmMonitor = new LlmMonitor({
     upstreamUrl: config.llm.upstreamUrl,
@@ -114,20 +115,13 @@ export function compose(
     now,
   });
   // Each server's energy and traffic per day (Admin > Energy): read all the time, not only while someone watches.
-  const energy = new EnergyMeter({
-    db,
-    sources: {
-      portal: config.hostd.portal.token === "" ? undefined : new HostdClient(config.hostd.portal),
-      llm: config.hostd.llm.token === "" ? undefined : new HostdClient(config.hostd.llm),
-    },
-    log,
-  });
+  const energy = new EnergyMeter({ db, sources: hostd, log });
   // The published electricity prices Admin > Energy prices those days at (every place's, for the one the admin picks).
   const prices = new EnergyPrices({ db, log, fetchText: seams.fetchText });
   const live = new LiveHub({ llm: llmMonitor, hosts, energy, sessions: sessionLog, log, now });
   const engine = new EngineUpdater({
     config,
-    host: seams.engineHost !== undefined ? seams.engineHost : config.hostd.llm.token === "" ? null : createEngineHost(new HostdClient(config.hostd.llm)),
+    host: seams.engineHost !== undefined ? seams.engineHost : hostd.llm && createEngineHost(hostd.llm),
     releases: new EngineReleases({
       registry: seams.engineRegistry ?? createRegistryClient(),
       notes: seams.engineNotes ?? createNotesClient(),

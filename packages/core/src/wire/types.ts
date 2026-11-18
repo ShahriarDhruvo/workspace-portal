@@ -311,7 +311,6 @@ export interface EngineOverview {
 
 /** portal-hostd's `info` event. */
 export interface HostInfo {
-  hostd: number;
   hostname: string;
   role: HostRole;
   os: string;
@@ -323,17 +322,17 @@ export interface HostInfo {
   sources: { perf: boolean; bandwidth: string | null; power: string | null; gpuBusy: string | null };
   power: { label: string } | null;
   engine: { unit: string } | null;
-  /** The physical network interfaces that `net` counts (not lo, bridges, veth or VPN tunnels); absent from hostd before API version 2. */
-  network?: { interfaces: string[] } | null;
+  /** The physical network interfaces that `net` counts (not lo, bridges, veth or VPN tunnels). */
+  network: { interfaces: string[] } | null;
   /** The whole disks that `disk` I/O counts, and the mount points of the local filesystems its space adds up. */
-  disks?: { devices: string[]; mounts: string[] } | null;
+  disks: { devices: string[]; mounts: string[] } | null;
 }
 
 /** portal-hostd's `sample` event. */
 export interface HostSample {
   /** Epoch ms on the host. */
   t: number;
-  cpu: { usage: number | null; mhz: number | null; mhzPeak: number | null; tempC: number | null; powerW: number | null; coreUsage: number[]; coreMhz: Array<number | null> };
+  cpu: { usage: number | null; mhz: number | null; mhzPeak: number | null; tempC: number | null; powerW: number | null; coreUsage: Array<number | null>; coreMhz: Array<number | null> };
   gpu: { usage: number | null; mhz: number | null; tempC: number | null; powerW: number | null; memUsedBytes: number | null; memTotalBytes: number | null } | null;
   memory: {
     totalBytes: number;
@@ -348,9 +347,9 @@ export interface HostSample {
   power: { watts: number | null; parts: { gpu: number | null; cpu: number | null; dram: number | null } };
   fans: Array<{ label: string; rpm: number | null; duty: number | null }>;
   throttling?: boolean | null;
-  /** Bytes per second over the physical interfaces together (hostd API version 2 on). */
+  /** Bytes per second over the physical interfaces together. */
   net?: { rxBps: number | null; txBps: number | null } | null;
-  /** Bytes per second over the whole disks together, and the local filesystems' space together (version 2 on). */
+  /** Bytes per second over the whole disks together, and the local filesystems' space together. */
   disk?: { readBps: number | null; writeBps: number | null; totalBytes: number | null; freeBytes: number | null } | null;
 }
 
@@ -431,7 +430,7 @@ export interface LiveFrame {
   t: number;
   hosts: Record<HostRole, HostLive>;
   llm: LlmLive;
-  /** Changes whenever the workspace sessions do (0 without them): the sessions table reads its page again. */
+  /** Changes whenever the workspace sessions do: the sessions table reads its page again. */
   sessionsVersion: number;
 }
 

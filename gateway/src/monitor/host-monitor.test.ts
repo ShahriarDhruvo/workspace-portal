@@ -5,7 +5,7 @@ import { closeServer, listenLocal, quiet } from "../../test/fakes.ts";
 import { waitFor } from "../../test/harness.ts";
 import { HostMonitor } from "./host-monitor.ts";
 import type { HostSample } from "@portal/core";
-import { HostdClient, HostdError, SseParser } from "./hostd.ts";
+import { HostdClient, hostdClient, HostdError, SseParser } from "./hostd.ts";
 
 const TOKEN = "h".repeat(64);
 
@@ -38,7 +38,7 @@ async function fakeHostd(): Promise<{ port: number; streams: () => number; opene
     open++;
     opened++;
     res.writeHead(200, { "content-type": "text/event-stream" });
-    res.write(`event: info\ndata: ${JSON.stringify({ hostd: 1, hostname: "locust", role: "portal" })}\n\n`);
+    res.write(`event: info\ndata: ${JSON.stringify({ hostname: "locust", role: "portal" })}\n\n`);
     const timer = setInterval(() => res.write(`: ping\n\nevent: sample\ndata: ${JSON.stringify(sample((t += 500)))}\n\n`), 20);
     res.on("close", () => {
       clearInterval(timer);
@@ -77,7 +77,7 @@ test("HostdClient: JSON requests carry the token; errors keep hostd's code", asy
 
 test("HostMonitor streams only while watched, keeps recent readings, and reports a refused token", async () => {
   const hostd = await fakeHostd();
-  const monitor = new HostMonitor({ role: "portal", config: { url: `http://127.0.0.1:${hostd.port}`, token: TOKEN }, log: quiet });
+  const monitor = new HostMonitor({ role: "portal", client: hostdClient({ url: `http://127.0.0.1:${hostd.port}`, token: TOKEN }), log: quiet });
   try {
     assert.equal(monitor.live().state, "connecting");
     assert.equal(hostd.streams(), 0, "nothing before the first viewer");
@@ -105,7 +105,7 @@ test("HostMonitor streams only while watched, keeps recent readings, and reports
   }
 
   const second = await fakeHostd();
-  const wrong = new HostMonitor({ role: "llm", config: { url: `http://127.0.0.1:${second.port}`, token: "x".repeat(64) }, log: quiet });
+  const wrong = new HostMonitor({ role: "llm", client: hostdClient({ url: `http://127.0.0.1:${second.port}`, token: "x".repeat(64) }), log: quiet });
   try {
     const leave = wrong.watch();
     await waitFor(() => wrong.live().state === "offline", "the refusal");
@@ -116,7 +116,7 @@ test("HostMonitor streams only while watched, keeps recent readings, and reports
     await second.close();
   }
 
-  const off = new HostMonitor({ role: "llm", config: { url: "", token: "" }, log: quiet });
+  const off = new HostMonitor({ role: "llm", client: hostdClient({ url: "", token: "" }), log: quiet });
   off.watch()();
   assert.deepEqual([off.live().state, off.live().error], ["off", null]);
 });

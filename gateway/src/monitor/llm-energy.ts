@@ -1,12 +1,11 @@
 // Each LLM request's share of the LLM server's measured energy, for its workspace session (session-log.ts). While
 // requests run, the LLM server's portal-hostd meter (GET /v1/meter, brought up to date every 2 s) is read every
-// READ_MS; the energy each reading adds is shared among the requests that ran in that stretch, by how long each
-// ran in it, and each session also gets the time it had a request running (its parallel ones count once, so its
-// energy over that time is its average draw). Nothing is read while the LLM server has no request, so its idle draw goes to no one. Each stretch is
-// bounded by the meter's own times (the LLM server's clock), unless that clock is off by more than CLOCK_SKEW_MS;
-// a request keeps its place until a reading covers its end.
-import type { MeterSource } from "./energy-meter.ts";
-import { isMeterReading } from "./energy-meter.ts";
+// READ_MS; the energy each reading adds is shared among the requests that ran in that stretch, by how long each ran in
+// it, and each session also gets the time it had a request running (its parallel ones count once, so its energy over
+// that time is its average draw). Nothing is read while the LLM server has no request, so its idle draw goes to no
+// one. Each stretch is bounded by the meter's own times (the LLM server's clock), unless that clock is off by more
+// than CLOCK_SKEW_MS; a request keeps its place until a reading covers its end.
+import { isMeterReading, type MeterSource } from "./energy-meter.ts";
 import type { Logger } from "../lib/log.ts";
 import { singleFlight } from "../lib/single-flight.ts";
 import type { EnergyShare } from "./session-log.ts";

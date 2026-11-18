@@ -1,10 +1,10 @@
-// The energy meter: each server's energy use and network traffic per local day (host_daily, priced on
-// Admin > Energy), from its portal-hostd's running totals (GET /v1/meter). Unlike the live view it runs all
-// the time: every POLL_MS it reads each set-up hostd, takes the increase since the reading before (kept in
-// host_meter, so a gateway restart counts only what is new) and adds it to the local day it happened on.
+// The energy meter: each server's energy use and network traffic per local day (host_daily, priced on Admin > Energy),
+// from its portal-hostd's running totals (GET /v1/meter). Unlike the live view it runs all the time: every POLL_MS it
+// reads each set-up hostd, takes the increase since the reading before (kept in host_meter, so a gateway restart
+// counts only what is new) and adds it to the local day it happened on.
 import { sql } from "drizzle-orm";
 import { HOST_ROLES, hostDaily, hostMeter, usageDay, type HostRole, type HostToday, type PortalDb } from "@portal/core";
-import { HostdError, type MeterReading } from "./hostd.ts";
+import type { MeterReading } from "./hostd.ts";
 import { errorMessage, type Logger } from "../lib/log.ts";
 import { singleFlight } from "../lib/single-flight.ts";
 
@@ -25,12 +25,10 @@ interface Booked {
   txBytes: number | null;
 }
 
-type SourceState = "ok" | "no_meter" | "unavailable";
-
 export interface EnergyMeterOptions {
   db: PortalDb;
-  /** The set-up portal-hostds (config.hostd.<role> with a token). */
-  sources: Partial<Record<HostRole, MeterSource>>;
+  /** Each server's portal-hostd; null or absent when it isn't set up. */
+  sources: Partial<Record<HostRole, MeterSource | null>>;
   log: Logger;
   now?: () => number;
   pollMs?: number;
@@ -45,7 +43,7 @@ export class EnergyMeter {
   readonly #booked = new Map<HostRole, Booked>();
   /** The in-memory copy of each role's newest host_daily row, so frames never read the database. */
   readonly #today = new Map<HostRole, HostToday>();
-  readonly #state = new Map<HostRole, SourceState>();
+  readonly #failing = new Set<HostRole>();
   #timer: ReturnType<typeof setInterval> | null = null;
   #stopped = false;
 
@@ -108,31 +106,17 @@ export class EnergyMeter {
     }
   }
 
+  /** A change is logged once: a hostd that stays down isn't logged every 30 s. */
   async #read(role: HostRole, source: MeterSource): Promise<MeterReading | null> {
     try {
       const reading = await source.get<unknown>("/v1/meter");
-      if (!isMeterReading(reading)) throw new HostdError(200, "bad_answer", `${source.url} sent a meter reading of another shape`);
-      this.#setState(role, source, "ok");
+      if (!isMeterReading(reading)) throw new Error(`${source.url} sent a meter reading of another shape`);
+      if (this.#failing.delete(role)) this.#log.info("energy meter: reading again", { role, url: source.url });
       return reading;
     } catch (error) {
-      // 404: a portal-hostd from before the meter (API version 1); it only needs updating.
-      const missing = error instanceof HostdError && error.status === 404;
-      this.#setState(role, source, missing ? "no_meter" : "unavailable", errorMessage(error));
+      if (!this.#failing.has(role)) this.#log.warn("energy meter: portal-hostd unavailable", { role, url: source.url, error: errorMessage(error) });
+      this.#failing.add(role);
       return null;
-    }
-  }
-
-  /** Logs each change of a source's state once (a hostd that stays down isn't logged every 30 s). */
-  #setState(role: HostRole, source: MeterSource, state: SourceState, error?: string): void {
-    const before = this.#state.get(role);
-    if (before === state) return;
-    this.#state.set(role, state);
-    if (state === "ok") {
-      if (before !== undefined) this.#log.info("energy meter: reading again", { role, url: source.url });
-    } else if (state === "no_meter") {
-      this.#log.warn("energy meter: this portal-hostd has no meter yet; update it (hostd/install.sh)", { role, url: source.url });
-    } else {
-      this.#log.warn("energy meter: portal-hostd unavailable", { role, url: source.url, error });
     }
   }
 

@@ -1,9 +1,10 @@
-// Client for portal-hostd (hostd/), the small service on each server that reports live hardware
-// readings and, on the LLM server, updates the LLM engine. Its API and payloads are described in
-// hostd/README.md; the shapes below are what the gateway relies on and passes to the admin console.
+// Client for portal-hostd (hostd/), the small service on each server that reports live hardware readings and, on the
+// LLM server, updates the LLM engine. Its API and payloads are described in hostd/README.md.
 import http from "node:http";
 import https from "node:https";
 import type { HostInfo, HostSample } from "@portal/core";
+import { readBounded } from "../lib/bounded-body.ts";
+import { field, parseJson } from "../lib/json.ts";
 import type { HostdConfig } from "../config.ts";
 
 const REQUEST_TIMEOUT_MS = 5_000;
@@ -12,7 +13,7 @@ const STREAM_IDLE_MS = 15_000;
 /** A larger event is refused (a sample is about 2 KB). */
 const MAX_EVENT_BYTES = 256 * 1024;
 
-/** GET /v1/meter (hostd API version 2 on): running totals since hostd started, kept whether or not anyone watches. */
+/** GET /v1/meter: running totals since hostd started, kept whether or not anyone watches. */
 export interface MeterReading {
   /** New on each hostd start, when the totals begin again at zero. */
   instance: string;
@@ -41,10 +42,8 @@ export class HostdError extends Error {
   }
 }
 
-export interface StreamHandlers {
-  info(info: HostInfo): void;
-  sample(sample: HostSample): void;
-}
+/** The client of a set-up portal-hostd (one with a token), else null. */
+export const hostdClient = (config: HostdConfig): HostdClient | null => (config.token === "" ? null : new HostdClient(config));
 
 export class HostdClient {
   readonly url: string;
@@ -67,11 +66,8 @@ export class HostdClient {
     return this.#request<T>("DELETE", path);
   }
 
-  /**
-   * Follows GET /v1/stream until `signal` aborts or the stream ends; resolves then, rejects with a
-   * HostdError when it can't be opened or breaks.
-   */
-  stream(handlers: StreamHandlers, signal: AbortSignal): Promise<void> {
+  /** Follows GET /v1/stream until `signal` aborts (it resolves then); rejects with a HostdError when it can't be opened, breaks or ends. */
+  stream(handlers: { info(info: HostInfo): void; sample(sample: HostSample): void }, signal: AbortSignal): Promise<void> {
     return new Promise((resolve, reject) => {
       if (signal.aborted) return resolve();
       const url = this.#url("/v1/stream");
@@ -102,12 +98,7 @@ export class HostdClient {
         touch();
         const parser = new SseParser((event, data) => {
           touch();
-          let payload: unknown;
-          try {
-            payload = JSON.parse(data);
-          } catch {
-            return;
-          }
+          const payload = parseJson(data);
           if (typeof payload !== "object" || payload === null) return;
           if (event === "info") handlers.info(payload as HostInfo);
           else if (event === "sample" && typeof (payload as HostSample).t === "number") handlers.sample(payload as HostSample);
@@ -202,24 +193,16 @@ function transport(url: URL): typeof http | typeof https {
 }
 
 async function readBody(res: http.IncomingMessage): Promise<string> {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of res as AsyncIterable<Buffer>) {
-    size += chunk.length;
-    if (size > MAX_EVENT_BYTES) throw new HostdError(res.statusCode ?? null, "answer_too_large", "portal-hostd sent too large an answer");
-    chunks.push(chunk);
-  }
-  return Buffer.concat(chunks).toString("utf8");
+  const body = await readBounded(res, MAX_EVENT_BYTES);
+  if (body === null) throw new HostdError(res.statusCode ?? null, "answer_too_large", "portal-hostd sent too large an answer");
+  return body.toString("utf8");
 }
 
 async function readError(res: http.IncomingMessage): Promise<HostdError> {
   const status = res.statusCode ?? null;
-  const text = await readBody(res).catch(() => "");
-  try {
-    const body = JSON.parse(text) as { error?: unknown; message?: unknown };
-    if (typeof body.error === "string") return new HostdError(status, body.error, typeof body.message === "string" ? body.message : body.error);
-  } catch {
-    // not JSON
-  }
+  const body = parseJson(await readBody(res).catch(() => ""));
+  const error = field(body, "error");
+  const message = field(body, "message");
+  if (typeof error === "string") return new HostdError(status, error, typeof message === "string" ? message : error);
   return new HostdError(status, status === 401 ? "unauthorized" : "bad_status", status === 401 ? "portal-hostd refused the token" : `portal-hostd answered ${status}`);
 }

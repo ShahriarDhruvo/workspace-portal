@@ -1,32 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { MeterSource } from "./energy-meter.ts";
-import type { MeterReading } from "./hostd.ts";
 import { LlmEnergy } from "./llm-energy.ts";
-import { quiet } from "../../test/fakes.ts";
+import { FakeMeter, quiet } from "../../test/fakes.ts";
 import type { EnergyShare } from "./session-log.ts";
-
-class FakeMeter implements MeterSource {
-  readonly url = "http://llm:9180";
-  reading: MeterReading = { instance: "a", startedAt: 0, t: 0, energyJ: 0, rxBytes: 0, txBytes: 0 };
-  calls = 0;
-  async get<T>(): Promise<T> {
-    this.calls++;
-    return { ...this.reading } as T;
-  }
-  /** The meter's next 2 s update: `watts` over the time since the last one. */
-  tick(t: number, watts: number): void {
-    this.reading = { ...this.reading, t, energyJ: this.reading.energyJ! + (watts * (t - this.reading.t)) / 1000 };
-  }
-}
 
 function setup() {
   const meter = new FakeMeter();
+  /** The meter's next 2 s update: `watts` over the time since the last one. */
+  const tick = (t: number, watts: number): void => meter.set({ t, energyJ: meter.reading.energyJ! + (watts * (t - meter.reading.t)) / 1000 });
   const clock = { now: 0 };
   const shares: EnergyShare[] = [];
   const energy = new LlmEnergy({ source: meter, onShares: (list) => shares.push(...list), log: quiet, now: () => clock.now, readMs: 60_000 });
   const total = (sessionId: number) => shares.filter((s) => s.sessionId === sessionId).reduce((sum, s) => sum + s.joules, 0);
-  return { meter, clock, shares, energy, total };
+  return { meter: Object.assign(meter, { tick }), clock, shares, energy, total };
 }
 
 test("each stretch's energy goes to the requests that ran in it, by how long each ran", async () => {

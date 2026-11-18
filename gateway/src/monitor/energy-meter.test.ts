@@ -3,50 +3,13 @@ process.env.TZ = "America/New_York";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
 import http from "node:http";
-import os from "node:os";
-import path from "node:path";
-import { hostDaily, openDatabase, type PortalDb } from "@portal/core";
-import { closeServer, listenLocal } from "../../test/fakes.ts";
-import { EnergyMeter, splitByDay, type MeterSource } from "./energy-meter.ts";
-import { HostdClient, HostdError, type MeterReading } from "./hostd.ts";
-import type { Logger } from "../lib/log.ts";
+import { hostDaily, type PortalDb } from "@portal/core";
+import { closeServer, FakeMeter, listenLocal, quiet, tempDb } from "../../test/fakes.ts";
+import { EnergyMeter, splitByDay } from "./energy-meter.ts";
+import { HostdClient, HostdError } from "./hostd.ts";
 
 const at = (day: number, hours: number, minutes = 0, seconds = 0): number => new Date(2026, 10, day, hours, minutes, seconds).getTime();
-
-function tempDb(): PortalDb {
-  return openDatabase(path.join(fs.mkdtempSync(path.join(os.tmpdir(), "energy-meter-")), "portal.sqlite"));
-}
-
-/** A portal-hostd's meter: answers `reading`, or throws `error`. */
-class FakeHostd implements MeterSource {
-  readonly url = "http://fake-hostd:9180";
-  reading: MeterReading;
-  error: Error | null = null;
-  calls = 0;
-
-  constructor(instance: string, startedAt: number) {
-    this.reading = { instance, startedAt, t: startedAt, energyJ: 0, rxBytes: 0, txBytes: 0 };
-  }
-
-  set(values: Partial<MeterReading>): void {
-    this.reading = { ...this.reading, ...values };
-  }
-
-  async get<T>(requested: string): Promise<T> {
-    assert.equal(requested, "/v1/meter");
-    this.calls++;
-    if (this.error) throw this.error;
-    return { ...this.reading } as T;
-  }
-}
-
-function recordingLog(): Logger & { lines: string[] } {
-  const lines: string[] = [];
-  const log = (level: string) => (message: string) => void lines.push(`${level}: ${message}`);
-  return { lines, info: log("info"), warn: log("warn"), error: log("error") };
-}
 
 function rows(db: PortalDb): Array<{ day: string; role: string; energyWh: number | null; rxBytes: number; txBytes: number }> {
   return db
@@ -60,9 +23,9 @@ function rows(db: PortalDb): Array<{ day: string; role: string; energyWh: number
 test("books the increase of each reading, a restarted hostd's totals from zero, and a counter reset as new", async () => {
   const db = tempDb();
   let now = at(16, 10);
-  const portal = new FakeHostd("a", now - 60_000);
+  const portal = new FakeMeter("a", now - 60_000);
   portal.set({ energyJ: 3600, rxBytes: 1000, txBytes: 500 });
-  const meter = new EnergyMeter({ db, sources: { portal }, log: recordingLog(), now: () => now });
+  const meter = new EnergyMeter({ db, sources: { portal }, log: quiet, now: () => now });
 
   await meter.poll(); // the first reading ever: everything since hostd started
   assert.deepEqual(meter.today("portal"), { day: "2026-11-16", energyWh: 1, rxBytes: 1000, txBytes: 500 });
@@ -86,8 +49,8 @@ test("books the increase of each reading, a restarted hostd's totals from zero, 
 test("an interval over local midnight is split in proportion to time, a long one over every day it spans", async () => {
   const db = tempDb();
   let now = at(15, 23, 59, 40);
-  const llm = new FakeHostd("x", now);
-  const meter = new EnergyMeter({ db, sources: { llm }, log: recordingLog(), now: () => now });
+  const llm = new FakeMeter("x", now);
+  const meter = new EnergyMeter({ db, sources: { llm }, log: quiet, now: () => now });
   await meter.poll();
   now = at(16, 0, 0, 20);
   llm.set({ energyJ: 7200, rxBytes: 1001, txBytes: 2 });
@@ -130,10 +93,10 @@ test("splitByDay follows local days, daylight saving time included", () => {
 test("a server whose power can't be measured keeps energy_wh NULL; its traffic still counts", async () => {
   const db = tempDb();
   let now = at(16, 8);
-  const portal = new FakeHostd("p", now);
-  const llm = new FakeHostd("l", now);
+  const portal = new FakeMeter("p", now);
+  const llm = new FakeMeter("l", now);
   portal.set({ energyJ: null });
-  const meter = new EnergyMeter({ db, sources: { portal, llm }, log: recordingLog(), now: () => now });
+  const meter = new EnergyMeter({ db, sources: { portal, llm }, log: quiet, now: () => now });
   await meter.poll();
   now += 30_000;
   portal.set({ rxBytes: 300, txBytes: 30 });
@@ -146,13 +109,14 @@ test("a server whose power can't be measured keeps energy_wh NULL; its traffic s
   assert.equal(meter.today("portal")?.energyWh, null);
 });
 
-test("an unreachable hostd, or one without a meter, is skipped and logged once per change; nothing is lost", async () => {
+test("an unreachable hostd is skipped and logged once per change; nothing is lost", async () => {
   const db = tempDb();
   let now = at(16, 8);
-  const portal = new FakeHostd("p", now);
-  const llm = new FakeHostd("l", now);
-  const log = recordingLog();
-  const meter = new EnergyMeter({ db, sources: { portal, llm }, log, now: () => now });
+  const portal = new FakeMeter("p", now);
+  const llm = new FakeMeter("l", now);
+  const lines: string[] = [];
+  const record = (level: string) => (message: string) => void lines.push(`${level}: ${message}`);
+  const meter = new EnergyMeter({ db, sources: { portal, llm }, log: { info: record("info"), warn: record("warn"), error: record("error") }, now: () => now });
   await meter.poll();
 
   llm.error = new HostdError(null, "unreachable", "http://fake-hostd:9180: connect ECONNREFUSED");
@@ -164,21 +128,11 @@ test("an unreachable hostd, or one without a meter, is skipped and logged once p
   }
   assert.equal(meter.today("portal")?.rxBytes, 300, "the other server goes on");
   assert.equal(meter.today("llm")?.energyWh, 0);
-  llm.error = new HostdError(404, "not_found", "no such endpoint");
-  await meter.poll();
-  await meter.poll();
   llm.error = null;
   now += 30_000;
   await meter.poll();
   assert.equal(meter.today("llm")?.energyWh, 3, "what it counted meanwhile arrives with the next reading");
-  assert.deepEqual(
-    log.lines.filter((line) => line.includes("energy meter")),
-    [
-      "warn: energy meter: portal-hostd unavailable",
-      "warn: energy meter: this portal-hostd has no meter yet; update it (hostd/install.sh)",
-      "info: energy meter: reading again",
-    ],
-  );
+  assert.deepEqual(lines, ["warn: energy meter: portal-hostd unavailable", "info: energy meter: reading again"]);
 
   llm.set({ energyJ: "lots" as unknown as number });
   now += 30_000;
@@ -189,12 +143,12 @@ test("an unreachable hostd, or one without a meter, is skipped and logged once p
 test("a restarted gateway goes on from the last stored reading and today's row", async () => {
   const db = tempDb();
   let now = at(16, 8);
-  const llm = new FakeHostd("l", now - 3_600_000);
+  const llm = new FakeMeter("l", now - 3_600_000);
   llm.set({ energyJ: 36_000, rxBytes: 10, txBytes: 20 });
-  await new EnergyMeter({ db, sources: { llm }, log: recordingLog(), now: () => now }).poll();
+  await new EnergyMeter({ db, sources: { llm }, log: quiet, now: () => now }).poll();
 
   now += 60_000;
-  const again = new EnergyMeter({ db, sources: { llm }, log: recordingLog(), now: () => now });
+  const again = new EnergyMeter({ db, sources: { llm }, log: quiet, now: () => now });
   assert.deepEqual(again.today("llm"), { day: "2026-11-16", energyWh: 10, rxBytes: 10, txBytes: 20 }, "before its first poll");
   llm.set({ energyJ: 39_600, rxBytes: 15, txBytes: 20 });
   await again.poll();
@@ -214,7 +168,7 @@ test("polls GET /v1/meter through HostdClient with the token, every pollMs, unti
   });
   const port = await listenLocal(server);
   const db = tempDb();
-  const meter = new EnergyMeter({ db, sources: { portal: new HostdClient({ url: `http://127.0.0.1:${port}`, token }) }, log: recordingLog(), pollMs: 20 });
+  const meter = new EnergyMeter({ db, sources: { portal: new HostdClient({ url: `http://127.0.0.1:${port}`, token }) }, log: quiet, pollMs: 20 });
   try {
     meter.start();
     const deadline = Date.now() + 5_000;

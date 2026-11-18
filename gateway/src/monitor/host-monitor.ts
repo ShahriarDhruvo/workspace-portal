@@ -1,9 +1,9 @@
-// Live hardware readings of one server, from its portal-hostd's event stream. Connected only while
-// someone watches (Admin > Usage), so hostd samples nothing the rest of the time. Keeps the last
-// minute of readings for the charts a new viewer opens with.
+// Live hardware readings of one server, from its portal-hostd's event stream. Connected only while someone watches
+// (Admin > Usage), so hostd samples nothing the rest of the time. Keeps the last minute of readings for the charts a
+// new viewer opens with.
+import { setTimeout as sleep } from "node:timers/promises";
 import type { HostInfo, HostLive, HostRole, HostSample, HostState } from "@portal/core";
-import { HostdClient, HostdError } from "./hostd.ts";
-import type { HostdConfig } from "../config.ts";
+import { HostdError, type HostdClient } from "./hostd.ts";
 import type { Logger } from "../lib/log.ts";
 
 /** Readings kept for a new viewer's charts. */
@@ -26,9 +26,10 @@ export class HostMonitor {
   #info: HostInfo | null = null;
   #history: HostSample[] = [];
 
-  constructor(options: { role: HostRole; config: HostdConfig; log: Logger }) {
+  /** `client`: null when this server's portal-hostd isn't set up. */
+  constructor(options: { role: HostRole; client: HostdClient | null; log: Logger }) {
     this.role = options.role;
-    this.#client = options.config.token === "" ? null : new HostdClient(options.config);
+    this.#client = options.client;
     this.#log = options.log;
     this.#state = this.#client === null ? "off" : "connecting";
   }
@@ -40,7 +41,10 @@ export class HostMonitor {
       clearTimeout(this.#linger);
       this.#linger = null;
     }
-    if (this.#abort === null && this.#client !== null) this.#connect(this.#client);
+    if (this.#abort === null && this.#client !== null) {
+      this.#abort = new AbortController();
+      void this.#follow(this.#client, this.#abort.signal);
+    }
     let left = false;
     return () => {
       if (left) return;
@@ -64,12 +68,6 @@ export class HostMonitor {
     if (this.#linger !== null) clearTimeout(this.#linger);
     this.#linger = null;
     this.#disconnect();
-  }
-
-  #connect(client: HostdClient): void {
-    const abort = new AbortController();
-    this.#abort = abort;
-    void this.#follow(client, abort.signal);
   }
 
   #disconnect(): void {
@@ -111,20 +109,8 @@ export class HostMonitor {
         this.#history = [];
       }
       if (signal.aborted) return;
-      await sleep(retryMs, signal);
+      await sleep(retryMs, undefined, { signal }).catch(() => undefined);
       retryMs = Math.min(retryMs * 2, RETRY_MAX_MS);
     }
   }
-}
-
-function sleep(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(done, ms);
-    signal.addEventListener("abort", done, { once: true });
-    function done(): void {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", done);
-      resolve();
-    }
-  });
 }
