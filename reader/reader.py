@@ -535,7 +535,10 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as error:  # a parser bug must not take the answer with it
             event, fields, answer = "failed", {"error": type(error).__name__}, {"ok": False, "code": "failed", "message": "The page could not be turned into text."}
         log(event, host=host, **fields, ms=round((time.monotonic() - started) * 1000))
-        self._send(200, answer)
+        try:
+            self._send(200, answer)
+        except MemoryError:  # serialising a page that only just fitted
+            self._send(200, {"ok": False, "code": "too_large", "message": "That page is too large to read."})
 
 
 class Server(ForkingMixIn, HTTPServer):
