@@ -2,13 +2,14 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
-import { WORKSPACE_KIND_NAMES, type AgentKind, type WorkspaceKind, type WorkspaceStatus } from "@portal/core/wire";
-import { fetchJson, needsReauth } from "@/lib/fetch-json";
+import { useRef, useState } from "react";
+import { AGENT_NAMES, WORKSPACE_KIND_NAMES, type WorkspaceKind, type WorkspaceStatus } from "@portal/core/wire";
+import { fetchJson, needsReauth, startWorkspace, stopWorkspace } from "@/lib/fetch-json";
 import { formatVersion, stopReasonText, workspaceState } from "@/lib/format";
 import type { WorkspaceStatusResponse } from "@/lib/api";
 import { initialKind, onlineAccessAfter, otherKind, startErrorText } from "@/lib/workspace-kind";
 import { stopWarnings } from "@/lib/workspace-stop";
+import { usePoll } from "@/components/common/use-poll";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
@@ -37,10 +38,9 @@ interface HomeCardProps {
   /** Why `initial` is missing. */
   initialError: string | null;
   idleTimeoutMinutes: number;
-  agentNames: Readonly<Record<AgentKind, string>>;
 }
 
-export function HomeCard({ initial, initialError, idleTimeoutMinutes, agentNames }: HomeCardProps) {
+export function HomeCard({ initial, initialError, idleTimeoutMinutes }: HomeCardProps) {
   const router = useRouter();
   const [info, setInfo] = useState(initial);
   const [pollError, setPollError] = useState(initialError);
@@ -59,45 +59,17 @@ export function HomeCard({ initial, initialError, idleTimeoutMinutes, agentNames
 
   const status = info?.status ?? null;
   const settling = request !== null || status === "starting" || status === "stopping" || (status === "running" && !info?.ready);
-  const delay = useRef(2_000);
-  useEffect(() => {
-    delay.current = settling ? 2_000 : 5_000;
-  }, [settling]);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const poll = async () => {
-      const result = await fetchJson<WorkspaceStatusResponse>("/api/workspace/status", { signal: controller.signal });
-      if (controller.signal.aborted) return;
-      if (result.ok) {
-        setInfo(result.data);
-        setPollError(null);
-      } else if (needsReauth(result)) {
-        router.refresh();
-        return;
-      } else {
-        setPollError(result.error.message);
-      }
-      timer = setTimeout(poll, delay.current);
-    };
-    timer = setTimeout(poll, delay.current);
-    return () => {
-      controller.abort();
-      clearTimeout(timer);
-    };
-  }, [router]);
+  usePoll<WorkspaceStatusResponse>("/api/workspace/status", settling ? 2_000 : 5_000, (result) => {
+    if (result.ok) setInfo(result.data);
+    setPollError(result.ok ? null : result.error.message);
+  });
 
   /** Starts the kind confirmed in the start dialog, then goes to the workspace page. */
   async function start(kind: WorkspaceKind) {
     setRequest("start");
     setStartedKind(kind);
     setActionError(null);
-    const result = await fetchJson<WorkspaceStatusResponse>("/api/workspace/start", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ kind }),
-    });
+    const result = await startWorkspace(kind);
     if (result.ok) {
       setInfo(result.data);
       router.push("/workspace");
@@ -121,7 +93,7 @@ export function HomeCard({ initial, initialError, idleTimeoutMinutes, agentNames
   async function stop(): Promise<string | null> {
     setRequest("stop");
     setActionError(null);
-    const result = await fetchJson<WorkspaceStatusResponse>("/api/workspace/stop", { method: "POST" });
+    const result = await stopWorkspace();
     setRequest(null);
     if (result.ok) {
       setInfo(result.data);
@@ -181,7 +153,7 @@ export function HomeCard({ initial, initialError, idleTimeoutMinutes, agentNames
         <CardDescription className="col-start-1 flex flex-wrap items-baseline gap-x-2">
           {agent ? (
             <>
-              <span className="text-14 font-medium text-foreground">{agentNames[agent]}</span>
+              <span className="text-14 font-medium text-foreground">{AGENT_NAMES[agent]}</span>
               {version ? <span className="font-mono text-12">{formatVersion(version)}</span> : null}
             </>
           ) : (
@@ -248,7 +220,7 @@ export function HomeCard({ initial, initialError, idleTimeoutMinutes, agentNames
           ) : null}
           {stoppedBecause ? <p className="text-13 text-muted-foreground">Stopped {stoppedBecause}.</p> : null}
           {changesNextTime && info.nextAgent ? (
-            <p className="text-13 text-muted-foreground">{agentNames[info.nextAgent]}, chosen in Settings, starts next time.</p>
+            <p className="text-13 text-muted-foreground">{AGENT_NAMES[info.nextAgent]}, chosen in Settings, starts next time.</p>
           ) : null}
           {pollError ? (
             <p role="status" className="text-13 text-muted-foreground">

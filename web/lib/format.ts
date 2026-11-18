@@ -1,5 +1,5 @@
 // Display formatting shared by server and client components. Pure; unit tested.
-import type { AgentKind, WorkspaceInfo } from "@portal/core";
+import { AGENT_NAMES, type WorkspaceInfo } from "@portal/core/wire";
 
 const BYTE_UNITS = ["B", "KiB", "MiB", "GiB", "TiB"] as const;
 
@@ -97,14 +97,11 @@ export function formatVersion(version: string): string {
 
 /**
  * The workspace's agent in a few words: its name while a container runs it, "last: <name>" once stopped, null
- * if it never started. `names` is AGENT_NAMES (passed in, as client components can't import @portal/core values).
+ * if it never started.
  */
-export function agentLabel(
-  info: Pick<WorkspaceInfo, "status" | "agent"> | null,
-  names: Readonly<Record<AgentKind, string>>,
-): string | null {
+export function agentLabel(info: Pick<WorkspaceInfo, "status" | "agent"> | null): string | null {
   if (!info?.agent) return null;
-  const name = names[info.agent];
+  const name = AGENT_NAMES[info.agent];
   return info.status === "stopped" || info.status === "error" ? `last: ${name}` : name;
 }
 

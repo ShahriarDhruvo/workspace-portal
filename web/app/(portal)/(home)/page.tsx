@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { AGENT_NAMES, displayName } from "@portal/core";
+import { displayName } from "@portal/core";
 import { openMyWorkspace } from "@/lib/actions/admin";
 import { startingAgent } from "@/lib/agent-choice";
 import { config } from "@/lib/config";
@@ -57,7 +57,7 @@ export default async function HomePage() {
         </Card>
       ) : (
         <>
-          <HomeCard initial={initial} initialError={initialError} idleTimeoutMinutes={config.idleTimeoutMinutes} agentNames={AGENT_NAMES} />
+          <HomeCard initial={initial} initialError={initialError} idleTimeoutMinutes={config.idleTimeoutMinutes} />
           <UsageToday usage={loadUsageToday(user.id)} />
         </>
       )}

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import type { AgentKind, WorkspaceInfo } from "@portal/core";
+import { AGENT_NAMES, type WorkspaceInfo } from "@portal/core/wire";
 import { formatBytes, formatDuration, formatVersion } from "@/lib/format";
 import { formatElapsed } from "@/lib/live-format";
 import { DataTable, DataTableEmpty, DataTableHead, DataTablePagination, usePagination } from "@/components/common/data-table";
@@ -55,14 +55,13 @@ interface WorkspacesCardProps {
   maxRunning: number | null;
   /** When `workspaces` was read (epoch ms), for "Up for". */
   now: number;
-  agentNames: Readonly<Record<AgentKind, string>>;
 }
 
 /**
  * Admin > Users' running workspaces, under the users table and refreshed with it: who, which kind and harness, what
  * it is doing and what it uses, and Open workspace.
  */
-export function WorkspacesCard({ workspaces, names, maxRunning, now, agentNames }: WorkspacesCardProps) {
+export function WorkspacesCard({ workspaces, names, maxRunning, now }: WorkspacesCardProps) {
   const list = workspaces.filter((workspace) => workspace.status !== "stopped");
   const running = list.filter((w) => w.status === "running" || w.status === "starting").length;
   const { rows, pagination } = usePagination(list);
@@ -111,7 +110,7 @@ export function WorkspacesCard({ workspaces, names, maxRunning, now, agentNames 
                   </TableCell>
                   <TableCell>
                     <span className="flex items-baseline gap-1.5">
-                      {workspace.agent ? agentNames[workspace.agent] : "—"}
+                      {workspace.agent ? AGENT_NAMES[workspace.agent] : "—"}
                       {workspace.agentVersion ? (
                         <span className="font-mono text-12 text-muted-foreground">{formatVersion(workspace.agentVersion)}</span>
                       ) : null}

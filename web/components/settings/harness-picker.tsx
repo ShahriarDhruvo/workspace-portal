@@ -1,7 +1,7 @@
 "use client";
 
 import { useOptimistic, useRef, useState, useTransition } from "react";
-import type { AgentInfo, AgentKind, WorkspaceInfo } from "@portal/core";
+import { AGENT_NAMES, type AgentInfo, type AgentKind, type WorkspaceInfo } from "@portal/core/wire";
 import { restartWorkspace, saveHarness } from "@/lib/actions/settings";
 import { formatVersion } from "@/lib/format";
 import { stopWarnings } from "@/lib/workspace-stop";
@@ -19,7 +19,6 @@ interface HarnessPickerProps {
   chosen: AgentKind;
   /** The running (or starting) workspace, to tell when it runs another harness; null when stopped or unknown. */
   running: Pick<WorkspaceInfo, "agent" | "busy" | "connections"> | null;
-  agentNames: Readonly<Record<AgentKind, string>>;
   /** The id of the visible title that names the choice. */
   labelledBy: string;
 }
@@ -29,7 +28,7 @@ interface HarnessPickerProps {
  * saved as soon as it changes. A running workspace keeps its harness until it starts again; the card says so and
  * offers "Restart now", which confirms first (the restart runs in the dialog).
  */
-export function HarnessPicker({ agents, chosen, running, agentNames, labelledBy }: HarnessPickerProps) {
+export function HarnessPicker({ agents, chosen, running, labelledBy }: HarnessPickerProps) {
   const [value, setValue] = useOptimistic(chosen);
   const [saving, startSaving] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -83,8 +82,8 @@ export function HarnessPicker({ agents, chosen, running, agentNames, labelledBy 
       {error ? <FormError>{error}</FormError> : null}
       {differs && running?.agent ? (
         <Alert role="status">
-          <AlertTitle>Your workspace is running {agentNames[running.agent]}.</AlertTitle>
-          <AlertDescription>{agentNames[value]} starts next time.</AlertDescription>
+          <AlertTitle>Your workspace is running {AGENT_NAMES[running.agent]}.</AlertTitle>
+          <AlertDescription>{AGENT_NAMES[value]} starts next time.</AlertDescription>
           <div className="mt-2">
             <Button
               ref={restartButton}
@@ -101,7 +100,7 @@ export function HarnessPicker({ agents, chosen, running, agentNames, labelledBy 
       ) : restarted ? (
         <p role="status" className="flex items-center gap-1.5 text-13 text-success">
           <CheckIcon className="shrink-0" />
-          Your workspace restarted with {agentNames[restarted]}.
+          Your workspace restarted with {AGENT_NAMES[restarted]}.
         </p>
       ) : null}
       {running ? (

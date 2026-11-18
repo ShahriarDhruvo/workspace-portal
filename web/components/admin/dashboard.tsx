@@ -1,17 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
-import type { AgentKind, WorkspaceInfo } from "@portal/core";
+import { useRef, useState } from "react";
+import { AGENT_NAMES, type AgentKind, type WorkspaceInfo } from "@portal/core/wire";
 import { startingAgent } from "@/lib/agent-choice";
-import { fetchJson } from "@/lib/fetch-json";
 import { agentLabel, formatVersion } from "@/lib/format";
 import type { AdminOverview } from "@/lib/overview";
 import type { UserSummary } from "@/lib/user-summary";
 import { UserAvatar } from "@/components/brand";
 import { LocalTime } from "@/components/local-time";
 import { DataTable, DataTableHead, DataTablePagination, usePagination } from "@/components/common/data-table";
+import { usePoll } from "@/components/common/use-poll";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -34,8 +33,6 @@ interface DashboardProps {
   users: UserSummary[];
   initialOverview: AdminOverview;
   currentAdminId: number;
-  /** AGENT_NAMES, which this client component can't import from @portal/core. */
-  agentNames: Readonly<Record<AgentKind, string>>;
   /** The enabled agents in display order; null when the gateway can't say. */
   enabledAgents: ReadonlyArray<{ id: AgentKind }> | null;
 }
@@ -44,24 +41,11 @@ interface DashboardProps {
  * The users table, 30 to a page, over the running workspaces (who, kind, harness, status, what it uses), both
  * refreshed every 5 s from the workspace list. Without the gateway the workspaces card is left out.
  */
-export function UsersDashboard({ users, initialOverview, currentAdminId, agentNames, enabledAgents }: DashboardProps) {
-  const router = useRouter();
+export function UsersDashboard({ users, initialOverview, currentAdminId, enabledAgents }: DashboardProps) {
   const [overview, setOverview] = useState(initialOverview);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    const timer = setInterval(async () => {
-      const result = await fetchJson<AdminOverview>("/api/admin/overview", { signal: controller.signal });
-      if (controller.signal.aborted) return;
-      if (result.ok) setOverview(result.data);
-      else if (result.status === 401 || result.status === 403) router.refresh();
-      else setOverview((current) => ({ ...current, error: result.error }));
-    }, REFRESH_MS);
-    return () => {
-      controller.abort();
-      clearInterval(timer);
-    };
-  }, [router]);
+  usePoll<AdminOverview>("/api/admin/overview", REFRESH_MS, (result) =>
+    setOverview((current) => (result.ok ? result.data : { ...current, error: result.error })),
+  );
 
   const workspaces = new Map((overview.workspaces ?? []).map((info) => [info.userId, info]));
   const names = new Map(users.map((user) => [user.id, user.name]));
@@ -88,7 +72,6 @@ export function UsersDashboard({ users, initialOverview, currentAdminId, agentNa
               user={user}
               isSelf={user.id === currentAdminId}
               workspace={overview.workspaces ? (workspaces.get(user.id) ?? null) : undefined}
-              agentNames={agentNames}
               nextAgent={enabledAgents ? startingAgent(user.agent, enabledAgents) : user.agent}
             />
           ))}
@@ -100,7 +83,6 @@ export function UsersDashboard({ users, initialOverview, currentAdminId, agentNa
           names={names}
           maxRunning={overview.stats?.maxRunning ?? null}
           now={overview.t}
-          agentNames={agentNames}
         />
       ) : null}
     </>
@@ -112,15 +94,14 @@ interface UserRowProps {
   isSelf: boolean;
   /** undefined = unknown (gateway unavailable); null = no workspace row (stopped). */
   workspace: WorkspaceInfo | null | undefined;
-  agentNames: Readonly<Record<AgentKind, string>>;
   /** The harness the workspace starts with next (the saved choice while enabled, else the default). */
   nextAgent: AgentKind | null;
 }
 
-function UserRow({ user, isSelf, workspace, agentNames, nextAgent }: UserRowProps) {
+function UserRow({ user, isSelf, workspace, nextAgent }: UserRowProps) {
   const running = workspace?.status === "running" || workspace?.status === "starting";
   // A running workspace shows its agent and version; a stopped one, the harness it starts with next.
-  const agent = running && workspace ? agentLabel(workspace, agentNames) : nextAgent ? agentNames[nextAgent] : null;
+  const agent = running && workspace ? agentLabel(workspace) : nextAgent ? AGENT_NAMES[nextAgent] : null;
 
   return (
     <TableRow>

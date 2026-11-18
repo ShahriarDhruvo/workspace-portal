@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { AGENT_NAMES, type WorkspaceInfo } from "@portal/core";
+import type { WorkspaceInfo } from "@portal/core";
 import {
   agentLabel,
   formatBytes,
@@ -101,13 +101,13 @@ test("formatVersion", () => {
 });
 
 test("agentLabel names the running agent, or the last one once stopped", () => {
-  assert.equal(agentLabel(running, AGENT_NAMES), "Qwen Code");
-  assert.equal(agentLabel({ status: "starting", agent: "dsh" }, AGENT_NAMES), "DeepSeek Harness");
-  assert.equal(agentLabel({ status: "stopping", agent: "dsh" }, AGENT_NAMES), "DeepSeek Harness");
-  assert.equal(agentLabel({ status: "stopped", agent: "dsh" }, AGENT_NAMES), "last: DeepSeek Harness");
-  assert.equal(agentLabel({ status: "error", agent: "qwen" }, AGENT_NAMES), "last: Qwen Code");
-  assert.equal(agentLabel({ status: "stopped", agent: null }, AGENT_NAMES), null, "never started");
-  assert.equal(agentLabel(null, AGENT_NAMES), null, "no workspace row");
+  assert.equal(agentLabel(running), "Qwen Code");
+  assert.equal(agentLabel({ status: "starting", agent: "dsh" }), "DeepSeek Harness");
+  assert.equal(agentLabel({ status: "stopping", agent: "dsh" }), "DeepSeek Harness");
+  assert.equal(agentLabel({ status: "stopped", agent: "dsh" }), "last: DeepSeek Harness");
+  assert.equal(agentLabel({ status: "error", agent: "qwen" }), "last: Qwen Code");
+  assert.equal(agentLabel({ status: "stopped", agent: null }), null, "never started");
+  assert.equal(agentLabel(null), null, "no workspace row");
 });
 
 test("workspaceState: a word for each status; running splits into working and idle, and starts once ready", () => {

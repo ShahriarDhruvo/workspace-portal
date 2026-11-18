@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { asc, desc } from "drizzle-orm";
-import { AGENT_NAMES, users } from "@portal/core";
+import { users } from "@portal/core";
 import { getDb } from "@/lib/db";
 import { gateway } from "@/lib/gateway";
 import { loadAdminOverview } from "@/lib/overview";
@@ -41,7 +41,6 @@ export default async function UsersPage() {
         users={rows.map(toUserSummary)}
         initialOverview={overview}
         currentAdminId={session.user.id}
-        agentNames={AGENT_NAMES}
         enabledAgents={enabled?.map((agent) => ({ id: agent.id })) ?? null}
       />
     </PageMain>

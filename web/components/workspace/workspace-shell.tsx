@@ -2,10 +2,10 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useReducer, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { WORKSPACE_KIND_NAMES, type AgentKind, type ApiError, type OnlineAccess, type WorkspaceKind } from "@portal/core/wire";
+import { useReducer, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { AGENT_NAMES, WORKSPACE_KIND_NAMES, type ApiError, type OnlineAccess, type WorkspaceKind } from "@portal/core/wire";
 import { agentFrameUrl, type AgentFrame } from "@/lib/agent-url";
-import { fetchJson, needsReauth } from "@/lib/fetch-json";
+import { needsReauth, startWorkspace, stopWorkspace } from "@/lib/fetch-json";
 import { stopReasonText, workspaceState, type WorkspaceState } from "@/lib/format";
 import type { WorkspaceStatusResponse } from "@/lib/api";
 import { hasContainer, initialKind, onlineAccessAfter, otherKind, startErrorText } from "@/lib/workspace-kind";
@@ -15,6 +15,7 @@ import { HOME_LINK, portalLinks } from "@/components/layout/portal-links";
 import { NavMenuItems } from "@/components/layout/header-nav";
 import { BarMenu } from "@/components/common/bar-menu";
 import { useTheme } from "@/components/common/theme";
+import { usePoll } from "@/components/common/use-poll";
 import { ThemeToggle } from "@/components/common/theme-toggle";
 import type { Viewer } from "@/components/layout/app-header";
 import { HeaderBar } from "@/components/layout/header-bar";
@@ -46,8 +47,6 @@ interface WorkspaceShellProps {
   /** Each kind's iframe port and token; null when the user id is outside AGENT_PORT_COUNT (the page explains it). */
   frames: Readonly<Record<WorkspaceKind, AgentFrame | null>>;
   idleTimeoutMinutes: number;
-  /** Display names of all agent kinds (AGENT_NAMES), so a running agent is named even if no longer enabled. */
-  agentNames: Readonly<Record<AgentKind, string>>;
   /** Rendered above the top bar (the red-tinted "viewing" banner for admins). */
   banner?: ReactNode;
 }
@@ -244,14 +243,13 @@ function idleCopy(
 
 const noopSubscribe = () => () => {};
 
-export function WorkspaceShell({ viewer, target, frames, idleTimeoutMinutes, agentNames, banner }: WorkspaceShellProps) {
+export function WorkspaceShell({ viewer, target, frames, idleTimeoutMinutes, banner }: WorkspaceShellProps) {
   const router = useRouter();
   const theme = useTheme();
   const [state, dispatch] = useReducer(reducer, INITIAL);
   const [pollRound, pollNow] = useReducer((n: number) => n + 1, 0);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const stopButton = useRef<HTMLButtonElement>(null);
-  const delay = useRef(2_000);
 
   const { info } = state;
   const choice = useKindChoice(info?.online ?? "off", state.startError ? state.startedKind : info ? initialKind(info) : "private");
@@ -275,44 +273,18 @@ export function WorkspaceShell({ viewer, target, frames, idleTimeoutMinutes, age
   const canStop = target.isViewer && running !== null && !state.leaving;
   const warnings = info ? stopWarnings(info, true) : null;
 
-  const pollDelay = phase.kind === "connecting" || phase.kind === "starting" || phase.kind === "stopping" ? 2_000 : 10_000;
-  useEffect(() => {
-    delay.current = pollDelay;
-  }, [pollDelay]);
-
-  useEffect(() => {
-    if (switched) return;
-    const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const poll = async () => {
-      const result = await fetchJson<WorkspaceStatusResponse>("/api/workspace/status", { signal: controller.signal });
-      if (controller.signal.aborted) return;
-      if (result.ok) {
-        dispatch({ type: "status", info: result.data });
-      } else if (needsReauth(result)) {
-        router.refresh();
-        return;
-      } else {
-        dispatch({ type: "pollFailed", error: result.error });
-      }
-      timer = setTimeout(poll, delay.current);
-    };
-    void poll();
-    return () => {
-      controller.abort();
-      clearTimeout(timer);
-    };
-  }, [pollRound, switched, router]);
+  usePoll<WorkspaceStatusResponse>(
+    switched ? null : "/api/workspace/status",
+    phase.kind === "connecting" || phase.kind === "starting" || phase.kind === "stopping" ? 2_000 : 10_000,
+    (result) => dispatch(result.ok ? { type: "status", info: result.data } : { type: "pollFailed", error: result.error }),
+    pollRound,
+  );
 
   /** Starts that kind (confirmed in the start dialog, or retried after the service couldn't be reached). */
   async function start(kind: WorkspaceKind) {
     dispatch({ type: "startRequested", kind });
     pollNow();
-    const result = await fetchJson<WorkspaceStatusResponse>("/api/workspace/start", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ kind }),
-    });
+    const result = await startWorkspace(kind);
     if (result.ok) dispatch({ type: "startSucceeded", info: result.data });
     else if (needsReauth(result)) router.refresh();
     else {
@@ -324,7 +296,7 @@ export function WorkspaceShell({ viewer, target, frames, idleTimeoutMinutes, age
   /** Stops the user's workspace, then goes Home; resolves to an error message when it couldn't. */
   async function stop(): Promise<string | null> {
     dispatch({ type: "stopRequested" });
-    const result = await fetchJson<WorkspaceStatusResponse>("/api/workspace/stop", { method: "POST" });
+    const result = await stopWorkspace();
     if (result.ok) {
       router.push("/");
       return null;
@@ -489,7 +461,7 @@ export function WorkspaceShell({ viewer, target, frames, idleTimeoutMinutes, age
           <BarMenu viewer={viewer} trigger="avatar">
             {runningAgent ? (
               <DropdownMenuLabel>
-                Harness: <span className="text-foreground">{agentNames[runningAgent]}</span>
+                Harness: <span className="text-foreground">{AGENT_NAMES[runningAgent]}</span>
               </DropdownMenuLabel>
             ) : null}
             {adminConnected ? (

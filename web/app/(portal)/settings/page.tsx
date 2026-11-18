@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
-import { AGENT_NAMES, type AgentInfo, type WorkspaceInfo } from "@portal/core";
+import type { AgentInfo, WorkspaceInfo } from "@portal/core";
 import { saveName } from "@/lib/actions/settings";
 import { startingAgent } from "@/lib/agent-choice";
 import { formatVersion } from "@/lib/format";
@@ -93,7 +93,6 @@ export default async function SettingsPage() {
                 agents={agents}
                 chosen={chosen}
                 running={running ? { agent: running.agent, busy: running.busy, connections: running.connections } : null}
-                agentNames={AGENT_NAMES}
                 labelledBy="harness-title"
               />
             )}

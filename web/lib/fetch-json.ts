@@ -1,4 +1,5 @@
-import type { ApiError } from "@portal/core/wire";
+import type { ApiError, WorkspaceKind } from "@portal/core/wire";
+import type { WorkspaceStatusResponse } from "./api";
 
 // Browser-side fetch for the portal's JSON routes, normalizing failures to ApiError.
 
@@ -27,6 +28,15 @@ export async function fetchJson<T>(url: string, init: RequestInit = {}): Promise
     status: response.status,
     error: isApiError(body) ? body : { error: `http_${response.status}`, message: `The portal answered with HTTP ${response.status}.` },
   };
+}
+
+/** Starts the session's workspace as `kind`. */
+export function startWorkspace(kind: WorkspaceKind): Promise<FetchResult<WorkspaceStatusResponse>> {
+  return fetchJson("/api/workspace/start", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ kind }) });
+}
+
+export function stopWorkspace(): Promise<FetchResult<WorkspaceStatusResponse>> {
+  return fetchJson("/api/workspace/stop", { method: "POST" });
 }
 
 /** Signed out, or a temporary password must be changed first: re-rendering the page redirects. */
