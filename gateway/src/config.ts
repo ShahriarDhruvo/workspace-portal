@@ -2,7 +2,7 @@
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { AGENT_KINDS, isAgentKind, isVersion, type AgentKind, type WorkspaceKind } from "@portal/core";
+import { AGENT_KINDS, isAgentKind, isVersion, MIN_CONTROL_SECRET_LENGTH, type AgentKind, type WorkspaceKind } from "@portal/core";
 
 /**
  * A workspace's preview port is its agent port plus this. Fixed: the Web Shell's Web preview works it out too
@@ -136,7 +136,6 @@ export class ConfigError extends Error {
   }
 }
 
-const MIN_SECRET_LENGTH = 16;
 /** portal-hostd refuses shorter tokens. */
 const MIN_HOSTD_TOKEN_LENGTH = 32;
 export const MIB = 1024 * 1024;
@@ -259,7 +258,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   const secret = (name: string): string => {
     const value = text(name, "");
     if (value === "") problems.push(`${name} is required (deploy/install.sh generates it in .env)`);
-    else if (value.length < MIN_SECRET_LENGTH) problems.push(`${name} must be at least ${MIN_SECRET_LENGTH} characters`);
+    else if (value.length < MIN_CONTROL_SECRET_LENGTH) problems.push(`${name} must be at least ${MIN_CONTROL_SECRET_LENGTH} characters`);
     return value;
   };
 

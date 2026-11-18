@@ -1,5 +1,6 @@
 import "server-only";
 import path from "node:path";
+import { MIN_CONTROL_SECRET_LENGTH } from "@portal/core/wire";
 import type { AdminSeedSettings } from "./seed";
 
 // Runtime configuration from the environment (see .env.example at the repo root).
@@ -19,9 +20,6 @@ function positiveInt(name: string, fallback: number): number {
   return value;
 }
 
-/** The gateway refuses to start with a shorter one (gateway/src/config.ts); so does the portal. */
-const MIN_CONTROL_SECRET_LENGTH = 16;
-
 /**
  * The control API's bearer token, which is also the HMAC key of every workspace browser token. A missing
  * or short one is an error, never an empty key. Read on use rather than at import: `next build` loads
@@ -40,6 +38,8 @@ function controlSecret(): string {
 }
 
 const dataDir = text("PORTAL_DATA_DIR", "/srv/workspace-portal");
+const agentPortBase = positiveInt("AGENT_PORT_BASE", 3100);
+const agentPortCount = positiveInt("AGENT_PORT_COUNT", 200);
 
 export const config = {
   dbFile: path.join(dataDir, "db", "portal.sqlite"),
@@ -47,9 +47,9 @@ export const config = {
    * User N's Private workspace is served by the gateway on port agentPortBase + N, the Online one on
    * onlineAgentPortBase + N: every workspace (and each of a user's two kinds) is its own browser origin.
    */
-  agentPortBase: positiveInt("AGENT_PORT_BASE", 3100),
-  onlineAgentPortBase: positiveInt("ONLINE_AGENT_PORT_BASE", positiveInt("AGENT_PORT_BASE", 3100) + positiveInt("AGENT_PORT_COUNT", 200)),
-  agentPortCount: positiveInt("AGENT_PORT_COUNT", 200),
+  agentPortBase,
+  onlineAgentPortBase: positiveInt("ONLINE_AGENT_PORT_BASE", agentPortBase + agentPortCount),
+  agentPortCount,
   /** The gateway control API on 127.0.0.1. */
   controlPort: positiveInt("CONTROL_PORT", 4002),
   get controlSecret(): string {

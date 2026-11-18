@@ -1,8 +1,7 @@
-// The values the database, the gateway and the browser all name: roles, workspace statuses, agents, workspace kinds,
-// the two servers, why the web app stops a workspace.
+// The values more than one part names: roles, workspace statuses, agents, workspace kinds, the two servers, why the
+// web app stops a workspace, the control secret's minimum length.
 
 export const ROLES = ["admin", "user"] as const;
-export type Role = (typeof ROLES)[number];
 
 export const WORKSPACE_STATUSES = ["stopped", "starting", "running", "stopping", "error"] as const;
 export type WorkspaceStatus = (typeof WORKSPACE_STATUSES)[number];
@@ -36,3 +35,6 @@ export type StopReason = (typeof STOP_REASONS)[number];
 /** The two servers portal-hostd reports on: the portal's own and the LLM server. */
 export const HOST_ROLES = ["portal", "llm"] as const;
 export type HostRole = (typeof HOST_ROLES)[number];
+
+/** GATEWAY_CONTROL_SECRET: neither the gateway nor the web app starts with a shorter one. */
+export const MIN_CONTROL_SECRET_LENGTH = 16;
