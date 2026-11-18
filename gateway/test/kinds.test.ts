@@ -173,7 +173,7 @@ test("agent ports: a port says user and kind; the other kind's port, token or so
     const page = await g.navigate(g.tokens.alice, alice);
     assert.equal(page.status, 409);
     assert.ok(page.body.includes("<h1>Your Online workspace is running, not this one</h1>"));
-    assert.ok(page.body.includes(`href="//127.0.0.1:${g.config.webPort}/" target="_top"`));
+    assert.ok(page.body.includes(`href="http://127.0.0.1:${g.config.webPort}/" target="_top"`));
     const api = await g.xhr(g.tokens.alice, alice, { path: "/api/sessions" });
     assert.deepEqual([api.status, json(api)], [409, { error: "kind_mismatch", message: "Your Online workspace is running, not this one (Private)." }]);
     assert.deepEqual(await g.openSocket(g.tokens.alice, alice), { status: 409 });

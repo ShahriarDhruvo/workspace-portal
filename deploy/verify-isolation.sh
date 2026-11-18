@@ -24,6 +24,9 @@ declare -A KIND_PREFIX=([private]=wp-ws- [online]=wp-wo-)
 # The port each agent listens on in a workspace, as its driver in gateway/src/agents/.
 declare -A AGENT_PORT=([qwen]=4170 [dsh]=3080)
 SERVICE_PORT=$(env_get SERVICE_PORT) CONTROL_PORT=$(env_get CONTROL_PORT) WEB_PORT=$(env_get WEB_PORT)
+# The portal's port on this host's addresses: behind deploy/tailscale-https.sh, 443 on Tailscale's.
+PORTAL_PORT=$WEB_PORT
+! env_is PORTAL_HTTPS true || PORTAL_PORT=443
 read -r AGENT_PORTS ONLINE_AGENT_PORTS PREVIEW_PORTS ONLINE_PREVIEW_PORTS < <(port_ranges)
 DATA_DIR=$(env_get PORTAL_DATA_DIR)
 ROUTER=$(routers | head -n 1)
@@ -181,7 +184,7 @@ closed=("$GW 22 host SSH via the bridge" "$GW $WEB_PORT the portal via the bridg
   "$GW ${AGENT_PORTS%-*} a workspace port via the bridge" "$GW ${PREVIEW_PORTS%-*} a preview port via the bridge"
   "1.1.1.1 443 the internet" "8.8.8.8 53 public DNS over TCP" "$GW $READER_PORT the page reader via the bridge")
 for address in $HOST_ADDRESSES; do
-  [[ $address == "$GW" ]] || closed+=("$address 22 SSH on host address $address" "$address $WEB_PORT the portal on host address $address")
+  [[ $address == "$GW" ]] || closed+=("$address 22 SSH on host address $address" "$address $PORTAL_PORT the portal on host address $address")
 done
 # The servers that are the gateway's to talk to, at every address their names have now. One on this host is tried
 # through the bridge; host_local keeps its port for the Online bridge.
@@ -352,7 +355,7 @@ fi
 inside=("$GW $SERVICE_PORT the gateway service port" "$GW 22 host SSH via the workspace bridge"
   "$ONLINE_GW $SERVICE_PORT the Online service listener" "1.1.1.1 22 a public address on another port")
 for address in $HOST_ADDRESSES; do
-  inside+=("$address 22 SSH on host address $address" "$address $WEB_PORT the portal on host address $address" "$address $CONTROL_PORT the gateway control API on $address")
+  inside+=("$address 22 SSH on host address $address" "$address $PORTAL_PORT the portal on host address $address" "$address $CONTROL_PORT the gateway control API on $address")
 done
 [[ -z $ROUTER ]] || inside+=("$ROUTER 80 the router" "$ROUTER 53 DNS on the router")
 for target in "${closed[@]}" "${private_closed[@]}"; do

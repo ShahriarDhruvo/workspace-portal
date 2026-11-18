@@ -115,19 +115,15 @@ export function splitBearerSubprotocol(header: string | undefined): { token: str
 }
 
 /**
- * Who may frame a workspace: the portal page (the same host on the portal's port); a preview port also its
- * workspace's agent port (the Web Shell's Web preview frames the app, inside the portal's frame).
+ * Who may frame a workspace, as origins: the portal page; a preview port also its workspace's agent port (the Web
+ * Shell's Web preview frames the app, inside the portal's frame).
  */
 export interface FramePolicy {
-  hostname: string;
-  webPort: number;
-  agentPort?: number;
+  portal: string;
+  agent?: string;
 }
 
-export function frameAncestorSources({ hostname, webPort, agentPort }: FramePolicy): string {
-  const ports = agentPort === undefined ? [webPort] : [webPort, agentPort];
-  return ports.map((port) => `http://${hostname}:${port} https://${hostname}:${port}`).join(" ");
-}
+export const frameAncestorSources = ({ portal, agent }: FramePolicy): string => (agent ? `${portal} ${agent}` : portal);
 
 /**
  * Sets frame-ancestors in a Content-Security-Policy value (one header or a comma-separated policy list), replacing
@@ -195,8 +191,7 @@ export function previewRequestHeaders(incoming: IncomingHttpHeaders, origin: str
   out.host = `localhost:${port}`;
   const local = `http://${out.host}`;
   if (incoming.origin !== undefined) out.origin = local;
-  // Behind a TLS proxy the browser says https; the gateway speaks HTTP and knows the origin as http.
-  const referer = incoming.referer?.replace(/^https:/, "http:");
+  const { referer } = incoming;
   if (referer !== undefined) {
     if (referer === origin || referer.startsWith(`${origin}/`)) out.referer = local + referer.slice(origin.length);
     else delete out.referer;

@@ -92,11 +92,11 @@ HTTPS certificates enabled for the tailnet:
 sudo bash deploy/tailscale-https.sh         # with "off": back to HTTP on the LAN
 ```
 
-Tailscale then ends TLS on each of the portal's ports, under the server's name in the tailnet, and passes the
-stream to the same port on 127.0.0.1. The script binds the ports to 127.0.0.1, sets `SESSION_COOKIE_SECURE=true`
-and prints the URL. From then on only the tailnet's devices reach the portal; which of them is for the
-tailnet's access rules, because `FIREWALL_ALLOW_SOURCE` no longer applies. The mapped ports are those in `.env`:
-run the script with `off` before changing a port or uninstalling the portal, and again after the change.
+Tailscale then ends TLS under the server's name in the tailnet: on port 443 for the portal, so its URL needs no
+port, and on each workspace's own port. The script binds the ports to 127.0.0.1, sets `PORTAL_HTTPS=true` and
+prints the URL. From then on only the tailnet's devices reach the portal; which of them is for the tailnet's
+access rules, because `FIREWALL_ALLOW_SOURCE` no longer applies. The mapped ports are those in `.env`: run the
+script with `off` before changing a port or uninstalling the portal, and again after the change.
 
 Over HTTPS a browser offers to install the portal as an app: Chrome on Android under "Add to Home screen",
 Safari on an iPhone under Share > Add to Home Screen.

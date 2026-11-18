@@ -55,7 +55,7 @@ export const config = {
   get controlSecret(): string {
     return controlSecret();
   },
-  cookieSecure: process.env.SESSION_COOKIE_SECURE?.trim().toLowerCase() === "true",
+  cookieSecure: process.env.PORTAL_HTTPS?.trim().toLowerCase() === "true",
   sessionTtlSeconds: positiveInt("SESSION_TTL_HOURS", 168) * 3600,
   idleTimeoutMinutes: positiveInt("IDLE_TIMEOUT_MINUTES", 30),
 } as const;

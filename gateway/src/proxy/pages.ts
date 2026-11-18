@@ -87,7 +87,6 @@ export function startingPage(kind: WorkspaceKind): string {
   });
 }
 
-/** `loginUrl` is protocol-relative (`//host:port/login`) so it keeps the scheme the browser uses. */
 export function signedOutPage(loginUrl: string): string {
   return render({
     title: "You're signed out",
@@ -105,7 +104,7 @@ export function capacityPage(maxRunning: number): string {
   });
 }
 
-/** `portalUrl` is protocol-relative (`//host:port/`): the portal's Home, where a workspace is started. */
+/** `portalUrl`: the portal's Home, where a workspace is started. */
 const portalLink = (portalUrl: string): string => `<a class="button" href="${escapeHtml(portalUrl)}" target="_top">Go to the portal</a>`;
 
 /** A stopped workspace's port: it is started from the portal, where its kind is chosen and confirmed. */

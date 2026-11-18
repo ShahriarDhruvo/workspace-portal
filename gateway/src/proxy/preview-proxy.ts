@@ -49,9 +49,9 @@ export function createPreviewServerFactory(deps: AgentDeps): () => http.Server {
     );
 }
 
-/** The preview's origin as the browser uses it (the Host it sent). */
-function originOf(host: HostParts, previewPort: number): string {
-  return `http://${host.hostname}:${host.port ?? previewPort}`;
+/** The preview's origin as the browser names it (the Host it sent). */
+function originOf(deps: AgentDeps, host: HostParts, previewPort: number): string {
+  return `${deps.config.scheme}://${host.hostname}:${host.port ?? previewPort}`;
 }
 
 async function handleRequest(deps: AgentDeps, req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -65,7 +65,7 @@ async function handleRequest(deps: AgentDeps, req: IncomingMessage, res: ServerR
 
   if (pathname.startsWith(PORTAL_PATH_PREFIX)) {
     // "Try again" as on the agent port, its pages framed by the portal alone.
-    if (pathname === START_PATH) return handlePortalPath(deps, req, res, userId, kind, { ...frame, agentPort: undefined }, pathname);
+    if (pathname === START_PATH) return handlePortalPath(deps, req, res, userId, kind, { portal: frame.portal }, pathname);
     if (!pathname.startsWith(PORT_PATH)) return sendError(res, 404, "not_found", "Not found.");
     if (method !== "GET" && method !== "HEAD") return sendError(res, 405, "method_not_allowed", "Use GET.", { allow: "GET, HEAD" });
     // /__portal/port/<n>[/<path>]: serve n from now on, from /<path>.
@@ -97,7 +97,7 @@ async function handleRequest(deps: AgentDeps, req: IncomingMessage, res: ServerR
   }
 
   if (navigation) deps.manager.touch(userId);
-  const origin = originOf(host, previewPort);
+  const origin = originOf(deps, host, previewPort);
   await relay(deps, req, res, admitted, {
     url: new URL(`http://${upstream.host}:${port}${target}`),
     headers: previewRequestHeaders(req.headers, origin, port),
@@ -125,7 +125,7 @@ function handleUpgrade(deps: AgentDeps, req: IncomingMessage, socket: Duplex, he
   const port = chosenPort(req, upstream);
   if (port === null) return rejectUpgrade(socket, 404, "no_app_chosen");
 
-  const headers = previewRequestHeaders(req.headers, originOf(host, req.socket.localPort ?? 0), port);
+  const headers = previewRequestHeaders(req.headers, originOf(deps, host, req.socket.localPort ?? 0), port);
   headers.connection = "Upgrade";
   headers.upgrade = req.headers.upgrade ?? "websocket";
   const request = http.request({ host: upstream.host, port, method: "GET", path: req.url ?? "/", headers, agent: false });

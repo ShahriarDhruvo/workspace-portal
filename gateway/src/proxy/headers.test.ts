@@ -216,25 +216,25 @@ test("workspaceResponseHeaders strips cookies and framing denial, keeps encoding
       "cache-control": "no-cache",
       "www-authenticate": "Bearer",
     },
-    { hostname: "192.0.2.10", webPort: 3000 },
+    { portal: "http://192.0.2.10:3000" },
   );
   assert.deepEqual(out, {
-    "content-security-policy": "default-src 'self'; frame-ancestors http://192.0.2.10:3000 https://192.0.2.10:3000",
+    "content-security-policy": "default-src 'self'; frame-ancestors http://192.0.2.10:3000",
     "content-encoding": "br",
     "content-type": "text/html",
     "cache-control": "no-cache",
     "www-authenticate": "Bearer",
   });
-  assert.equal(workspaceResponseHeaders({ "content-type": "text/css" }, { hostname: "h", webPort: 3000 })["content-security-policy"], "frame-ancestors http://h:3000 https://h:3000");
+  assert.equal(workspaceResponseHeaders({ "content-type": "text/css" }, { portal: "https://h" })["content-security-policy"], "frame-ancestors https://h");
   // Only the portal may frame a workspace: not another workspace's port or any other service on the host.
-  assert.equal(frameAncestorSources({ hostname: "portal.example", webPort: 8443 }), "http://portal.example:8443 https://portal.example:8443");
+  assert.equal(frameAncestorSources({ portal: "https://portal.example", agent: "https://portal.example:3101" }), "https://portal.example https://portal.example:3101");
 });
 
 test("workspaceResponseHeaders makes per-user responses uncacheable, but leaves 304s alone", () => {
-  const out = workspaceResponseHeaders({ "content-type": "application/json", "cache-control": "max-age=600", expires: "Thu, 01 Jan 2099 00:00:00 GMT" }, { hostname: "h", webPort: 3000 }, 200);
+  const out = workspaceResponseHeaders({ "content-type": "application/json", "cache-control": "max-age=600", expires: "Thu, 01 Jan 2099 00:00:00 GMT" }, { portal: "http://h:3000" }, 200);
   assert.equal(out["cache-control"], "private, no-store");
   assert.equal(out.expires, undefined);
-  const notModified = workspaceResponseHeaders({ etag: '"abc"' }, { hostname: "h", webPort: 3000 }, 304);
+  const notModified = workspaceResponseHeaders({ etag: '"abc"' }, { portal: "http://h:3000" }, 304);
   assert.equal(notModified["cache-control"], undefined);
   assert.equal(notModified.etag, '"abc"');
 });

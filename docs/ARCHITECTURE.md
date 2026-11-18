@@ -89,10 +89,11 @@ other id gets 409 `no_workspace_port`. The offset is fixed because the Web Shell
 the same number; `config.test.ts` compares the three. Online's ports listen even with `ONLINE_WORKSPACES=off`.
 A service listener waits up to 60 s for its bridge address; the gateway exits if it never appears.
 
-Neither process speaks TLS. For HTTPS, `deploy/tailscale-https.sh` has Tailscale Serve end TLS on the web
-port and on every agent and preview port and pass the bytes to the same port on 127.0.0.1, where it binds
-them. `Host` and `Origin` arrive as the browser sent them, the URLs the web app builds take the page's scheme,
-and the checks below hold unchanged.
+Neither process speaks TLS. For HTTPS, `deploy/tailscale-https.sh` has Tailscale Serve end TLS on port 443 for
+the web app and on each agent and preview port under its own number, and pass the bytes to 127.0.0.1, where it
+binds them. `Host` and `Origin` arrive as the browser sent them and the URLs the web app builds take the page's
+scheme, so the checks below hold unchanged. `PORTAL_HTTPS` tells the web app to mark its cookie `Secure` and
+the gateway which origins to name: `https://host` for the portal instead of `http://host:WEB_PORT`.
 
 ## Data directory
 
@@ -141,7 +142,7 @@ transaction, so the two processes may open the database at the same moment.
 ## Sessions and browser authentication
 
 The web app creates a session at sign-in: a random token in the cookie `portal_session` (HttpOnly,
-SameSite=Lax, `Secure` with `SESSION_COOKIE_SECURE`), of which the database keeps only the hash. The gateway
+SameSite=Lax, `Secure` with `PORTAL_HTTPS`), of which the database keeps only the hash. The gateway
 reads sessions and never writes them. `loadSessionContext` returns the user and the *target*: whose workspace
 the session uses, the user's own or, for an admin who opened one, `sessions.acting_as_user_id`.
 

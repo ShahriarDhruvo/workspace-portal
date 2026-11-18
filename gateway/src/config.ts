@@ -103,6 +103,8 @@ export interface Config {
   /** The build context of agent images. */
   imageContextDir: string;
   webPort: number;
+  /** What browsers reach the portal over. Over HTTPS it is on port 443, the workspaces on their own ports. */
+  scheme: "http" | "https";
   agentBind: string;
   agentPortCount: number;
   controlPort: number;
@@ -274,6 +276,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     // workspace-image/ beside the gateway's code: mounted at /app/workspace-image in the container, the repository's in development.
     imageContextDir: fileURLToPath(new URL("../../workspace-image", import.meta.url)),
     webPort: port("WEB_PORT", 3000),
+    scheme: bool("PORTAL_HTTPS", false) ? "https" : "http",
     agentBind: checked("AGENT_BIND", "0.0.0.0", (value) => net.isIP(value) !== 0, "be an IP address"),
     agentPortCount,
     controlPort: port("CONTROL_PORT", 4002),

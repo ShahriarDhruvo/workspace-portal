@@ -86,8 +86,8 @@ test("signed-out navigations get the themed page; other requests get 401", async
     assert.equal(page.status, 401);
     assert.match(page.headers["content-type"]!, /^text\/html/);
     assert.ok(page.body.includes("<h1>You&#39;re signed out</h1>"));
-    assert.ok(page.body.includes(`href="//127.0.0.1:${g.config.webPort}/login" target="_top"`));
-    assert.match(String(page.headers["content-security-policy"]), new RegExp(`frame-ancestors http://127\\.0\\.0\\.1:${g.config.webPort} https://127\\.0\\.0\\.1:${g.config.webPort}`));
+    assert.ok(page.body.includes(`href="http://127.0.0.1:${g.config.webPort}/login" target="_top"`));
+    assert.match(String(page.headers["content-security-policy"]), new RegExp(`frame-ancestors http://127\\.0\\.0\\.1:${g.config.webPort}$`));
 
     const api = await g.xhr(token, alice, { path: "/api/sessions", bearer: "anything" });
     assert.equal(api.status, 401);
@@ -147,7 +147,7 @@ test("a session only gets into the workspace on its own user's port", async () =
   const page = await g.navigate(g.tokens.bob, alice);
   assert.equal(page.status, 403);
   assert.ok(page.body.includes("<h1>This workspace isn&#39;t open here</h1>"));
-  assert.ok(page.body.includes(`href="//127.0.0.1:${g.config.webPort}/" target="_top"`));
+  assert.ok(page.body.includes(`href="http://127.0.0.1:${g.config.webPort}/" target="_top"`));
 
   const api = await g.xhr(g.tokens.bob, alice, { path: "/api/sessions" });
   assert.equal(api.status, 403);
@@ -165,7 +165,7 @@ test("a page load starts nothing: a stopped workspace's port links to the portal
       const page = await g.navigate(g.tokens.alice, alice, "/", headers, kind);
       assert.equal(page.status, 503);
       assert.ok(page.body.includes(`<h1>Your ${kind === "private" ? "Private" : "Online"} workspace is stopped</h1>`), page.body);
-      assert.ok(page.body.includes(`href="//127.0.0.1:${g.config.webPort}/" target="_top"`));
+      assert.ok(page.body.includes(`href="http://127.0.0.1:${g.config.webPort}/" target="_top"`));
       assert.equal(page.body.includes('action="/__portal/start"'), false, "no start without choosing the kind in the portal");
     }
   }
@@ -222,7 +222,7 @@ test("a start from the portal: the agent port shows the starting page, then prox
   assert.equal(page.body, "<!doctype html><title>Qwen Code</title>");
   assert.equal(page.headers["set-cookie"], undefined, "the browser never receives workspace cookies");
   assert.equal(page.headers["x-frame-options"], undefined);
-  assert.equal(page.headers["content-security-policy"], `default-src 'self'; frame-ancestors http://127.0.0.1:${g.config.webPort} https://127.0.0.1:${g.config.webPort}`);
+  assert.equal(page.headers["content-security-policy"], `default-src 'self'; frame-ancestors http://127.0.0.1:${g.config.webPort}`);
 
   const qwen = g.runtime.qwenFor(alice);
   const seen = qwen.requests.at(-1)!;

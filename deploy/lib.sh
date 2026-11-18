@@ -162,8 +162,8 @@ tailscale_name() {
 }
 # Where browsers find the portal: with deploy/tailscale-https.sh under that name, else at this host's address.
 portal_url() {
-  if env_is SESSION_COOKIE_SECURE true; then
-    printf 'https://%s:%s' "$(tailscale_name || echo '<https-name>')" "$(env_get WEB_PORT)"
+  if env_is PORTAL_HTTPS true; then
+    printf 'https://%s' "$(tailscale_name || echo '<https-name>')"
   else
     printf 'http://%s:%s' "$(host_ip || echo '<server-ip>')" "$(env_get WEB_PORT)"
   fi

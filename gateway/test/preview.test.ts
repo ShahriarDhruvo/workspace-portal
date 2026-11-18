@@ -68,8 +68,8 @@ async function choose(g: Gateway, token: string, userId: number, port: number | 
   return String(reply.headers["set-cookie"]?.[0]).split(";")[0]!;
 }
 
-async function withApp(run: (g: Gateway, app: Awaited<ReturnType<typeof startApp>>, alice: number) => Promise<void>): Promise<void> {
-  const g = await startGateway();
+async function withApp(run: (g: Gateway, app: Awaited<ReturnType<typeof startApp>>, alice: number) => Promise<void>, env: Record<string, string> = {}): Promise<void> {
+  const g = await startGateway({ env });
   const alice = g.ids.alice;
   await g.startReady(alice);
   const app = await startApp(g.manager.upstream(alice, "private")!.host);
@@ -134,11 +134,20 @@ test("the app sees a local browser: Host and Origin localhost:<port>, its own co
     assert.equal(seen?.headers.referer, `http://localhost:${app.port}/game`);
     assert.equal(seen?.headers.cookie, "theme=dark; app=1", "no portal cookie reaches the app");
     assert.equal(seen?.headers["x-forwarded-for"], undefined);
-
-    // Behind a TLS proxy the browser's Referer says https.
-    await previewNavigate(g, g.tokens.alice, alice, "/", { cookie: chosen, referer: `https://127.0.0.1:${g.previewPort(alice)}/menu` });
-    assert.equal(app.seen.at(-1)?.headers.referer, `http://localhost:${app.port}/menu`);
   }));
+
+test("over HTTPS the portal is on the default port, and every origin the gateway names is https", () =>
+  withApp(async (g, app, alice) => {
+    const chosen = await choose(g, g.tokens.alice, alice, app.port);
+    const page = await previewNavigate(g, g.tokens.alice, alice, "/", { cookie: chosen, referer: `https://127.0.0.1:${g.previewPort(alice)}/menu` });
+    assert.equal(app.seen.at(-1)?.headers.referer, `http://localhost:${app.port}/menu`);
+    const [own, confined] = String(page.headers["content-security-policy"]).split(", ");
+    assert.equal(own, `img-src 'self'; frame-ancestors https://127.0.0.1 https://127.0.0.1:${g.agentPort(alice)}`);
+    assert.match(confined!, new RegExp(`connect-src 'self' wss://127\\.0\\.0\\.1:${g.previewPort(alice)};`));
+    const signedOut = await g.navigate(null, alice);
+    assert.ok(signedOut.body.includes('href="https://127.0.0.1/login" target="_top"'));
+    assert.equal(signedOut.headers["content-security-policy"]?.toString().split("; ").at(-1), "frame-ancestors https://127.0.0.1");
+  }, { PORTAL_HTTPS: "true" }));
 
 test("the app's answer: no portal cookies, framed only by its Web Shell inside the portal, redirects kept on the preview", () =>
   withApp(async (g, app, alice) => {
@@ -150,7 +159,7 @@ test("the app's answer: no portal cookies, framed only by its Web Shell inside t
     assert.equal(page.headers["x-frame-options"], undefined);
     assert.equal(page.headers["cache-control"], "private, no-store");
     const host = "127.0.0.1";
-    const ancestors = `frame-ancestors http://${host}:${g.config.webPort} https://${host}:${g.config.webPort} http://${host}:${g.agentPort(alice)} https://${host}:${g.agentPort(alice)}`;
+    const ancestors = `frame-ancestors http://${host}:${g.config.webPort} http://${host}:${g.agentPort(alice)}`;
     const csp = String(page.headers["content-security-policy"]);
     const policies = csp.split(", ");
     assert.equal(policies[0], `img-src 'self'; ${ancestors}`, "the app's own policy, its frame-ancestors replaced");
