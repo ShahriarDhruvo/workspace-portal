@@ -127,6 +127,9 @@ it lacks, the model settings and all data, and refuses while an update from Admi
 `HOSTD_LLM_URL` and `HOSTD_LLM_TOKEN` for the portal's `.env`. With them Admin > Usage and Energy show that
 server too, and Admin > Updates updates its engine: see [hostd/README.md](hostd/README.md).
 
+[`llm-server/`](llm-server) holds what the reference LLM server runs: the engine's service file, the model
+download, a full-load test, and fan control for the one board it was tested on.
+
 ## Security model
 
 - **A workspace** is a container that runs as a UID of its own on a read-only root, with no capabilities, no
@@ -152,7 +155,7 @@ npm ci                # Node.js 24 or newer; an npm workspace of packages/core, 
 npm test              # all three; the gateway's integration tests need no Docker
 npm run typecheck
 npm run build         # the gateway bundle, then the web app
-python3 -m unittest hostd/test_hostd.py
+python3 -m unittest hostd/test_hostd.py llm-server/fans/test_fans.py
 ```
 
 The page reader's tests run in its image build. `npm run dev -w @portal/gateway` runs the gateway from source

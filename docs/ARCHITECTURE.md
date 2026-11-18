@@ -59,6 +59,7 @@ browser --(cookie portal_session)--> web app   WEB_BIND:WEB_PORT
 | `workspace-image/` | one Dockerfile, a target per agent; start scripts; the Web Shell trim; the dsh lockdown |
 | `reader/`, `searxng/` | the page reader (Python, Defuddle in Node); SearXNG with its `settings.yml` built in |
 | `hostd/`, `qwen-config/` | portal-hostd; the model settings a fresh install starts with |
+| `llm-server/` | the reference LLM server: engine service file, model download, load test, fan control for one board |
 | `deploy/` | installer, firewall, isolation check, image update, model settings, uninstall; `lib.sh` is shared |
 
 The web app keeps sessions, renders the pages and calls the control API. Pages: `/login`, `/change-password`,
