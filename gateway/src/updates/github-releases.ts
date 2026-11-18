@@ -5,9 +5,8 @@ import { failureReason, fetchBounded } from "../lib/bounded-body.ts";
 import { isVersion, type ReleaseNotes } from "@portal/core";
 
 /**
- * Releases asked for, newest first: GitHub's maximum for one request. Qwen Code also publishes nightlies, previews
- * and other products (a desktop app, an SDK) there, so its newest 30 covered only 12 days (8 stable releases) in
- * November 2026; 100 cover the five versions offered plus older ones still on the server.
+ * Releases asked for, newest first: GitHub's maximum for one request. Qwen Code's repository also publishes nightlies,
+ * previews and other products, so it takes 100 to cover the versions offered and older ones still on the server.
  */
 const PER_PAGE = 100;
 /** Notes longer than this are cut (the page links to the full notes). */

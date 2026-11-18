@@ -12,7 +12,7 @@ export interface ApiError {
 
 export type OnlineAccess = "allowed" | "off" | "not_allowed";
 
-/** Why a workspace counts as working right now; null when it is not. */
+/** Why a workspace counts as working: "task" (the agent reports work), "llm" (a model request), "cpu" (sustained CPU); null when it is not. */
 export type BusyReason = "task" | "llm" | "cpu" | null;
 
 /** GET /control/workspaces → workspaces[], GET /control/workspaces/:id, and the answers of start, stop, attach, release. */
@@ -46,7 +46,6 @@ export interface WorkspaceInfo {
   llmInFlight: number;
   /** The agent is working: it is never stopped for inactivity while this is true. */
   busy: boolean;
-  /** Why it counts as busy: "task" (the agent reports work), "llm" (a model request), "cpu" (sustained CPU). */
   busyReason: BusyReason;
   /** Nobody uses it any more; it stops by itself once the agent's work is done. */
   stopPending: boolean;
@@ -137,7 +136,7 @@ export interface AgentVersionInfo {
 
 /**
  * An update job, an agent's or the LLM engine's. Each of the two updaters runs one at a time, and its last job stays
- * visible until the next starts. A job runs while `finishedAt` is null.
+ * visible until the next starts or the gateway restarts. A job runs while `finishedAt` is null.
  */
 export interface UpdateJob<Phase extends string> {
   id: string;
@@ -182,7 +181,6 @@ export interface AgentUpdateJob extends UpdateJob<UpdatePhase> {
 export interface AgentVersionsOverview {
   /** The enabled agents, in WORKSPACE_AGENTS order. */
   agents: AgentVersionInfo[];
-  /** The running job, else the last finished one since the gateway started. */
   job: AgentUpdateJob | null;
   /** The last registry check failed: releases and latest are unknown or stale. */
   registryError: string | null;
@@ -292,12 +290,11 @@ export interface EngineOverview {
   error: string | null;
   engine: EngineStatus | null;
   releases: EngineReleaseList | null;
-  /** The running job, else the last finished one since the gateway started. */
   job: EngineUpdateJob | null;
   drainMinutes: number;
 }
 
-// ---- The live view (GET /control/live: `init` once, then a `frame` every frameMs) ------------------------------
+// The live view: GET /control/live sends `init` once, then a `frame` every frameMs.
 
 /** portal-hostd's `info` event. */
 export interface HostInfo {

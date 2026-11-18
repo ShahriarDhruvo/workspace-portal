@@ -56,7 +56,6 @@ export class AgentUpdater {
   readonly #deps: AgentUpdaterDeps;
   readonly #now: () => number;
   readonly #releases: ReleaseCache<NpmPackage>;
-  /** The running job, else the last finished one. */
   #job: AgentUpdateJob | null = null;
   /** An update request still being checked (its image on the server, the registry); it counts as running. */
   #pending: AgentKind | null = null;

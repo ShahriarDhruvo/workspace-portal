@@ -372,7 +372,6 @@ export class LlmMonitor {
   }
 }
 
-
 function integer(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
 }
