@@ -4,6 +4,7 @@
 // only reach the public internet. The gateway decides whether a workspace may open a URL
 // (url-policy.ts), asks the reader, keeps the answer for a while so paging through a long page
 // costs one download, and hands the model one slice at a time.
+import { readBoundedText } from "../lib/bounded-body.ts";
 import { canonicalUrl, MAX_URL_CHARS } from "./url-policy.ts";
 
 export { MAX_URL_CHARS };
@@ -54,19 +55,6 @@ export interface ReaderOptions {
 /** The reader cuts a page at 400,000 characters; an answer far beyond that is not one of its own. */
 const MAX_ANSWER_BYTES = 4 * 1024 * 1024;
 
-/** The body as text, or an error once it is longer than `limit` bytes. */
-async function bodyText(response: Response, limit: number): Promise<string> {
-  if (!response.body) return "";
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  for await (const chunk of response.body) {
-    size += chunk.byteLength;
-    if (size > limit) throw new Error("the reader's answer is too long");
-    chunks.push(chunk);
-  }
-  return Buffer.concat(chunks).toString("utf8");
-}
-
 /** Reader answers that will not change by asking again soon. */
 const LASTING_CODES = new Set(["bad_url", "blocked", "dns", "http", "tls", "unsupported", "empty", "too_large"]);
 
@@ -90,7 +78,7 @@ export function createReaderBackend(options: ReaderOptions): ReaderBackend {
       }
       let data: unknown;
       try {
-        data = JSON.parse(await bodyText(response, MAX_ANSWER_BYTES));
+        data = JSON.parse((await readBoundedText(response, MAX_ANSWER_BYTES)) ?? "");
       } catch {
         data = null;
       }
