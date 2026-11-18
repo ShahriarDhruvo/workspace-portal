@@ -1,16 +1,9 @@
-// WorkspaceManager: the state of every user's workspace container (one per user, shared by all of
-// that user's sessions), kept in memory and mirrored to the `workspaces` table. It starts and stops
-// containers, waits for the agent to come up, tracks activity and whether the agent is working, stops
-// idle workspaces, enforces the running cap, and reconciles with what Docker actually runs.
-// Every user has two workspaces, Private and Online (WORKSPACE_KINDS), each with its own files, UID,
-// network and container; one of them runs at a time, chosen at start, and the entry follows whichever
-// kind runs (or ran last). Online needs ONLINE_WORKSPACES on, the admin's permission (users.online_allowed) and the
-// host firewall that fences the Online network in (fence.ts): without it, Online workspaces are refused and stopped.
-// A workspace runs one agent at a time (Qwen Code or DeepSeek Harness, chosen at start); what
-// differs between agents is behind their drivers (agents/). Each start uses the agent's current
-// version, which AgentVersions (agent-versions.ts) knows; a running container keeps its image.
-// The decisions themselves (busy, idle, what to stop or evict) are pure functions in policy.ts; the
-// files a container mounts are prepared by paths.ts.
+// WorkspaceManager: every user's workspace, kept in memory and mirrored to the `workspaces` table. A user has two
+// workspaces, Private and Online (WORKSPACE_KINDS), and one container at a time: the entry follows whichever kind
+// runs (or ran last), with the agent and the agent version chosen at its start. Online needs ONLINE_WORKSPACES on,
+// the admin's permission (users.online_allowed) and the host firewall that fences the Online network in (fence.ts):
+// without it, Online workspaces are refused and stopped. The decisions (busy, idle, what to stop or evict) are pure
+// functions in policy.ts.
 //
 // When a workspace stops: never while its agent is working. Otherwise when nobody has used it for
 // IDLE_TIMEOUT_MINUTES, or soon after the last session using it has ended (sign-out, expiry).
@@ -26,7 +19,6 @@ import {
   type BusyReason,
   type OnlineAccess,
   type PortalDb,
-  type Workspace,
   type WorkspaceInfo,
   type WorkspaceKind,
   type WorkspaceStatus,
@@ -42,16 +34,7 @@ import { HttpError } from "../lib/http-util.ts";
 import { errorMessage, type Logger } from "../lib/log.ts";
 import { singleFlight } from "../lib/single-flight.ts";
 import type { SessionLog } from "../monitor/session-log.ts";
-import {
-  assessActivity,
-  averageCores,
-  chooseEviction,
-  idleMs,
-  reapVerdict,
-  type ActivityAssessment,
-  type AgentState,
-  type ReapInput,
-} from "./policy.ts";
+import { assessActivity, averageCores, chooseEviction, idleMs, reapVerdict, type ActivityAssessment, type AgentState, type ReapVerdict } from "./policy.ts";
 import { READY_TIMEOUT_MS, waitForReady, type ReadyResult } from "./readiness.ts";
 import { WorkspaceImageMissingError, type ContainerRuntime, type ContainerState, type ContainerSummary } from "../docker/runtime.ts";
 import { eraseKindFiles, prepareWorkspaceFiles, removeUserData, workspaceOwner } from "./paths.ts";
@@ -60,10 +43,7 @@ import { eraseKindFiles, prepareWorkspaceFiles, removeUserData, workspaceOwner }
 const beingDeleted = (erasing: WorkspaceKind | null = null): HttpError =>
   new HttpError(409, "deleting", erasing === null ? "This workspace is being deleted." : `The ${WORKSPACE_KIND_NAMES[erasing]} workspace's files are being erased.`);
 
-/**
- * No Online workspace runs on this portal now: ONLINE_WORKSPACES is off, or (`firewall`) the host firewall that keeps
- * the Online network off the LAN and the servers is not loaded (fence.ts).
- */
+/** `firewall`: the host firewall's fence is not loaded (fence.ts); otherwise ONLINE_WORKSPACES is off. */
 const onlineDisabled = (firewall = false): HttpError =>
   new HttpError(
     409,
@@ -73,15 +53,13 @@ const onlineDisabled = (firewall = false): HttpError =>
       : "Online workspaces are turned off on this portal.",
   );
 
-/** That kind is starting, running or stopping: its files can't be erased now. */
 const workspaceRunning = (kind: WorkspaceKind): HttpError =>
   new HttpError(409, "workspace_running", `The ${WORKSPACE_KIND_NAMES[kind]} workspace is running. Stop it before erasing its files.`);
 
 /** The agent asked for is not enabled on this install (WORKSPACE_AGENTS). */
 export const agentUnavailable = (agent: AgentKind): HttpError => new HttpError(400, "agent_unavailable", `${driverFor(agent).name} is not available on this portal.`);
 
-/** What a start asks for; both optional (see requestStart). */
-export interface StartOptions {
+interface StartOptions {
   agent?: AgentKind;
   kind?: WorkspaceKind;
 }
@@ -92,16 +70,7 @@ export interface StartOptions {
  * then rejects with `capacity` or `deleting` instead. An Online start whose last fence check (fence.ts) fails
  * rejects with `online_disabled`. `done` settles once the container runs.
  */
-export type StartAttempt = { ok: true; done: Promise<WorkspaceInfo> } | { ok: false; error: HttpError };
-
-/** Why a workspace is being stopped, as recorded in stopReason and the audit log. */
-export interface StopCause {
-  reason: string;
-  /** The user who asked for the stop (admin actions); null for the gateway's own decisions. */
-  actorUserId?: number | null;
-  /** Set when the container died by itself: the stop is then audited as workspace_error. */
-  lastError?: string | null;
-}
+type StartAttempt = { ok: true; done: Promise<WorkspaceInfo> } | { ok: false; error: HttpError };
 
 /** Where to send a browser's requests: the agent, its address, and the credential that authenticates the gateway to it. */
 export interface Upstream extends AgentEndpoint {
@@ -109,7 +78,7 @@ export interface Upstream extends AgentEndpoint {
   kind: WorkspaceKind;
 }
 
-export interface WorkspaceManagerOptions {
+interface WorkspaceManagerOptions {
   config: Config;
   db: PortalDb;
   runtime: ContainerRuntime;
@@ -118,10 +87,7 @@ export interface WorkspaceManagerOptions {
   llm: LlmQueue;
   connections: ConnectionRegistry;
   log: Logger;
-  /**
-   * Whether the host firewall that fences the Online network in is loaded (fence.ts: fenceCheck). Online workspaces
-   * run only while it says "loaded"; without it, never.
-   */
+  /** Whether the host firewall's fence is loaded (fence.ts: fenceCheck). Online workspaces run only while it says "loaded"; without it, never. */
   fence?: () => Promise<FenceState>;
   /** Told each state saved, so each run of a workspace is a session (session-log.ts). */
   sessions?: Pick<SessionLog, "sync">;
@@ -133,7 +99,7 @@ const REAP_INTERVAL_MS = 60_000;
 const RECONCILE_INTERVAL_MS = 5 * 60_000;
 const SAMPLE_INTERVAL_MS = 15_000;
 const FLUSH_INTERVAL_MS = 30_000;
-/** How often the fence is checked; the Online workspaces stop within this long of it going. */
+/** The Online workspaces stop within this long of the fence going. */
 const FENCE_INTERVAL_MS = 5_000;
 /** WebSocket close code sent to browsers when their workspace stops ("going away"). */
 const CLOSE_GOING_AWAY = 1001;
@@ -144,20 +110,15 @@ interface Entry {
   status: WorkspaceStatus;
   ready: boolean;
   containerId: string | null;
-  /**
-   * A container that should be gone but whose removal failed (a failed stop or start). Reconcile
-   * retries the removal and never adopts it.
-   */
+  /** A container that should be gone but whose removal failed (a failed stop or start). Reconcile retries the removal and never adopts it. */
   leftoverContainerId: string | null;
-  /** The agent of the current container, or of the last one; null if it never ran one. */
+  /** Of the current container, or of the last one; null if it never ran one. */
   agent: AgentKind | null;
-  /** The workspace kind of the current container, or of the last one ("private" if it never ran one). */
+  /** Of the current container, or of the last one ("private" if it never ran one). */
   kind: WorkspaceKind;
-  /** The agent version of the current container's image; null without one, or when unknown. */
   version: string | null;
   ip: string | null;
   port: number | null;
-  /** The credential of this container's agent (driver.credentialEnv). */
   credential: string | null;
   startedAt: number | null;
   stoppedAt: number | null;
@@ -168,13 +129,13 @@ interface Entry {
   stopReason: string | null;
   lastError: string | null;
   memoryBytes: number | null;
-  /** From the agent's status checks. */
   agentState: AgentState;
   /** Average CPU use over the last sampling interval. */
   cpuCores: number | null;
   cpuSample: { cpuSeconds: number; at: number } | null;
   /** The last busy reason seen by the stats refresh, to log when work starts. */
   busyReason: BusyReason;
+  /** Nobody uses it, but the agent is still working: the reaper stops it once the work is done. */
   stopPending: boolean;
   /** In-flight start, until the container runs (readiness continues in the background). */
   starting: Promise<WorkspaceInfo> | null;
@@ -201,7 +162,7 @@ function patch(entry: Entry, changes: Partial<Entry>): void {
 const NO_AGENT: AgentState = Object.freeze({ working: null, answeredAt: null, unknown: false });
 
 /** What an entry no longer has once its container is gone. */
-const NO_CONTAINER: Partial<Entry> = {
+const NO_CONTAINER = {
   ready: false,
   readiness: null,
   containerId: null,
@@ -215,7 +176,38 @@ const NO_CONTAINER: Partial<Entry> = {
   cpuSample: null,
   busyReason: null,
   stopPending: false,
-};
+} satisfies Partial<Entry>;
+
+/** A user's workspace before its first start. */
+function newEntry(userId: number): Entry {
+  return {
+    ...NO_CONTAINER,
+    userId,
+    status: "stopped",
+    leftoverContainerId: null,
+    agent: null,
+    kind: "private",
+    startedAt: null,
+    stoppedAt: null,
+    lastActivityAt: null,
+    lastUserActivityAt: null,
+    stopReason: null,
+    lastError: null,
+    starting: null,
+    stopping: null,
+    deleting: null,
+    erasing: null,
+    activityDirty: false,
+  };
+}
+
+/** `flight`, kept where `set` puts it until it settles. That also marks it as handled: a caller that doesn't wait reads the failure from the workspace. */
+function inFlight<T>(flight: Promise<T>, set: (flight: Promise<T> | null) => void): Promise<T> {
+  set(flight);
+  const clear = (): void => set(null);
+  flight.then(clear, clear);
+  return flight;
+}
 
 export class WorkspaceManager {
   readonly #config: Config;
@@ -229,8 +221,6 @@ export class WorkspaceManager {
   readonly #entries = new Map<number, Entry>();
   readonly #checking = new Set<number>();
   readonly #timers: NodeJS.Timeout[] = [];
-  #reaping = false;
-  #sampling = false;
   readonly #fenceCheck: () => Promise<FenceState>;
   /** The last fence check's answer; "unknown" until there is one (Online runs only on "loaded"). */
   #fence: FenceState = "unknown";
@@ -252,8 +242,6 @@ export class WorkspaceManager {
     this.#now = options.now ?? Date.now;
   }
 
-  // ---------------------------------------------------------------- lifecycle of the manager
-
   /** Loads the persisted state and reconciles it with the containers Docker is running. */
   async init(): Promise<void> {
     // Before reconcile: it adopts an Online container only while the fence is loaded.
@@ -261,25 +249,26 @@ export class WorkspaceManager {
     const now = this.#now();
     const stale: Entry[] = [];
     for (const row of this.#db.select().from(workspaces).all()) {
-      const entry = entryFromRow(row);
-      if (row.status === "stopped" || row.status === "error") {
+      const { userId, status, agent, kind, ip, startedAt, stoppedAt, lastActivityAt, stopReason, lastError } = row;
+      const entry: Entry = { ...newEntry(userId), status, agent, kind, ip, startedAt, stoppedAt, lastActivityAt, lastUserActivityAt: lastActivityAt, stopReason, lastError };
+      if (status === "stopped" || status === "error") {
         // A stopped workspace's row only names a container whose removal failed (see #persist).
-        patch(entry, { containerId: null, leftoverContainerId: row.containerId });
+        entry.leftoverContainerId = row.containerId;
       } else {
         // Reconcile adopts the container if it still runs; otherwise this is how it stays. A stop
         // that was under way is finished instead: that container is removed, not adopted.
-        const wasStopping = row.status === "stopping";
+        const wasStopping = status === "stopping";
         patch(entry, {
-          ...NO_CONTAINER,
+          ip: null,
           status: "stopped",
           stoppedAt: now,
-          stopReason: wasStopping ? row.stopReason : "error",
-          lastError: wasStopping ? row.lastError : "The workspace container was not running when the gateway started.",
+          stopReason: wasStopping ? stopReason : "error",
+          lastError: wasStopping ? lastError : "The workspace container was not running when the gateway started.",
           leftoverContainerId: wasStopping ? row.containerId : null,
         });
         stale.push(entry);
       }
-      this.#entries.set(row.userId, entry);
+      this.#entries.set(userId, entry);
     }
     await this.reconcile();
     for (const entry of stale) if (entry.status === "stopped") this.#persist(entry);
@@ -287,13 +276,8 @@ export class WorkspaceManager {
 
   startBackgroundTasks(): void {
     const every = (intervalMs: number, name: string, task: () => unknown): void => {
-      const timer = setInterval(() => {
-        Promise.resolve()
-          .then(task)
-          .catch((error: unknown) => this.#log.error(`${name} failed`, { error }));
-      }, intervalMs);
-      timer.unref();
-      this.#timers.push(timer);
+      const run = (): unknown => Promise.resolve().then(task).catch((error: unknown) => this.#log.error(`${name} failed`, { error }));
+      this.#timers.push(setInterval(run, intervalMs).unref());
     };
     every(REAP_INTERVAL_MS, "reaper", () => this.reap());
     every(REAP_INTERVAL_MS, "session sweep", () => {
@@ -302,11 +286,15 @@ export class WorkspaceManager {
     });
     every(RECONCILE_INTERVAL_MS, "reconcile", () => this.reconcile());
     every(SAMPLE_INTERVAL_MS, "stats refresh", () => this.refreshSamples());
-    every(FLUSH_INTERVAL_MS, "activity flush", () => this.flushActivity());
+    every(FLUSH_INTERVAL_MS, "activity flush", () => this.#flushActivity());
     every(FENCE_INTERVAL_MS, "firewall check", () => this.checkFence());
   }
 
-  // ---------------------------------------------------------------- the Online fence
+  /** Stops the background tasks and saves pending activity. Containers keep running. */
+  shutdown(): void {
+    for (const timer of this.#timers.splice(0)) clearInterval(timer);
+    this.#flushActivity();
+  }
 
   /**
    * Checks the host firewall's fence (fence.ts) now. Unless it is loaded, every Online workspace that is starting or
@@ -319,7 +307,7 @@ export class WorkspaceManager {
     await Promise.all(
       online.map((entry) => {
         this.#log.warn("stopping an Online workspace: the host firewall that fences it in is not loaded", { userId: entry.userId, firewall: state });
-        return this.#stopEntry(entry, { reason: "online_disabled" });
+        return this.#stopEntry(entry, "online_disabled");
       }),
     );
     return state;
@@ -353,40 +341,9 @@ export class WorkspaceManager {
     return state;
   }
 
-  /** Stops the background tasks and saves pending activity. Containers keep running. */
-  shutdown(): void {
-    for (const timer of this.#timers.splice(0)) clearInterval(timer);
-    this.flushActivity();
-  }
-
-  // ---------------------------------------------------------------- queries
-
-  info(userId: number, online: OnlineAccess = this.onlineAccess(userId)): WorkspaceInfo {
-    const entry = this.#entries.get(userId);
-    const connections = this.#connections.count(userId);
-    const llmInFlight = this.#llm.inFlightFor(userId);
-    if (!entry) {
-      return {
-        userId,
-        status: "stopped",
-        agent: null,
-        kind: "private",
-        online,
-        agentVersion: null,
-        ready: false,
-        startedAt: null,
-        lastActivityAt: null,
-        idleSeconds: null,
-        memoryBytes: null,
-        connections,
-        llmInFlight,
-        busy: false,
-        busyReason: null,
-        stopPending: false,
-        stopReason: null,
-        lastError: null,
-      };
-    }
+  /** `onlineAllowed`: the admin's permission for this user, when the caller has read it already. */
+  info(userId: number, onlineAllowed?: boolean): WorkspaceInfo {
+    const entry = this.#entries.get(userId) ?? newEntry(userId);
     const active = isActive(entry);
     const activity = active ? this.#assess(entry) : null;
     return {
@@ -394,15 +351,15 @@ export class WorkspaceManager {
       status: entry.status,
       agent: entry.agent,
       kind: entry.kind,
-      online,
+      online: this.#onlineAccess(userId, onlineAllowed),
       agentVersion: active ? entry.version : null,
       ready: entry.ready,
       startedAt: entry.startedAt,
       lastActivityAt: entry.lastActivityAt,
       idleSeconds: activity ? Math.floor(idleMs(activity, this.#now()) / 1000) : null,
       memoryBytes: active ? entry.memoryBytes : null,
-      connections,
-      llmInFlight,
+      connections: this.#connections.count(userId),
+      llmInFlight: this.#llm.inFlightFor(userId),
       busy: activity?.busy ?? false,
       busyReason: activity?.busyReason ?? null,
       stopPending: active && entry.stopPending,
@@ -415,40 +372,26 @@ export class WorkspaceManager {
   list(): WorkspaceInfo[] {
     // One query for everyone's Online permission, not one per workspace.
     const allowed = new Map(this.#db.select({ id: users.id, onlineAllowed: users.onlineAllowed }).from(users).all().map((row) => [row.id, row.onlineAllowed]));
-    return [...this.#entries.keys()]
-      .sort((a, b) => a - b)
-      .map((userId) => this.info(userId, this.#onlineAccessOf(allowed.get(userId) ?? false)));
+    return [...this.#entries.keys()].sort((a, b) => a - b).map((userId) => this.info(userId, allowed.get(userId) ?? false));
   }
 
   /** WorkspaceInfo.online: the global switch and the host firewall's fence first, then the admin's permission for this user. */
-  onlineAccess(userId: number): OnlineAccess {
-    if (!this.#onlineOn()) return "off";
-    const row = this.#db.select({ onlineAllowed: users.onlineAllowed }).from(users).where(eq(users.id, userId)).get();
-    return this.#onlineAccessOf(row?.onlineAllowed ?? false);
-  }
-
-  #onlineAccessOf(allowed: boolean): OnlineAccess {
-    if (!this.#onlineOn()) return "off";
+  #onlineAccess(userId: number, allowed?: boolean): OnlineAccess {
+    if (!this.#config.workspace.onlineEnabled || this.#fence !== "loaded") return "off";
+    allowed ??= this.#db.select({ onlineAllowed: users.onlineAllowed }).from(users).where(eq(users.id, userId)).get()?.onlineAllowed ?? false;
     return allowed ? "allowed" : "not_allowed";
-  }
-
-  /** ONLINE_WORKSPACES is on and the last fence check found the host firewall loaded. */
-  #onlineOn(): boolean {
-    return this.#config.workspace.onlineEnabled && this.#fence === "loaded";
   }
 
   /** Why an Online workspace of this user may not run (now), or null when it may. */
   #onlineRefusal(userId: number): HttpError | null {
     if (!this.#config.workspace.onlineEnabled) return onlineDisabled();
     if (this.#fence !== "loaded") return onlineDisabled(true);
-    return this.onlineAccess(userId) === "not_allowed" ? new HttpError(403, "online_not_allowed", "Your administrator hasn't allowed you an Online workspace.") : null;
+    return this.#onlineAccess(userId) === "not_allowed" ? new HttpError(403, "online_not_allowed", "Your administrator hasn't allowed you an Online workspace.") : null;
   }
 
   /** Workspaces holding a container slot (starting or running). */
   runningCount(): number {
-    let count = 0;
-    for (const entry of this.#entries.values()) if (isActive(entry)) count++;
-    return count;
+    return [...this.#entries.values()].filter(isActive).length;
   }
 
   /**
@@ -472,15 +415,11 @@ export class WorkspaceManager {
     return null;
   }
 
-  // ---------------------------------------------------------------- activity
-
   /** A person did something in the workspace. Ignored unless the workspace holds a container. */
   touch(userId: number): void {
     const entry = this.#entries.get(userId);
     if (!entry || !isActive(entry)) return;
-    const now = this.#now();
-    entry.lastActivityAt = now;
-    entry.lastUserActivityAt = now;
+    entry.lastActivityAt = entry.lastUserActivityAt = this.#now();
     entry.activityDirty = true;
   }
 
@@ -495,26 +434,19 @@ export class WorkspaceManager {
     entry.activityDirty = true;
   }
 
-  flushActivity(): void {
+  #flushActivity(): void {
     const dirty = [...this.#entries.values()].filter((entry) => entry.activityDirty);
     if (dirty.length === 0) return;
     const now = this.#now();
     try {
       this.#db.transaction((tx) => {
-        for (const entry of dirty) {
-          tx.update(workspaces)
-            .set({ lastActivityAt: entry.lastActivityAt, updatedAt: now })
-            .where(eq(workspaces.userId, entry.userId))
-            .run();
-        }
+        for (const entry of dirty) tx.update(workspaces).set({ lastActivityAt: entry.lastActivityAt, updatedAt: now }).where(eq(workspaces.userId, entry.userId)).run();
       });
       for (const entry of dirty) entry.activityDirty = false;
     } catch (error) {
       this.#log.error("could not save workspace activity", { error });
     }
   }
-
-  // ---------------------------------------------------------------- start
 
   /**
    * Starts the user's workspace of `kind` with `agent` unless one is already starting or running.
@@ -553,18 +485,15 @@ export class WorkspaceManager {
       if (refusal) return { ok: false, error: refusal };
     }
     if (existing?.erasing?.kind === kind) return { ok: false, error: beingDeleted(kind) };
-    const chosen = agent ?? this.preferredAgent(userId);
+    const chosen = agent ?? this.#preferredAgent(userId);
     if (!this.#config.workspace.agents.includes(chosen)) return { ok: false, error: agentUnavailable(chosen) };
 
-    const slot = this.#reserveSlot(userId);
-    if (!slot.ok) {
-      return refuse(409, "capacity", `All ${this.#config.maxRunning} workspace slots are in use and none has been idle long enough to make room.`);
-    }
-    const eviction = slot.victim === null ? null : this.stop(slot.victim, "capacity");
+    const eviction = this.#makeRoom(userId);
+    if (eviction === false) return refuse(409, "capacity", `All ${this.#config.maxRunning} workspace slots are in use and none has been idle long enough to make room.`);
 
     const entry = existing ?? this.#createEntry(userId);
     const now = this.#now();
-    patch(entry, {
+    this.#persist(entry, {
       ...NO_CONTAINER,
       status: "starting",
       agent: chosen,
@@ -575,16 +504,7 @@ export class WorkspaceManager {
       stopReason: null,
       lastError: null,
     });
-    this.#persist(entry);
-
-    const done = this.#launch(entry, eviction);
-    entry.starting = done;
-    // Also marks `done` as handled: failures are recorded on the workspace for callers that don't wait.
-    const clear = (): void => {
-      if (entry.starting === done) entry.starting = null;
-    };
-    done.then(clear, clear);
-    return { ok: true, done };
+    return { ok: true, done: inFlight(this.#launch(entry, eviction), (flight) => (entry.starting = flight)) };
   }
 
   /** User ids 1 … AGENT_PORT_COUNT - 1 have workspace ports (and UIDs clear of the other kind's); no other id runs one. */
@@ -593,7 +513,7 @@ export class WorkspaceManager {
   }
 
   /** The agent a start without one uses: the user's choice (Settings) if enabled, else the first enabled agent. */
-  preferredAgent(userId: number): AgentKind {
+  #preferredAgent(userId: number): AgentKind {
     const enabled = this.#config.workspace.agents;
     const chosen = this.#db.select({ agent: users.agent }).from(users).where(eq(users.id, userId)).get()?.agent ?? null;
     return chosen !== null && enabled.includes(chosen) ? chosen : enabled[0]!;
@@ -616,15 +536,13 @@ export class WorkspaceManager {
     return attempt.done;
   }
 
-  #reserveSlot(requesterId: number): { ok: true; victim: number | null } | { ok: false } {
+  /** A slot for one more workspace: null when one is free, the stop of the workspace that makes room, or false when none can go. */
+  #makeRoom(requesterId: number): Promise<WorkspaceInfo> | null | false {
     const active = [...this.#entries.values()].filter(isActive);
-    if (active.length < this.#config.maxRunning) return { ok: true, victim: null };
-    const candidates = active.map((entry) => {
-      const { busy, lastActivityAt } = this.#assess(entry);
-      return { userId: entry.userId, ready: entry.status === "running" && entry.ready && entry.stopping === null, busy, lastActivityAt };
-    });
+    if (active.length < this.#config.maxRunning) return null;
+    const candidates = active.map((entry) => ({ ...this.#assess(entry), userId: entry.userId, ready: entry.status === "running" && entry.ready && entry.stopping === null }));
     const victim = chooseEviction(candidates, requesterId, this.#now());
-    return victim === null ? { ok: false } : { ok: true, victim };
+    return victim !== null && this.stop(victim, "capacity");
   }
 
   async #launch(entry: Entry, eviction: Promise<WorkspaceInfo> | null): Promise<WorkspaceInfo> {
@@ -662,8 +580,7 @@ export class WorkspaceManager {
       if (entry.status !== "starting") return this.info(userId);
       if (error instanceof HttpError && error.code === "online_disabled") {
         // Refused before there was a container: stopped, as a running one would be for the same reason.
-        patch(entry, { ...NO_CONTAINER, status: "stopped", stoppedAt: this.#now(), stopReason: error.code, lastError: null });
-        this.#persist(entry);
+        this.#persist(entry, { ...NO_CONTAINER, status: "stopped", stoppedAt: this.#now(), stopReason: error.code, lastError: null });
         this.#log.warn("refused an Online workspace start: the host firewall that fences it in is not loaded", { userId });
         this.#connections.closeWorkspace(userId, CLOSE_GOING_AWAY, "workspace stopped");
         throw error;
@@ -688,8 +605,7 @@ export class WorkspaceManager {
       // Addresses are per network, so only a workspace of the same kind can hold this one.
       if (other === entry || other.kind !== entry.kind || other.ip !== entry.ip) continue;
       this.#log.warn("a workspace's address now belongs to another workspace", { userId: other.userId, ip: other.ip, newUserId: entry.userId });
-      other.ip = null;
-      this.#persist(other);
+      this.#persist(other, { ip: null });
       this.checkContainer(other.userId);
     }
   }
@@ -714,8 +630,7 @@ export class WorkspaceManager {
         if (!current()) return;
         if (result.ok) {
           // The probe answered: an unknown agent state counts from here.
-          patch(entry, { status: "running", ready: true, readiness: null, agentState: { ...NO_AGENT, answeredAt: this.#now() } });
-          this.#persist(entry);
+          this.#persist(entry, { status: "running", ready: true, readiness: null, agentState: { ...NO_AGENT, answeredAt: this.#now() } });
           this.#log.info("workspace ready", { userId, seconds: Math.round((this.#now() - startedAt) / 100) / 10 });
           return;
         }
@@ -729,14 +644,7 @@ export class WorkspaceManager {
   async #fail(entry: Entry, message: string): Promise<void> {
     const { userId, containerId } = entry;
     entry.readiness?.abort();
-    patch(entry, {
-      ...NO_CONTAINER,
-      status: "error",
-      stoppedAt: this.#now(),
-      stopReason: "error",
-      lastError: message,
-    });
-    this.#persist(entry);
+    this.#persist(entry, { ...NO_CONTAINER, status: "error", stoppedAt: this.#now(), stopReason: "error", lastError: message });
     this.#audit("workspace_error", userId, { error: firstLine(message), kind: entry.kind });
     this.#log.error("workspace failed to start", { userId, kind: entry.kind, error: firstLine(message) });
     this.#connections.closeWorkspace(userId, CLOSE_INTERNAL_ERROR, "workspace failed");
@@ -744,19 +652,14 @@ export class WorkspaceManager {
       await this.#runtime.removeContainer(containerId).catch((error: unknown) => {
         this.#log.warn("could not remove failed workspace container", { userId, containerId, error });
         // Unless a new start has begun (it removes the container itself), reconcile retries.
-        if (entry.status === "error") {
-          entry.leftoverContainerId = containerId;
-          this.#persist(entry);
-        }
+        if (entry.status === "error") this.#persist(entry, { leftoverContainerId: containerId });
       });
     }
   }
 
-  // ---------------------------------------------------------------- stop
-
   stop(userId: number, reason: string, actorUserId: number | null = null): Promise<WorkspaceInfo> {
     const entry = this.#entries.get(userId);
-    return entry ? this.#stopEntry(entry, { reason, actorUserId }) : Promise.resolve(this.info(userId));
+    return entry ? this.#stopEntry(entry, reason, actorUserId) : Promise.resolve(this.info(userId));
   }
 
   /**
@@ -789,19 +692,13 @@ export class WorkspaceManager {
     const existing = this.#entries.get(userId);
     if (existing?.deleting) return existing.deleting;
     const entry = existing ?? this.#createEntry(userId);
-    const done = this.#deleteEntry(entry, existing === undefined);
-    entry.deleting = done;
-    const clear = (): void => {
-      if (entry.deleting === done) entry.deleting = null;
-    };
-    done.then(clear, clear);
-    return done;
+    return inFlight(this.#deleteEntry(entry, existing === undefined), (flight) => (entry.deleting = flight));
   }
 
   async #deleteEntry(entry: Entry, created: boolean): Promise<void> {
     const { userId } = entry;
     try {
-      await this.#stopEntry(entry, { reason: "deleted" });
+      await this.#stopEntry(entry, "deleted");
       // Also a container an earlier stop failed to remove: its mounts are the data about to go.
       await this.#removeLeftover(entry).catch((error: unknown) => {
         throw new HttpError(500, "stop_failed", `could not stop the workspace container, so its data was not deleted: ${errorMessage(error)}`);
@@ -859,25 +756,21 @@ export class WorkspaceManager {
     this.#log.info("workspace files erased", { userId, kind, actorUserId });
   }
 
-  #stopEntry(entry: Entry, cause: StopCause): Promise<WorkspaceInfo> {
+  /**
+   * `reason` goes to stopReason and the audit log, with the user who asked for the stop (`actorUserId`; null for the
+   * gateway's own decisions). `lastError`: the container died by itself, and the stop is audited as workspace_error.
+   */
+  #stopEntry(entry: Entry, reason: string, actorUserId: number | null = null, lastError: string | null = null): Promise<WorkspaceInfo> {
     if (entry.stopping) return entry.stopping;
     if (!entry.starting && !isActive(entry)) return Promise.resolve(this.info(entry.userId));
-    const done = this.#halt(entry, cause);
-    entry.stopping = done;
-    const clear = (): void => {
-      if (entry.stopping === done) entry.stopping = null;
-    };
-    done.then(clear, clear);
-    return done;
+    return inFlight(this.#halt(entry, reason, actorUserId, lastError), (flight) => (entry.stopping = flight));
   }
 
-  async #halt(entry: Entry, cause: StopCause): Promise<WorkspaceInfo> {
+  async #halt(entry: Entry, reason: string, actorUserId: number | null, lastError: string | null): Promise<WorkspaceInfo> {
     const { userId } = entry;
-    const { reason, actorUserId = null, lastError = null } = cause;
     const pendingStart = entry.starting;
     entry.readiness?.abort();
-    patch(entry, { status: "stopping", ready: false, readiness: null, stopReason: reason });
-    this.#persist(entry);
+    this.#persist(entry, { status: "stopping", ready: false, readiness: null, stopReason: reason });
     this.#connections.closeWorkspace(userId, CLOSE_GOING_AWAY, "workspace stopped");
     if (pendingStart) await pendingStart.catch(() => undefined);
 
@@ -887,15 +780,13 @@ export class WorkspaceManager {
     } catch (error) {
       const message = `could not stop the workspace container: ${errorMessage(error)}`;
       // The container may still run: reconcile retries the removal, and never adopts it.
-      patch(entry, { ...NO_CONTAINER, status: "error", stoppedAt: this.#now(), lastError: message, leftoverContainerId: containerId });
-      this.#persist(entry);
+      this.#persist(entry, { ...NO_CONTAINER, status: "error", stoppedAt: this.#now(), lastError: message, leftoverContainerId: containerId });
       this.#audit("workspace_error", userId, { reason, error: message, kind: entry.kind }, actorUserId);
       this.#log.error("workspace stop failed", { userId, containerId, error });
       return this.info(userId);
     }
 
-    patch(entry, { ...NO_CONTAINER, status: "stopped", stoppedAt: this.#now(), stopReason: reason, lastError });
-    this.#persist(entry);
+    this.#persist(entry, { ...NO_CONTAINER, status: "stopped", stoppedAt: this.#now(), stopReason: reason, lastError });
     if (lastError) this.#audit("workspace_error", userId, { reason, error: firstLine(lastError), kind: entry.kind });
     else if (containerId) this.#audit("workspace_stopped", userId, { reason, kind: entry.kind }, actorUserId);
     this.#log.info("workspace stopped", { userId, kind: entry.kind, reason });
@@ -907,10 +798,7 @@ export class WorkspaceManager {
     const containerId = entry.leftoverContainerId;
     if (!containerId) return;
     await this.#runtime.stopContainer(containerId);
-    if (entry.leftoverContainerId === containerId) {
-      entry.leftoverContainerId = null;
-      this.#persist(entry);
-    }
+    if (entry.leftoverContainerId === containerId) this.#persist(entry, { leftoverContainerId: null });
     this.#log.info("removed a workspace container left behind by a failed stop", { userId: entry.userId, containerId });
   }
 
@@ -932,96 +820,76 @@ export class WorkspaceManager {
     ]);
     if (state.running) return;
     if (entry.containerId !== containerId || entry.status !== "running" || entry.starting || entry.stopping) return;
-    await this.#stopEntry(entry, { reason: "error", lastError: withLogs(describeExit(state), tail) });
+    await this.#stopEntry(entry, "error", null, withLogs(describeExit(state), tail));
   }
-
-  // ---------------------------------------------------------------- background tasks
 
   /** Stops workspaces nobody uses any more, or that have been idle for IDLE_TIMEOUT_MINUTES. */
-  async reap(): Promise<void> {
-    if (this.#reaping) return;
-    this.#reaping = true;
-    try {
-      const running = [...this.#entries.values()].filter(
-        (entry) => entry.status === "running" && entry.ready && !entry.starting && !entry.stopping,
-      );
-      await Promise.all(running.map((entry) => this.#reapOne(entry)));
-    } finally {
-      this.#reaping = false;
-    }
-  }
+  readonly reap = singleFlight(async (): Promise<void> => {
+    const running = [...this.#entries.values()].filter((entry) => entry.status === "running" && entry.ready && !entry.starting && !entry.stopping);
+    await Promise.all(running.map((entry) => this.#reapOne(entry)));
+  });
 
   async #reapOne(entry: Entry): Promise<void> {
     // The admin's switch (or ONLINE_WORKSPACES) went off: an Online workspace stops, working or not.
     if (entry.kind === "online") {
       const refusal = this.#onlineRefusal(entry.userId);
-      if (refusal) return void (await this.#stopEntry(entry, { reason: refusal.code }));
+      if (refusal) return void (await this.#stopEntry(entry, refusal.code));
     }
-    let input = this.#reapInput(entry);
-    // Nobody uses it, but the agent is still working: it stops once the work is done.
-    entry.stopPending = input.sessions === 0 && input.busy;
-    if (reapVerdict(input) === "keep") return;
+    if (this.#verdict(entry) === "keep") return;
     // About to stop it: ask the agent once more, in case work started since the last check.
     const containerId = entry.containerId;
     await this.#refreshAgentState(entry);
     if (entry.status !== "running" || entry.containerId !== containerId || entry.stopping || entry.starting) return;
-    input = this.#reapInput(entry);
-    entry.stopPending = input.sessions === 0 && input.busy;
-    const verdict = reapVerdict(input);
-    if (verdict === "keep") return;
-    await this.#stopEntry(entry, { reason: verdict === "released" ? "logout" : "idle" });
+    const verdict = this.#verdict(entry);
+    if (verdict !== "keep") await this.#stopEntry(entry, verdict === "released" ? "logout" : "idle");
   }
 
-  #reapInput(entry: Entry): ReapInput {
+  /** The reaper's verdict now; a workspace nobody uses whose agent still works is marked to stop once the work is done. */
+  #verdict(entry: Entry): ReapVerdict {
     const { busy, lastActivityAt } = this.#assess(entry);
-    return { busy, lastActivityAt, now: this.#now(), idleTimeoutMs: this.#config.idleTimeoutMs, sessions: this.#sessionsUsing(entry.userId) };
+    const sessions = this.#sessionsUsing(entry.userId);
+    entry.stopPending = sessions === 0 && busy;
+    return reapVerdict({ busy, lastActivityAt, now: this.#now(), idleTimeoutMs: this.#config.idleTimeoutMs, sessions });
   }
 
   /**
-   * Every 15 s: memory and CPU from docker stats, whether the agent is working from Qwen Code's
-   * health endpoint, and containers that exited. Work counts as activity, so the idle countdown
-   * only starts once the agent is done.
+   * Every 15 s: memory and CPU from docker stats, whether the agent is working from its status check, and
+   * containers that exited. Work counts as activity, so the idle countdown only starts once the agent is done.
    */
-  async refreshSamples(): Promise<void> {
-    if (this.#sampling) return;
-    this.#sampling = true;
-    try {
-      const running = [...this.#entries.values()].filter((entry) => entry.status === "running" && !entry.stopping);
-      await Promise.all(
-        running.map(async (entry) => {
-          const containerId = entry.containerId;
-          if (!containerId) return;
-          // Both signals are gathered first and busy is decided once, from this window's CPU average.
-          const [sample] = await Promise.all([
-            this.#runtime.sample(containerId).catch((error: unknown) => {
-              this.#log.warn("docker stats failed", { userId: entry.userId, error });
-              return null;
-            }),
-            entry.ready ? this.#refreshAgentState(entry, { updateBusy: false }) : Promise.resolve(),
-          ]);
-          if (entry.containerId !== containerId) return;
-          if (sample && !sample.running) return void (await this.#handleExit(entry, containerId));
-          if (sample) {
-            entry.memoryBytes = sample.memoryBytes;
-            if (sample.cpuSeconds !== null) {
-              const current = { cpuSeconds: sample.cpuSeconds, at: this.#now() };
-              entry.cpuCores = averageCores(entry.cpuSample, current);
-              entry.cpuSample = current;
-            }
+  readonly refreshSamples = singleFlight(async (): Promise<void> => {
+    const running = [...this.#entries.values()].filter((entry) => entry.status === "running" && !entry.stopping);
+    await Promise.all(
+      running.map(async (entry) => {
+        const containerId = entry.containerId;
+        if (!containerId) return;
+        // Both signals are gathered first and busy is decided once, from this window's CPU average.
+        const [sample] = await Promise.all([
+          this.#runtime.sample(containerId).catch((error: unknown) => {
+            this.#log.warn("docker stats failed", { userId: entry.userId, error });
+            return null;
+          }),
+          entry.ready && this.#refreshAgentState(entry, false),
+        ]);
+        if (entry.containerId !== containerId) return;
+        if (sample && !sample.running) return void (await this.#handleExit(entry, containerId));
+        if (sample) {
+          entry.memoryBytes = sample.memoryBytes;
+          if (sample.cpuSeconds !== null) {
+            const current = { cpuSeconds: sample.cpuSeconds, at: this.#now() };
+            entry.cpuCores = averageCores(entry.cpuSample, current);
+            entry.cpuSample = current;
           }
-          this.#updateBusy(entry);
-        }),
-      );
-    } finally {
-      this.#sampling = false;
-    }
-  }
+        }
+        this.#updateBusy(entry);
+      }),
+    );
+  });
 
   /**
    * Asks the workspace's agent whether it is working. Without an answer the last one is kept and the
    * state becomes unknown (see agentCountsAsWorking).
    */
-  async #refreshAgentState(entry: Entry, options: { updateBusy?: boolean } = {}): Promise<void> {
+  async #refreshAgentState(entry: Entry, updateBusy = true): Promise<void> {
     const { containerId } = entry;
     const endpoint = endpointOf(entry);
     if (endpoint === null || entry.agent === null) return;
@@ -1042,7 +910,7 @@ export class WorkspaceManager {
         }
       }
     }
-    if (options.updateBusy !== false) this.#updateBusy(entry);
+    if (updateBusy) this.#updateBusy(entry);
   }
 
   /** Recomputes busy from the latest signals; while busy, the workspace counts as active. */
@@ -1060,9 +928,7 @@ export class WorkspaceManager {
    * Aligns state with Docker: adopts running workspace containers of users we have rows for,
    * removes any other workspace container, and records containers that are gone.
    */
-  readonly reconcile = singleFlight(() => this.#reconcileOnce());
-
-  async #reconcileOnce(): Promise<void> {
+  readonly reconcile = singleFlight(async (): Promise<void> => {
     const running = new Set<string>();
     for (const container of await this.#runtime.list()) {
       const entry = container.userId === null ? undefined : this.#entries.get(container.userId);
@@ -1097,7 +963,7 @@ export class WorkspaceManager {
         await this.#handleExit(entry, containerId);
       }
     }
-  }
+  });
 
   /**
    * An Online container found running that may not run (ONLINE_WORKSPACES is off, or the admin barred the user since):
@@ -1112,8 +978,7 @@ export class WorkspaceManager {
       this.#log.warn("could not stop an Online workspace that may not run; reconcile retries", { userId: entry.userId, containerId, error });
       return;
     }
-    patch(entry, { ...NO_CONTAINER, kind: "online", status: "stopped", stoppedAt: this.#now(), stopReason: reason, lastError: null });
-    this.#persist(entry);
+    this.#persist(entry, { ...NO_CONTAINER, kind: "online", status: "stopped", stoppedAt: this.#now(), stopReason: reason, lastError: null });
     this.#audit("workspace_stopped", entry.userId, { reason, kind: "online" });
   }
 
@@ -1129,8 +994,7 @@ export class WorkspaceManager {
     if (!credential) {
       this.#log.warn("cannot adopt workspace container: its credential is unknown", { userId: entry.userId, containerId: container.id });
       if (!entry.starting && !entry.stopping && !isActive(entry)) {
-        patch(entry, { lastError: "After a gateway restart the running workspace could not be taken over (its access token was missing), so it was removed. Opening it starts it again." });
-        this.#persist(entry);
+        this.#persist(entry, { lastError: "After a gateway restart the running workspace could not be taken over (its access token was missing), so it was removed. Opening it starts it again." });
       }
       return false;
     }
@@ -1159,21 +1023,9 @@ export class WorkspaceManager {
     return true;
   }
 
-  // ---------------------------------------------------------------- helpers
-
   /** Busy, why, and where the idle countdown runs from (policy.ts decides). */
   #assess(entry: Entry): ActivityAssessment {
-    return assessActivity(
-      {
-        agent: entry.agentState,
-        llmBusy: this.#llm.pendingFor(entry.userId) > 0,
-        cpuCores: entry.cpuCores,
-        lastActivityAt: entry.lastActivityAt,
-        lastUserActivityAt: entry.lastUserActivityAt,
-      },
-      this.#now(),
-      this.#config.maxBusyMs,
-    );
+    return assessActivity({ ...entry, agent: entry.agentState, llmBusy: this.#llm.pendingFor(entry.userId) > 0 }, this.#now(), this.#config.maxBusyMs);
   }
 
   #sessionsUsing(userId: number): number {
@@ -1181,49 +1033,22 @@ export class WorkspaceManager {
   }
 
   #createEntry(userId: number): Entry {
-    const entry = entryFromRow({
-      userId,
-      containerId: null,
-      containerName: null,
-      ip: null,
-      kind: "private",
-      status: "stopped",
-      agent: null,
-      startedAt: null,
-      stoppedAt: null,
-      lastActivityAt: null,
-      stopReason: null,
-      lastError: null,
-      updatedAt: this.#now(),
-    });
+    const entry = newEntry(userId);
     this.#entries.set(userId, entry);
     return entry;
   }
 
-  #persist(entry: Entry): void {
+  /** Saves the entry, with `changes` applied first. */
+  #persist(entry: Entry, changes: Partial<Entry> = {}): void {
+    patch(entry, changes);
+    const { userId, ip, status, agent, kind, startedAt, stoppedAt, lastActivityAt, stopReason, lastError } = entry;
     // A stopped workspace keeps the id of a container whose removal failed, so a restarted gateway
     // removes it too instead of adopting it.
     const containerId = entry.containerId ?? entry.leftoverContainerId;
-    const row = {
-      containerId,
-      containerName: containerId ? containerName(entry.userId, entry.kind) : null,
-      ip: entry.ip,
-      status: entry.status,
-      agent: entry.agent,
-      kind: entry.kind,
-      startedAt: entry.startedAt,
-      stoppedAt: entry.stoppedAt,
-      lastActivityAt: entry.lastActivityAt,
-      stopReason: entry.stopReason,
-      lastError: entry.lastError,
-      updatedAt: this.#now(),
-    };
+    const container = { containerId, containerName: containerId ? containerName(userId, kind) : null };
+    const row = { ...container, ip, status, agent, kind, startedAt, stoppedAt, lastActivityAt, stopReason, lastError, updatedAt: this.#now() };
     try {
-      this.#db
-        .insert(workspaces)
-        .values({ userId: entry.userId, ...row })
-        .onConflictDoUpdate({ target: workspaces.userId, set: row })
-        .run();
+      this.#db.insert(workspaces).values({ userId, ...row }).onConflictDoUpdate({ target: workspaces.userId, set: row }).run();
       entry.activityDirty = false;
     } catch (error) {
       this.#log.error("could not save workspace state", { userId: entry.userId, error });
@@ -1238,40 +1063,6 @@ export class WorkspaceManager {
       this.#log.error("could not write audit entry", { action, userId, error });
     }
   }
-}
-
-function entryFromRow(row: Workspace): Entry {
-  return {
-    userId: row.userId,
-    status: row.status,
-    ready: false,
-    containerId: row.containerId,
-    leftoverContainerId: null,
-    agent: row.agent,
-    kind: row.kind,
-    version: null,
-    ip: row.ip,
-    port: null,
-    credential: null,
-    startedAt: row.startedAt,
-    stoppedAt: row.stoppedAt,
-    lastActivityAt: row.lastActivityAt,
-    lastUserActivityAt: row.lastActivityAt,
-    stopReason: row.stopReason,
-    lastError: row.lastError,
-    memoryBytes: null,
-    agentState: NO_AGENT,
-    cpuCores: null,
-    cpuSample: null,
-    busyReason: null,
-    stopPending: false,
-    starting: null,
-    stopping: null,
-    deleting: null,
-    erasing: null,
-    readiness: null,
-    activityDirty: false,
-  };
 }
 
 /** Where the entry's agent listens, with its credential; null without a container to talk to. */
