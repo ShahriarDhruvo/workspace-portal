@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
-import type { AddressInfo } from "node:net";
+import { closeServer, listenLocal } from "../../test/fakes.ts";
 import {
   createLimiter,
   createSearxngBackend,
@@ -31,11 +31,11 @@ async function withServer(
       ...extra,
     });
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = await listenLocal(server);
   try {
-    await run(`http://127.0.0.1:${(server.address() as AddressInfo).port}/mcp/search`, calls);
+    await run(`http://127.0.0.1:${port}/mcp/search`, calls);
   } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await closeServer(server);
   }
 }
 

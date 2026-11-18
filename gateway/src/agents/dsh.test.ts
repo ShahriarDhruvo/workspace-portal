@@ -9,8 +9,6 @@ import { DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_TOKENS, portalModels, type ModelCat
 const SERVICE = "http://172.29.0.1:4001";
 const SECRET = crypto.randomBytes(32).toString("base64url");
 
-// ------------------------------------------------------------------ models
-
 test("portalModels reads Qwen Code's model list, with the same default model", () => {
   const catalog = portalModels({
     settings: {},
@@ -79,8 +77,6 @@ test("fitDshModels: output caps shrink to fit dsh's compaction budget; models to
     return true;
   });
 });
-
-// ------------------------------------------------------------------ portal.patch.yml
 
 const CATALOG: ModelCatalog = {
   defaultModel: "big",
@@ -164,8 +160,6 @@ test("the rendered file is JSON under a comment: admin strings stay quoted scala
   assert.ok(!/^\s*[^"\s#].*!!js/m.test(text), "no unquoted tag anywhere");
 });
 
-// ------------------------------------------------------------------ cookie and headers
-
 test("mintDshCookie: dsh's cookie format, for dsh's loopback authority, signed with the container's secret", () => {
   const now = 1_760_000_000_000;
   const cookie = mintDshCookie(SECRET, now);
@@ -209,8 +203,6 @@ test("dsh container env carries only the cookie secret", () => {
   assert.equal(Buffer.from(dshDriver.generateCredential(), "base64url").length, 32);
 });
 
-// ------------------------------------------------------------------ activity
-
 test("dsh user actions: prompts, approvals and changes; not what the UI sends on load or for a terminal", () => {
   for (const path of ["/api/session/prompt", "/api/$events/result", "/api/session/selectModel", "/api/settings/mutate", "/api/terminal/create"]) {
     assert.equal(dshDriver.isUserAction("POST", path), true, path);
@@ -230,8 +222,6 @@ test("dsh user actions: prompts, approvals and changes; not what the UI sends on
   }
   assert.equal(dshDriver.isUserAction("GET", "/"), false);
 });
-
-// ------------------------------------------------------------------ session API
 
 test("rpcValue and parseSessionList read dsh's RPC answer", () => {
   const body = {

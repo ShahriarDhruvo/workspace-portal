@@ -24,8 +24,6 @@ const ONE_MODEL: AdminQwenConfig = {
   systemDefaultsFile: DEFAULTS_FILE,
 };
 
-// ------------------------------------------------------------------ settings files
-
 test("stripJsonComments removes comments outside strings only", () => {
   assert.equal(stripJsonComments('{"a": 1} // trailing'), '{"a": 1} \n');
   assert.equal(stripJsonComments('{\n  // line\n  "a": /* inline */ 1\n}'), '{\n  \n  "a":   1\n}');
@@ -89,8 +87,6 @@ test("loadAdminQwenConfig: missing files are empty, unreadable or invalid ones t
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
-
-// ------------------------------------------------------------------ rendering
 
 test("renderQwenSettings with one model and no other settings: the portal's keys", () => {
   const { settings, systemDefaults } = renderQwenSettings({ admin: ONE_MODEL, serviceBaseUrl: SERVICE, browser: true });
@@ -287,8 +283,6 @@ test("mergeSettings merges objects deeply, replaces everything else, and ignores
   assert.equal(({} as { polluted?: boolean }).polluted, undefined, "Object.prototype is untouched");
   assert.equal((out.a as { polluted?: boolean }).polluted, undefined);
 });
-
-// ------------------------------------------------------------------ default reasoning effort
 
 const REASONING = (efforts: string[], defaultEffort: string) => ({ reasoning: { profile: "openai-effort", efforts, defaultEffort } });
 const EFFORT_MODELS: AdminQwenConfig = {

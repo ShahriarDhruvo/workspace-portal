@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
-import type { AddressInfo } from "node:net";
+import { closeServer, listenLocal } from "../../test/fakes.ts";
 import { agentWorking, fetchQwenHealth, parseQwenHealth, parseQwenStarted, qwenDriver, type QwenHealth } from "./qwen.ts";
 
 /** A real `GET /health?deep=1` answer of `qwen serve`. */
@@ -21,8 +21,6 @@ const REAL_HEALTH = {
 };
 
 const quiet: QwenHealth = { activePrompts: 0, pendingPermissions: 0, activeWork: false, channelAlive: true, idleSinceMs: null };
-
-// ------------------------------------------------------------------ health
 
 test("parseQwenHealth reads the deep health answer", () => {
   assert.deepEqual(parseQwenHealth(REAL_HEALTH), {
@@ -72,8 +70,7 @@ test("fetchQwenHealth sends the token to /health?deep=1 and gives up on odd answ
     seen.push(req.headers);
     reply(res);
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const { port } = server.address() as AddressInfo;
+  const port = await listenLocal(server);
   try {
     assert.deepEqual(await fetchQwenHealth({ host: "127.0.0.1", port, credential: "container-token" }), parseQwenHealth(REAL_HEALTH));
     assert.equal(seen[0]!.authorization, "Bearer container-token");
@@ -88,8 +85,7 @@ test("fetchQwenHealth sends the token to /health?deep=1 and gives up on odd answ
     reply = (res) => res.writeHead(200).end(JSON.stringify({ ...REAL_HEALTH, padding: "x".repeat(100 * 1024) }));
     assert.equal(await fetchQwenHealth({ host: "127.0.0.1", port, credential: "t" }), null, "too large");
   } finally {
-    server.closeAllConnections();
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await closeServer(server);
   }
   assert.equal(await fetchQwenHealth({ host: "127.0.0.1", port, credential: "t" }), null, "connection refused");
 });
@@ -126,8 +122,7 @@ test("probeReady: a live agent process, or one the daemon has started before and
     // The real answer lists every capability: about 107 KB in Qwen Code 0.27.0.
     res.end(JSON.stringify({ v: 1, status: "ok", daemon: { startup: { preheat: { status: preheat } } }, capabilities: "x".repeat(200 * 1024) }));
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const { port } = server.address() as AddressInfo;
+  const port = await listenLocal(server);
   const at = (credential: string) => ({ host: "127.0.0.1", port, credential });
   assert.equal(await qwenDriver.probeReady(at("tok")), false, "starting: the daemon answers, its agent process is not up yet");
   preheat = "failed";
@@ -141,7 +136,7 @@ test("probeReady: a live agent process, or one the daemon has started before and
   assert.equal(await qwenDriver.probeReady(at("tok")), true);
   assert.deepEqual(seen, [{ url: "/health?deep=1", authorization: "Bearer tok" }], "a live agent process needs no second question");
   assert.equal(await qwenDriver.probeReady(at("wrong")), false, "a 401 is not ready");
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await closeServer(server);
   assert.equal(await qwenDriver.probeReady(at("tok")), false, "connection refused");
 });
 

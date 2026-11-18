@@ -90,7 +90,7 @@ test("the page cache reuses a page, shares a download and remembers lasting refu
 test("the page cache keeps a fenced read apart from an unfenced one of the same URL", async () => {
   const fences: Array<readonly string[] | null> = [];
   const backend: ReaderBackend = {
-    async read(url, _signal, options) {
+    async read(_url, _signal, options) {
       fences.push(options?.redirectHosts ?? null);
       // Unfenced, the reader followed a redirect off the site; fenced, it would have refused.
       if (options?.redirectHosts) throw new ReadError("That address redirects to another site (elsewhere.example), and the redirect was not followed.");
