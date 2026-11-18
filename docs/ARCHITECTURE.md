@@ -55,7 +55,7 @@ browser --(cookie portal_session)--> web app   WEB_BIND:WEB_PORT
 | `gateway/src/updates/` | agent updater and versions, engine updater, registries, release cache |
 | `gateway/src/monitor/` | live view, hostd client, host and LLM monitors, energy meter, prices, usage, session log |
 | `gateway/src/lib/`, `gateway/test/` | HTTP helpers and `HttpError`, forwarding, logging; the harness, fakes and integration suites |
-| `web/` | the web app (Next.js) |
+| `web/` | the web app (Next.js); installable through `app/manifest.ts`, without a service worker, since it does nothing offline |
 | `workspace-image/` | one Dockerfile, a target per agent; start scripts; the Web Shell trim; the dsh lockdown |
 | `reader/`, `searxng/` | the page reader (Python, Defuddle in Node); SearXNG with its `settings.yml` built in |
 | `hostd/`, `qwen-config/` | portal-hostd; the model settings a fresh install starts with |
@@ -92,7 +92,7 @@ A service listener waits up to 60 s for its bridge address; the gateway exits if
 Neither process speaks TLS. For HTTPS, `deploy/tailscale-https.sh` has Tailscale Serve end TLS on the web
 port and on every agent and preview port and pass the bytes to the same port on 127.0.0.1, where it binds
 them. `Host` and `Origin` arrive as the browser sent them, the URLs the web app builds take the page's scheme,
-and the checks below hold unchanged. The manifest (`web/app/manifest.ts`) makes the web app installable.
+and the checks below hold unchanged.
 
 ## Data directory
 
@@ -437,6 +437,7 @@ overlap, UID ranges, subnets, resolvers.
 | `web/lib/**/*.test.ts` | the web app's pure logic, the wire contract's import rule, its fallbacks against `.env.example` |
 | `reader/test_*.py` | address checks, conversion, PDFs; run in the image build, which fails with them |
 | `hostd/test_hostd.py` | portal-hostd against a fake `/proc` and `/sys`: `python3 -m unittest hostd/test_hostd.py` |
+| `llm-server/fans/test_fans.py` | the fan curve and its loop against fake sensors, run the same way |
 | `deploy/verify-isolation.sh` | the installed system: the only check of real Docker and nftables |
 
 `gateway/test/harness.ts` builds the gateway with the production `compose()` over a real SQLite file and puts

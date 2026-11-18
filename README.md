@@ -94,8 +94,9 @@ sudo bash deploy/tailscale-https.sh         # with "off": back to HTTP on the LA
 
 Tailscale then ends TLS on each of the portal's ports, under the server's name in the tailnet, and passes the
 stream to the same port on 127.0.0.1. The script binds the ports to 127.0.0.1, sets `SESSION_COOKIE_SECURE=true`
-and prints the URL: from then on the portal is reached by the tailnet's devices only. Run it again after
-changing a port.
+and prints the URL. From then on only the tailnet's devices reach the portal; which of them is for the
+tailnet's access rules, because `FIREWALL_ALLOW_SOURCE` no longer applies. The mapped ports are those in `.env`:
+run the script with `off` before changing a port or uninstalling the portal, and again after the change.
 
 Over HTTPS a browser offers to install the portal as an app: Chrome on Android under "Add to Home screen",
 Safari on an iPhone under Share > Add to Home Screen.
@@ -176,4 +177,5 @@ python3 -m unittest hostd/test_hostd.py llm-server/fans/test_fans.py
 
 The page reader's tests run in its image build. `npm run dev -w @portal/gateway` runs the gateway from source
 with the settings in `.env`; it needs Docker and a data directory it can write. `npm run dev -w @portal/web`
-runs the web app on port 3000 with the settings in its environment. Licensed under [Apache-2.0](LICENSE).
+runs the web app on port 3000 with the settings in its environment. Licensed under [Apache-2.0](LICENSE), except the kernel module in
+`llm-server/fans`, which is [GPL-2.0](llm-server/fans/COPYING).
