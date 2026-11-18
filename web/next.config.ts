@@ -12,8 +12,6 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
-  // NEXT_DIST_DIR: only for local test runs side by side (each its own build folder); unset in the image.
-  distDir: process.env.NEXT_DIST_DIR || ".next",
   output: "standalone",
   outputFileTracingRoot: repoRoot,
   transpilePackages: ["@portal/core"],
