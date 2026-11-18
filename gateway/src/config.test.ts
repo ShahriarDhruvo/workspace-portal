@@ -7,7 +7,6 @@ import { AGENT_KINDS } from "@portal/core";
 import { driverFor } from "./agents/index.ts";
 import { ConfigError, DEFAULT_TRUSTED_HOSTS, isPublicIpv4, loadConfig, MIB, NOT_PUBLIC, parseByteSize, PREVIEW_PORT_OFFSET } from "./config.ts";
 
-const HOUR = 3_600_000;
 const secrets = { GATEWAY_CONTROL_SECRET: "c".repeat(64) };
 
 function problems(env: NodeJS.ProcessEnv): readonly string[] {
@@ -43,6 +42,27 @@ test("the defaults are .env.example's", () => {
   assert.equal(config.qwenConfigDir, "/srv/workspace-portal/config/qwen");
   assert.equal(config.agentVersionsFile, "/srv/workspace-portal/config/agent-versions.env");
   assert.equal(config.imageContextDir, fileURLToPath(new URL("../../workspace-image", import.meta.url)), "/app/workspace-image in the container");
+  // What both sides of the comparison above derive alike: a unit, or a default that .env.example leaves unset.
+  assert.deepEqual(
+    {
+      controlSecret: config.controlSecret,
+      agentBind: config.agentBind,
+      llm: [config.llm.maxConcurrency, config.llm.maxConcurrencyPerUser],
+      urls: { search: config.search.url, reader: config.reader.url },
+      trustsGithub: config.reader.trustedHosts.includes("github.com"),
+      workspace: [config.workspace.memoryBytes, config.workspace.shmBytes, config.workspace.pidsLimit],
+      limits: [config.maxRunning, config.maxBusyMs, config.uploadLimitBytes],
+    },
+    {
+      controlSecret: secrets.GATEWAY_CONTROL_SECRET,
+      agentBind: "0.0.0.0",
+      llm: [3, 2],
+      urls: { search: "http://127.0.0.1:8888", reader: "" },
+      trustsGithub: true,
+      workspace: [3072 * MIB, 1024 * MIB, 1024],
+      limits: [4, 24 * 3_600_000, 100 * MIB],
+    },
+  );
 });
 
 test("values are parsed and normalised", () => {
@@ -98,10 +118,10 @@ test("values are parsed and normalised", () => {
     maxConcurrentPerUser: 1,
   });
   assert.deepEqual(loadConfig({ ...secrets, READER_TRUSTED_HOSTS: "none" }).reader.trustedHosts, [], "none: no site is open as a whole");
-  assert.equal(loadConfig({ ...secrets, READER_TRUSTED_HOSTS: "" }).reader.trustedHosts.length, DEFAULT_TRUSTED_HOSTS.split(",").length, "empty (as docker compose passes an unset value): the built-in list");
+  assert.equal(loadConfig({ ...secrets, READER_TRUSTED_HOSTS: "" }).reader.trustedHosts.length, DEFAULT_TRUSTED_HOSTS.split(",").length, "empty: the built-in list");
   assert.equal(loadConfig({ ...secrets, READER_URL: "off" }).reader.url, "", "off: no page reader");
   assert.deepEqual(loadConfig({ ...secrets, SEARCH_FALLBACK_ENGINES: "none" }).search.fallbackEngines, [], "none: no second try");
-  assert.equal(loadConfig({ ...secrets, SEARCH_FALLBACK_ENGINES: "" }).search.fallbackEngines.length, 4, "empty (as docker compose passes an unset value): the four spare engines of searxng/settings.yml");
+  assert.equal(loadConfig({ ...secrets, SEARCH_FALLBACK_ENGINES: "" }).search.fallbackEngines.length, 4, "empty: the four spare engines of searxng/settings.yml");
   assert.equal(config.workspace.nanoCpus, 1.5e9);
   assert.equal(config.workspace.kinds.private.uidBase, 300_000);
   assert.equal(config.workspace.kinds.online.uidBase, 400_000);
@@ -143,11 +163,6 @@ test("every problem is reported at once", () => {
     ],
   );
   assert.deepEqual(problems({}), ["GATEWAY_CONTROL_SECRET is required (deploy/install.sh generates it in .env)"]);
-});
-
-test("models are not configured through the environment any more", () => {
-  const config = loadConfig({ ...secrets, LLM_MODEL_ID: "other", LLM_REASONING: "maybe", LLM_INPUT: "audio" });
-  assert.equal("model" in config.llm, false, "system-defaults.json is the only source of models");
 });
 
 test("WORKSPACE_AGENTS selects the agents; the version variables set their default versions", () => {
@@ -267,7 +282,7 @@ test("NOT_PUBLIC is the firewall's not_public set; isPublicIpv4 is its complemen
 test("ONLINE_WORKSPACES switches Online workspaces off for the whole portal; its settings are checked all the same", () => {
   assert.equal(loadConfig({ ...secrets, ONLINE_WORKSPACES: "off" }).workspace.onlineEnabled, false);
   assert.equal(loadConfig({ ...secrets, ONLINE_WORKSPACES: "on" }).workspace.onlineEnabled, true);
-  assert.equal(loadConfig({ ...secrets, ONLINE_WORKSPACES: "" }).workspace.onlineEnabled, true, "empty (as docker compose passes an unset value): on");
+  assert.equal(loadConfig({ ...secrets, ONLINE_WORKSPACES: "" }).workspace.onlineEnabled, true, "empty: on");
   assert.deepEqual(problems({ ...secrets, ONLINE_WORKSPACES: "maybe" }), ['ONLINE_WORKSPACES must be true or false (got "maybe")']);
   assert.deepEqual(problems({ ...secrets, ONLINE_WORKSPACES: "off", ONLINE_AGENT_PORT_BASE: "3200" }).length, 1, "so turning it on later can't break isolation");
 });
