@@ -9,17 +9,14 @@ function context(userId: number, targetId = userId): SessionContext {
   return { session: { id: `s${userId}` } as SessionContext["session"], user, target, actingAs: userId !== targetId };
 }
 
-test("lookups are cached for the TTL, including misses", () => {
-  let now = 0;
+test("lookups are cached for the TTL, including misses", (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 0 });
   const loads: string[] = [];
   const known = new Map([[hashSessionToken("tok-a"), context(1)]]);
-  const cache = new SessionCache(
-    (hash) => {
-      loads.push(hash);
-      return known.get(hash) ?? null;
-    },
-    { ttlMs: 5_000, now: () => now },
-  );
+  const cache = new SessionCache((hash) => {
+    loads.push(hash);
+    return known.get(hash) ?? null;
+  });
 
   assert.equal(cache.fromCookieHeader("x=1; portal_session=tok-a")?.user.id, 1);
   assert.equal(cache.fromCookieHeader("portal_session=tok-a")?.user.id, 1);
@@ -28,25 +25,22 @@ test("lookups are cached for the TTL, including misses", () => {
   assert.equal(cache.fromCookieHeader(undefined), null);
   assert.equal(loads.length, 2);
 
-  now = 5_000;
+  t.mock.timers.setTime(5_000);
   cache.fromCookieHeader("portal_session=tok-a");
   assert.equal(loads.length, 3, "expired entries are reloaded");
 });
 
-test("a cached session is not served past its own expiry", () => {
-  let now = 0;
+test("a cached session is not served past its own expiry", (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 0 });
   const ctx = context(1);
   ctx.session.expiresAt = 2_000;
   let loads = 0;
-  const cache = new SessionCache(
-    () => {
-      loads += 1;
-      return now < 2_000 ? ctx : null;
-    },
-    { ttlMs: 5_000, now: () => now },
-  );
+  const cache = new SessionCache(() => {
+    loads += 1;
+    return Date.now() < 2_000 ? ctx : null;
+  });
   assert.equal(cache.fromCookieHeader("portal_session=tok")?.user.id, 1);
-  now = 2_000;
+  t.mock.timers.setTime(2_000);
   assert.equal(cache.fromCookieHeader("portal_session=tok"), null, "reloaded at expiry, not after the TTL");
   assert.equal(loads, 2);
 });
