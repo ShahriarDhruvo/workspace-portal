@@ -4,8 +4,8 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 import { ScrollArea as ScrollAreaPrimitive } from "radix-ui";
 
-// shadcn/ui ScrollArea, radix-nova style, as the registry has it plus one portal tweak: `viewportProps`, passed
-// to the scrolling viewport (a ref, onScroll, a label), for a log that follows its end while scrolled there.
+// shadcn/ui ScrollArea, radix-nova style, with one portal tweak: `viewportProps`, passed to the scrolling viewport
+// (a ref, onScroll, a label), for a log that follows its end while scrolled there.
 
 function ScrollArea({
   className,
