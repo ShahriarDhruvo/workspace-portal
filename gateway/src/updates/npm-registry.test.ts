@@ -105,19 +105,21 @@ test("hasVersion: 200 is published, 404 is not, anything else is a registry erro
   const registry = createNpmRegistry({ fetch });
   assert.equal(await registry.hasVersion("@deepseek-ai/dsh", "0.2.2-rc.3"), true);
   assert.equal(await registry.hasVersion("@deepseek-ai/dsh", "9.9.9"), false);
-  await assert.rejects(registry.hasVersion("@deepseek-ai/dsh", "1.0.0"), { status: 502, code: "registry_unreachable" });
+  await assert.rejects(registry.hasVersion("@deepseek-ai/dsh", "1.0.0"), { status: 502, code: "registry_unreachable", message: "The npm registry answered 503 for @deepseek-ai/dsh@1.0.0." });
   assert.equal(requests.length, 3);
+  const down = createNpmRegistry({ fetch: stubFetch({ [`${DSH}/1.0.0`]: new TypeError("fetch failed") }).fetch });
+  await assert.rejects(down.hasVersion("@deepseek-ai/dsh", "1.0.0"), { code: "registry_unreachable", message: "The npm registry is unreachable (fetch failed)." });
 });
 
 test("an unreachable, slow or odd registry is registry_unreachable", async () => {
-  const cases: Array<[string, Answer, RegExp]> = [
-    ["down", new TypeError("fetch failed"), /unreachable \(fetch failed\)/],
-    ["hangs", "hang", /unreachable \(no answer within 0\.05 s\)/],
-    ["500", { status: 500 }, /answered 500/],
-    ["304 unasked", { status: 304 }, /answered 304/],
-    ["not JSON", { status: 200, body: "<html>" }, /not JSON/],
-    ["not an object", { status: 200, body: '["latest"]' }, /not a package/],
-    ["huge", { status: 200, body: `{"x":"${"a".repeat(2048)}"}` }, /too large/],
+  const cases: Array<[string, Answer, string]> = [
+    ["down", new TypeError("fetch failed"), "The npm registry is unreachable (fetch failed)."],
+    ["hangs", "hang", "The npm registry is unreachable (no answer within 0.05 s)."],
+    ["500", { status: 500 }, "The npm registry answered 500 for @deepseek-ai/dsh."],
+    ["304 unasked", { status: 304 }, "The npm registry answered 304 for @deepseek-ai/dsh."],
+    ["not JSON", { status: 200, body: "<html>" }, "The npm registry's answer for @deepseek-ai/dsh is not JSON."],
+    ["not an object", { status: 200, body: '["latest"]' }, "The npm registry's answer for @deepseek-ai/dsh is not a package."],
+    ["huge", { status: 200, body: `{"x":"${"a".repeat(2048)}"}` }, "The npm registry's answer for @deepseek-ai/dsh is too large."],
   ];
   for (const [what, answer, message] of cases) {
     const registry = createNpmRegistry({ fetch: stubFetch({ [DSH]: answer }).fetch, timeoutMs: 50, maxPackumentBytes: 1024 });
@@ -133,7 +135,7 @@ test("a registry that sends its headers and then stalls is registry_unreachable 
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   try {
     const registry = createNpmRegistry({ baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, timeoutMs: 200 });
-    await assert.rejects(registry.packument("@deepseek-ai/dsh"), { code: "registry_unreachable", message: /unreachable \(no answer within 0\.2 s\)/ });
+    await assert.rejects(registry.packument("@deepseek-ai/dsh"), { code: "registry_unreachable", message: "The npm registry is unreachable (no answer within 0.2 s)." });
   } finally {
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));

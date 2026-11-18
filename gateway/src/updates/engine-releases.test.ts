@@ -45,14 +45,30 @@ test("the registry client follows the anonymous token challenge and reads digest
   assert.equal(calls.filter((call) => call.url.startsWith("https://ghcr.io/token")).length, 1, "the token is reused");
   assert.equal(calls.at(-1)!.method, "HEAD");
   assert.equal(await client.digest("ghcr.io/gufo-org/toolboxes/gufo-runtime", "bad"), null);
-  await assert.rejects(client.digest("ghcr.io/gufo-org/toolboxes/gufo-runtime", "missing"), /answered 404/);
+  await assert.rejects(client.digest("ghcr.io/gufo-org/toolboxes/gufo-runtime", "missing"), { name: "EngineReleaseError", message: "ghcr.io answered 404 for gufo-org/toolboxes/gufo-runtime" });
 });
 
 test("the registry client refuses challenges it can't answer anonymously", async () => {
   const { fetch } = fakeFetch({
     "https://registry.example/v2/a/tags/list?n=1000": () => new Response("", { status: 401, headers: { "www-authenticate": 'Basic realm="x"' } }),
   });
-  await assert.rejects(createRegistryClient(fetch).tags("registry.example/a"), /credentials the portal doesn't have/);
+  await assert.rejects(createRegistryClient(fetch).tags("registry.example/a"), { name: "EngineReleaseError", message: "the registry asks for credentials the portal doesn't have" });
+});
+
+test("the registry client's failures, by message; a failed request is not wrapped", async () => {
+  const tags = "https://registry.example/v2/a/tags/list?n=1000";
+  const token = "https://registry.example/token";
+  const challenge = (): Response => new Response("", { status: 401, headers: { "www-authenticate": `Bearer realm="${token}"` } });
+  const cases: Array<[Record<string, () => Response>, string, string]> = [
+    [{ [tags]: () => new Response("", { status: 500 }) }, "EngineReleaseError", "registry.example answered 500 for a"],
+    [{ [tags]: () => new Response("<html>") }, "EngineReleaseError", "the registry's tag list is not JSON"],
+    [{ [tags]: () => new Response("x".repeat(4 * 1024 * 1024 + 1)) }, "EngineReleaseError", "the registry's tag list is larger than 4 MiB"],
+    [{ [tags]: challenge, [token]: () => new Response("", { status: 503 }) }, "EngineReleaseError", "the registry's token service answered 503"],
+    [{ [tags]: challenge, [token]: () => new Response("<html>") }, "EngineReleaseError", "the registry's token answer is not JSON"],
+    [{ [tags]: challenge, [token]: () => Response.json({}) }, "EngineReleaseError", "the registry's token service sent no token"],
+    [{ [tags]: () => { throw new TypeError("fetch failed"); } }, "TypeError", "fetch failed"],
+  ];
+  for (const [routes, name, message] of cases) await assert.rejects(createRegistryClient(fakeFetch(routes).fetch).tags("registry.example/a"), { name, message });
 });
 
 test("release notes: stable releases only, by version, breaking changes flagged", async () => {

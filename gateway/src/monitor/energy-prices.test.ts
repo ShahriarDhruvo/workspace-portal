@@ -1,11 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { asc } from "drizzle-orm";
 import { energyPrices, openDatabase } from "@portal/core";
-import { EIA_URL, EnergyPrices, EUROSTAT_URL, parseEiaTable, parseEurostat, PriceFormatError, type PriceRow } from "./energy-prices.ts";
+import { EIA_URL, EnergyPrices, EUROSTAT_URL, fetchText, parseEiaTable, parseEurostat, PriceFormatError, type PriceRow } from "./energy-prices.ts";
 import type { Logger, LogFields } from "../lib/log.ts";
 
 const FIXTURES = path.join(import.meta.dirname, "..", "..", "test", "fixtures");
@@ -192,4 +194,21 @@ test("EnergyPrices: concurrent refreshes share one download", async () => {
   release();
   assert.deepEqual(await a, await b);
   assert.equal(calls, 2, "one per source");
+});
+
+test("fetchText: the document's text; a refusal and an oversized answer by message", async () => {
+  const server = http.createServer((req, res) => {
+    if (req.url === "/down") return void res.writeHead(503).end("busy");
+    res.end(req.url === "/huge" ? "x".repeat(2 * 1024 * 1024 + 1) : "<html>ok</html>");
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  try {
+    assert.equal(await fetchText(`${base}/`), "<html>ok</html>");
+    await assert.rejects(fetchText(`${base}/down`), { name: "Error", message: "HTTP 503" });
+    await assert.rejects(fetchText(`${base}/huge`), { name: "Error", message: "the answer is larger than 2 MiB" });
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
 });

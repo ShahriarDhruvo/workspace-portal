@@ -80,11 +80,19 @@ test("list: anonymous, drafts left out, notes cut when long, only github.com lin
 });
 
 test("list: GitHub's refusals and odd repositories are a GitHubError", async () => {
-  const { fetch } = fakeFetch("https://api.github.com/repos/QwenLM/qwen-code/releases?per_page=100", () => new Response("rate limited", { status: 403 }));
-  await assert.rejects(createGitHubReleases(fetch).list("QwenLM/qwen-code"), (error: unknown) => error instanceof GitHubError && /answered 403/.test(error.message));
-  await assert.rejects(createGitHubReleases(fetch).list("../etc"), GitHubError);
-  const down = (async () => {
-    throw new TypeError("fetch failed");
-  }) as typeof fetch;
-  await assert.rejects(createGitHubReleases(down).list("QwenLM/qwen-code"), /GitHub is unreachable \(fetch failed\)/);
+  const fails = (repo: string, answer: () => Response, message: string | RegExp): Promise<void> =>
+    assert.rejects(
+      createGitHubReleases(fakeFetch(`https://api.github.com/repos/${repo}/releases?per_page=100`, answer).fetch).list(repo),
+      (error: unknown) => error instanceof GitHubError && (typeof message === "string" ? error.message === message : message.test(error.message)),
+    );
+  const thrown = (error: Error) => (): Response => {
+    throw error;
+  };
+  const repo = "QwenLM/qwen-code";
+  await fails(repo, () => new Response("rate limited", { status: 403 }), "GitHub answered 403 for QwenLM/qwen-code's releases");
+  await fails(repo, thrown(new TypeError("fetch failed")), "GitHub is unreachable (fetch failed)");
+  await fails(repo, thrown(new DOMException("The operation was aborted due to timeout", "TimeoutError")), "GitHub is unreachable (no answer within 10 s)");
+  await fails(repo, () => new Response("x".repeat(8 * 1024 * 1024 + 1)), "GitHub's list of QwenLM/qwen-code's releases is too large");
+  await fails(repo, () => new Response("<html>"), /^GitHub is unreachable \(Unexpected token .* is not valid JSON\)$/);
+  await fails("../etc", () => Response.json([]), "../etc is not a GitHub repository (owner/name)");
 });
