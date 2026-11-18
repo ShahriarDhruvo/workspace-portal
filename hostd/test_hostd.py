@@ -14,6 +14,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 _spec = importlib.util.spec_from_file_location('portal_hostd', os.path.join(HERE, 'portal-hostd.py'))
@@ -503,6 +504,12 @@ class TestNetDisk(TmpRoot):
             self.assertEqual(space.get(), (1510 * 4096, 405 * 4096))
         finally:
             SPACE['/'] = (1000, 400)
+
+    def test_a_table_longer_than_one_read_is_read_to_its_end(self):
+        write(self.root, '/long', 'x' * 10_000)
+        page = lambda fd, size, offset, pread=os.pread: pread(fd, min(size, 4096), offset)     # as procfs answers
+        with mock.patch.object(os, 'pread', page):
+            self.assertEqual(H.Src(self.root + '/long', 16384).read(), b'x' * 10_000)
 
     def test_no_sources(self):
         for path in ('/proc/net/dev', '/proc/diskstats', '/proc/self/mounts'):

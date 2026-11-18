@@ -106,11 +106,11 @@ class Src:
                 if self.fd is None:
                     self.fd = os.open(self.path, os.O_RDONLY | os.O_CLOEXEC)
                 data = b''
-                while True:     # one pread unless the file fills the buffer (some reads are slow: SMU, EC)
+                while True:     # to the end: procfs hands out about a page per read, whatever the size asked for
                     chunk = os.pread(self.fd, self.size, len(data))
-                    data += chunk
-                    if len(chunk) < self.size:
+                    if not chunk:
                         return data
+                    data += chunk
             except OSError:
                 self.close()
         return None
