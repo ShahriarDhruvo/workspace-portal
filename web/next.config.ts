@@ -17,7 +17,6 @@ const nextConfig: NextConfig = {
   output: "standalone",
   outputFileTracingRoot: repoRoot,
   transpilePackages: ["@portal/core"],
-  serverExternalPackages: ["better-sqlite3", "@node-rs/argon2"],
   poweredByHeader: false,
   reactStrictMode: true,
   async headers() {
