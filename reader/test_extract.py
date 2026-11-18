@@ -62,6 +62,7 @@ class Decoding(unittest.TestCase):
         self.assertEqual(extract.decode('<meta http-equiv="Content-Type" content="text/html; charset=Shift_JIS"><p>日本</p>'.encode("shift_jis"), meta=True), '<meta http-equiv="Content-Type" content="text/html; charset=Shift_JIS"><p>日本</p>')
         self.assertEqual(extract.decode("<p>grüße</p>".encode(), meta=True), "<p>grüße</p>")
         self.assertEqual(extract.decode(b"\xef\xbb\xbf<p>bom</p>", "iso-8859-1", meta=True), "<p>bom</p>")
+        self.assertEqual(extract.decode(b"\xff\xfe\x00\x00" + "ok 😀".encode("utf-32-le"), "utf-32"), "ok 😀", "not UTF-16, whose mark those first two bytes are")
         self.assertEqual(extract.decode("<p>grüße</p>".encode(), "no-such-charset", meta=True), "<p>grüße</p>")
         self.assertEqual(extract.decode(b"<p>bad \xff byte</p>", "utf-8", meta=True), "<p>bad � byte</p>")
 

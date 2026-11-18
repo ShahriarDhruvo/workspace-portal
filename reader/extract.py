@@ -28,7 +28,8 @@ LITTLE_TEXT = "The page has very little text. If more was expected, it is probab
 
 def decode(body: bytes, charset: str = "", meta: bool = False) -> str:
     """Bytes to text: a byte-order mark, the charset the server declared, with `meta` an HTML page's own <meta>, then UTF-8."""
-    for mark, name in ((codecs.BOM_UTF8, "utf-8-sig"), (codecs.BOM_UTF16_LE, "utf-16"), (codecs.BOM_UTF16_BE, "utf-16")):
+    # UTF-32 before UTF-16: its little-endian mark begins with UTF-16's.
+    for mark, name in ((codecs.BOM_UTF8, "utf-8-sig"), (codecs.BOM_UTF32_LE, "utf-32"), (codecs.BOM_UTF32_BE, "utf-32"), (codecs.BOM_UTF16_LE, "utf-16"), (codecs.BOM_UTF16_BE, "utf-16")):
         if body.startswith(mark):
             return body.decode(name, errors="replace")
     declared = [charset]
