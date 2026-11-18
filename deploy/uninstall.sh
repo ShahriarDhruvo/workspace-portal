@@ -1,75 +1,54 @@
 #!/usr/bin/env bash
-# Removes Workspace Portal from this host: the stack, every workspace container (both kinds), the two
-# workspace networks, the firewall unit, its rules and Docker's requirement of it, portal-hostd, the images and
-# the SELinux label rule.
-# User data (PORTAL_DATA_DIR) is kept unless --purge-data is given.
-#
-#   sudo bash deploy/uninstall.sh                 keep the data directory
-#   sudo bash deploy/uninstall.sh --purge-data    also delete every account and workspace file
+# Removes what deploy/install.sh installed, except .env and the data directory:
+#   sudo bash deploy/uninstall.sh                 keeps the data directory (accounts, workspace files, settings)
+#   sudo bash deploy/uninstall.sh --purge-data    deletes it too
 set -euo pipefail
 # shellcheck source=deploy/lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 cd "$ROOT"
 require_root
-
-purge=false
-case "${1:-}" in
-  "") ;;
-  --purge-data) purge=true ;;
-  *) die "usage: $0 [--purge-data]" ;;
-esac
+[[ $# -eq 0 || $* == --purge-data ]] || die "usage: $0 [--purge-data]"
 DATA_DIR=$(env_get PORTAL_DATA_DIR)
 
-log "stopping the stack"
+log "removing the containers and their networks"
+# Stops the stack in its own time; fails when .env lacks a setting, and then the labels below find it all the same.
 docker compose down --remove-orphans 2>/dev/null || true
-log "removing workspace containers and the workspace networks"
-docker ps -aq --filter label=workspace-portal.workspace=1 | xargs -r docker rm -f >/dev/null
-# A version check the gateway ran on a new agent image, if the gateway died during it.
-docker ps -aq --filter label=workspace-portal.verify | xargs -r docker rm -f >/dev/null
-docker network rm "$(env_get WORKSPACE_NETWORK)" >/dev/null 2>&1 || true
-docker network rm "$(env_get ONLINE_NETWORK)" >/dev/null 2>&1 || true
+for label in com.docker.compose.project=workspace-portal workspace-portal.workspace workspace-portal.verify; do
+  docker ps -aq --filter "label=$label" | xargs -r docker rm -f >/dev/null
+done
+for label in com.docker.compose.project=workspace-portal workspace-portal.network; do
+  docker network ls -q --filter "label=$label" | xargs -r docker network rm >/dev/null
+done
 
 log "removing the firewall"
-# Docker's requirement first: with it in place, stopping the firewall unit would stop Docker too, and Docker
-# could not start again without the unit.
+# The drop-in first: with it, stopping the unit stops Docker.
 rm -f /etc/systemd/system/docker.service.d/workspace-portal-firewall.conf
 rmdir /etc/systemd/system/docker.service.d 2>/dev/null || true
 systemctl daemon-reload
 systemctl disable --now workspace-portal-firewall.service >/dev/null 2>&1 || true
-/usr/local/libexec/workspace-portal/firewall.sh remove >/dev/null 2>&1 || bash deploy/firewall.sh remove >/dev/null
-rm -f /etc/systemd/system/workspace-portal-firewall.service
+bash deploy/firewall.sh remove
+rm -rf /etc/systemd/system/workspace-portal-firewall.service /usr/local/libexec/workspace-portal /etc/workspace-portal
 systemctl daemon-reload
-rm -rf /usr/local/libexec/workspace-portal /etc/workspace-portal
+if systemctl is-active --quiet firewalld; then firewalld_rules remove; fi
 
-if systemctl is-active --quiet firewalld; then
-  while IFS= read -r rule; do
-    [[ -n $rule ]] || continue
-    firewall-cmd --permanent --remove-rich-rule="$rule" >/dev/null 2>&1 && log "firewalld: removed ${rule}"
-  done < <(portal_rich_rules)
-  firewall-cmd --reload >/dev/null
-elif command -v ufw >/dev/null && ufw status | grep -q "Status: active"; then
-  for source in $(portal_sources); do
-    ufw delete allow from "$source" to any port "$(web_port)" proto tcp >/dev/null 2>&1 || true
-    for range in "$(agent_port_range)" "$(online_agent_port_range)" "$(preview_port_range)" "$(online_preview_port_range)"; do
-      ufw delete allow from "$source" to any port "${range/-/:}" proto tcp >/dev/null 2>&1 || true
-    done
-  done
-fi
-
-log "removing portal-hostd (the live server readings)"
+log "removing portal-hostd"
 bash hostd/install.sh uninstall >/dev/null 2>&1 || warn "could not remove portal-hostd; see: sudo bash hostd/install.sh uninstall"
 
-log "removing images"
-docker image ls --format '{{.Repository}}:{{.Tag}}' | grep '^workspace-portal/' | xargs -r docker image rm >/dev/null 2>&1 || true
-# Old agent builds a rebuild left without a tag (workspace-image/Dockerfile labels them).
-docker image ls -q --filter dangling=true --filter label=workspace-portal.agent | xargs -r docker image rm >/dev/null 2>&1 || true
+log "removing the images"
+{
+  docker image ls --filter 'reference=workspace-portal/*' --format '{{.Repository}}:{{.Tag}}'
+  # Earlier builds, left without a tag by a rebuild.
+  for label in com.docker.compose.project=workspace-portal workspace-portal.agent; do
+    docker image ls -q --filter dangling=true --filter "label=$label"
+  done
+} | xargs -r docker image rm >/dev/null || warn "could not remove every image; see: docker image ls"
 
-if command -v semanage >/dev/null; then semanage fcontext -d "${DATA_DIR}(/.*)?" 2>/dev/null || true; fi
+semanage fcontext -d "$DATA_DIR(/.*)?" 2>/dev/null || true
 
-if $purge; then
-  log "deleting ${DATA_DIR}"
+if [[ $# -eq 1 ]]; then
+  log "deleting $DATA_DIR"
   rm -rf --one-file-system "$DATA_DIR"
   echo "Workspace Portal is removed, including all data."
 else
-  echo "Workspace Portal is removed. The data is still in ${DATA_DIR} (delete it with --purge-data)."
+  echo "Workspace Portal is removed. The data is still in $DATA_DIR (delete it with --purge-data)."
 fi

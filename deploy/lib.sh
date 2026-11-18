@@ -1,7 +1,5 @@
 # shellcheck shell=bash
-# Shared helpers for the deploy scripts. Source it; don't run it.
-#
-# Settings come from .env, falling back to .env.example, so every default lives in one place.
+# Helpers of the deploy scripts (source it). Settings come from .env; a missing or blank one is .env.example's.
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 ENV_FILE="$ROOT/.env"
@@ -11,8 +9,8 @@ warn() { printf '\033[1;33m!!\033[0m %s\n' "$*" >&2; }
 die() { printf '\033[1;31mxx\033[0m %s\n' "$*" >&2; exit 1; }
 require_root() { [[ $EUID -eq 0 ]] || die "run as root: sudo bash $0"; }
 
-# Prints the value of KEY in FILE, parsed like docker compose does: quotes removed, and for
-# unquoted values a " #" comment stripped. Returns 1 when the key is missing or empty.
+# KEY's value in FILE as docker compose reads it: without quotes, or without a " #" comment when unquoted.
+# Fails when the key is missing or empty.
 env_value() { # file key
   local line
   line=$(grep -E "^$2=" "$1" 2>/dev/null | tail -n 1) || return 1
@@ -26,12 +24,10 @@ env_value() { # file key
   printf '%s' "$line"
 }
 
-# The setting KEY: from .env, else .env.example, else DEFAULT (empty if not given).
-env_get() { # key [default]
+env_get() { # key [default, for a setting .env.example leaves empty]
   env_value "$ENV_FILE" "$1" || env_value "$ROOT/.env.example" "$1" || printf '%s' "${2-}"
 }
 
-# Sets KEY=VALUE in .env, replacing an existing line or appending one.
 env_set() { # key value
   if grep -qE "^$1=" "$ENV_FILE"; then
     sed -i "s|^$1=.*|$1=$2|" "$ENV_FILE"
@@ -42,39 +38,44 @@ env_set() { # key value
   fi
 }
 
-# ---------------------------------------------------------------- agents and their images
-# The agents users can choose (WORKSPACE_AGENTS) and the versions their images contain. Images are
-# named workspace-portal/workspace:<agent>-<version>, as the gateway names them
-# (gateway/src/image-names.ts); one multi-target Dockerfile builds them all.
+# True when the setting is one of the words, in any case.
+env_is() { # key word...
+  local value word
+  value=$(env_get "$1")
+  for word in "${@:2}"; do [[ ${value,,} != "$word" ]] || return 0; done
+  return 1
+}
+
+online_enabled() { ! env_is ONLINE_WORKSPACES false off no 0; }
+selinux_on() { command -v selinuxenabled >/dev/null && selinuxenabled; }
+
+# Per agent: its name and the .env key of its version, which is also the build argument of its Dockerfile stage.
+# Its CLI and its stage are named like the agent.
 AGENTS=(qwen dsh)
+declare -A AGENT_NAME=([qwen]="Qwen Code" [dsh]="DeepSeek Harness")
+declare -A AGENT_VERSION_KEY=([qwen]=QWEN_CODE_VERSION [dsh]=DSH_VERSION)
+known_agent() { [[ -n ${AGENT_NAME[${1:-?}]-} ]] || die "unknown agent \"$1\" (one of: ${AGENTS[*]})"; }
 
-agent_name() { # agent
-  case $1 in
-    qwen) printf 'Qwen Code' ;;
-    dsh) printf 'DeepSeek Harness' ;;
-    *) die "unknown agent \"$1\" (one of: ${AGENTS[*]})" ;;
-  esac
+# Sets ENABLED_AGENTS from WORKSPACE_AGENTS. Dies on an unknown agent, so call it outside $(...).
+load_enabled_agents() {
+  local agent
+  IFS=', ' read -r -a ENABLED_AGENTS <<<"$(env_get WORKSPACE_AGENTS)"
+  [[ ${#ENABLED_AGENTS[@]} -gt 0 ]] || die "WORKSPACE_AGENTS is empty: list one or more of ${AGENTS[*]}"
+  for agent in "${ENABLED_AGENTS[@]}"; do known_agent "$agent"; done
 }
 
-# The .env key holding an agent's version (also the build argument of its Dockerfile stage).
-agent_version_key() { # agent
-  case $1 in
-    qwen) printf QWEN_CODE_VERSION ;;
-    dsh) printf DSH_VERSION ;;
-    *) die "unknown agent \"$1\" (one of: ${AGENTS[*]})" ;;
-  esac
+# A version as the gateway accepts one (isVersion in gateway/src/lib/versions.ts). C locale: ASCII ranges only.
+valid_version() { # version
+  local LC_ALL=C
+  [[ ${#1} -le 100 && $1 =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$ ]]
 }
 
-# The agent versions new workspaces start with, as chosen in the admin console or with
-# update-image.sh: KEY=VALUE lines with the .env keys (QWEN_CODE_VERSION=0.28.0). The gateway reads
-# it at boot and writes it after an update; a missing file or key means .env's version (the default).
+# The versions in use: KEY=VALUE lines with the .env keys, written by the admin console and update-image.sh and
+# read by the gateway at boot. A missing or invalid entry means .env's version.
 agent_versions_file() { printf '%s/config/agent-versions.env' "$(env_get PORTAL_DATA_DIR)"; }
 
-# An agent's current version: from the versions file, else .env, else .env.example. (An invalid
-# value in the versions file is ignored, as the gateway ignores it.)
 agent_version() { # agent
-  local key version
-  key=$(agent_version_key "$1")
+  local key=${AGENT_VERSION_KEY[$1]} version
   if version=$(env_value "$(agent_versions_file)" "$key") && valid_version "$version"; then
     printf '%s' "$version"
   else
@@ -82,194 +83,106 @@ agent_version() { # agent
   fi
 }
 
-# Makes VERSION the agent's current version. Replaces the versions file atomically (a temporary
-# file in the same directory, then a rename) and keeps its other lines; root-owned, mode 0600, in
-# the root-only config directory, as the gateway writes it. The gateway reads it at boot only:
-# restart it afterwards.
+# Keeps the file's other lines and replaces it by a rename (mktemp: root only, as the gateway writes it).
 agent_version_set() { # agent version
-  local key file dir tmp
-  key=$(agent_version_key "$1")
-  valid_version "$2" || die "\"$2\" is not a $(agent_name "$1") version (like 0.28.0)"
+  local key=${AGENT_VERSION_KEY[$1]} file tmp
   file=$(agent_versions_file)
-  dir=$(dirname "$file")
-  [[ -d $dir ]] || install -d -m 0700 -o root -g root "$dir"
-  tmp=$(mktemp "$dir/.agent-versions.env.XXXXXX")
-  {
-    if [[ -f $file ]]; then
-      grep -vE "^$key=" "$file" || true
-    else
-      printf '%s\n' "# The agent versions new workspaces start with (the admin console and deploy/update-image.sh write" \
-        "# this file). A missing key means the default from .env."
-    fi
-    printf '%s=%s\n' "$key" "$2"
-  } >"$tmp" && chmod 0600 "$tmp" && chown root:root "$tmp" && mv -f "$tmp" "$file" || {
-    rm -f "$tmp"
-    die "could not write $file"
-  }
-}
-
-# GETs a gateway control API path. The secret goes to curl on stdin (-H @-), not on its command line,
-# which every user on the host can read.
-control_get() { # path
-  curl -fsS --max-time 20 -H @- "http://127.0.0.1:$(env_get CONTROL_PORT)$1" \
-    <<<"Authorization: Bearer $(env_get GATEWAY_CONTROL_SECRET)" 2>/dev/null
-}
-
-# True while the admin console runs an update: an agent image build (a job building or verifying), or
-# an LLM engine update (downloading, holding the LLM queue, or restarting the engine; a gateway restart
-# would let the held requests through to an engine that is going down). A gateway that doesn't answer
-# runs no update.
-console_update_running() {
-  local answer
-  if answer=$(control_get /control/updates/running); then
-    grep -Eq '"running": *true' <<<"$answer"
-  else
-    # A gateway from before that route: only agent updates existed.
-    control_get /control/agents/versions | grep -Eq '"phase": *"(building|verifying)"'
-  fi
-}
-
-# Sets ENABLED_AGENTS to the agents WORKSPACE_AGENTS enables, and dies on an unknown one. (Run in
-# the script's own shell, not in $(...), so that dying stops the script.)
-load_enabled_agents() {
-  local list agent
-  list=$(env_get WORKSPACE_AGENTS)
-  ENABLED_AGENTS=()
-  for agent in ${list//,/ }; do
-    agent_name "$agent" >/dev/null
-    ENABLED_AGENTS+=("$agent")
-  done
-  [[ ${#ENABLED_AGENTS[@]} -gt 0 ]] || die "WORKSPACE_AGENTS is empty: list one or more of ${AGENTS[*]}"
-}
-
-# An agent version as the gateway accepts one (gateway/src/versions.ts isVersion): ASCII only (the C
-# locale, so the ranges can't match other scripts' digits or letters), at most 100 characters.
-valid_version() { # version
-  local LC_ALL=C
-  [[ ${#1} -le 100 && $1 =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$ ]]
+  tmp=$(mktemp "$(dirname "$file")/.agent-versions.env.XXXXXX")
+  { grep -vE "^$key=" "$file" 2>/dev/null || true; printf '%s=%s\n' "$key" "$2"; } >"$tmp"
+  mv -f "$tmp" "$file"
 }
 
 workspace_image() { # agent [version]
   printf 'workspace-portal/workspace:%s-%s' "$1" "${2:-$(agent_version "$1")}"
 }
 
-build_workspace_image() { # agent version [extra docker build args...]
+# Dies unless the agent in the image reports VERSION (asked offline).
+check_workspace_image() { # agent version
+  local image reported
+  image=$(workspace_image "$1" "$2")
+  reported=$(docker run --rm --network none --entrypoint "$1" "$image" --version 2>/dev/null |
+    grep -oE '[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?' | head -n 1) || true
+  [[ $reported == "$2" ]] || die "$image reports ${AGENT_NAME[$1]} \"$reported\", expected $2"
+}
+
+build_workspace_image() { # agent version [docker build options...]
   local agent=$1 version=$2
   shift 2
-  log "building $(workspace_image "$agent" "$version") ($(agent_name "$agent") $version)"
-  docker build --pull "$@" --target "$agent" --build-arg "$(agent_version_key "$agent")=$version" \
+  log "building $(workspace_image "$agent" "$version") (${AGENT_NAME[$agent]} $version)"
+  docker build --pull "$@" --target "$agent" --build-arg "${AGENT_VERSION_KEY[$agent]}=$version" \
     -t "$(workspace_image "$agent" "$version")" "$ROOT/workspace-image"
+  check_workspace_image "$agent" "$version"
 }
 
-# The version of the agent an image really contains (asks the agent's own CLI, offline).
-image_agent_version() { # agent image
-  local cli
-  case $1 in qwen) cli=qwen ;; dsh) cli=dsh ;; esac
-  docker run --rm --network none --entrypoint "$cli" "$2" --version 2>/dev/null |
-    grep -oE '[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?' | head -n 1 || true
+# Dies while Admin > Updates runs an agent or engine update, which a rebuild or a gateway restart would break.
+# (A gateway that doesn't answer runs none. The secret goes to curl on stdin, not on its command line.)
+no_console_update() { # [what to do afterwards]
+  local answer
+  answer=$(curl -fsS --max-time 20 -H @- "http://127.0.0.1:$(env_get CONTROL_PORT)/control/updates/running" \
+    <<<"Authorization: Bearer $(env_get GATEWAY_CONTROL_SECRET)" 2>/dev/null) || return 0
+  [[ ! $answer =~ \"running\":\ *true ]] || die "Admin > Updates is running an update: wait for it or cancel it there${1:+; $1}"
 }
 
-# ---------------------------------------------------------------- web search
-# The stack's own SearXNG as the gateway reaches it, and the instance the gateway really uses:
-# SEARXNG_URL from .env when that names another one.
+# Docker before 25.0.5 lets containers on internal networks resolve internet names (CVE-2024-29018).
+docker_version_ok() {
+  local version
+  version=$(docker version --format '{{.Server.Version}}' 2>/dev/null) || return 1
+  [[ $version == [0-9]* && $(printf '%s\n' 25.0.5 "$version" | sort -V | head -n 1) == 25.0.5 ]]
+}
+
+# The stack's own SearXNG, and the one the gateway uses (SEARXNG_URL when .env names another).
 searxng_builtin_url() { printf 'http://127.0.0.1:%s' "$(env_get SEARXNG_PORT)"; }
 searxng_url() {
   local url
   url=$(env_get SEARXNG_URL "$(searxng_builtin_url)")
   printf '%s' "${url%/}"
 }
-# True when SearXNG's health page answers at URL (with SEARXNG_AUTHORIZATION, for an instance behind auth).
+searxng_is_builtin() {
+  local url
+  url=$(searxng_url)
+  [[ ${url/\/\/localhost:/\/\/127.0.0.1:} == "$(searxng_builtin_url)" ]]
+}
 searxng_answers() { # url
   local auth header=()
   auth=$(env_get SEARXNG_AUTHORIZATION)
   [[ -z $auth ]] || header=(-H "Authorization: $auth")
   curl -fsS --max-time 5 -o /dev/null "${header[@]}" "$1/healthz" 2>/dev/null
 }
-# True when the gateway searches through the stack's own SearXNG.
-searxng_is_builtin() {
-  local url
-  url=$(searxng_url)
-  [[ ${url/\/\/localhost:/\/\/127.0.0.1:} == "$(searxng_builtin_url)" ]]
-}
 
-# True when a program listens on TCP PORT of the loopback address (or of every address), where the
-# stack publishes SearXNG and the page reader.
-loopback_port_taken() { # port
-  ss -Hltn "sport = :$1" 2>/dev/null | awk '{print $4}' | grep -qE '^(127\.0\.0\.1|0\.0\.0\.0|\*|\[::\]):'
-}
-# Who holds it, for a message: "pasta, pid 1234" (as root; empty when ss cannot tell).
-loopback_port_holder() { # port
-  ss -Hltnp "sport = :$1" 2>/dev/null | sed -n 's/.*users:(("\([^"]*\)",pid=\([0-9]*\).*/\1, pid \2/p' | head -n 1
-}
-# True when a loopback port the stack publishes is its to use: the stack's own container already
-# publishes it, or nobody holds it. (Both containers listen on 8080 inside.)
-stack_port_available() { # service port
-  [[ $(docker compose --project-directory "$ROOT" port "$1" 8080 2>/dev/null) == "127.0.0.1:$2" ]] || ! loopback_port_taken "$2"
-}
+# The word after KEY on each line of stdin: ip's "via <router>", "dev <interface>", "src <address>".
+word_after() { awk -v key="$1" '{for (i = 1; i < NF; i++) if ($i == key) print $(i + 1)}'; }
+host_ip() { ip -4 route get 1.1.1.1 2>/dev/null | word_after src; }
+routers() { ip -4 route show default | word_after via; }
 
-# The host's address on the default route (what users type in the browser on the LAN).
-host_ip() { ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}'; }
+url_host() { python3 -I -c 'import sys, urllib.parse as u; print(u.urlsplit(sys.argv[1]).hostname or "")' "$1" 2>/dev/null; }
+url_port() {
+  python3 -I -c 'import sys, urllib.parse as u
+url = u.urlsplit(sys.argv[1]); print(url.port or (443 if url.scheme == "https" else 80))' "$1" 2>/dev/null
+}
+# The IPv4 addresses a URL's host has now (none for an IPv6 literal or a name that doesn't resolve).
+url_ipv4s() { getent ahostsv4 "$(url_host "$1")" 2>/dev/null | awk '{print $1}' | sort -u; }
 
-# ---------------------------------------------------------------- addresses
-# A URL's host (an IPv6 literal with its brackets) and port (the scheme's default when it names none).
-url_authority() { # url
-  local rest=${1#*://}
-  rest=${rest%%/*}
-  rest=${rest%%\?*}
-  rest=${rest%%#*}
-  printf '%s' "${rest##*@}"
-}
-url_host() { # url
-  local authority
-  authority=$(url_authority "$1")
-  case $authority in
-    \[*) printf '%s]' "${authority%%]*}" ;;
-    *) printf '%s' "${authority%:*}" ;;
-  esac
-}
-url_port() { # url
-  local authority scheme=${1%%://*}
-  authority=$(url_authority "$1")
-  authority=${authority##*]}
-  if [[ $authority == *:* ]]; then
-    printf '%s' "${authority##*:}"
-  elif [[ ${scheme,,} == https ]]; then
-    printf 443
-  else
-    printf 80
-  fi
-}
-
-# The IPv4 addresses of a URL's host: the address itself, or what this host's resolver answers for the name now
-# (nothing for an IPv6 literal or a name that doesn't resolve).
-url_ipv4s() { # url
-  local host
-  host=$(url_host "$1")
-  if [[ $host =~ ^[0-9]+(\.[0-9]+){3}$ ]]; then
-    printf '%s\n' "$host"
-  elif [[ $host != \[* && -n $host ]]; then
-    getent ahostsv4 "$host" 2>/dev/null | awk '{print $1}' | sort -u
-  fi
-}
-
-# firewall.sh's not_public ranges (the private, link-local, carrier-NAT and other reserved ones), one per line.
+# firewall.sh's not_public ranges, one per line.
 not_public_ranges() { bash "$ROOT/deploy/firewall.sh" not-public; }
 
-# True when the IPv4 ADDRESS lies in none of CIDRS (separated by commas, spaces or newlines).
-ipv4_outside() { # address cidrs
-  python3 -I -c '
+# The resolver settings the firewall would let no answer through for, as " KEY (value)": it lets DNS through only
+# to public IPv4 addresses outside NEVER.
+bad_resolvers() { # never
+  local key
+  for key in ONLINE_DNS_1 ONLINE_DNS_2 READER_DNS_1 READER_DNS_2 SEARXNG_DNS_1 SEARXNG_DNS_2; do
+    python3 -I -c '
 import ipaddress, sys
-address = ipaddress.ip_address(sys.argv[1])
-networks = [ipaddress.ip_network(item, strict=False) for item in sys.argv[2].replace(",", " ").split()]
-sys.exit(1 if any(address in network for network in networks) else 0)' "$1" "$2"
+try:
+    address = ipaddress.IPv4Address(sys.argv[1])
+except ValueError:
+    sys.exit(1)
+sys.exit(any(address in ipaddress.ip_network(n, strict=False) for n in " ".join(sys.argv[2:]).replace(",", " ").split()))' \
+      "$(env_get "$key")" "$(not_public_ranges)" "$1" || printf ' %s (%s)' "$key" "$(env_get "$key")"
+  done
 }
 
-# True when the IPv4 ADDRESS is a public one: in none of the firewall's not_public ranges.
-ipv4_public() { ipv4_outside "$1" "$(not_public_ranges)"; }
-
-# IPv4 addresses and CIDRs from stdin (separated by commas, spaces or newlines) as one comma-separated list for
-# the firewall: networks masked, overlaps merged, loopback and IPv6 left out (the fenced containers have no IPv6,
-# and nothing is forwarded to loopback). Fails, naming them, on items that are neither.
+# IPv4 addresses and CIDRs from stdin (separated by commas, spaces or newlines) as one comma-separated list:
+# networks masked, overlaps merged, loopback and IPv6 left out. Fails, naming them, on items that are neither.
 ipv4_networks() {
   python3 -I -c '
 import ipaddress, sys
@@ -287,27 +200,19 @@ if bad:
 print(",".join(str(n.network_address) if n.prefixlen == 32 else str(n) for n in ipaddress.collapse_addresses(networks)))'
 }
 
-# The servers the portal talks to (deploy/firewall.sh keeps the Online workspaces, the reader and SearXNG off
-# them, whatever their addresses): the LLM server, portal-hostd on either server, an outside SearXNG or page reader.
-PORTAL_UPSTREAMS=(LLM_UPSTREAM_URL HOSTD_LLM_URL HOSTD_PORTAL_URL SEARXNG_URL READER_URL)
-
-# What the Online workspaces, the reader and SearXNG must never reach, whatever its address (firewall.sh's
-# NEVER_REACH, on top of the private ranges it drops anyway): every network this host has an address on, and its
-# router; the PORTAL_UPSTREAMS, by the addresses their names have now; and FIREWALL_NEVER_REACH from .env. Warns
-# about a server whose name doesn't resolve; fails on a FIREWALL_NEVER_REACH item that is no IPv4 address or CIDR.
+# firewall.sh's NEVER_REACH, what the Online workspaces, the reader and SearXNG reach at no address: this host's
+# networks and routers, the servers the portal talks to (at the addresses their names have now) and
+# FIREWALL_NEVER_REACH.
 never_reach() {
   local key url addresses
   {
     ip -4 -o addr show scope global | awk '{print $4}'
-    ip -4 route show default | awk '{for (i = 1; i < NF; i++) if ($i == "via") print $(i + 1)}'
-    for key in "${PORTAL_UPSTREAMS[@]}"; do
+    routers
+    for key in LLM_UPSTREAM_URL HOSTD_LLM_URL HOSTD_PORTAL_URL SEARXNG_URL READER_URL; do
       url=$(env_get "$key")
       [[ $url == *://* ]] || continue
-      addresses=$(url_ipv4s "$url")
-      if [[ -z $addresses ]]; then
-        warn "$key: $(url_host "$url") has no IPv4 address now, so the firewall can't keep the Online workspaces, the reader and SearXNG off it by address (they still reach no private address). Run this again once it resolves."
-        continue
-      fi
+      addresses=$(url_ipv4s "$url") || true
+      [[ -n $addresses ]] || warn "$key: $(url_host "$url") has no IPv4 address now, so the firewall can't keep the Online workspaces, the reader and SearXNG off it by address. Run the installer again once it resolves."
       printf '%s\n' "$addresses"
     done
     env_get FIREWALL_NEVER_REACH
@@ -315,70 +220,50 @@ never_reach() {
   } | ipv4_networks
 }
 
-# The port each agent's server listens on inside its workspace container (the drivers' port in gateway/src/agents/).
-agent_port() { # agent
-  case $1 in
-    qwen) printf 4170 ;;
-    dsh) printf 3080 ;;
-    *) die "unknown agent \"$1\" (one of: ${AGENTS[*]})" ;;
-  esac
+# The UIDs of users 1 … AGENT_PORT_COUNT - 1 from the base in KEY: the /etc/subuid and /etc/subgid ranges that
+# overlap them. (Their owners could read those workspaces' files through a user namespace.)
+subid_overlaps() { # WORKSPACE_UID_BASE | ONLINE_UID_BASE
+  local base
+  base=$(env_get "$1")
+  awk -F: -v first="$((base + 1))" -v last="$((base + $(env_get AGENT_PORT_COUNT) - 1))" \
+    '$2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ && $2 <= last && $2 + $3 - 1 >= first {
+       printf " %s (%d-%d in %s)", $1, $2, $2 + $3 - 1, FILENAME }' /etc/subuid /etc/subgid 2>/dev/null || true
 }
 
-# The ports users' browsers need: the portal and one port per workspace, in a range per kind (a user's
-# Private and Online workspaces are separate browser origins), and as many again for the web apps running in
-# them, PREVIEW_PORT_OFFSET above (the Web preview). Online's range follows Private's unless
-# ONLINE_AGENT_PORT_BASE says otherwise, as in the gateway (gateway/src/config.ts).
-PREVIEW_PORT_OFFSET=1000
-web_port() { env_get WEB_PORT; }
-online_agent_port_base() {
-  env_get ONLINE_AGENT_PORT_BASE "$(($(env_get AGENT_PORT_BASE) + $(env_get AGENT_PORT_COUNT)))"
-}
-port_range_from() { # base -> FIRST-LAST
-  printf '%s-%s' "$(($1 + 1))" "$(($1 + $(env_get AGENT_PORT_COUNT) - 1))"
-}
-agent_port_range() { port_range_from "$(env_get AGENT_PORT_BASE)"; }        # Private
-online_agent_port_range() { port_range_from "$(online_agent_port_base)"; } # Online
-preview_port_range() { port_range_from "$(($(env_get AGENT_PORT_BASE) + PREVIEW_PORT_OFFSET))"; }
-online_preview_port_range() { port_range_from "$(($(online_agent_port_base) + PREVIEW_PORT_OFFSET))"; }
-
-# True unless ONLINE_WORKSPACES turns Online workspaces off for the whole portal (the gateway's default is on).
-online_enabled() {
-  case $(env_get ONLINE_WORKSPACES on | tr '[:upper:]' '[:lower:]') in
-    false | off | no | 0) return 1 ;;
-    *) return 0 ;;
-  esac
+# FIRST-LAST of the four ranges browsers reach besides WEB_PORT: the Private and the Online workspaces, then each
+# kind's previews, 1000 above (PREVIEW_PORT_OFFSET in gateway/src/config.ts).
+port_ranges() {
+  local base count online
+  base=$(env_get AGENT_PORT_BASE) count=$(env_get AGENT_PORT_COUNT)
+  online=$(env_get ONLINE_AGENT_PORT_BASE "$((base + count))")
+  for base in "$base" "$online" "$((base + 1000))" "$((online + 1000))"; do
+    printf '%s-%s ' "$((base + 1))" "$((base + count - 1))"
+  done
+  echo
 }
 
-# Sources allowed to reach those ports: FIREWALL_ALLOW_SOURCE, or the LAN of the default route
-# plus Tailscale's address range when a tailscale0 interface exists.
+# Who may reach those ports: FIREWALL_ALLOW_SOURCE, else the LAN of the default route and, with a tailscale0
+# interface, Tailscale's range.
 portal_sources() {
   local configured dev lan
   configured=$(env_get FIREWALL_ALLOW_SOURCE)
   if [[ -n $configured ]]; then printf '%s' "$configured"; return; fi
-  dev=$(ip -4 route show default | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
+  dev=$(ip -4 route show default | word_after dev | head -n 1)
   lan=$(ip -4 route show dev "${dev:-lo}" scope link proto kernel 2>/dev/null | awk '{print $1; exit}')
   if ip link show tailscale0 >/dev/null 2>&1; then lan="${lan:+$lan }100.64.0.0/10"; fi
   printf '%s' "$lan"
 }
 
-# firewalld rich rules for the portal ports, one per source and port (range). Both kinds' workspace
-# ranges are opened even with Online off: the gateway answers there that the workspace is stopped.
-portal_rich_rules() {
-  local source port
+# Adds or removes the firewalld rich rules that open the portal's ports to portal_sources. Both kinds' ranges,
+# also with Online off: the gateway answers there that the workspace is stopped.
+firewalld_rules() { # add | remove
+  local source port rule
   for source in $(portal_sources); do
-    for port in "$(web_port)" "$(agent_port_range)" "$(online_agent_port_range)" "$(preview_port_range)" "$(online_preview_port_range)"; do
-      printf 'rule family="ipv4" source address="%s" port port="%s" protocol="tcp" accept\n' "$source" "$port"
+    for port in "$(env_get WEB_PORT)" $(port_ranges); do
+      rule="rule family=\"ipv4\" source address=\"$source\" port port=\"$port\" protocol=\"tcp\" accept"
+      # A rule already there (or already gone) is a warning and exit status 0.
+      firewall-cmd --permanent "--$1-rich-rule=$rule" >/dev/null 2>&1 || warn "firewalld: could not $1: $rule"
     done
   done
-}
-
-# Docker engines before 25.0.5 forward DNS queries from internal networks to the outside world
-# (CVE-2024-29018), which would give workspaces a way out.
-docker_version_ok() {
-  local version major minor patch
-  version=$(docker version --format '{{.Server.Version}}' 2>/dev/null) || return 1
-  IFS=. read -r major minor patch <<<"${version%%[-+]*}"
-  minor=${minor:-0} patch=${patch%%[!0-9]*}
-  [[ $major =~ ^[0-9]+$ && $minor =~ ^[0-9]+$ ]] || return 1
-  ((major > 25 || (major == 25 && minor > 0) || (major == 25 && minor == 0 && ${patch:-0} >= 5)))
+  firewall-cmd --reload >/dev/null
 }
