@@ -60,7 +60,7 @@ export function createAgentServerFactory(deps: AgentDeps): () => http.Server {
 }
 
 /** A request that passed the access checks, and who may frame its answers. */
-export type Admitted = Extract<AgentAccess, { ok: true }> & { method: string; target: string; navigation: boolean; frame: FramePolicy };
+type Admitted = Extract<AgentAccess, { ok: true }> & { method: string; target: string; navigation: boolean; frame: FramePolicy };
 
 /** Protocol-relative, so it keeps the scheme the browser uses. */
 const portalUrl = (frame: FramePolicy, path = "/"): string => `//${frame.hostname}:${frame.webPort}${path}`;

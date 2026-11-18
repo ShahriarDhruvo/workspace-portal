@@ -5,7 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 
 const RETRY_INTERVAL_MS = 1_000;
 
-export interface ListenOptions {
+interface ListenOptions {
   host: string;
   port: number;
   /** Keep retrying EADDRNOTAVAIL for this long. */

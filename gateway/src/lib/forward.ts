@@ -5,7 +5,7 @@ import { pipeline, Transform, type Readable, type TransformCallback } from "node
 import type { HeaderMap } from "../proxy/headers.ts";
 import { HttpError } from "./http-util.ts";
 
-export interface ForwardOptions {
+interface ForwardOptions {
   url: URL;
   method: string;
   headers: HeaderMap;

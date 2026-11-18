@@ -111,7 +111,7 @@ export class ConnectionRegistry {
  * Sessions end without the gateway being told (password change or reset, deactivation, expiry), and an admin may have
  * moved on to another workspace: closes the connections whose session no longer resolves, or no longer uses that workspace.
  */
-export function closeEndedSessions(db: PortalDb, registry: ConnectionRegistry, now = Date.now()): number {
+export function closeEndedSessions(db: PortalDb, registry: ConnectionRegistry, now: number): number {
   const targets = new Map<string, number | null>();
   const targetOf = (sessionId: string): number | null => {
     if (!targets.has(sessionId)) targets.set(sessionId, loadSessionContext(db, sessionId, now)?.target.id ?? null);
