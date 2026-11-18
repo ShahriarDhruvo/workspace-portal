@@ -407,6 +407,8 @@ test("deleting a user's data waits for an erase of their files that is under way
     await assert.rejects(g.manager.start(alice), { code: "deleting" }, "the erase is done, the deletion is not");
     await deleting;
     assert.equal(fs.existsSync(root), false);
+    await Promise.all([g.manager.start(alice), g.manager.deleteData(alice)]);
+    assert.deepEqual(g.runtime.startsFor(alice), [], "a start made in the same tick as a deletion creates no container");
   }));
 
 test("a user id without a workspace port (AGENT_PORT_COUNT) starts no workspace of either kind: 409 no_workspace_port", () =>

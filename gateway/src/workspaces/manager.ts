@@ -699,7 +699,8 @@ export class WorkspaceManager {
   async #deleteEntry(entry: Entry, created: boolean): Promise<void> {
     const { userId } = entry;
     try {
-      await entry.erasing?.done.catch(() => undefined); // two removals of the same folders fail each other (ENOTEMPTY)
+      // An erase removes the same folders, and both at once fail (ENOTEMPTY). No await without one: a start made in the same tick would get as far as its container.
+      if (entry.erasing) await entry.erasing.done.catch(() => undefined);
       await this.#stopEntry(entry, "deleted");
       // Also a container an earlier stop failed to remove: its mounts are the data about to go.
       await this.#removeLeftover(entry).catch((error: unknown) => {
