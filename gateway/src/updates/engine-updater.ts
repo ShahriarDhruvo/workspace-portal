@@ -267,23 +267,17 @@ export class EngineUpdater {
   async #follow(job: EngineUpdateJob, started: EngineJob, host: EngineHost, timeoutMs: number): Promise<EngineJob> {
     this.#hostJob = started;
     const until = this.#now() + timeoutMs;
-    let unreachableSince: number | null = null;
+    let unreachable = false;
     while (this.#now() < until) {
       await delay(this.#pollMs);
+      // The LLM server may be busy restarting; keep trying until the time limit.
+      const status = await host.status().catch((error: unknown) => {
+        if (!unreachable) this.#note(job, `portal-hostd did not answer (${errorMessage(error)}); still trying.`);
+        return null;
+      });
       if (job.finishedAt !== null) throw new Cancelled();
-      let status: EngineStatus;
-      try {
-        status = await host.status();
-        unreachableSince = null;
-      } catch (error) {
-        // The LLM server may be busy restarting; keep trying until the time limit.
-        if (unreachableSince === null) {
-          unreachableSince = this.#now();
-          this.#note(job, `portal-hostd did not answer (${errorMessage(error)}); still trying.`);
-        }
-        continue;
-      }
-      const current = status.job;
+      unreachable = status === null;
+      const current = status?.job;
       if (!current || current.id !== started.id) continue;
       this.#hostJob = current;
       if (current.step) job.step = current.step;

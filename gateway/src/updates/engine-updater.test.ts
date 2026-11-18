@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { auditLog, openDatabase } from "@portal/core";
+import { auditLog, openDatabase, type EngineStatus } from "@portal/core";
 import { ENGINE_REPOSITORY, engineDigest, FakeEngineHost, FakeEngineRegistry, FakeNotes, quiet } from "../../test/fakes.ts";
 import { waitFor } from "../../test/harness.ts";
 import { loadConfig } from "../config.ts";
@@ -200,21 +200,27 @@ test("the drain ends at ENGINE_DRAIN_MINUTES; shutdown records a running job as 
   cleanup();
 });
 
-test("a job that shutdown recorded as failed stays so: its run, still under way, does not end it a second time", async () => {
-  const { updater, host, queue, audits, cleanup } = setup();
-  const status = host.status.bind(host);
-  host.status = async () => {
-    // The restart has succeeded: the gateway stops while the updater asks which version the engine reports.
-    const restarted = host.version === "0.34.0";
-    const answer = await status();
-    if (restarted) updater.shutdown();
-    return answer;
-  };
-  await updater.startUpdate({ version: "0.34.0", actorUserId: null });
-  await waitFor(() => updater.snapshot()?.finishedAt != null && !queue.paused, "the run to end");
-  assert.deepEqual([updater.snapshot()!.phase, updater.snapshot()!.error], ["failed", GATEWAY_STOPPED]);
-  assert.deepEqual(audits(), [{ action: "engine_update_failed", details: { from: "0.31.0", to: "0.34.0", error: GATEWAY_STOPPED, rolledBack: false } }]);
-  cleanup();
+test("a job that shutdown recorded as failed stays so: its run, still under way, changes nothing more", async () => {
+  // The gateway stops while the updater waits for hostd's answer: that the download has ended, or which version runs after the restart.
+  const moments: Array<[string, (versionBefore: string, answer: EngineStatus) => boolean]> = [
+    ["the download has ended", (_version, answer) => answer.job?.kind === "pull" && answer.job.phase === "succeeded"],
+    ["the engine has restarted", (version) => version === "0.34.0"],
+  ];
+  for (const [when, reached] of moments) {
+    const { updater, host, queue, audits, done, cleanup } = setup();
+    const status = host.status.bind(host);
+    host.status = async () => {
+      const version = host.version;
+      const answer = await status();
+      if (reached(version, answer)) updater.shutdown();
+      return answer;
+    };
+    await updater.startUpdate({ version: "0.34.0", actorUserId: null });
+    const job = await done();
+    assert.deepEqual([job.phase, job.error, job.drain, queue.paused], ["failed", GATEWAY_STOPPED, null, false], when);
+    assert.deepEqual(audits(), [{ action: "engine_update_failed", details: { from: "0.31.0", to: "0.34.0", error: GATEWAY_STOPPED, rolledBack: false } }], when);
+    cleanup();
+  }
 });
 
 test("removing an engine image: not while a job runs, not the running one", async () => {
