@@ -52,7 +52,11 @@ internet_only() { # template
 }
 
 ruleset() {
-  local never
+  local never setting
+  # Here, before any output: a failure in a $(...) of the here-document would only leave its part out of the table.
+  for setting in WORKSPACE_{SUBNET,GATEWAY_IP,BRIDGE} SERVICE_PORT ONLINE_{SUBNET,GATEWAY_IP,BRIDGE,DNS_1,DNS_2} {READER,SEARXNG}_{SUBNET,BRIDGE,DNS_1,DNS_2} NEVER_REACH; do
+    [[ -n ${!setting-} ]] || { echo "firewall.sh: $setting is missing or empty" >&2; return 1; }
+  done
   never=$(never_elements) || return 1
   cat <<NFT
 table $TABLE {
