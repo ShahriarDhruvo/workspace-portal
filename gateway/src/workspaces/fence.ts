@@ -17,7 +17,7 @@ export type FenceState = "loaded" | "missing" | "unknown";
 const PROBE_TIMEOUT_MS = 2_000;
 
 /** One look at the marker on 127.0.0.1:port. */
-export function probeFence(port: number, timeoutMs = PROBE_TIMEOUT_MS): Promise<FenceState> {
+export function probeFence(port: number): Promise<FenceState> {
   return new Promise((resolve) => {
     const socket = net.connect({ host: "127.0.0.1", port });
     let settled = false;
@@ -28,7 +28,7 @@ export function probeFence(port: number, timeoutMs = PROBE_TIMEOUT_MS): Promise<
       socket.destroy();
       resolve(state);
     };
-    const timer = setTimeout(() => settle("unknown"), timeoutMs);
+    const timer = setTimeout(() => settle("unknown"), PROBE_TIMEOUT_MS);
     // Something listens there and nothing refused the connection: no marker.
     socket.once("connect", () => settle("missing"));
     socket.once("error", (error: NodeJS.ErrnoException) => {

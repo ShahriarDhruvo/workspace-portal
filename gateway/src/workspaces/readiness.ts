@@ -10,7 +10,7 @@ export type ReadyResult =
   | { ok: false; reason: "exited"; exitCode: number | null; oomKilled: boolean }
   | { ok: false; reason: "timeout" | "aborted" };
 
-export interface ReadinessOptions {
+interface ReadinessOptions {
   probe: () => Promise<boolean>;
   state: () => Promise<ContainerState>;
   signal: AbortSignal;

@@ -7,11 +7,6 @@ import { eraseKindFiles, removeUserData, userPaths, userRoot } from "./paths.ts"
 
 const me = { uid: process.getuid?.() ?? 0, gid: process.getgid?.() ?? 0 };
 
-function withDataDir(run: (dataDir: string) => Promise<void>): Promise<void> {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "paths-"));
-  return run(dataDir).finally(() => fs.rmSync(dataDir, { recursive: true, force: true }));
-}
-
 function write(file: string, content = "x"): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, content);
@@ -28,31 +23,32 @@ test("each kind has its own folder under the user's; nothing of one lies inside 
   }
 });
 
-test("erasing one kind empties its home and workspace and leaves the other kind alone", () =>
-  withDataDir(async (dataDir) => {
-    const priv = userPaths(dataDir, 5, "private");
-    const online = userPaths(dataDir, 5, "online");
-    for (const paths of [priv, online]) {
-      write(path.join(paths.home, ".bashrc"));
-      write(path.join(paths.workspace, "a", "b.txt"));
-      write(paths.passwd);
-    }
-    fs.chmodSync(path.join(online.workspace, "a"), 0o500); // a folder the workspace made read-only
-    await eraseKindFiles(dataDir, 5, "online", me);
-    assert.deepEqual([fs.readdirSync(online.home), fs.readdirSync(online.workspace)], [[], []]);
-    assert.equal(fs.statSync(online.workspace).mode & 0o777, 0o700);
-    assert.ok(fs.existsSync(online.passwd), "system/ is re-rendered at every start anyway");
-    assert.ok(fs.existsSync(path.join(priv.workspace, "a", "b.txt")), "the Private files are untouched");
-    assert.ok(fs.existsSync(path.join(priv.home, ".bashrc")));
+test("erasing one kind empties its home and workspace and leaves the other kind alone", async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "paths-"));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const priv = userPaths(dataDir, 5, "private");
+  const online = userPaths(dataDir, 5, "online");
+  for (const paths of [priv, online]) {
+    write(path.join(paths.home, ".bashrc"));
+    write(path.join(paths.workspace, "a", "b.txt"));
+    write(paths.passwd);
+  }
+  fs.chmodSync(path.join(online.workspace, "a"), 0o500); // a folder the workspace made read-only
+  await eraseKindFiles(dataDir, 5, "online", me);
+  assert.deepEqual([fs.readdirSync(online.home), fs.readdirSync(online.workspace)], [[], []]);
+  assert.equal(fs.statSync(online.workspace).mode & 0o777, 0o700);
+  assert.ok(fs.existsSync(online.passwd), "system/ is re-rendered at every start anyway");
+  assert.ok(fs.existsSync(path.join(priv.workspace, "a", "b.txt")), "the Private files are untouched");
+  assert.ok(fs.existsSync(path.join(priv.home, ".bashrc")));
 
-    await eraseKindFiles(dataDir, 5, "private", me);
-    assert.deepEqual([fs.readdirSync(priv.home), fs.readdirSync(priv.workspace)], [[], []]);
-    assert.deepEqual(fs.readdirSync(userRoot(dataDir, 5)).sort(), ["online", "private"]);
+  await eraseKindFiles(dataDir, 5, "private", me);
+  assert.deepEqual([fs.readdirSync(priv.home), fs.readdirSync(priv.workspace)], [[], []]);
+  assert.deepEqual(fs.readdirSync(userRoot(dataDir, 5)).sort(), ["online", "private"]);
 
-    // A kind that never ran has nothing to erase, and gets no folders.
-    await eraseKindFiles(dataDir, 6, "online", me);
-    assert.equal(fs.existsSync(userRoot(dataDir, 6)), false);
+  // A kind that never ran has nothing to erase, and gets no folders.
+  await eraseKindFiles(dataDir, 6, "online", me);
+  assert.equal(fs.existsSync(userRoot(dataDir, 6)), false);
 
-    await removeUserData(dataDir, 5);
-    assert.equal(fs.existsSync(userRoot(dataDir, 5)), false, "deleting the user removes both kinds");
-  }));
+  await removeUserData(dataDir, 5);
+  assert.equal(fs.existsSync(userRoot(dataDir, 5)), false, "deleting the user removes both kinds");
+});
