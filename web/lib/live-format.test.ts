@@ -53,7 +53,7 @@ test("readings are short and say when they are unknown", () => {
   assert.equal(formatElapsed(45_900), "45 s");
   assert.equal(formatElapsed(125_000), "2m 05s");
   assert.equal(formatElapsed(3_840_000), "1h 04m");
-  for (const format of [formatTemp, formatClock, formatWatts, formatPercent, formatBandwidth, formatElapsed, formatRate]) assert.equal(format(null), "—");
+  for (const format of [formatTemp, formatClock, formatWatts, formatPercent, formatRate]) assert.equal(format(null), "—");
 });
 
 test("network and disk rates are in decimal units, down to bytes", () => {
@@ -182,5 +182,4 @@ test("a session's cost: cents for dollars, four or three places for euros, money
 
 test("energy in Wh, then kWh", () => {
   assert.deepEqual([0.714, 31.42, 882.4, 1243].map(formatWh), ["0.71 Wh", "31.4 Wh", "882 Wh", "1.24 kWh"]);
-  assert.equal(formatWh(null), "—");
 });

@@ -59,7 +59,7 @@ export type LoginReservation =
  * the fifth reservation in the window sets the lock and every later one is refused. When the password
  * turns out to be right, the caller clears the record (clearLoginFailures).
  */
-export function reserveLoginAttempt(db: PortalDb, username: string, now = Date.now()): LoginReservation {
+export function reserveLoginAttempt(db: PortalDb, username: string, now: number): LoginReservation {
   // better-sqlite3 transactions are synchronous on one connection, so statements issued through
   // `db` inside the callback are part of the transaction.
   return db.transaction(
@@ -82,7 +82,7 @@ export function reserveLoginAttempt(db: PortalDb, username: string, now = Date.n
  * Deletes records that no longer affect anything: the lock has lifted, or (without a lock) the failure
  * window has passed. nextFailureState would start afresh for these anyway. Returns how many went.
  */
-export function pruneLoginAttempts(db: PortalDb, now = Date.now()): number {
+export function pruneLoginAttempts(db: PortalDb, now: number): number {
   return db
     .delete(loginAttempts)
     .where(

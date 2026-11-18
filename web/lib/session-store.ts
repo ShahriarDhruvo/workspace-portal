@@ -27,6 +27,6 @@ export function deleteSessions(db: PortalDb, where: SQL | undefined): DeletedSes
 }
 
 /** Deletes sessions that have expired. They are already refused everywhere; this keeps the table small. */
-export function pruneExpiredSessions(db: PortalDb, now = Date.now()): DeletedSessions {
+export function pruneExpiredSessions(db: PortalDb, now: number): DeletedSessions {
   return deleteSessions(db, lte(sessions.expiresAt, now));
 }

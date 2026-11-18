@@ -68,7 +68,7 @@ interface UserDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** Gets the focus back on close: the control that opened the dialog (it has no Trigger), or the menu's button. */
-  returnFocusTo?: RefObject<HTMLElement | null>;
+  returnFocusTo: RefObject<HTMLElement | null>;
 }
 
 /** One admin action on one user, as a confirmation dialog. Controlled: the caller owns `open`. */

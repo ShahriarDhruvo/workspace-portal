@@ -19,8 +19,8 @@ interface GuardedButtonProps extends Omit<ComponentProps<typeof Button>, "asChil
  * blocked under the focus. `explain` prevents the click's default,
  * so the tooltip doesn't take the press as its cue to close.
  */
-function useBlockedHint<T extends HTMLElement>(blockedReason: string | null | undefined) {
-  const ref = useRef<T>(null);
+function useBlockedHint(blockedReason: string | null | undefined) {
+  const ref = useRef<HTMLButtonElement>(null);
   // The reason the pointer or the keyboard asked about.
   const [hintFor, setHintFor] = useState<string | null>(null);
   const blocked = Boolean(blockedReason);
@@ -48,7 +48,7 @@ function useBlockedHint<T extends HTMLElement>(blockedReason: string | null | un
  * when it becomes blocked (a job starting after its dialog closed).
  */
 export function GuardedButton({ blockedReason, className, onClick, ref, ...props }: GuardedButtonProps) {
-  const hint = useBlockedHint<HTMLButtonElement>(blockedReason);
+  const hint = useBlockedHint(blockedReason);
   return (
     <Tooltip {...hint.tooltip}>
       <TooltipTrigger asChild>

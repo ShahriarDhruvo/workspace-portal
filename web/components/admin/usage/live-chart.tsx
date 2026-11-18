@@ -21,8 +21,6 @@ interface LiveChartProps {
   now: number;
   /** The tooltip's value. */
   format: (value: number) => string;
-  /** Upper end of the y axis when it is fixed (percentages); otherwise it follows the data. */
-  max?: number;
   /** Charts stacked on one time axis share it: hovering one shows the same moment in each. */
   syncId?: string;
   /** The time axis under the chart; a chart stacked over another leaves it to the one below (and keeps room for
@@ -35,7 +33,7 @@ const TICKS_S = [-60, -30, 0];
 const axisNumber = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
 
 /** One reading over the last minute. Animation is off: a new point arrives every 500 ms. */
-export function LiveChart({ points, label, color, now, format, max, syncId, timeAxis = true, className }: LiveChartProps) {
+export function LiveChart({ points, label, color, now, format, syncId, timeAxis = true, className }: LiveChartProps) {
   const config = { value: { label, color } } satisfies ChartConfig;
   const data = points.map((point) => ({ t: point.t, value: point.value }));
   return (
@@ -56,7 +54,7 @@ export function LiveChart({ points, label, color, now, format, max, syncId, time
           hide={!timeAxis}
         />
         <YAxis
-          domain={[0, max ?? "auto"]}
+          domain={[0, "auto"]}
           tickCount={3}
           interval={0}
           width={44}

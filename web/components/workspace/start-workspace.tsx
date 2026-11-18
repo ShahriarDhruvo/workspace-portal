@@ -99,16 +99,15 @@ interface StartWorkspaceButtonProps {
   disabled?: boolean;
   /** Starts that kind; resolves once the request is answered (the caller shows what came of it). */
   onStart: (kind: WorkspaceKind) => Promise<void>;
-  className?: string;
 }
 
 /** The Start button, naming the chosen kind, and the confirmation it opens. */
-export function StartWorkspaceButton({ kind, onSwitch, whose, retry = false, disabled = false, onStart, className }: StartWorkspaceButtonProps) {
+export function StartWorkspaceButton({ kind, onSwitch, whose, retry = false, disabled = false, onStart }: StartWorkspaceButtonProps) {
   const [confirming, setConfirming] = useState(false);
   const startButton = useRef<HTMLButtonElement>(null);
   return (
     <>
-      <Button ref={startButton} type="button" onClick={() => setConfirming(true)} disabled={disabled} className={className}>
+      <Button ref={startButton} type="button" onClick={() => setConfirming(true)} disabled={disabled}>
         <PlayIcon />
         {retry ? "Try again" : `Start ${WORKSPACE_KIND_NAMES[kind]}`}
       </Button>

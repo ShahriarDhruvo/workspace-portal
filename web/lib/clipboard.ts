@@ -7,7 +7,7 @@
  * dialog would otherwise take the focus straight back from a textarea elsewhere on the page, leaving nothing
  * selected, and the copy command would still report success.
  */
-export async function copyText(text: string, origin?: HTMLElement | null): Promise<boolean> {
+export async function copyText(text: string, origin: HTMLElement): Promise<boolean> {
   if (window.isSecureContext && navigator.clipboard) {
     try {
       await navigator.clipboard.writeText(text);
@@ -16,7 +16,7 @@ export async function copyText(text: string, origin?: HTMLElement | null): Promi
       // Fall through to the legacy path (e.g. permission denied).
     }
   }
-  return legacyCopy(text, origin?.parentElement ?? document.body);
+  return legacyCopy(text, origin.parentElement ?? document.body);
 }
 
 /** The legacy copy command on a hidden textarea placed in `host`; the focus goes back where it was. */

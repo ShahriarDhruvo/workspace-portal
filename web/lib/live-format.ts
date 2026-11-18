@@ -13,8 +13,8 @@ const threeDecimals = fixed(3);
 const fourDecimals = fixed(4);
 
 /** A rate or reading: one decimal below 10, whole numbers (with thousands separators) above. "—" when unknown. */
-export function formatNumber(value: number | null | undefined): string {
-  if (value === null || value === undefined || !Number.isFinite(value)) return "—";
+export function formatNumber(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return "—";
   return Math.abs(value) < 10 ? oneDecimal.format(value) : integer.format(value);
 }
 
@@ -40,8 +40,7 @@ export function formatPercent(percent: number | null | undefined): string {
 }
 
 /** Memory bandwidth in decimal units, as hardware is rated: "165 GB/s", "820 MB/s". */
-export function formatBandwidth(bytesPerSecond: number | null | undefined): string {
-  if (bytesPerSecond === null || bytesPerSecond === undefined) return "—";
+export function formatBandwidth(bytesPerSecond: number): string {
   if (bytesPerSecond >= 1e9) return `${formatNumber(bytesPerSecond / 1e9)} GB/s`;
   return `${integer.format(bytesPerSecond / 1e6)} MB/s`;
 }
@@ -56,9 +55,8 @@ export function formatRate(bytesPerSecond: number | null | undefined): string {
   return `${integer.format(value)} B/s`;
 }
 
-/** A short span: "850 ms", "8.2 s", "45 s", "2m 05s", "1h 04m". "—" when unknown. */
-export function formatElapsed(ms: number | null | undefined): string {
-  if (ms === null || ms === undefined || !Number.isFinite(ms)) return "—";
+/** A short span: "850 ms", "8.2 s", "45 s", "2m 05s", "1h 04m". */
+export function formatElapsed(ms: number): string {
   const value = Math.max(0, ms);
   if (value < 1000) return `${integer.format(value)} ms`;
   if (value < 10_000) return `${oneDecimal.format(value / 1000)} s`;
@@ -76,7 +74,7 @@ export function formatBytesOf(part: number, whole: number): string {
   return a.endsWith(unit) ? `${a.slice(0, -unit.length)} / ${b}` : `${a} / ${b}`;
 }
 
-/** A clock that reads 0 (an iGPU asleep) or is left out while the cores idle (portal-hostd) shows as idle. */
+/** A clock that reads 0 (an iGPU asleep), or that portal-hostd leaves null while the cores idle, shows as idle. */
 export function formatClockOrIdle(mhz: number | null | undefined, usage: number | null | undefined): string {
   if (mhz === 0 || ((mhz === null || mhz === undefined) && usage !== null && usage !== undefined)) return "idle";
   return formatClock(mhz);
@@ -89,14 +87,14 @@ export function memoryFree(sample: HostSample): { bytes: number; percent: number
 }
 
 /** Used share of a whole, in percent; null when the whole is unknown. */
-export function usedPercent(used: number | null | undefined, total: number | null | undefined): number | null {
-  if (used === null || used === undefined || !total) return null;
+export function usedPercent(used: number | null, total: number | null | undefined): number | null {
+  if (used === null || !total) return null;
   return Math.min(100, Math.max(0, (used / total) * 100));
 }
 
 /** Energy without its unit: three decimals for a day's few kWh ("0.214"), fewer as it grows ("41.75", "1,204.5"). */
-export function formatKwh(kwh: number | null | undefined): string {
-  if (kwh === null || kwh === undefined || !Number.isFinite(kwh)) return "—";
+export function formatKwh(kwh: number | null): string {
+  if (kwh === null || !Number.isFinite(kwh)) return "—";
   const value = Math.max(0, kwh);
   return (value < 10 ? threeDecimals : value < 100 ? twoDecimals : value < 1000 ? oneDecimal : integer).format(value);
 }
@@ -112,8 +110,8 @@ const unitPrice: Record<EnergyCurrency, { unit: string; scale: number; format: I
 };
 
 /** An amount with its currency: "$1.18", "€0.02"; "<$0.01" for a cost too small to show in cents. "—" when unknown. */
-export function formatMoney(amount: number | null | undefined, currency: EnergyCurrency | null | undefined): string {
-  if (amount === null || amount === undefined || !Number.isFinite(amount) || !currency) return "—";
+export function formatMoney(amount: number | null, currency: EnergyCurrency | null): string {
+  if (amount === null || !Number.isFinite(amount) || !currency) return "—";
   const format = money[currency];
   return amount > 0 && amount < 0.005 ? `<${format.format(0.01)}` : format.format(Math.max(0, amount));
 }
@@ -122,17 +120,16 @@ export function formatMoney(amount: number | null | undefined, currency: EnergyC
  * A small cost, such as one session's: dollars under one in cents ("0.47¢", "12.3¢"), euros under one to four or
  * three places ("€0.0047", "€0.047"), like their prices per kWh; from one up, as formatMoney. "—" when unknown.
  */
-export function formatCost(amount: number | null | undefined, currency: EnergyCurrency | null | undefined): string {
-  if (amount === null || amount === undefined || !Number.isFinite(amount) || !currency) return "—";
+export function formatCost(amount: number | null, currency: EnergyCurrency | null): string {
+  if (amount === null || !Number.isFinite(amount) || !currency) return "—";
   const value = Math.max(0, amount);
   if (value >= 1) return formatMoney(value, currency);
   if (currency === "USD") return `${(value < 0.1 ? twoDecimals : oneDecimal).format(value * 100)}¢`;
   return `€${(value < 0.01 ? fourDecimals : threeDecimals).format(value)}`;
 }
 
-/** Energy in watt-hours, with its unit: "0.71 Wh", "31.4 Wh", "882 Wh", then "1.24 kWh". "—" when unknown. */
-export function formatWh(wh: number | null | undefined): string {
-  if (wh === null || wh === undefined || !Number.isFinite(wh)) return "—";
+/** Energy in watt-hours, with its unit: "0.71 Wh", "31.4 Wh", "882 Wh", then "1.24 kWh". */
+export function formatWh(wh: number): string {
   const value = Math.max(0, wh);
   if (value >= 1000) return `${twoDecimals.format(value / 1000)} kWh`;
   return `${(value < 10 ? twoDecimals : value < 100 ? oneDecimal : integer).format(value)} Wh`;
@@ -173,10 +170,10 @@ export function formatMonth(month: string): string {
   return monthFormat.format(new Date(`${month}-01T00:00:00Z`));
 }
 
-/** Round axis ticks from 0 that cover `max` in about `intervals` steps of 1, 2, 2.5 or 5 × 10ⁿ: 0 / 0.5 / 1 / 1.5. */
-export function axisTicks(max: number, intervals = 3): number[] {
+/** Round axis ticks from 0 that cover `max` in about three steps of 1, 2, 2.5 or 5 × 10ⁿ: 0 / 0.5 / 1 / 1.5. */
+export function axisTicks(max: number): number[] {
   if (!(max > 0) || !Number.isFinite(max)) return [0, 1];
-  const raw = max / intervals;
+  const raw = max / 3;
   const power = 10 ** Math.floor(Math.log10(raw));
   const step = [1, 2, 2.5, 5, 10].map((m) => m * power).find((candidate) => candidate >= raw) ?? 10 * power;
   const steps = Math.ceil(max / step - 1e-9);
@@ -199,10 +196,10 @@ export function daysOfMonth(month: string): string[] {
 }
 
 /**
- * Appends `items` (with a `t`) to `history`, keeping only the newest `windowMs` and never going back in time.
+ * Appends `items` (with a `t`) to `history`, keeping only the newest HISTORY_MS and never going back in time.
  * Returns `history` itself when nothing is new.
  */
-export function appendHistory<T extends { t: number }>(history: readonly T[], items: readonly T[], windowMs = HISTORY_MS): readonly T[] {
+export function appendHistory<T extends { t: number }>(history: readonly T[], items: readonly T[]): readonly T[] {
   let last = history.at(-1)?.t ?? -Infinity;
   const added: T[] = [];
   for (const item of items) {
@@ -212,7 +209,7 @@ export function appendHistory<T extends { t: number }>(history: readonly T[], it
   }
   if (added.length === 0) return history;
   const next = [...history, ...added];
-  const from = next.findIndex((item) => item.t >= last - windowMs);
+  const from = next.findIndex((item) => item.t >= last - HISTORY_MS);
   return from > 0 ? next.slice(from) : next;
 }
 

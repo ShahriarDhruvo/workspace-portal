@@ -22,7 +22,7 @@ import type { ActionResult } from "./validation";
 // Client for the gateway control API (docs/ARCHITECTURE.md, "Gateway control API").
 
 const DEFAULT_TIMEOUT_MS = 5_000;
-/** Start returns once the container is created; it may first evict an idle workspace (docker stop -t 10). */
+/** Start returns once the container is created; it may first stop an idle workspace to make room. */
 const START_TIMEOUT_MS = 30_000;
 /** Stop, release and data deletion include `docker stop -t 10`. */
 const STOP_TIMEOUT_MS = 30_000;
@@ -98,20 +98,17 @@ export const gateway = {
   live: (signal: AbortSignal) => send("GET", "/control/live", { signal, accept: "text/event-stream" }),
   stats: () => call<HostStats>("GET", "/control/stats"),
   /** The agents enabled on this install, in display order. */
-  agents: async (timeoutMs?: number) =>
-    (await call<{ agents: AgentInfo[] }>("GET", "/control/agents", timeoutMs ? { timeoutMs } : {})).agents,
+  agents: async (timeoutMs?: number) => (await call<{ agents: AgentInfo[] }>("GET", "/control/agents", { timeoutMs })).agents,
   listWorkspaces: async () => (await call<{ workspaces: WorkspaceInfo[] }>("GET", "/control/workspaces")).workspaces,
-  getWorkspace: (userId: number, timeoutMs?: number) =>
-    call<WorkspaceInfo>("GET", `/control/workspaces/${userId}`, timeoutMs ? { timeoutMs } : {}),
+  getWorkspace: (userId: number, timeoutMs?: number) => call<WorkspaceInfo>("GET", `/control/workspaces/${userId}`, { timeoutMs }),
   /**
    * Returns once the `kind` container is started (status "starting"); poll getWorkspace until ready. One of that kind
-   * already starting or running just returns its state and calls off a pending stop. Without `kind`: attaches to a
-   * starting or running workspace of either kind, else starts Private.
+   * already starting or running just returns its state and calls off a pending stop.
    */
-  start: (userId: number, kind?: WorkspaceKind, timeoutMs = START_TIMEOUT_MS) =>
-    call<WorkspaceInfo>("POST", `/control/workspaces/${userId}/start`, { body: kind ? { kind } : {}, timeoutMs }),
+  start: (userId: number, kind: WorkspaceKind) =>
+    call<WorkspaceInfo>("POST", `/control/workspaces/${userId}/start`, { body: { kind }, timeoutMs: START_TIMEOUT_MS }),
   /** The gateway writes the `workspace_stopped` audit entry, attributed to `actorUserId`. */
-  stop: (userId: number, reason: StopReason, actorUserId?: number) =>
+  stop: (userId: number, reason: StopReason, actorUserId: number) =>
     call<WorkspaceInfo>("POST", `/control/workspaces/${userId}/stop`, {
       body: { reason, actorUserId },
       timeoutMs: STOP_TIMEOUT_MS,
@@ -128,7 +125,7 @@ export const gateway = {
    * Erases one kind's files (its home and workspace folders, left empty): 409 `workspace_running` while that kind
    * is starting, running or stopping. The gateway writes the `workspace_files_erased` audit entry.
    */
-  eraseFiles: (userId: number, kind: WorkspaceKind, actorUserId?: number) =>
+  eraseFiles: (userId: number, kind: WorkspaceKind, actorUserId: number) =>
     call<{ ok: true }>("DELETE", `/control/workspaces/${userId}/files?kind=${kind}`, {
       body: { actorUserId },
       timeoutMs: STOP_TIMEOUT_MS,
@@ -189,7 +186,7 @@ export function toApiError(error: unknown): ApiError {
 }
 
 /** A server action's gateway work: done, or the failure as `words` puts it. */
-export async function attempt(work: () => Promise<unknown>, words = (error: ApiError) => error.message): Promise<ActionResult> {
+export async function attempt(work: () => Promise<unknown>, words: (error: ApiError) => string): Promise<ActionResult> {
   try {
     await work();
   } catch (error) {

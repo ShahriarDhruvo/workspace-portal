@@ -7,9 +7,9 @@ import type { RefObject } from "react";
  * A dialog's onCloseAutoFocus that hands the focus to `target`: the control that opened the dialog, or whatever
  * stands in for it once that control is gone. With no target on the page, Radix's default applies.
  */
-export function returnFocus(target: RefObject<HTMLElement | null> | undefined): (event: Event) => void {
+export function returnFocus(target: RefObject<HTMLElement | null>): (event: Event) => void {
   return (event) => {
-    const element = target?.current;
+    const element = target.current;
     if (!element?.isConnected) return;
     event.preventDefault();
     element.focus();

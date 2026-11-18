@@ -46,8 +46,8 @@ export function DataTable({ children, footer, variant = "framed", className, tab
   );
 }
 
-/** A column heading: 12px, muted, one line. `align="right"` for numbers. */
-export function DataTableHead({ align, className, ...props }: ComponentProps<typeof TableHead> & { align?: "left" | "right" }) {
+/** A column heading. `align="right"` for numbers. */
+export function DataTableHead({ align, className, ...props }: ComponentProps<typeof TableHead> & { align?: "right" }) {
   return (
     <TableHead
       scope="col"

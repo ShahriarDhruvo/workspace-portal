@@ -26,7 +26,7 @@ export function noteSpans(line: string): NoteSpan[] {
   const pattern = /`([^`]+)`|\*\*([^*]+)\*\*|__([^_]+)__/g;
   let last = 0;
   for (const match of line.matchAll(pattern)) {
-    const at = match.index ?? 0;
+    const at = match.index;
     if (at > last) spans.push({ text: plain(line.slice(last, at)) });
     if (match[1] !== undefined) spans.push({ text: match[1], code: true });
     else spans.push({ text: plain(match[2] ?? match[3] ?? ""), bold: true });
