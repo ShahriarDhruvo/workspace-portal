@@ -863,7 +863,7 @@ test("a workspace that hangs up frees its LLM slot and the upstream request", as
   assert.equal(g.info(alice).busy, false);
   assert.deepEqual(g.llmRequests.active(), []);
   assert.equal(g.finishedRequests.length, finishedBefore + 1, "a request that never left the gateway is not one");
-  assert.equal(g.finishedRequests[0]!.ok, false);
+  assert.equal(g.finishedRequests[0]!.ok, true, "hanging up is not the LLM server failing");
 });
 
 test("a workspace that hangs up before the LLM server answers is not that server failing", async () => {
@@ -876,6 +876,11 @@ test("a workspace that hangs up before the LLM server answers is not that server
   await waitFor(() => g.llm.abandoned === abandonedBefore + 1, "the upstream request to be aborted");
   await waitFor(() => g.llmQueue.inFlight === 0, "the slot to be released");
   assert.equal(logged(g, "LLM server did not answer"), false);
+  assert.equal(g.finishedRequests[0]!.ok, true);
+
+  const refused = await request(g.ports.service, { method: "POST", path: "/llm/v1/chat/completions", body: JSON.stringify({ fail: true }) });
+  assert.equal(refused.status, 500);
+  assert.equal(g.finishedRequests[0]!.ok, false, "an answer that is not 2xx is");
 });
 
 test("the service API refuses unknown callers and odd paths", async () => {

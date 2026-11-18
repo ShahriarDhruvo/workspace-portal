@@ -870,7 +870,8 @@ export async function startFakeLlm(): Promise<FakeUpstream> {
     }
     const chunks: Buffer[] = [];
     for await (const chunk of req) chunks.push(chunk as Buffer);
-    const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}") as { stream?: boolean; hold?: boolean };
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}") as { stream?: boolean; hold?: boolean; fail?: boolean };
+    if (body.fail) return void res.writeHead(500, { "content-type": "application/json" }).end('{"error":{"message":"out of memory"}}');
     res.on("close", () => {
       if (!res.writableFinished) fake.abandoned++;
     });

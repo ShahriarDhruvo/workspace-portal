@@ -34,7 +34,7 @@ export interface FinishedLlmRequest {
   timings: EngineTimings | null;
   /** The answer's `usage`; null when it had none. */
   usage: TokenUsage | null;
-  /** The request ended normally with a 2xx answer. */
+  /** False when the LLM server failed it: an answer that is not 2xx, or none, or a stream that broke. */
   ok: boolean;
 }
 

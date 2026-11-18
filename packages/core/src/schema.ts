@@ -188,7 +188,7 @@ export const workspaceSessions = sqliteTable(
     startedAt: integer("started_at").notNull(),
     /** When it stopped; null while it runs. */
     endedAt: integer("ended_at"),
-    /** Requests that reached the LLM server, and those of them that failed. */
+    /** Requests that reached the LLM server, and those of them it failed (not those the workspace hung up on). */
     requests: integer("requests").notNull().default(0),
     failed: integer("failed").notNull().default(0),
     /** As the answers' `usage` counts them, like llm_usage: tokens in (cached ones included) and out. */

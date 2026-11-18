@@ -284,7 +284,8 @@ async function proxyLlm(
   } finally {
     release();
     deps.manager.noteAgentActivity(userId);
-    const ok = result !== null && result.outcome === "completed" && result.status !== null && result.status >= 200 && result.status < 300;
+    // A workspace that hangs up (a cancelled turn, a helper request it dropped, its stop) is not the LLM server failing.
+    const ok = result !== null && result.outcome !== "failed" && (result.status === null || (result.status >= 200 && result.status < 300));
     progress?.finish(ok, tapped.parser?.usage ?? null);
   }
 
