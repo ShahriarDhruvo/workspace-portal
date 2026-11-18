@@ -306,9 +306,9 @@ traffic between containers. State is per listener: nothing carries between kinds
 ## Wire contract
 
 `packages/core/src/wire/` holds what the gateway sends and the browser may read: the control API's types
-(`types.ts`), the shared names (`kinds.ts`), the version syntax (`versions.ts`) and the energy price places
-(`energy-locations.ts`). Nothing in the folder imports from outside it, so client components can import values
-from `@portal/core/wire`; the package's main entry brings SQLite along and is for server code.
+(`types.ts`), the shared names and limits (`kinds.ts`), the version syntax (`versions.ts`) and the energy
+price places (`energy-locations.ts`). Nothing in the folder imports from outside it, so client components can
+import values from `@portal/core/wire`; the package's main entry brings SQLite along and is for server code.
 `web/lib/client-imports.test.ts` checks both halves of that rule. A change to a control API answer is a change
 to `types.ts` first: the gateway and the web app compile against it.
 
@@ -428,7 +428,7 @@ overlap, UID ranges, subnets, resolvers.
 | `packages/core/src/**/*.test.ts` | opening and migrating the database, the version syntax |
 | `gateway/src/**/*.test.ts` | each module beside its source: policy, headers, URL policy, settings, specs, updaters |
 | `gateway/test/*.test.ts` | the whole gateway through its real listeners |
-| `web/lib/**/*.test.ts` | the web app's pure logic, and the import rule of the wire contract |
+| `web/lib/**/*.test.ts` | the web app's pure logic, the wire contract's import rule, its fallbacks against `.env.example` |
 | `reader/test_*.py` | address checks, conversion, PDFs; run in the image build, which fails with them |
 | `hostd/test_hostd.py` | portal-hostd against a fake `/proc` and `/sys`: `python3 -m unittest hostd/test_hostd.py` |
 | `deploy/verify-isolation.sh` | the installed system: the only check of real Docker and nftables |
