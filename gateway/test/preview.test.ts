@@ -134,6 +134,10 @@ test("the app sees a local browser: Host and Origin localhost:<port>, its own co
     assert.equal(seen?.headers.referer, `http://localhost:${app.port}/game`);
     assert.equal(seen?.headers.cookie, "theme=dark; app=1", "no portal cookie reaches the app");
     assert.equal(seen?.headers["x-forwarded-for"], undefined);
+
+    // Behind a TLS proxy the browser's Referer says https.
+    await previewNavigate(g, g.tokens.alice, alice, "/", { cookie: chosen, referer: `https://127.0.0.1:${g.previewPort(alice)}/menu` });
+    assert.equal(app.seen.at(-1)?.headers.referer, `http://localhost:${app.port}/menu`);
   }));
 
 test("the app's answer: no portal cookies, framed only by its Web Shell inside the portal, redirects kept on the preview", () =>

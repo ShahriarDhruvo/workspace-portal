@@ -195,7 +195,8 @@ export function previewRequestHeaders(incoming: IncomingHttpHeaders, origin: str
   out.host = `localhost:${port}`;
   const local = `http://${out.host}`;
   if (incoming.origin !== undefined) out.origin = local;
-  const { referer } = incoming;
+  // Behind a TLS proxy the browser says https; the gateway speaks HTTP and knows the origin as http.
+  const referer = incoming.referer?.replace(/^https:/, "http:");
   if (referer !== undefined) {
     if (referer === origin || referer.startsWith(`${origin}/`)) out.referer = local + referer.slice(origin.length);
     else delete out.referer;
