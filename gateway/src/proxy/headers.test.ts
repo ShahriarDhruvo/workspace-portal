@@ -134,6 +134,7 @@ test("workspaceRequestHeaders: no cookie, Origin, browser credentials or forward
       "x-forwarded-host": "evil",
       "x-forwarded-port": "1",
       "x-forwarded-proto": "https",
+      "x-forwarded-server": "proxy.lan",
       "x-real-ip": "1.2.3.4",
       forwarded: "for=1.2.3.4",
       connection: "keep-alive",

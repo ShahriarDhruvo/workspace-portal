@@ -72,7 +72,7 @@ export function rejectsSameSite(method: string, headers: IncomingHttpHeaders, up
 }
 
 /** Never passed into a workspace: the portal's cookies, where the browser really is, and `expect` (the gateway answers it). */
-const NOT_FORWARDED = ["host", "cookie", "expect", "forwarded", "x-forwarded-for", "x-forwarded-host", "x-forwarded-port", "x-forwarded-proto", "x-real-ip"];
+const notForwarded = (name: string): boolean => ["host", "cookie", "expect", "forwarded", "x-real-ip"].includes(name) || name.startsWith("x-forwarded-");
 
 /** WebSocket subprotocol prefix a token agent's UI uses to carry its bearer token (browsers can't set headers). */
 export const BEARER_SUBPROTOCOL_PREFIX = "qwen-bearer.";
@@ -83,9 +83,9 @@ export const BEARER_SUBPROTOCOL_PREFIX = "qwen-bearer.";
  */
 export function workspaceRequestHeaders(incoming: IncomingHttpHeaders, authority: string, options: { websocket?: boolean } = {}): HeaderMap {
   const out = endToEndHeaders(incoming);
-  const stripped = [...NOT_FORWARDED, "origin", "authorization"];
   for (const name of Object.keys(out)) {
-    if (stripped.includes(name) || name.startsWith("sec-fetch-") || (options.websocket && name.startsWith("sec-websocket-"))) delete out[name];
+    const stripped = notForwarded(name) || name === "origin" || name === "authorization" || name.startsWith("sec-fetch-");
+    if (stripped || (options.websocket && name.startsWith("sec-websocket-"))) delete out[name];
   }
   out.host = authority;
   return out;
@@ -191,7 +191,7 @@ export function isPortalCookie(cookie: string): boolean {
  */
 export function previewRequestHeaders(incoming: IncomingHttpHeaders, origin: string, port: number): HeaderMap {
   const out = endToEndHeaders(incoming);
-  for (const name of NOT_FORWARDED) delete out[name];
+  for (const name of Object.keys(out)) if (notForwarded(name)) delete out[name];
   out.host = `localhost:${port}`;
   const local = `http://${out.host}`;
   if (incoming.origin !== undefined) out.origin = local;

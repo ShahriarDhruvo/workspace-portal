@@ -215,8 +215,8 @@ Then, on an agent port (`agent-proxy.ts`):
   at the cap it offers "Try again" (`POST /__portal/start`), which starts this port's kind.
 - A driver's blocked paths (phone pairing, OAuth) are refused in every spelling (403 `not_available`).
 - Going in, the gateway removes hop-by-hop headers, `Host`, `Cookie`, `Origin`, `Authorization`, `Expect`,
-  `Forwarded`, `X-Forwarded-For`/`-Host`/`-Port`/`-Proto`, `X-Real-IP` and `Sec-Fetch-*`; the driver then
-  sets `Host` and the credential, which a token agent gets only on requests that presented the browser token.
+  `Forwarded`, `X-Forwarded-*`, `X-Real-IP` and `Sec-Fetch-*`; the driver then sets `Host` and the credential,
+  which a token agent gets only on requests that presented the browser token.
 - Coming out, it removes `Set-Cookie` and `X-Frame-Options`, sets `frame-ancestors` to the portal's origin,
   and makes `Cache-Control` `private, no-store` unless the agent's forbids reuse or says `immutable`.
 - Bodies above `UPLOAD_LIMIT_MB` end in 413 `payload_too_large`; an agent that does not answer, in 502
