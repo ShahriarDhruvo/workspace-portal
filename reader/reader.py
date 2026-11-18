@@ -181,7 +181,6 @@ class PinnedConnection(http.client.HTTPConnection):
 @dataclass
 class Fetched:
     url: str
-    status: int
     content_type: str
     charset: str
     body: bytes
@@ -251,7 +250,7 @@ def fetch(
             content_type, charset = _content_type(response.getheader("Content-Type"))
             limit = MAX_PDF_BYTES if content_type == "application/pdf" else MAX_DOWNLOAD_BYTES
             body, truncated = _read_body(response, limit, deadline, sock)
-            return Fetched(target.url, status, content_type, charset, body, truncated)
+            return Fetched(target.url, content_type, charset, body, truncated)
         finally:
             connection.close()
     raise Refused("http", f"The site redirected more than {MAX_REDIRECTS} times.")
@@ -346,8 +345,6 @@ def _read_body(response: http.client.HTTPResponse, limit: int, deadline: float, 
     return (body[:limit], True) if len(body) > limit else (body, False)
 
 
-# ------------------------------------------------------------------ turning a response into text
-
 TEXT_TYPES = {
     "application/json", "application/ld+json", "application/xml", "application/javascript", "application/x-javascript",
     "application/x-yaml", "application/yaml", "application/toml", "application/x-sh", "application/x-ndjson",
@@ -441,8 +438,6 @@ def read(url: str, redirect_hosts: Iterable[str] | None = None, fetcher: Callabl
         text, truncated = text[:MAX_OUTPUT_CHARS], True
     return {"ok": True, "url": fetched.url, "kind": kind, "title": title, "text": text, "truncated": truncated, "note": note}
 
-
-# ------------------------------------------------------------------ HTTP server
 
 def log(event: str, **fields: object) -> None:
     print(json.dumps({"time": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "event": event, **fields}), file=sys.stderr, flush=True)

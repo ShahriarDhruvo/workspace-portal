@@ -181,7 +181,7 @@ class Fetching(unittest.TestCase):
     def test_a_page_is_fetched_from_the_checked_address(self):
         web = Web({("example.com", "/doc?x=1"): Reply(200, {"Content-Type": "text/html; charset=ISO-8859-1"}, b"<html>hi</html>")}, {"example.com": ["1.2.3.4", "5.6.7.8"]})
         fetched = web.fetch("https://example.com/doc?x=1")
-        self.assertEqual((fetched.url, fetched.status, fetched.content_type, fetched.charset, fetched.body, fetched.truncated), ("https://example.com/doc?x=1", 200, "text/html", "iso-8859-1", b"<html>hi</html>", False))
+        self.assertEqual((fetched.url, fetched.content_type, fetched.charset, fetched.body, fetched.truncated), ("https://example.com/doc?x=1", "text/html", "iso-8859-1", b"<html>hi</html>", False))
         self.assertEqual(web.connections, [("https", "example.com", 443, "1.2.3.4")], "connected to the address that was checked")
         host, path, headers = web.requests[0]
         self.assertEqual(headers["Host"], "example.com")
@@ -336,7 +336,7 @@ class Fetching(unittest.TestCase):
 
 
 def fetched(body: bytes, content_type: str = "text/html", charset: str = "", truncated: bool = False, url: str = "https://example.com/page") -> Fetched:
-    return Fetched(url, 200, content_type, charset, body, truncated)
+    return Fetched(url, content_type, charset, body, truncated)
 
 
 class Content(unittest.TestCase):

@@ -171,7 +171,7 @@ class Converter(unittest.TestCase):
         self.assertIn("More text for the page.", answer["markdown"])
 
     def test_reader_puts_it_together(self):
-        page = reader.Fetched(URL, 200, "text/html", "utf-8", DOCS, False)
+        page = reader.Fetched(URL, "text/html", "utf-8", DOCS, False)
         result = reader.read(URL, fetcher=lambda url, redirect_hosts=None: page)
         self.assertEqual((result["ok"], result["kind"], result["title"], result["truncated"], result["note"]), (True, "html", "Importing modules — Example 3.2 documentation", False, ""))
         self.assertIn("```python\nimport sys", result["text"])
@@ -187,7 +187,7 @@ class Pdf(unittest.TestCase):
         self.assertIn("## Page 3\n\nHello PDF reader", text)
 
     def test_long_files_are_cut_at_the_page_limit(self):
-        page = reader.Fetched("https://example.com/paper.pdf", 200, "application/pdf", "", tiny_pdf(["Hello"], pages=5), False)
+        page = reader.Fetched("https://example.com/paper.pdf", "application/pdf", "", tiny_pdf(["Hello"], pages=5), False)
         with mock.patch.object(reader, "MAX_PDF_PAGES", 2):
             result = reader.read(page.url, fetcher=lambda url, redirect_hosts=None: page)
         self.assertEqual((result["kind"], result["note"]), ("pdf", "Only the first 2 of 5 pages were read."))
@@ -197,7 +197,7 @@ class Pdf(unittest.TestCase):
         with self.assertRaises(reader.Refused) as caught:
             reader.extract_pdf(b"%PDF-1.7\nthis is not really a pdf")
         self.assertEqual(caught.exception.code, "unsupported")
-        empty = reader.Fetched("https://example.com/scan.pdf", 200, "application/pdf", "", tiny_pdf([]), False)
+        empty = reader.Fetched("https://example.com/scan.pdf", "application/pdf", "", tiny_pdf([]), False)
         with self.assertRaises(reader.Refused) as caught:
             reader.read(empty.url, fetcher=lambda url, redirect_hosts=None: empty)
         self.assertEqual(caught.exception.code, "empty")
