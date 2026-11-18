@@ -141,4 +141,4 @@ ROLE=llm HOSTD_TOKEN_FILE=./token python3 hostd/portal-hostd.py       # serve; t
 python3 -m unittest hostd/test_hostd.py                               # from the repo root; no root, no network
 ```
 
-`HOSTD_ROOT=/path` reads `/proc` and `/sys` from a tree under that path, as the tests do. `HOSTD_STATE_DIR` replaces `~/.local/state/portal-hostd`.
+`HOSTD_ROOT=/path` reads `/proc` and `/sys` from a tree under that path, as the tests do.

@@ -33,6 +33,7 @@ put() {  # put MODE FILE: stdin becomes FILE, never half-written
     mv -f "$2.new" "$2"
 }
 
+route_field() { ip -4 route get "$1" 2>/dev/null | sed -n "s/.* $2 \([^ ]*\).*/\1/p" | head -n 1 || true; }  # route_field IP dev|src
 fw_running() { command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; }
 fw_rule() { printf 'rule family="ipv4" source address="%s/32" port port="%s" protocol="tcp" accept' "$1" "$2"; }
 
@@ -55,7 +56,7 @@ fw_add() {  # fw_add IP PORT: add the rule to the zone of the interface that rou
     local ip=$1 port=$2 rule dev zone
     fw_running || { warn "firewalld is not running; open tcp/$port for $ip yourself"; return 0; }
     rule=$(fw_rule "$ip" "$port")
-    dev=$(ip -4 route get "$ip" 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p' | head -n 1) || true
+    dev=$(route_field "$ip" dev)
     zone=$( [[ -n $dev ]] && firewall-cmd --get-zone-of-interface="$dev" 2>/dev/null ) || zone=$(firewall-cmd --get-default-zone)
     if firewall-cmd --permanent --zone="$zone" --query-rich-rule="$rule" >/dev/null 2>&1; then
         say "firewalld: zone $zone already lets $ip reach tcp/$port"
@@ -91,7 +92,7 @@ uninstall() {
     rm -f "$UNIT_FILE"
     systemctl daemon-reload
     systemctl reset-failed "$UNIT" >/dev/null 2>&1 || true
-    fw_remove "$ip" "${port:-9180}"
+    fw_remove "$ip" "$port"
     rm -rf "$CONF_DIR" "$LIB_DIR"
     say "removed portal-hostd (unit, $CONF_DIR, $LIB_DIR$( [[ -n $ip ]] && echo ', firewalld rule' ))."
     say "an engine user's ~/.local/state/portal-hostd (saved previous quadlet) is kept; delete it by hand if unwanted."
@@ -178,7 +179,7 @@ printf '%s\n' "# portal-hostd configuration (written by hostd/install.sh; not se
     "ROLE=$role" "BIND=$bind" "PORT=$port" "INTERVAL_MS=${interval:-500}" "${role_conf[@]}" | put 0644 "$CONF"
 install -m 0755 "$SRC_DIR/portal-hostd.py" "$LIB_DIR/portal-hostd.py"
 python3 -I -m py_compile "$LIB_DIR/portal-hostd.py" || warn "could not precompile (the service compiles at start instead)"
-if [[ -f $SRC_DIR/README.md ]]; then install -m 0644 "$SRC_DIR/README.md" "$LIB_DIR/README.md"; fi
+install -m 0644 "$SRC_DIR/README.md" "$LIB_DIR/README.md"
 unit=$(<"$SRC_DIR/portal-hostd.service")
 unit=${unit//@ROLE@/$role}
 unit=${unit//@AFTER@/$after}
@@ -204,7 +205,7 @@ wait_health "$port"
 say "health check passed (role $role, port $port)"
 
 if [[ $role == llm ]]; then
-    src=$(ip -4 route get "$portal" 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -n 1) || true
+    src=$(route_field "$portal" src)
     [[ $token_stdin == 0 ]] || token="<the token you passed on stdin>"
     echo
     echo "Put these lines in the portal's .env:"

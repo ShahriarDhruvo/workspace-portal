@@ -137,15 +137,13 @@ class PerfUnavailable(Exception):
     pass
 
 
-_SYSCALL_NR = {'x86_64': 298, 'aarch64': 241}
 _libc = None
 
 
 def perf_event_open(type_, config, config1, config2, cpu, group_fd):
     global _libc
     import ctypes
-    nr = _SYSCALL_NR.get(os.uname().machine)
-    if nr is None:
+    if os.uname().machine != 'x86_64':      # 298 below is its perf_event_open
         raise OSError(38, 'perf_event_open: unsupported architecture')
     if _libc is None:
         _libc = ctypes.CDLL(None, use_errno=True)
@@ -153,7 +151,7 @@ def perf_event_open(type_, config, config1, config2, cpu, group_fd):
     # struct perf_event_attr, PERF_ATTR_SIZE_VER1 (72 bytes): read_format = GROUP|TOTAL_TIME_ENABLED|RUNNING
     attr = struct.pack('<IIQQQQQIIQQ', type_, 72, config, 0, 0, 8 | 1 | 2, 0, 0, 0, config1, config2)
     buf = ctypes.create_string_buffer(attr, 72)
-    fd = _libc.syscall(ctypes.c_long(nr), buf, ctypes.c_int(-1), ctypes.c_int(cpu), ctypes.c_int(group_fd),
+    fd = _libc.syscall(ctypes.c_long(298), buf, ctypes.c_int(-1), ctypes.c_int(cpu), ctypes.c_int(group_fd),
                        ctypes.c_ulong(8))  # PERF_FLAG_FD_CLOEXEC
     if fd < 0:
         err = ctypes.get_errno()
@@ -885,7 +883,7 @@ class Sampler:
                 self.cond.wait(left)
             return (self.seq, self.latest) if self.latest is not None else (seq, None)
 
-    def current(self, timeout=3.0):
+    def current(self):
         """A fresh sample for /v1/sample: the latest if recent, else the next one. Keeps the sampler running
         for `keepalive` seconds."""
         with self.cond:
@@ -894,7 +892,7 @@ class Sampler:
             if self.latest is not None and time.monotonic() - self.latest_mono < 1.5 * self.interval:
                 return self.latest
             seq = self.seq
-        return self.wait_newer(seq, timeout)[1]
+        return self.wait_newer(seq, 3.0)[1]
 
     def _run(self):
         prev = None
@@ -1213,13 +1211,13 @@ class Job:
 
 class Engine:
     def __init__(self, unit, quadlet, url, state_dir, runner=None, ready_timeout=600.0, restart_timeout=900.0,
-                 poll=2.0, http_timeout=2.0, pull_timeout=3600.0):
+                 poll=2.0, http_timeout=2.0):
         self.unit, self.quadlet, self.url = unit, quadlet, url.rstrip('/')
         self.prev_path = os.path.join(state_dir, unit.removesuffix('.service') + '.container.prev')
         self.state_dir = state_dir
         self.runner = runner or Runner()
         self.ready_timeout, self.restart_timeout = ready_timeout, restart_timeout
-        self.poll, self.http_timeout, self.pull_timeout = poll, http_timeout, pull_timeout
+        self.poll, self.http_timeout = poll, http_timeout
         self.lock = threading.Lock()
         self.job = None
         self._images_cache = (0.0, None)
@@ -1396,8 +1394,7 @@ class Engine:
 
     def _pull(self, job):
         job.set_step(f'Pulling {job.image}')
-        rc = self.runner.stream(self.runner.podman(['pull', job.image], unit=f'portal-hostd-{job.id}'), job.add,
-                                self.pull_timeout)
+        rc = self.runner.stream(self.runner.podman(['pull', job.image], unit=f'portal-hostd-{job.id}'), job.add, 3600)
         if rc < 0:  # our timeout killed systemd-run; stop the transient unit as well
             self._stop_pull(job)
         if job.cancel_requested:
@@ -1563,8 +1560,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.rfile = _DeadlineReader(raw, self.connection, time.monotonic() + HEADER_TIMEOUT)
         try:
             super().handle_one_request()
-        except TimeoutError:
-            self.close_connection = True
         finally:
             self.rfile = raw
             try:
@@ -1773,8 +1768,8 @@ def config(env):
     quadlet = env.get('ENGINE_QUADLET', '').strip() or (
         os.path.join(home, '.config/containers/systemd', unit.removesuffix('.service') + '.container') if unit else '')
     return {'role': role, 'bind': bind, 'port': port, 'interval_ms': interval, 'engine_unit': unit,
-            'engine_quadlet': os.path.expanduser(quadlet), 'engine_url': env.get('ENGINE_URL', '').strip() or 'http://127.0.0.1:8080',
-            'state_dir': env.get('HOSTD_STATE_DIR', '').strip() or os.path.join(home, '.local/state/portal-hostd'),
+            'engine_quadlet': quadlet, 'engine_url': env.get('ENGINE_URL', '').strip() or 'http://127.0.0.1:8080',
+            'state_dir': os.path.join(home, '.local/state/portal-hostd'),
             'root': env.get('HOSTD_ROOT', '')}
 
 

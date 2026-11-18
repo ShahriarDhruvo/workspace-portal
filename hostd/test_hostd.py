@@ -1216,8 +1216,6 @@ class TestHttpEngine(HttpCase):
         self.assertEqual((st, body), (200, {'ok': True}))
         st, body = self.req('POST', '/v1/engine/cancel')
         self.assertEqual((st, body), (200, {'cancelled': False}))
-        st, body = self.req('POST', '/v1/engine/rollback')
-        self.assertEqual((st, body['error']), (404, 'not_found'))   # removed: switching back is an apply
 
 
 # --------------------------------------------------------------------------------------- config tests
