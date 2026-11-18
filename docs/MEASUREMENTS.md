@@ -1,14 +1,14 @@
 # Measurements
 
-What was measured on the test machines, and what was tried and left out. The settings these numbers led to are
-in [`llm-server/`](../llm-server) and [`.env.example`](../.env.example).
+What was measured on the test machines, and what was tried and left out. The engine and fan settings these
+numbers led to are in [`llm-server/`](../llm-server).
 
 - **LLM server:** Bosgame M5, Ryzen AI Max+ 395, 128 GB, board AXB35-02, BIOS 3.11, Fedora 44.
 - **Portal server:** Pentium G4400T (2 cores), 8 GB, Fedora 45.
 - One unit of each, at room temperature. Power and temperature are the chip's own sensors, not a wall meter.
 - tok/s is tokens per second. Reading is prompt processing, writing is the answer.
 - The fan, undervolt, model, engine, image and full-machine measurements date from kernel 7.2.15 and were not
-  repeated with 7.3.4 on November 17, 2026.
+  repeated with 7.3.4.
 
 ## Settings and what they buy
 
@@ -20,8 +20,7 @@ in [`llm-server/`](../llm-server) and [`.env.example`](../.env.example).
 | Power profile | Performance | 120 W sustained, 160 W peak. 132 W can be forced but is slower. |
 | Fan curve | up to 95% | Chip about 6 °C cooler. Reading holds 1,760-1,787 tok/s instead of sagging to as low as 1,484 after long load: up to 20% faster when hot. |
 | CPU governor | performance | TuneD profile `accelerator-performance`. Baseline for all numbers. |
-| Speculative decoding | MTP | A helper file drafts tokens ahead and about 80% are accepted. Writing runs at 55 to 66 tok/s, against 24 to 27 on llama.cpp without it. |
-| CPU undervolt, not in use | curve offset -50 | 7.4% more CPU work at 15 W less and 10 °C cooler. About 1% faster prompt reading, because the GPU does most of the work. |
+| Speculative decoding | MTP | A helper file drafts tokens ahead and about 80% are accepted. Writing runs at 61 to 70 tok/s (14 runs, November 18, 2026), against 24 to 27 on llama.cpp without it. |
 
 ## Levers tried and left alone
 
@@ -39,7 +38,7 @@ in [`llm-server/`](../llm-server) and [`.env.example`](../.env.example).
 | GPU undervolt<br>`sudo ryzenadj --set-cogfx=1048526` | `set_cogfx is not supported on this family` | locked |
 | CPU overclock | No BIOS option, and `ryzenadj` has no clock or voltage control for this chip. | locked |
 | RAM speed | Rated for 8,533 MT/s, runs at 8,000. The firmware sets that at power-on; there is no setting in the BIOS or in Linux. The most it could add is 6.7% writing speed. | locked |
-| Quiet power profile | 55 W. Prompt reading 28% slower. | costs speed |
+| GPU job timeout<br>`amdgpu.lockup_timeout=60000` | Without it the full-load test passes, a 12-megapixel image is read, and the kernel logs no GPU timeout. | not needed |
 | Repaste | Not tried. It means opening the case, and the fan curve already removes most of the throttling. | not tried |
 
 ## Fans
@@ -51,7 +50,6 @@ in [`llm-server/`](../llm-server) and [`.env.example`](../.env.example).
 
 - Short jobs gain about 3%, long hot ones up to 20%. Writing speed does not change: it depends on memory
   bandwidth, not on temperature.
-- At 100% fan 1 sags to 1,300-2,700 rpm once the machine is hot, and the chip runs 4-6 °C warmer than at 95%.
 - The upstream driver's stock fan settings do nothing on BIOS 3.11: the firmware's top fan level is only about
   3,000 rpm.
 - Fan speed by duty: 40% to 75%, about 2,500 to 3,800 rpm; 80%, about 3,900 rpm; 95%, about 4,300 rpm. With the
@@ -76,71 +74,16 @@ Not in use on the test machine. In the same 45-second all-core test:
 | Stock | 4,650 MHz | 140 W | 96-98 °C |
 | Curve offset -50 | 5,000 MHz | 127 W | 87 °C |
 
-- 7.4% more work at 15 W less and 10 °C cooler. Prompt reading went from 1,815 and 1,819 tok/s to 1,836 and
-  1,832, about 1%.
+- 7.4% more work at 13 W less and 10 °C cooler. Prompt reading went from 1,815 and 1,819 tok/s to 1,836 and
+  1,832, about 1%, because the GPU does most of the work.
 - -55 through -200 are accepted but behave exactly like -50.
 - It passed 17 minutes of checks and about 25 minutes of AI load. It was not run for days.
-- Every chip is different. Run the full-load test (`llm-server/acceptance.py`) once with the offset on before
-  relying on it.
-
-About 20 minutes and one reboot, after the model download has finished, with
-[RyzenAdj](https://github.com/FlyGoat/RyzenAdj) 0.18.0 from
-[COPR shdwchn10/ryzenadj](https://copr.fedorainfracloud.org/coprs/shdwchn10/ryzenadj/). The reboot loads its
-driver:
-
-```sh
-sudo dnf -y copr enable shdwchn10/ryzenadj
-sudo dnf -y install ryzenadj stress-ng
-sudo reboot
-```
-
-Apply -50 until the next reboot and check the arithmetic on all cores together, then on each core alone. The
-number is 1048576 minus the offset:
-
-```sh
-lsmod | grep ryzen_smu
-sudo ryzenadj --set-coall=1048526 | tail -1
-stress-ng --cpu 32 --cpu-method matrixprod --verify --timeout 180s --metrics-brief 2>&1 | grep -E "failed|cpu "
-for c in $(seq 0 15); do
-  stress-ng --cpu 1 --taskset $c --cpu-method matrixprod --verify --timeout 45s 2>&1 | grep -qE "failed: [1-9]|unsuccessful" && echo "core $c FAILED"
-done; echo "per-core done"
-```
-
-Passed: `Successfully set coall to 1048526`, `failed: 0`, and `per-core done` with no `FAILED` line above it.
-After a freeze or a `FAILED` line, reboot, which clears the offset, and repeat with -40 (`1048536`).
-
-Keep the passing value across boots:
-
-```sh
-sudo tee /etc/systemd/system/m5-undervolt.service >/dev/null <<'X'
-[Unit]
-Description=Bosgame M5 CPU undervolt, curve offset -50
-After=m5-fans.service
-
-[Service]
-Type=oneshot
-ExecStart=/usr/bin/ryzenadj --set-coall=1048526
-RemainAfterExit=yes
-
-[Install]
-WantedBy=multi-user.target
-X
-sudo systemctl daemon-reload
-sudo systemctl enable --now m5-undervolt.service
-journalctl -u m5-undervolt.service -b --no-pager | grep coall
-```
-
-Back to stock voltage:
-
-```sh
-sudo systemctl disable --now m5-undervolt.service
-sudo reboot
-```
-
-| Symptom | Cause and fix |
-|---|---|
-| `ryzenadj`: `Unable to get memory access` | Its driver is not loaded yet. Reboot once after installing; `lsmod \| grep ryzen_smu` must print a line. |
-| Freeze or wrong results after the undervolt | Reboot, `sudo systemctl disable m5-undervolt.service`, and test -40. |
+- Set with [RyzenAdj](https://github.com/FlyGoat/RyzenAdj) 0.18.0 from
+  [COPR shdwchn10/ryzenadj](https://copr.fedorainfracloud.org/coprs/shdwchn10/ryzenadj/), whose driver loads at
+  the next boot: `sudo ryzenadj --set-coall=1048526`, which is 1048576 minus the offset and lasts until a reboot.
+- Every chip is different. Check the arithmetic on all cores and on each core alone
+  (`stress-ng --cpu-method matrixprod --verify`), and run the full-load test (`llm-server/acceptance.py`) once
+  with the offset on before relying on it. After a freeze or a failed check, a reboot clears the offset.
 
 ## Memory
 
@@ -155,7 +98,7 @@ The LLM server's 128 GiB with the model loaded and seven 128K sessions:
 
 | Layout | Free memory | Timings |
 |---|---|---|
-| 7 × 128K | 11.7 GiB after load, about 6 GiB while in use. Lowest: 5.7 GiB with seven full prompts at once, 4.0 GiB while a raw 12 MP photo was read | See [Load](#load) |
+| 7 × 128K | 11.7 GiB after load, about 6 GiB while in use. Lowest: 5.7 GiB with seven full prompts at once on Gufo 0.34.0 (8.8 GiB on 0.35.0, right after a restart), 4.0 GiB while a raw 12 MP photo was read | See [Load](#load) |
 | 3 × 256K | About 12 GiB under full load, with an idle workspace stack next to the model | Three 259,000-token prompts at once: first words after 8 minutes, follow-up turns after 0.7 seconds |
 
 Agents on the LLM server itself, four sandboxes of 3 GB each next to the model. The 3 × 256K layout was not
@@ -170,16 +113,13 @@ tried with busy sandboxes.
 
 ## Load
 
-Seven 128,000-token prompts at once, November 17, 2026, Gufo 0.34.0, sampled at temperature 1, top-p 0.95,
-top-k 20, min-p 0:
+Seven 128,000-token prompts at once (`llm-server/acceptance.py`), two runs on November 18, 2026, Gufo 0.35.0:
 
-- The run took 9 minutes 20 seconds. All seven sessions wrote their first word after 527 to 534 seconds and
-  every tool call was correct.
-- The follow-up turns answered in 0.4 to 2.0 seconds, because the 128,000 tokens were already cached.
-- Nothing was written to swap, nothing was killed for lack of memory, Gufo did not restart, and the chip held
-  83-84 °C with the fans at 80%.
-- The first run that day failed: one session cut its 24-character receipt to 16 characters. The server did its
-  part.
+- All seven sessions wrote their first word after 523 to 532 seconds, and every tool call was correct.
+- The follow-up turns answered in 0.4 to 1.8 seconds, because the 128,000 tokens were already cached.
+- Nothing was written to swap, nothing was killed for lack of memory, and free memory stayed above 8.8 GiB.
+- For the first three minutes the chip ran at its limit, 98 °C on the CPU's sensor and up to 101 °C on the
+  GPU's, with the fans at 95%. Then it held 88-89 °C.
 
 A full machine, the worst case that was tried: seven clients each sent a 122,000-token prompt, eight more
 requests queued behind them, a second wave of seven followed, and real agents worked at the same time.
@@ -206,8 +146,8 @@ Engine update through Admin > Updates, November 17, 2026:
   32 seconds.
 - The day before, a forced bad update put 0.31.0 back by itself.
 
-After a reboot, November 17, 2026: Gufo answers after 35 seconds and the portal after 25, counted from the
-start of the kernel.
+After a reboot, November 18, 2026: Gufo answers after 32 seconds and the portal, over HTTPS, after 22, counted
+from the start of the kernel. A restart of Gufo alone is healthy after 17 to 18 seconds.
 
 ## Model and engine
 

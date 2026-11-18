@@ -14,7 +14,7 @@ die() { echo "install.sh: $*" >&2; exit 1; }
 remove() {   # every version of it; the daemon's exit and the module's unload both release the fans
     systemctl disable --now m5-fans.service 2>/dev/null || true
     [[ ! -d /sys/module/$PACKAGE_NAME ]] || rmmod "$PACKAGE_NAME"
-    dkms status "$PACKAGE_NAME" 2>/dev/null | sed -n "s|^\($PACKAGE_NAME/[^,:]*\).*|\1|p" | sort -u | xargs -r -n 1 dkms remove --all
+    { dkms status "$PACKAGE_NAME" 2>/dev/null || true; } | sed -n "s|^\($PACKAGE_NAME/[^,:]*\).*|\1|p" | sort -u | xargs -r -n 1 dkms remove --all
     rm -rf /usr/src/"$PACKAGE_NAME"-* /usr/local/sbin/m5-fans.py /etc/systemd/system/m5-fans.service
     systemctl daemon-reload
 }

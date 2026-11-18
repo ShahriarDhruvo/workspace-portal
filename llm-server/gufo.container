@@ -8,7 +8,7 @@ Image=ghcr.io/gufo-org/toolboxes/gufo-runtime@sha256:99e9b5471b7a9b007c686c2aa79
 Pull=missing
 AddDevice=/dev/kfd
 AddDevice=/dev/dri
-# Listens on every interface; the firewall only lets the portal server reach 8080.
+# Listens on every interface, without a login: the firewall must let only the portal server reach 8080.
 PublishPort=8080:8080
 Volume=/models/qwen3.8-flash-next:/models:ro,z
 HealthCmd=curl -fsS -o /dev/null http://127.0.0.1:8080/ready
