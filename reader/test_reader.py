@@ -21,6 +21,7 @@ import urllib.request
 import zlib
 from unittest import mock
 
+import extract
 import reader
 from reader import Fetched, Refused, Target, fetch, is_public, kind_of, parse_target, resolve_public
 
@@ -42,7 +43,7 @@ class Reply:
     def getheader(self, name: str, default: str | None = None) -> str | None:
         return self._headers.get(name.lower(), default)
 
-    def read(self, size: int) -> bytes:
+    def read1(self, size: int) -> bytes:
         if self._fail_after is not None and self._sent >= self._fail_after:
             raise ConnectionResetError("reset")
         chunk = self._body[self._sent : self._sent + size]
@@ -83,7 +84,7 @@ class Web:
                     raise ConnectionRefusedError("nothing there")
 
             def getresponse(self) -> Reply:
-                return web.pages[(target.host, path_of(web))]
+                return web.pages[(target.host, web.requests[-1][1])]
 
             def close(self) -> None:
                 pass
@@ -92,10 +93,6 @@ class Web:
 
     def fetch(self, url: str, **options) -> Fetched:
         return fetch(url, resolver=self.resolver, connector=self.connector, **options)
-
-
-def path_of(web: Web) -> str:
-    return web.requests[-1][1]
 
 
 def refusal(test: unittest.TestCase, code: str, call, *args, **kwargs) -> Refused:
@@ -304,7 +301,7 @@ class Fetching(unittest.TestCase):
 
     def test_the_deadline_holds_against_a_site_that_drips_or_stalls(self):
         # A real socket: after the headers the site sends a byte now and then (or nothing), which never
-        # fills a read buffer and never trips a per-read timeout. It used to hold the request until the kill timer.
+        # fills a read buffer and never trips a per-read timeout.
         for pause in (0.05, 30.0):
 
             class Slow(socketserver.BaseRequestHandler):
@@ -358,10 +355,9 @@ class Content(unittest.TestCase):
             self.assertEqual(kind_of(fetched(b"....", content_type)), "other", content_type)
 
     def test_text_is_decoded_with_the_declared_charset_or_utf8(self):
-        self.assertEqual(reader.decode_text(fetched("grüße".encode("latin-1"), "text/plain", "iso-8859-1")), "grüße")
-        self.assertEqual(reader.decode_text(fetched("grüße".encode(), "text/plain", "")), "grüße")
-        self.assertEqual(reader.decode_text(fetched("grüße".encode(), "text/plain", "no-such-charset")), "grüße")
-        self.assertEqual(reader.decode_text(fetched(b"gr\xff\xfe", "text/plain", "utf-8")), "gr��")
+        shown = '<meta charset="iso-8859-1"> grüße'  # a text file that shows a <meta> is not an HTML page that has one
+        for body, charset, text in [("grüße".encode("latin-1"), "iso-8859-1", "grüße"), ("grüße".encode(), "", "grüße"), ("grüße".encode(), "no-such-charset", "grüße"), (b"gr\xff\xfe", "utf-8", "gr��"), (shown.encode(), "", shown)]:
+            self.assertEqual(self.read(fetched(body, "text/plain", charset))["text"], text)
 
     def test_titles(self):
         self.assertEqual(reader.html_title(b"<html><head><TITLE lang=en>\n Tom &amp; Jerry \n</TITLE></head>"), "Tom & Jerry")
@@ -369,31 +365,31 @@ class Content(unittest.TestCase):
         self.assertEqual(reader.html_title(b"<title>A</title><title>B</title>"), "A")
         self.assertEqual(reader.html_title(b"<titles>not this</titles><title>this</title>"), "this")
         started = time.monotonic()
-        self.assertEqual(reader.html_title(b"<title>" * 30_000), "", "140 KB of unclosed titles used to take seconds")
+        self.assertEqual(reader.html_title(b"<title>" * 30_000), "", "unclosed titles are not searched one by one")
         self.assertEqual(reader.html_title(b"<title " * 30_000 + b">x</title>"), "")
         self.assertLess(time.monotonic() - started, 1.0)
 
-    def read(self, page: Fetched, **patches) -> dict:
-        with mock.patch.multiple(reader, **patches) if patches else mock.patch.object(reader, "PORT", reader.PORT):
-            return reader.read(page.url, fetcher=lambda url, redirect_hosts=None: page)
+    def read(self, page: Fetched) -> dict:
+        return reader.read(page.url, fetcher=lambda url, redirect_hosts=None: page)
 
     def test_read_returns_text_and_markdown_as_they_are(self):
         result = self.read(fetched(b"# Title\n\nBody\x00 text\n", "text/markdown", url="https://example.com/a.md"))
         self.assertEqual(result, {"ok": True, "url": "https://example.com/a.md", "kind": "markdown", "title": "", "text": "# Title\n\nBody text", "truncated": False, "note": ""})
         cut = self.read(fetched(b"x" * 100, "text/plain", truncated=True))
         self.assertEqual((cut["kind"], cut["truncated"]), ("text", True))
-        capped = self.read(fetched(b"y" * 5000, "text/plain"), MAX_OUTPUT_CHARS=1200)
+        with mock.patch.object(reader, "MAX_OUTPUT_CHARS", 1200):
+            capped = self.read(fetched(b"y" * 5000, "text/plain"))
         self.assertEqual((len(capped["text"]), capped["truncated"]), (1200, True))
 
     def test_read_refuses_what_is_not_text(self):
         self.assertEqual(refusal(self, "unsupported", self.read, fetched(b"\x89PNG....", "image/png")).message, "That URL is a image/png file, which cannot be read as text.")
         refusal(self, "too_large", self.read, fetched(b"%PDF-1.7", "application/pdf", truncated=True))
-        with mock.patch.object(reader, "extract_html", return_value=("  \n", "")):
+        with mock.patch.object(extract, "html_to_markdown", return_value=("  \n", "")):
             self.assertIn("JavaScript", refusal(self, "empty", self.read, fetched(b"<html><body><div id=root></div></body></html>")).message)
-        with mock.patch.object(reader, "extract_html", return_value=("# Doc\n\nText", "A note.")) as extract_html:
+        with mock.patch.object(extract, "html_to_markdown", return_value=("# Doc\n\nText", "A note.")) as html_to_markdown:
             page = self.read(fetched(b"<html><head><title>Doc page</title></head><body>...</body></html>", charset="koi8-r"))
         self.assertEqual((page["kind"], page["title"], page["text"], page["note"]), ("html", "Doc page", "# Doc\n\nText", "A note."))
-        self.assertEqual(extract_html.call_args.args[1:], ("https://example.com/page", "koi8-r"))
+        self.assertEqual(html_to_markdown.call_args.args[1:], ("https://example.com/page", "koi8-r"))
 
 
 class Service(unittest.TestCase):

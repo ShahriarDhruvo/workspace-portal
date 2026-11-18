@@ -57,18 +57,18 @@ def tiny_pdf(lines: list[str], pages: int = 1) -> bytes:
 
 class Decoding(unittest.TestCase):
     def test_charset_comes_from_the_server_then_the_page_then_utf8(self):
-        self.assertEqual(extract.decode_html("<p>grüße</p>".encode("latin-1"), "iso-8859-1"), "<p>grüße</p>")
-        self.assertEqual(extract.decode_html('<meta charset="windows-1251"><p>привет</p>'.encode("cp1251")), '<meta charset="windows-1251"><p>привет</p>')
-        self.assertEqual(extract.decode_html('<meta http-equiv="Content-Type" content="text/html; charset=Shift_JIS"><p>日本</p>'.encode("shift_jis")), '<meta http-equiv="Content-Type" content="text/html; charset=Shift_JIS"><p>日本</p>')
-        self.assertEqual(extract.decode_html("<p>grüße</p>".encode()), "<p>grüße</p>")
-        self.assertEqual(extract.decode_html(b"\xef\xbb\xbf<p>bom</p>", "iso-8859-1"), "<p>bom</p>")
-        self.assertEqual(extract.decode_html("<p>grüße</p>".encode(), "no-such-charset"), "<p>grüße</p>")
-        self.assertEqual(extract.decode_html(b"<p>bad \xff byte</p>", "utf-8"), "<p>bad � byte</p>")
+        self.assertEqual(extract.decode("<p>grüße</p>".encode("latin-1"), "iso-8859-1", meta=True), "<p>grüße</p>")
+        self.assertEqual(extract.decode('<meta charset="windows-1251"><p>привет</p>'.encode("cp1251"), meta=True), '<meta charset="windows-1251"><p>привет</p>')
+        self.assertEqual(extract.decode('<meta http-equiv="Content-Type" content="text/html; charset=Shift_JIS"><p>日本</p>'.encode("shift_jis"), meta=True), '<meta http-equiv="Content-Type" content="text/html; charset=Shift_JIS"><p>日本</p>')
+        self.assertEqual(extract.decode("<p>grüße</p>".encode(), meta=True), "<p>grüße</p>")
+        self.assertEqual(extract.decode(b"\xef\xbb\xbf<p>bom</p>", "iso-8859-1", meta=True), "<p>bom</p>")
+        self.assertEqual(extract.decode("<p>grüße</p>".encode(), "no-such-charset", meta=True), "<p>grüße</p>")
+        self.assertEqual(extract.decode(b"<p>bad \xff byte</p>", "utf-8", meta=True), "<p>bad � byte</p>")
 
 
 class PlainText(unittest.TestCase):
     def test_everything_readable_is_kept_in_order(self):
-        text = extract.plain_text(extract.decode_html(DOCS), URL)
+        text = extract.plain_text(extract.decode(DOCS, meta=True), URL)
         self.assertNotIn("SCRIPT-TEXT-MUST-NOT-APPEAR", text)
         self.assertNotIn("STYLE-TEXT-MUST-NOT-APPEAR", text)
         self.assertIn("- [SIDEBAR-INSTALL-LINK](https://docs.example.org/install.html)", text, "no judgement about what is a menu")
@@ -100,7 +100,7 @@ class Fallbacks(unittest.TestCase):
 
     def test_a_good_conversion_is_returned_as_it_is(self):
         markdown = "# Title\n\n" + "A sentence of real content. " * 20
-        self.assertEqual(self.run_with({"title": "Title", "markdown": markdown + "\n\n"}), (markdown.strip(), ""))
+        self.assertEqual(self.run_with({"markdown": markdown + "\n\n"}), (markdown.strip(), ""))
 
     def test_a_failed_conversion_falls_back_to_the_whole_text(self):
         text, note = self.run_with(None)
@@ -110,18 +110,18 @@ class Fallbacks(unittest.TestCase):
 
     def test_a_conversion_that_lost_the_page_falls_back_too(self):
         long_page = b"<html><body><div class='x'>" + b"<p>Real paragraph of the page, number one of many.</p>" * 80 + b"</div></body></html>"
-        text, note = self.run_with({"title": "", "markdown": "Cookie notice"}, long_page)
+        text, note = self.run_with({"markdown": "Cookie notice"}, long_page)
         self.assertIn("Real paragraph of the page", text)
         self.assertEqual(note, extract.UNCLEANED)
 
     def test_a_short_page_is_returned_with_a_note(self):
         short = b"<html><body><p>It works!</p></body></html>"
-        self.assertEqual(self.run_with({"title": "", "markdown": "It works!"}, short), ("It works!", extract.LITTLE_TEXT))
-        self.assertEqual(self.run_with({"title": "", "markdown": ""}, short), ("It works!", extract.LITTLE_TEXT))
+        self.assertEqual(self.run_with({"markdown": "It works!"}, short), ("It works!", extract.LITTLE_TEXT))
+        self.assertEqual(self.run_with({"markdown": ""}, short), ("It works!", extract.LITTLE_TEXT))
 
     def test_a_page_without_text_gives_nothing(self):
         shell = b"<html><head><script>boot()</script></head><body><div id='root'></div><noscript>Enable JavaScript.</noscript></body></html>"
-        self.assertEqual(self.run_with({"title": "", "markdown": ""}, shell), ("", ""))
+        self.assertEqual(self.run_with({"markdown": ""}, shell), ("", ""))
         self.assertEqual(self.run_with(None, shell), ("", ""))
 
     def test_a_converter_that_hangs_or_breaks_counts_as_failed(self):

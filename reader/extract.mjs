@@ -1,18 +1,7 @@
 // HTML to markdown for the page reader: one process per page, HTML on stdin, JSON on stdout.
-//
-//   node extract.mjs <url> < page.html   ->   {"title": "...", "markdown": "...", "codeBlocks": 12}
-//
-// Defuddle finds the main content and converts it. It was chosen for agents that read
-// documentation: of the extractors compared it is the one that keeps code blocks as code. Four
-// things it gets wrong on documentation sites are corrected here, before and after it runs:
-//
-//   1. It deletes same-page cross-references (Sphinx's <a class="reference internal" href="#...">)
-//      together with their text, which leaves holes in sentences.
-//   2. It removes elements whose id contains words such as "search" or "share". On headings and
-//      sections an id is an anchor made from the title, so "Module search path" would disappear.
-//   3. Its markdown step can re-indent, re-flow or drop blank lines in code. Every <pre> is saved
-//      first and put back verbatim afterwards, with the language of the block when the page names it.
-//   4. It drops the page's main heading.
+//   node extract.mjs <url> < page.html   ->   {"markdown": "..."}
+// Defuddle finds the main content and converts it. The functions below correct, before and after it runs,
+// what it gets wrong on documentation sites.
 import { parseHTML } from "linkedom";
 import { Defuddle } from "defuddle/node";
 
@@ -26,7 +15,8 @@ const DEFUDDLE_OPTIONS = { markdown: true, useAsync: false, removeContentPattern
 const LANGUAGE_CLASS = /(?:language-|lang-|highlight-source-|highlight-|brush:\s*|sp-)([a-z0-9+#-]+)/i;
 const NOT_A_LANGUAGE = new Set(["default", "none", "text", "plaintext", "cm", "pre", "code", "stack", "pristine", "placeholder", "wrapper", "layout", "editor", "tabs", "tab"]);
 
-/** Fix 1: a same-page link with real text stays (footnote markers such as [1] or ↩ may go). */
+/** Defuddle deletes same-page cross-references (Sphinx's a.reference.internal) with their text, which leaves holes
+ * in sentences: without the class they stay. Footnote markers such as [1] or ↩ may go. */
 function keepCrossReferences(document) {
   for (const link of document.querySelectorAll('a[href^="#"][class*="ref" i]')) {
     const text = (link.textContent || "").trim();
@@ -34,14 +24,16 @@ function keepCrossReferences(document) {
   }
 }
 
-/** Fix 2: ids on sections, headings and definition terms are anchors, not hints about layout. */
+/** Defuddle removes elements whose id contains words such as "search" or "share"; on sections, headings and
+ * definition terms an id is an anchor made from the title ("Module search path"). */
 function dropAnchorIds(document) {
   for (const element of document.querySelectorAll("section[id], div.section[id], h1[id], h2[id], h3[id], h4[id], h5[id], h6[id], dt[id]")) {
     element.removeAttribute("id");
   }
 }
 
-/** Fix 3, before: the text of every <pre>, in document order, with the language its classes name. */
+/** Defuddle's markdown step can re-indent, re-flow or drop blank lines in code, so the text of every <pre> is
+ * saved first, in document order, with the language its classes name. */
 function collectCode(document) {
   const blocks = [];
   for (const pre of document.querySelectorAll("pre")) {
@@ -63,9 +55,9 @@ function collectCode(document) {
 }
 
 /**
- * Fix 3, after: each fenced block in the markdown whose text (ignoring whitespace) is that of a
- * saved <pre> gets the saved text back. A block that matches nothing is replaced only when it sits
- * between two matched blocks and exactly one saved <pre> is left between the same two.
+ * Each fenced block in the markdown whose text (ignoring whitespace) is that of a saved <pre> gets the
+ * saved text back. A block that matches nothing is replaced only when it sits between two matched
+ * blocks and exactly one saved <pre> is left between the same two.
  */
 function restoreCode(markdown, saved) {
   const byKey = new Map();
@@ -117,7 +109,7 @@ function restoreCode(markdown, saved) {
     const body = block.text.split("\n").map((line) => (line ? fence.indent + line : fence.indent.trimEnd()));
     lines.splice(fence.open, fence.close - fence.open + 1, fence.indent + ticks + (fence.info || block.language), ...body, fence.indent + ticks);
   }
-  return { markdown: lines.join("\n"), codeBlocks: fences.length };
+  return lines.join("\n");
 }
 
 async function convert(html, url) {
@@ -127,10 +119,9 @@ async function convert(html, url) {
   const saved = collectCode(document);
   const result = await Defuddle(document, url, DEFUDDLE_OPTIONS);
   const title = (result.title || "").replace(/\s+/g, " ").trim();
-  let { markdown, codeBlocks } = restoreCode((result.content || "").trim(), saved);
-  // Fix 4.
-  if (markdown && title && !/^#\s/.test(markdown)) markdown = `# ${title}\n\n${markdown}`;
-  return { title, markdown, codeBlocks };
+  const markdown = restoreCode((result.content || "").trim(), saved);
+  // Defuddle drops the page's main heading.
+  return { markdown: markdown && title && !/^#\s/.test(markdown) ? `# ${title}\n\n${markdown}` : markdown };
 }
 
 async function readStdin() {

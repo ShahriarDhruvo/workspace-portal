@@ -1,27 +1,15 @@
 #!/usr/bin/env python3
-"""Workspace Portal page reader: turns one public web page (or PDF) into text for an agent.
+"""Workspace Portal page reader: turns one public web page (or PDF) into text for the gateway, its only client.
 
-The gateway is its only client (POST /read {"url": "..."} on a loopback-published port). It exists as
-a separate, unprivileged container because it does the two risky things the gateway must not do:
-it connects to addresses an agent chose, and it parses whatever comes back.
-
-What keeps that safe:
-  * http and https only, ports 80 and 443 only, GET only, no cookies, no credentials in the URL.
-  * IPv4 only. Every address a name resolves to must be public, and the connection is made to that
-    checked address (the name is used only for TLS and the Host header), so a name cannot resolve
-    to something else between the check and the connection. Every redirect goes through the same
-    checks again, and the gateway can limit which sites a redirect may lead to.
-  * Hard limits on time, on downloaded and decompressed bytes, on PDF pages and on output size.
-  * One process per request (fork), with CPU and memory limits and a kill timer, and HTML is
-    converted in a further process of its own (extract.py), so a hostile page can at worst end its
-    own request. A few requests work at a time; the others wait their turn for a while and are then
-    told the reader is busy.
-The container's own network (docker-compose.yml) and the host firewall (deploy/firewall.sh) block
-private networks a second time.
+The rule that keeps it safe: it connects only to public IPv4 addresses, on ports 80 and 443, and to the very
+address it checked (the name is used only for TLS and the Host header); every redirect is checked the same way.
+Each request is a process of its own with limits on time, bytes and memory, so a hostile page ends at worst
+its own request.
 """
 from __future__ import annotations
 
 import fcntl
+import html
 import http.client
 import ipaddress
 import json
@@ -39,7 +27,9 @@ from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ForkingMixIn
 from typing import Callable, Iterable
-from urllib.parse import quote, urljoin, urlsplit, urlunsplit
+from urllib.parse import quote, urljoin, urlsplit
+
+import extract
 
 
 def env_int(name: str, default: int, minimum: int) -> int:
@@ -55,23 +45,22 @@ def env_int(name: str, default: int, minimum: int) -> int:
     return value
 
 
-PORT = env_int("READER_LISTEN_PORT", 8080, 1)
+PORT = 8080
 MAX_CONCURRENT = env_int("READER_MAX_CONCURRENT", 2, 1)
-TIMEOUT_SECONDS = env_int("READER_TIMEOUT_SECONDS", 20, 5)
+TIMEOUT_SECONDS = env_int("READER_FETCH_TIMEOUT_SECONDS", 20, 5)
 MAX_DOWNLOAD_BYTES = env_int("READER_MAX_DOWNLOAD_MB", 5, 1) * 1024 * 1024
 MAX_PDF_BYTES = env_int("READER_MAX_PDF_MB", 15, 1) * 1024 * 1024
 MAX_PDF_PAGES = env_int("READER_MAX_PDF_PAGES", 60, 1)
-MAX_OUTPUT_CHARS = env_int("READER_MAX_OUTPUT_CHARS", 400_000, 1000)
+MAX_OUTPUT_CHARS = 400_000
 USER_AGENT = os.environ.get("READER_USER_AGENT", "").strip() or "Mozilla/5.0 (compatible; WorkspacePortalReader/1.0)"
 
 MAX_REDIRECTS = 5
 MAX_URL_CHARS = 2000
 CONNECT_TIMEOUT = 8.0
-# Requests beyond MAX_CONCURRENT wait this long for a turn (each in a small process of its own).
-# Six large pages asked for at once on a 2-core machine: the last waited 19 s.
+# Up to MAX_WAITING requests beyond MAX_CONCURRENT wait SLOT_WAIT_SECONDS for a turn, each in a process of its own.
 MAX_WAITING = 14
 SLOT_WAIT_SECONDS = 30
-SLOT_DIR = os.environ.get("READER_SLOT_DIR", "").strip() or tempfile.gettempdir()
+SLOT_DIR = tempfile.gettempdir()
 # Per-request process limits: a kill timer past the fetch and conversion timeouts, CPU seconds, and heap.
 HARD_KILL_SECONDS = TIMEOUT_SECONDS + 35
 CPU_SECONDS = 30
@@ -253,9 +242,9 @@ def fetch(
                     raise Refused("redirect", f"That address redirects to another site ({onward.host}), and the redirect was not followed.")
                 target = onward
                 continue
-            if status == 404 or status == 410:
+            if status in (404, 410):
                 raise Refused("http", f"There is no page at that URL (HTTP {status}).")
-            if status in (401, 403, 429, 451) or status == 503:
+            if status in (401, 403, 429, 451, 503):
                 raise Refused("http", f"The site refused the request (HTTP {status}); it may block automated readers or want a sign-in. Try another source.")
             if status < 200 or status >= 300:
                 raise Refused("http", f"The site answered HTTP {status}.")
@@ -309,14 +298,13 @@ def _content_type(header: str | None) -> tuple[str, str]:
     return mime.strip().lower(), (match[1].lower() if match else "")
 
 
-def _read_body(response: http.client.HTTPResponse, limit: int, deadline: float, sock: socket.socket | None = None) -> tuple[bytes, bool]:
+def _read_body(response: http.client.HTTPResponse, limit: int, deadline: float, sock: socket.socket | None) -> tuple[bytes, bool]:
     """The decoded body, cut at `limit` bytes (counted after decompression).
 
     The deadline holds however the site sends: each read returns what has arrived instead of waiting
     for a full buffer, and waits no longer than the time that is left. A site that sends a byte
     every few seconds would otherwise hold the request, and its place in the queue, until the kill timer.
     """
-    receive = getattr(response, "read1", None) or response.read
     encoding = (response.getheader("Content-Encoding") or "").strip().lower()
     if encoding in ("gzip", "x-gzip"):
         inflater = zlib.decompressobj(16 + zlib.MAX_WBITS)
@@ -335,7 +323,7 @@ def _read_body(response: http.client.HTTPResponse, limit: int, deadline: float, 
                 raise Refused("timeout", "The site was too slow sending the page.")
             if sock is not None:
                 sock.settimeout(max(0.05, remaining))
-            chunk = receive(64 * 1024)
+            chunk = response.read1(64 * 1024)
             if not chunk:
                 break
             if inflater is None:
@@ -386,17 +374,6 @@ def kind_of(fetched: Fetched) -> str:
     return "other"
 
 
-def decode_text(fetched: Fetched) -> str:
-    for charset in (fetched.charset, "utf-8"):
-        if not charset:
-            continue
-        try:
-            return fetched.body.decode(charset)
-        except (LookupError, UnicodeDecodeError):
-            continue
-    return fetched.body.decode("utf-8", errors="replace")
-
-
 def html_title(body: bytes) -> str:
     """The text of the first <title>. Two plain searches: a page of unclosed <title> tags costs nothing extra."""
     head = body[:200_000]
@@ -406,16 +383,7 @@ def html_title(body: bytes) -> str:
     closing = re.compile(rb"</title", re.I).search(head, opening.end(), opening.end() + 4000)
     if not closing:
         return ""
-    import html
-
     return re.sub(r"\s+", " ", html.unescape(head[opening.end() : closing.start()].decode("utf-8", errors="replace"))).strip()[:300]
-
-
-def extract_html(body: bytes, url: str, charset: str = "") -> tuple[str, str]:
-    """(markdown, note): the main content of an HTML page; ("", "") when it has no text."""
-    from extract import html_to_markdown
-
-    return html_to_markdown(body, url, charset)
 
 
 def extract_pdf(body: bytes) -> tuple[str, int, int]:
@@ -449,11 +417,10 @@ def read(url: str, redirect_hosts: Iterable[str] | None = None, fetcher: Callabl
     """The whole job: fetch `url` and return the JSON answer for the gateway. Raises Refused."""
     fetched = fetcher(url, redirect_hosts=redirect_hosts)
     kind = kind_of(fetched)
-    title = ""
-    note = ""
+    title = note = ""
     if kind == "html":
         title = html_title(fetched.body)
-        text, note = extract_html(fetched.body, fetched.url, fetched.charset)
+        text, note = extract.html_to_markdown(fetched.body, fetched.url, fetched.charset)
         if not text.strip():
             raise Refused("empty", "The page has no readable text without JavaScript (this reader has no browser). Try another source.")
     elif kind == "pdf":
@@ -465,7 +432,7 @@ def read(url: str, redirect_hosts: Iterable[str] | None = None, fetcher: Callabl
         if pages < total:
             note = f"Only the first {pages} of {total} pages were read."
     elif kind in ("markdown", "text"):
-        text = decode_text(fetched)
+        text = extract.decode(fetched.body, fetched.charset)
     else:
         raise Refused("unsupported", f"That URL is a {fetched.content_type or 'binary'} file, which cannot be read as text.")
     text = text.replace("\x00", "").strip()
@@ -559,18 +526,16 @@ class Handler(BaseHTTPRequestHandler):
                 host = (urlsplit(url).hostname or "") if isinstance(url, str) else ""
             except ValueError:
                 host = ""
-            result = read(url, fence)
-            log("read", host=host, kind=result["kind"], chars=len(result["text"]), truncated=result["truncated"], ms=round((time.monotonic() - started) * 1000))
-            self._send(200, result)
+            answer = read(url, fence)
+            event, fields = "read", {"kind": answer["kind"], "chars": len(answer["text"]), "truncated": answer["truncated"]}
         except Refused as refusal:
-            log("refused", host=host, code=refusal.code, ms=round((time.monotonic() - started) * 1000))
-            self._send(200, {"ok": False, "code": refusal.code, "message": refusal.message})
+            event, fields, answer = "refused", {"code": refusal.code}, {"ok": False, "code": refusal.code, "message": refusal.message}
         except MemoryError:
-            log("refused", host=host, code="too_large", ms=round((time.monotonic() - started) * 1000))
-            self._send(200, {"ok": False, "code": "too_large", "message": "That page is too large to read."})
+            event, fields, answer = "refused", {"code": "too_large"}, {"ok": False, "code": "too_large", "message": "That page is too large to read."}
         except Exception as error:  # a parser bug must not take the answer with it
-            log("failed", host=host, error=type(error).__name__, ms=round((time.monotonic() - started) * 1000))
-            self._send(200, {"ok": False, "code": "failed", "message": "The page could not be turned into text."})
+            event, fields, answer = "failed", {"error": type(error).__name__}, {"ok": False, "code": "failed", "message": "The page could not be turned into text."}
+        log(event, host=host, **fields, ms=round((time.monotonic() - started) * 1000))
+        self._send(200, answer)
 
 
 class Server(ForkingMixIn, HTTPServer):
@@ -583,11 +548,9 @@ class Server(ForkingMixIn, HTTPServer):
 
 
 def main() -> None:
-    # Load the PDF library once, so every request process starts with it in memory, and make sure
-    # the HTML converter runs: without it every page would come back uncleaned.
-    import extract
-    import pypdfium2  # noqa: F401
+    import pypdfium2  # noqa: F401  (here, so that every request process starts with it in memory)
 
+    # Without the converter every page would come back uncleaned.
     probe = extract.convert("<html><head><title>Probe</title></head><body><article><h1>Probe</h1><p>The converter works.</p></article></body></html>", "https://example.com/")
     if probe is None or "The converter works." not in probe["markdown"]:
         sys.exit("the HTML converter (node extract.mjs) does not run")

@@ -1,9 +1,6 @@
-"""HTML to markdown for the page reader.
-
-The conversion is done by Defuddle in a Node process of its own for every page (extract.mjs): a page
-that makes the converter loop or grow is killed with that process, and takes nothing else with it.
-When the converter fails, or throws away nearly all of a page that plainly has text, the page's
-text is returned as it is, menus included, with a note that says so.
+"""HTML to markdown for the page reader: Defuddle, in a Node process of its own for every page (extract.mjs),
+so that a page which makes the converter loop or grow is killed alone. When the converter fails, or throws away
+nearly all of a page that plainly has text, the page's text is returned as it is, with a note that says so.
 """
 from __future__ import annotations
 
@@ -17,7 +14,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urljoin
 
-NODE = os.environ.get("READER_NODE", "node")
+NODE = "node"
 SCRIPT = Path(__file__).with_name("extract.mjs")
 CONVERT_SECONDS = 25
 NODE_HEAP_MB = 256
@@ -29,15 +26,15 @@ UNCLEANED = "This page could not be reduced to its main content, so menus and ot
 LITTLE_TEXT = "The page has very little text. If more was expected, it is probably filled in by JavaScript, which this reader does not run."
 
 
-def decode_html(body: bytes, charset: str = "") -> str:
-    """Bytes to text: a byte-order mark, the charset the server declared, the page's own <meta>, then UTF-8."""
+def decode(body: bytes, charset: str = "", meta: bool = False) -> str:
+    """Bytes to text: a byte-order mark, the charset the server declared, with `meta` an HTML page's own <meta>, then UTF-8."""
     for mark, name in ((codecs.BOM_UTF8, "utf-8-sig"), (codecs.BOM_UTF16_LE, "utf-16"), (codecs.BOM_UTF16_BE, "utf-16")):
         if body.startswith(mark):
             return body.decode(name, errors="replace")
     declared = [charset]
-    meta = re.search(rb"""<meta[^>]+charset\s*=\s*["']?\s*([A-Za-z0-9._:-]+)""", body[:4096], re.I)
-    if meta:
-        declared.append(meta[1].decode("ascii", errors="ignore"))
+    found = meta and re.search(rb"""<meta[^>]+charset\s*=\s*["']?\s*([A-Za-z0-9._:-]+)""", body[:4096], re.I)
+    if found:
+        declared.append(found[1].decode("ascii", errors="ignore"))
     for name in declared:
         if not name:
             continue
@@ -64,7 +61,6 @@ def convert(html: str, url: str, timeout: float = CONVERT_SECONDS) -> dict | Non
             timeout=timeout,
             preexec_fn=_unlimited_heap,
             env={"PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"), "NODE_COMPILE_CACHE": os.environ.get("NODE_COMPILE_CACHE", "")},
-            check=False,
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -112,9 +108,7 @@ class _PlainText(HTMLParser):
             self.out.append("\n\n" + "#" * int(tag[1]) + " ")
         elif tag == "li":
             self.out.append("\n- ")
-        elif tag == "tr":
-            self.out.append("\n")
-        elif tag == "br":
+        elif tag in ("tr", "br"):
             self.out.append("\n")
         elif tag in ("td", "th"):
             self.out.append(" | ")
@@ -185,7 +179,7 @@ def plain_text(html: str, url: str) -> str:
 
 def html_to_markdown(body: bytes, url: str, charset: str = "") -> tuple[str, str]:
     """(markdown, note) for an HTML page; ("", "") when it has no text to give."""
-    html = decode_html(body, charset)
+    html = decode(body, charset, meta=True)
     answer = convert(html, url)
     markdown = answer["markdown"].strip() if answer else ""
     if answer and len(markdown) >= SHORT_CHARS:
