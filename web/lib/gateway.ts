@@ -104,12 +104,9 @@ export const gateway = {
   getWorkspace: (userId: number, timeoutMs?: number) =>
     call<WorkspaceInfo>("GET", `/control/workspaces/${userId}`, timeoutMs ? { timeoutMs } : {}),
   /**
-   * Creates and starts the `kind` container with the user's harness (their choice in Settings while it is enabled,
-   * else the first enabled agent), then returns (status "starting"); poll getWorkspace until ready. An already
-   * starting or running workspace of that kind just returns its state, whatever its agent, and calls off a pending
-   * stop. Without `kind`: attaches to a starting or running workspace of either kind, else starts Private.
-   * Errors: 409 `capacity` when every slot is busy; 409 `kind_mismatch` while the other kind runs (stop it first);
-   * 409 `online_disabled` (ONLINE_WORKSPACES=off) and 403 `online_not_allowed` (the admin barred this user).
+   * Returns once the `kind` container is started (status "starting"); poll getWorkspace until ready. One of that kind
+   * already starting or running just returns its state and calls off a pending stop. Without `kind`: attaches to a
+   * starting or running workspace of either kind, else starts Private.
    */
   start: (userId: number, kind?: WorkspaceKind, timeoutMs = START_TIMEOUT_MS) =>
     call<WorkspaceInfo>("POST", `/control/workspaces/${userId}/start`, { body: kind ? { kind } : {}, timeoutMs }),

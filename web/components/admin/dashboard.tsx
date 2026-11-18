@@ -37,10 +37,7 @@ interface DashboardProps {
   enabledAgents: ReadonlyArray<{ id: AgentKind }> | null;
 }
 
-/**
- * The users table, 30 to a page, over the running workspaces (who, kind, harness, status, what it uses), both
- * refreshed every 5 s from the workspace list. Without the gateway the workspaces card is left out.
- */
+/** The users table over the running workspaces, both read again every 5 s; no workspaces card without the gateway. */
 export function UsersDashboard({ users, initialOverview, currentAdminId, enabledAgents }: DashboardProps) {
   const [overview, setOverview] = useState(initialOverview);
   usePoll<AdminOverview>("/api/admin/overview", REFRESH_MS, (result) =>

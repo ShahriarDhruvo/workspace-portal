@@ -2,10 +2,7 @@ import { PageMain } from "@/components/layout/page-main";
 import { ButtonSkeleton, FieldSkeleton, SectionSkeleton } from "@/components/layout/skeletons";
 import { Skeleton } from "@/components/ui/skeleton";
 
-/**
- * A user's page while it loads: the back link, avatar, name and pills, Open workspace, then Profile, Workspaces
- * (the Online switch, the two erase buttons) and Account.
- */
+/** A user's page while it loads. */
 export default function UserLoading() {
   return (
     <PageMain width="md">

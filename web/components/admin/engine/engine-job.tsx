@@ -17,10 +17,7 @@ interface EngineJobProps {
   onDismiss: () => void;
 }
 
-/**
- * The engine's job, inline in its card. Running: its panel, while draining how many requests still run and until
- * when it waits, Cancel (downloading or draining) and "Restart now" (draining). Finished: the outcome until dismissed.
- */
+/** The engine's job, inline in its card: its panel while it runs, then the outcome until dismissed. */
 export function EngineJob({ job, onChanged, onRestartNow, onDismiss }: EngineJobProps) {
   if (!isJobActive(job)) {
     return (

@@ -185,12 +185,7 @@ export async function stopWorkspace(_previous: ActionState, formData: FormData):
   return { status: "done" };
 }
 
-/**
- * The admin's per-user "Online workspace" permission (users.online_allowed), audited as
- * `user_online_access_changed` {allowed}. Switching it off stops the user's Online workspace if it starts or runs
- * (the confirmation says so); the gateway refuses their Online starts from then on. Also for the admin's own
- * account.
- */
+/** Switching it off also stops the user's Online workspace if it starts or runs (the confirmation says so). */
 export async function setOnlineAccess(_previous: ActionState, formData: FormData): Promise<ActionState> {
   const session = await requireAdmin();
   const parsed = onlineAccessSchema.safeParse({ userId: formData.get("userId"), allowed: formData.get("allowed") });

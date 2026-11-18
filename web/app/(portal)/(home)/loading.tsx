@@ -2,10 +2,7 @@ import { PageMain } from "@/components/layout/page-main";
 import { Card, CardAction, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 
-/**
- * Home while it loads, as when stopped: the workspace card (Start top right, the Private and Online cards under it,
- * side by side from sm, then the idle rule) and the LLM usage card with its three tiles.
- */
+/** Home while it loads, as when stopped. */
 export default function HomeLoading() {
   return (
     <PageMain width="sm" className="gap-4">

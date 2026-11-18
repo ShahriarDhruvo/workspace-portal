@@ -10,10 +10,7 @@ const CARDS = [
   { title: "max-w-36", source: "max-w-32" },
 ];
 
-/**
- * The Updates page while it loads: the heading with Check for updates, then each card as VersionCard draws it (title,
- * source and badge; the version and its button; the folded Package images row), so nothing moves when it arrives.
- */
+/** The Updates page while it loads: each card as VersionCard draws it, so nothing moves when it arrives. */
 export default function UpdatesLoading() {
   return (
     <PageMain width="lg">

@@ -7,10 +7,7 @@ import { UsageLive } from "@/components/admin/usage/usage-live";
 
 export const metadata: Metadata = { title: "Usage" };
 
-/**
- * Admin > Usage: the LLM sessions and both servers, live (the browser streams it from /api/admin/live), and the
- * workspace sessions' first page.
- */
+/** Admin > Usage, live (the browser streams it from /api/admin/live), with the workspace sessions' first page. */
 export default async function UsagePage() {
   await requireAdmin();
   return (

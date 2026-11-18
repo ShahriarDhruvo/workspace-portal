@@ -17,10 +17,7 @@ import { Progress } from "@/components/ui/progress";
 import { Spinner } from "@/components/ui/spinner";
 import { BuildLog } from "./build-log";
 
-// The one layout of the Updates page's cards (the LLM engine, Qwen Code, DeepSeek Harness), so each reads the same
-// way: the title, its source and a status badge; the focal point, the current version large in mono, with the one
-// primary action beside it; the running job's panel inline under it; and the Package images section folded at the
-// bottom.
+// The one layout of the Updates page's cards (the LLM engine, Qwen Code, DeepSeek Harness), so each reads the same way.
 
 interface VersionCardProps {
   title: string;

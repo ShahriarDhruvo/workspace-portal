@@ -20,10 +20,7 @@ interface ProfileFormProps {
   children?: ReactNode;
 }
 
-/**
- * The body of a Profile or Account card: the name fields, then Save in the card's footer, which says "Saved"
- * once stored; the server's errors show under the fields.
- */
+/** The body of a Profile or Account card; Save, in the card's footer, says "Saved" once stored. */
 export function ProfileForm({ action: save, userId, firstName, middleName, lastName, children }: ProfileFormProps) {
   const [state, action] = useActionState(save, { status: "idle" });
   const errors = state.status === "invalid" ? state.fieldErrors : {};
