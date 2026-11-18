@@ -376,11 +376,11 @@ interface FakeContainer {
   userId: number | null;
   /** The agent label. */
   agent: AgentKind;
-  /** The kind label (none: Private); null for a label the gateway doesn't know. */
+  /** The kind label; null for none, or one the gateway doesn't know. */
   kind: WorkspaceKind | null;
   /** The image it was created from. */
   image: string;
-  /** The version label (container-spec.ts VERSION_LABEL); null for a container from before it. */
+  /** The version label (container-spec.ts VERSION_LABEL); null for a container without one. */
   version: string | null;
   /** Address on its kind's "network" (Private 127.0.0.N, Online 127.0.1.N); null for orphans nobody serves. */
   ip: string | null;
