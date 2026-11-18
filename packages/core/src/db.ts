@@ -11,12 +11,8 @@ export type PortalDb = BetterSQLite3Database<typeof schema> & { $client: Databas
 export function migrate(client: Database.Database): void {
   const apply = client.transaction(() => {
     const current = client.pragma("user_version", { simple: true }) as number;
-    for (let i = current; i < MIGRATIONS.length; i++) {
-      client.exec(MIGRATIONS[i]!);
-    }
-    if (current < MIGRATIONS.length) {
-      client.pragma(`user_version = ${MIGRATIONS.length}`);
-    }
+    for (const sql of MIGRATIONS.slice(current)) client.exec(sql);
+    if (current < MIGRATIONS.length) client.pragma(`user_version = ${MIGRATIONS.length}`);
   });
   apply.immediate();
 }
@@ -45,9 +41,7 @@ export function openForOwnershipChange(name: string): number | null {
   try {
     const stat = fs.fstatSync(fd);
     if (!stat.isFile()) throw new Error(`Refusing to change the owner of ${name}: it is not a regular file.`);
-    if (stat.nlink !== 1) {
-      throw new Error(`Refusing to change the owner of ${name}: it has ${stat.nlink} hard links, expected 1.`);
-    }
+    if (stat.nlink !== 1) throw new Error(`Refusing to change the owner of ${name}: it has ${stat.nlink} hard links, expected 1.`);
     return fd;
   } catch (error) {
     fs.closeSync(fd);
@@ -84,7 +78,7 @@ function alignOwnership(file: string): void {
 }
 
 /** Opens (and creates, if needed) the portal database with the pragmas both services rely on. */
-export function openDatabase(file: string, options: { migrate?: boolean } = {}): PortalDb {
+export function openDatabase(file: string): PortalDb {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   alignOwnership(file);
   const client = new Database(file);
@@ -92,7 +86,7 @@ export function openDatabase(file: string, options: { migrate?: boolean } = {}):
   client.pragma("busy_timeout = 5000");
   client.pragma("foreign_keys = ON");
   client.pragma("synchronous = NORMAL");
-  if (options.migrate !== false) migrate(client);
+  migrate(client);
   return drizzle({ client, schema }) as PortalDb;
 }
 

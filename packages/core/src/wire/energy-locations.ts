@@ -1,5 +1,5 @@
 // The places Admin > Energy can price electricity for, and where each one's price comes from. The gateway downloads
-// every place's published prices (gateway/src/energy-prices.ts) into energy_prices; the admin picks one in
+// every place's published prices (gateway/src/monitor/energy-prices.ts) into energy_prices; the admin picks one in
 // Settings (portal_settings.energy_price_location). Both sources publish without an account or key.
 //   * United States: EIA's average price to residential customers in the state, per month (Electric Power
 //     Monthly, Table 5.6.A), about two months after the month. EIA writes cents per kWh.
@@ -73,10 +73,6 @@ const BY_ID = new Map(ENERGY_LOCATIONS.map((location) => [location.id, location]
 
 export function energyLocation(id: string | null | undefined): EnergyLocation | null {
   return (id && BY_ID.get(id)) || null;
-}
-
-export function isEnergyLocationId(value: unknown): value is string {
-  return typeof value === "string" && BY_ID.has(value);
 }
 
 /** "Florida, US" and "Georgia, US" against "Georgia": a name that also says which region (audit entries). */

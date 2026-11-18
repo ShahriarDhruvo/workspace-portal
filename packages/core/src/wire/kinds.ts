@@ -18,8 +18,8 @@ export function isAgentKind(value: unknown): value is AgentKind {
 
 /**
  * The two workspaces every user has. Each has its own files, UID, container, network and browser origin, and only
- * one of a user's two runs at a time. Private (the original kind) has no internet; Online reaches the public
- * internet but never the LAN, the servers or another container.
+ * one of a user's two runs at a time. Private has no internet; Online reaches the public internet but never the LAN,
+ * the servers or another container.
  */
 export const WORKSPACE_KINDS = ["private", "online"] as const;
 export type WorkspaceKind = (typeof WORKSPACE_KINDS)[number];

@@ -10,8 +10,6 @@ export interface ApiError {
   message: string;
 }
 
-// ---- Workspaces ------------------------------------------------------------------------------------------------
-
 export type OnlineAccess = "allowed" | "off" | "not_allowed";
 
 /** Why a workspace counts as working right now; null when it is not. */
@@ -67,8 +65,6 @@ export interface HostStats {
   cpus: number;
   llm: { inFlight: number; queued: number; maxConcurrency: number };
 }
-
-// ---- Agents and their versions ---------------------------------------------------------------------------------
 
 /** GET /control/agents → agents[]: one of the agents enabled on this install, in display order. */
 export interface AgentInfo {
@@ -204,8 +200,6 @@ export interface AgentUpdateRequest {
   actorUserId?: number;
 }
 
-// ---- The LLM engine (GET /control/engine) ----------------------------------------------------------------------
-
 /** An engine image on the LLM server, as portal-hostd lists it. */
 export interface EngineImage {
   id: string;
@@ -218,16 +212,13 @@ export interface EngineImage {
   previous: boolean;
 }
 
-export type EngineJobKind = "pull" | "apply";
-export type EngineJobPhase = "running" | "succeeded" | "failed" | "cancelled";
-
 /** portal-hostd's own job (a download, or a restart with another image), which the gateway's update job follows. */
 export interface EngineJob {
   id: string;
-  kind: EngineJobKind;
+  kind: "pull" | "apply";
   image: string | null;
   version: string | null;
-  phase: EngineJobPhase;
+  phase: "running" | "succeeded" | "failed" | "cancelled";
   step: string;
   log: string[];
   startedAt: number;
@@ -294,11 +285,10 @@ export interface EngineUpdateJob extends UpdateJob<EngineUpdatePhase> {
   cancellable: boolean;
 }
 
-/** off: no portal-hostd for the LLM server; offline: it can't be reached; no_engine: it controls no engine. */
-export type EngineHostState = "off" | "offline" | "no_engine" | "ok";
-
+/** GET /control/engine[?refresh=1]. */
 export interface EngineOverview {
-  state: EngineHostState;
+  /** off: no portal-hostd for the LLM server; offline: it can't be reached; no_engine: it controls no engine. */
+  state: "off" | "offline" | "no_engine" | "ok";
   error: string | null;
   engine: EngineStatus | null;
   releases: EngineReleaseList | null;
@@ -448,8 +438,6 @@ export interface LiveInit {
   /** The LLM totals of the recent frames, oldest first. */
   llmHistory: LlmTotalsPoint[];
 }
-
-// ---- Electricity prices ----------------------------------------------------------------------------------------
 
 /** A price source's last download: `at` the last try, `okAt` the last that stored prices. */
 export interface EnergyPriceSourceStatus {

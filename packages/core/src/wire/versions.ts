@@ -1,15 +1,9 @@
-// Agent versions as the portal handles them: npm versions of Qwen Code and DeepSeek Harness, which also
-// name the workspace images (workspace-portal/workspace:<agent>-<version>).
-//
-// One pattern for every place a version comes in: the .env defaults (config.ts), the selection file
-// (agent-versions.ts), the control API, the web app's forms and the npm registry's dist-tags. deploy/lib.sh (valid_version)
-// uses the same expression. It admits nothing that could break out of an image tag, a build argument
-// or a KEY=VALUE line. Unanchored, the same expression finds the version in an agent CLI's
-// `--version` output (findVersion; deploy/lib.sh image_agent_version greps for it too).
-//
-// compareVersions orders them by semver precedence, prereleases included, so that "an update is
-// available" means newer and not just different: when the current version is 0.2.2-rc.3 (from the
-// "next" channel) and "latest" says 0.2.2-rc.1, there is nothing to update to.
+// Agent versions as the portal handles them: npm versions of Qwen Code and DeepSeek Harness, which also name the
+// workspace images (workspace-portal/workspace:<agent>-<version>). One pattern for every place a version comes in (the
+// .env defaults, the selection file, the control API, the web app's forms, the npm registry's dist-tags), the same
+// expression as deploy/lib.sh valid_version: it admits nothing that could break out of an image tag, a build argument
+// or a KEY=VALUE line. Unanchored, it finds the version in an agent CLI's `--version` output (deploy/lib.sh
+// image_agent_version greps for it too).
 
 const VERSION_SYNTAX = String.raw`\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.]+)?`;
 const VERSION_PATTERN = new RegExp(`^${VERSION_SYNTAX}$`);
@@ -48,7 +42,7 @@ function parseSemver(version: string): SemVer | null {
   };
 }
 
-function sign(a: bigint, b: bigint): number {
+function sign<T extends bigint | number | string>(a: T, b: T): number {
   return a === b ? 0 : a > b ? 1 : -1;
 }
 
@@ -58,7 +52,7 @@ function compareIdentifiers(a: string, b: string): number {
   const numericB = /^\d+$/.test(b);
   if (numericA && numericB) return sign(BigInt(a), BigInt(b));
   if (numericA !== numericB) return numericA ? -1 : 1;
-  return a === b ? 0 : a > b ? 1 : -1;
+  return sign(a, b);
 }
 
 /**
@@ -82,7 +76,7 @@ export function compareVersions(a: string, b: string): number | null {
     const order = compareIdentifiers(left.prerelease[i]!, right.prerelease[i]!);
     if (order !== 0) return order;
   }
-  return sign(BigInt(left.prerelease.length), BigInt(right.prerelease.length));
+  return sign(left.prerelease.length, right.prerelease.length);
 }
 
 /** `candidate` is a newer version than `current`; false when either can't be ordered. */
@@ -97,5 +91,5 @@ export function byNewestVersion(a: string, b: string): number {
   const aOrdered = parseSemver(a) !== null;
   const bOrdered = parseSemver(b) !== null;
   if (aOrdered !== bOrdered) return aOrdered ? -1 : 1;
-  return a < b ? -1 : a > b ? 1 : 0;
+  return sign(a, b);
 }

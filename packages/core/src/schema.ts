@@ -3,15 +3,7 @@
 // The SQL in migrations.ts must stay in sync with this file.
 import { sql } from "drizzle-orm";
 import { AGENT_KINDS, ENERGY_CURRENCIES, ENERGY_PRICE_SOURCES, HOST_ROLES, ROLES, WORKSPACE_KINDS, WORKSPACE_STATUSES } from "./wire/index.ts";
-import {
-  sqliteTable,
-  integer,
-  text,
-  index,
-  uniqueIndex,
-  primaryKey,
-  real,
-} from "drizzle-orm/sqlite-core";
+import { index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const users = sqliteTable(
   "users",
@@ -71,7 +63,7 @@ export const workspaces = sqliteTable("workspaces", {
   status: text("status", { enum: WORKSPACE_STATUSES }).notNull().default("stopped"),
   /** The agent of the current container, or of the last one when stopped; null if never started. */
   agent: text("agent", { enum: AGENT_KINDS }),
-  /** The kind of the current container, or of the last one when stopped ("private" for rows from before kinds). */
+  /** The kind of the current container, or of the last one when stopped ("private" if never started). */
   kind: text("kind", { enum: WORKSPACE_KINDS }).notNull().default("private"),
   startedAt: integer("started_at"),
   stoppedAt: integer("stopped_at"),
@@ -148,7 +140,7 @@ export const hostMeter = sqliteTable("host_meter", {
 });
 
 // Published electricity prices (energy-locations.ts), one row per place and period, downloaded by the gateway
-// (gateway/src/energy-prices.ts) for every place; Admin > Energy prices each day at its chosen place's.
+// (gateway/src/monitor/energy-prices.ts) for every place; Admin > Energy prices each day at its chosen place's.
 export const energyPrices = sqliteTable(
   "energy_prices",
   {
@@ -224,10 +216,6 @@ export const workspaceSessions = sqliteTable(
 );
 
 export type User = typeof users.$inferSelect;
-export type NewUser = typeof users.$inferInsert;
 export type Session = typeof sessions.$inferSelect;
 export type Workspace = typeof workspaces.$inferSelect;
-export type AuditEntry = typeof auditLog.$inferSelect;
-export type HostDaily = typeof hostDaily.$inferSelect;
-export type EnergyPrice = typeof energyPrices.$inferSelect;
 export type WorkspaceSession = typeof workspaceSessions.$inferSelect;
