@@ -249,8 +249,8 @@ export class EngineUpdater {
         job.rolledBack = result.rolledBack;
         throw new Error(result.error ?? "The engine did not come up with the new version.");
       }
-      if (job.finishedAt !== null) return; // shutdown() recorded it
       const reached = await host.status().catch(() => null);
+      if (job.finishedAt !== null) return; // shutdown() recorded it
       if (reached?.version) job.toVersion = reached.version;
       this.#finish(job, "succeeded", null);
     } catch (error) {

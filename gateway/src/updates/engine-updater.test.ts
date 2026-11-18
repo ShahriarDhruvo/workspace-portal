@@ -200,6 +200,23 @@ test("the drain ends at ENGINE_DRAIN_MINUTES; shutdown records a running job as 
   cleanup();
 });
 
+test("a job that shutdown recorded as failed stays so: its run, still under way, does not end it a second time", async () => {
+  const { updater, host, queue, audits, cleanup } = setup();
+  const status = host.status.bind(host);
+  host.status = async () => {
+    // The restart has succeeded: the gateway stops while the updater asks which version the engine reports.
+    const restarted = host.version === "0.34.0";
+    const answer = await status();
+    if (restarted) updater.shutdown();
+    return answer;
+  };
+  await updater.startUpdate({ version: "0.34.0", actorUserId: null });
+  await waitFor(() => updater.snapshot()?.finishedAt != null && !queue.paused, "the run to end");
+  assert.deepEqual([updater.snapshot()!.phase, updater.snapshot()!.error], ["failed", GATEWAY_STOPPED]);
+  assert.deepEqual(audits(), [{ action: "engine_update_failed", details: { from: "0.31.0", to: "0.34.0", error: GATEWAY_STOPPED, rolledBack: false } }]);
+  cleanup();
+});
+
 test("removing an engine image: not while a job runs, not the running one", async () => {
   const { updater, host, cleanup } = setup();
   host.local.add("0.30.0");
