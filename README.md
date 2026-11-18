@@ -69,9 +69,9 @@ default and meaning. Look at these first:
   more addresses that Online workspaces, SearXNG and the page reader must never reach;
 - `SESSION_COOKIE_SECURE=true` when the portal is served over HTTPS.
 
-Run the installer again after a change of a port, subnet, bridge, resolver or `FIREWALL_*` setting or of a
-server's address in a `*_URL` setting (the firewall is built from them), and after adding an agent to
-`WORKSPACE_AGENTS` (it builds the image). Any other change takes effect with `docker compose up -d`.
+Run the installer again after changing `PORTAL_DATA_DIR`, `HOSTD_PORTAL_*`, `FIREWALL_*`, `WORKSPACE_AGENTS`,
+an agent's `*_VERSION`, a port, subnet, `*_GATEWAY_IP`, bridge, DNS server or the server in a `*_URL`
+(the firewall, portal-hostd and the images are made from them). Anything else: `docker compose up -d`.
 
 The models are not in `.env` but in two files in Qwen Code's settings format, in
 `$PORTAL_DATA_DIR/config/qwen`: `system-defaults.json` holds the models and the defaults users may change,
@@ -80,7 +80,7 @@ The models are not in `.env` but in two files in Qwen Code's settings format, in
 read the installed files at their next start.
 
 ```sh
-sudo bash deploy/qwen-config.sh install system-defaults.json settings.json
+sudo bash deploy/qwen-config.sh install qwen-config/system-defaults.json qwen-config/settings.json
 sudo bash deploy/qwen-config.sh check        # or: show
 ```
 
@@ -102,8 +102,8 @@ It prints `PASS` or `FAIL` per check, then the counts, and exits non-zero when o
 guarantee of the security model that does not hold on this host. It touches no user data.
 
 Agent versions change under Admin > Updates, which builds an image, checks it and starts the next workspaces
-from it, or with `update-image.sh`, which also runs the isolation check. Running workspaces keep their image
-until they stop.
+from it, or with `update-image.sh`, which restarts the gateway and runs the isolation check on the running
+stack. Running workspaces keep their image until they stop.
 
 Back up `.env` and the data directory (`PORTAL_DATA_DIR`): `db/` is the SQLite database (accounts, sessions,
 audit log, usage, energy), `users/<id>/private` and `users/<id>/online` are the workspace files, `config/`
