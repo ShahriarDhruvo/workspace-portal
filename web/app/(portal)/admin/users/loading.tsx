@@ -5,7 +5,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 const COLUMNS = ["Name", "Username", "Role", "Account", "Harness", "Last sign-in", ""];
 
-/** The users list while it loads: the heading with New user, the table's frame with a few rows, the workspaces card. */
 export default function UsersLoading() {
   return (
     <PageMain width="lg">

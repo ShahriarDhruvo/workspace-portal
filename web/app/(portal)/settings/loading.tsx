@@ -2,7 +2,6 @@ import { PageMain } from "@/components/layout/page-main";
 import { ButtonSkeleton, FieldSkeleton, HeadingSkeleton, SectionSkeleton } from "@/components/layout/skeletons";
 import { Skeleton } from "@/components/ui/skeleton";
 
-/** Settings while it loads: the Account facts, the two harness cards and the password row. */
 export default function SettingsLoading() {
   return (
     <PageMain width="md">

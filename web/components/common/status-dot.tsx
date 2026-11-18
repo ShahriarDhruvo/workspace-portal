@@ -11,7 +11,7 @@ const DOT_TONES: Record<DotTone, string> = {
   idle: "bg-idle text-idle",
 };
 
-/** A 6px status dot; `pulse` breathes a soft ring around it while something is in progress. */
+/** `pulse` breathes a soft ring around the dot while something is in progress. */
 export function StatusDot({ tone, pulse = false }: { tone: DotTone; pulse?: boolean }) {
   return (
     <span aria-hidden="true" className={cn("inline-block size-1.5 shrink-0 rounded-full", DOT_TONES[tone], pulse && "activity-pulse")} />

@@ -46,7 +46,6 @@ export function OnlineAccess({ user, allowed, onlineRunning, portalOff }: Online
 
   return (
     <>
-      {/* As on the New user form: the switch, then its label. */}
       <Field orientation="horizontal">
         <Switch ref={control} id="online-access" checked={shown} aria-busy={saving || undefined} onCheckedChange={change} />
         <FieldContent>

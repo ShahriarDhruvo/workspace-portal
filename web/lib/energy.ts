@@ -1,5 +1,4 @@
-// Energy and its cost for Admin > Energy. It takes the database as an argument (no server-only imports), so it can
-// be unit tested.
+// Energy and its cost for Admin > Energy. It takes the database as an argument (no server-only imports).
 import { and, asc, desc, eq, gte, lte, sql } from "drizzle-orm";
 import {
   ENERGY_SOURCE_NAMES,

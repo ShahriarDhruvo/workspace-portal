@@ -11,7 +11,6 @@ interface NameFieldsProps {
   newUser?: boolean;
 }
 
-/** First, middle (optional) and last name side by side (stacked on narrow screens), as on the new-user and profile forms. */
 export function NameFields({ values, errors, newUser = false }: NameFieldsProps) {
   return (
     <div className="grid grid-cols-1 gap-x-4 gap-y-5 sm:grid-cols-3">

@@ -3,7 +3,6 @@ import { HeadingSkeleton, TableSkeleton } from "@/components/layout/skeletons";
 
 const COLUMNS = ["Time", "Actor", "Action", "Target", "Details"];
 
-/** The audit log while it loads: its heading and a full page (30 rows) of the table. */
 export default function AuditLoading() {
   return (
     <PageMain width="lg">

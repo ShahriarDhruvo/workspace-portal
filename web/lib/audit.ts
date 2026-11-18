@@ -1,4 +1,4 @@
-// Human-readable audit log entries. Pure; unit tested.
+// Human-readable audit log entries.
 import { AGENT_NAMES, isAgentKind, isWorkspaceKind, WORKSPACE_KIND_NAMES, type AuditAction } from "@portal/core";
 
 const ACTION_LABELS: Record<AuditAction, string> = {
@@ -50,8 +50,8 @@ const DETAIL_LABELS: Record<string, string> = {
   to: "To",
   version: "Version",
   rebuild: "From scratch",
-  // LLM engine updates (written by the gateway) and image removals: from/to or version, rolledBack, digest (older
-  // engine entries also a kind: update or rollback). A workspace's start and erased files: kind (Private or Online).
+  // LLM engine updates (written by the gateway) and image removals: from/to or version, rolledBack, digest. A
+  // workspace's start and erased files: kind (Private or Online).
   kind: "Type",
   rolledBack: "Rolled back",
   digest: "Digest",

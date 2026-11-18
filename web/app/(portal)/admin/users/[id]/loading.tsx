@@ -2,7 +2,6 @@ import { PageMain } from "@/components/layout/page-main";
 import { ButtonSkeleton, FieldSkeleton, SectionSkeleton } from "@/components/layout/skeletons";
 import { Skeleton } from "@/components/ui/skeleton";
 
-/** A user's page while it loads. */
 export default function UserLoading() {
   return (
     <PageMain width="md">

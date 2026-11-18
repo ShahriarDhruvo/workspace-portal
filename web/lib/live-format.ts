@@ -1,4 +1,4 @@
-// Formatting and history for Admin > Usage's live view and Admin > Energy. Pure; unit tested.
+// Formatting and history for Admin > Usage's live view and Admin > Energy.
 import { formatBytes } from "./format.ts";
 import type { EnergyCurrency, HostSample, LiveFrame, LiveInit, LlmTotalsPoint } from "@portal/core";
 

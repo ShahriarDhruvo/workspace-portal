@@ -1,6 +1,5 @@
 import type { ReactNode } from "react";
 
-/** A page's title (18px/600) with its actions on the right. */
 export function PageHeading({ title, actions }: { title: string; actions?: ReactNode }) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-4">

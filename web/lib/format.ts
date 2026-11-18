@@ -1,4 +1,4 @@
-// Display formatting shared by server and client components. Pure; unit tested.
+// Display formatting shared by server and client components.
 import type { WorkspaceInfo } from "@portal/core/wire";
 
 const BYTE_UNITS = ["B", "KiB", "MiB", "GiB", "TiB"] as const;

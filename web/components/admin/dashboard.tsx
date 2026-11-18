@@ -37,7 +37,7 @@ interface DashboardProps {
   enabledAgents: ReadonlyArray<{ id: AgentKind }> | null;
 }
 
-/** The users table over the running workspaces, both read again every 5 s; no workspaces card without the gateway. */
+/** The users table over the running workspaces (read again every 5 s); no workspaces card without the gateway. */
 export function UsersDashboard({ users, initialOverview, currentAdminId, enabledAgents }: DashboardProps) {
   const [overview, setOverview] = useState(initialOverview);
   usePoll<AdminOverview>("/api/admin/overview", REFRESH_MS, (result) =>
@@ -147,7 +147,7 @@ function UserRow({ user, isSelf, workspace, nextAgent }: UserRowProps) {
   );
 }
 
-/** The row's "…" menu and the confirmation dialog its items open; closing the dialog refocuses the "…" button. */
+/** A row's menu; the dialog an item opens hands the focus back to the "…" button. */
 function UserActions({ user, isSelf, running, active }: { user: DialogUser; isSelf: boolean; running: boolean; active: boolean }) {
   const [dialog, setDialog] = useState<UserDialogKind>("stop");
   const [dialogOpen, setDialogOpen] = useState(false);

@@ -19,7 +19,6 @@ interface HarnessPickerProps {
   chosen: AgentKind;
   /** The running (or starting) workspace, to tell when it runs another harness; null when stopped or unknown. */
   running: Pick<WorkspaceInfo, "agent" | "busy" | "connections"> | null;
-  /** The id of the visible title that names the choice. */
   labelledBy: string;
 }
 

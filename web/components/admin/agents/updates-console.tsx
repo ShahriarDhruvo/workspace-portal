@@ -72,7 +72,7 @@ export function UpdatesConsole({ initialAgents, initialEngine }: UpdatesConsoleP
   );
 }
 
-/** "Checked 5 min ago" and the button that asks the npm registry, the image registry and GitHub again. */
+/** Check for updates asks the npm registry, the image registry and GitHub again. */
 function RegistryCheck({ checkedAt, checking, onCheck }: { checkedAt: number | null; checking: boolean; onCheck: () => void }) {
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1">

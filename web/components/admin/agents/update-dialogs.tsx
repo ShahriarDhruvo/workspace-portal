@@ -98,7 +98,6 @@ interface AgentDialogsProps {
   agent: AgentVersionInfo;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** The gateway accepted: poll now. */
   onDone: () => void;
   returnFocusTo: RefObject<HTMLElement | null>;
 }

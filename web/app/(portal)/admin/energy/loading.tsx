@@ -5,7 +5,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 const COLUMNS = ["Day", "LLM server (kWh)", "Portal server (kWh)", "Total (kWh)", "Price", "Cost"];
 
-/** Energy while it loads: the heading with the month picker, the totals over the chart, the days' table. */
 export default function EnergyLoading() {
   return (
     <PageMain width="lg">

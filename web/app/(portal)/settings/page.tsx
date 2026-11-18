@@ -20,7 +20,7 @@ import { CardContent } from "@/components/ui/card";
 
 export const metadata: Metadata = { title: "Settings" };
 
-/** One labelled value of the Account card: a small muted label over a 32px row (a button's height). */
+/** One labelled value of the Account card, in a row as tall as a button. */
 function Fact({ label, labelId, children }: { label: string; labelId?: string; children: ReactNode }) {
   return (
     <div className="flex min-w-0 flex-col gap-1.5">

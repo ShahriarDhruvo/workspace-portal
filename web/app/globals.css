@@ -172,7 +172,7 @@
   }
 }
 
-/* Uppercase section labels (12px/600, .04em, muted). */
+/* Uppercase section labels. */
 @utility label-caps {
   font-size: 12px;
   line-height: 16px;

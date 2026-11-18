@@ -15,7 +15,6 @@ import { PlusIcon } from "@/components/ui/icons";
 
 export const metadata: Metadata = { title: "Users" };
 
-/** Admin > Users: everyone, with New user, over the running workspaces. */
 export default async function UsersPage() {
   const session = await requireAdmin();
   const rows = getDb()

@@ -3,7 +3,6 @@ import { ButtonSkeleton, FieldSkeleton, HeadingSkeleton } from "@/components/lay
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 
-/** The new-user form while it loads. */
 export default function NewUserLoading() {
   return (
     <PageMain width="md">

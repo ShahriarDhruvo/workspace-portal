@@ -36,7 +36,6 @@ export function LiveSkeleton({ rows = SESSION_PAGE_SIZE }: { rows?: number }) {
   return (
     <div className={USAGE_GRID} aria-busy="true" aria-label="Loading the live view">
       <Card className="gap-0 py-0 xl:col-span-2 3xl:col-span-1">
-        {/* LlmCard's header: title and description, then the Read and Write totals (under them on a phone). */}
         <CardHeader className="flex flex-col items-stretch gap-0 border-b px-0 sm:flex-row">
           <div className="flex flex-1 flex-col justify-center gap-1 px-4 py-3">
             <Skeleton className="my-0.5 h-5 w-40" />
@@ -54,7 +53,7 @@ export function LiveSkeleton({ rows = SESSION_PAGE_SIZE }: { rows?: number }) {
             ))}
           </div>
         </CardHeader>
-        {/* The Read and Write charts, each under its caption; the lower one has the time axis. */}
+        {/* The Read and Write charts; the lower one has the time axis. */}
         <CardContent className="flex flex-1 flex-col gap-3 p-4">
           {["min-h-15", "min-h-21"].map((height) => (
             <div key={height} className="flex flex-1 flex-col gap-1">
@@ -124,7 +123,6 @@ function ServerSkeleton() {
   return (
     <Card className="gap-0 py-0">
       <CardHeader className="border-b px-4 py-3">
-        {/* The title's and the description's lines. */}
         <Skeleton className="my-0.5 h-5 w-40" />
         <Skeleton className="my-0.5 h-4 w-56 max-w-full" />
         <CardAction className="flex flex-col items-end gap-1">

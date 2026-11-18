@@ -26,7 +26,7 @@ interface VersionCardProps {
   status: CardStatus;
   /** The focal point; omitted when there is no version to show (not set up, unreachable). */
   version?: { label: string; value: string };
-  /** The primary action, beside the version. */
+  /** The primary action; none while the card's job runs (its panel is the focus, and nothing else can start). */
   actions?: ReactNode;
   /** Under the version: the job panel, notices, an empty state. */
   children?: ReactNode;
@@ -86,7 +86,7 @@ export function VersionCard({ title, subtitle, status, version, actions, childre
   );
 }
 
-/** One collapsed detail of a card: a full-width trigger with a title and a short summary, then its content. */
+/** One collapsed detail of a card. */
 export function VersionSection({
   title,
   summary,
@@ -137,14 +137,14 @@ function useSeconds(): number | null {
 interface JobPanelProps {
   title: string;
   /** "Step 2 of 3 · Waiting for running requests". */
-  stage: string;
+  phase: string;
   /** 0-100. */
   progress: number;
   /** What it does right now, in the gateway's words. */
   step?: string | null;
   startedAt: number;
   log: readonly string[];
-  /** Facts of the stage (the drain's requests and deadline). */
+  /** Facts of the phase (the drain's requests and deadline). */
   children?: ReactNode;
   /** Cancel, Restart now. */
   actions?: ReactNode;
@@ -152,8 +152,8 @@ interface JobPanelProps {
   focusHandoff?: RefObject<boolean>;
 }
 
-/** A running job, inline in its card: what, where (a Progress), the current step, the log on request, its buttons. */
-export function JobPanel({ title, stage, progress, step, startedAt, log, children, actions, focusHandoff }: JobPanelProps) {
+/** A running job, inline in its card. */
+export function JobPanel({ title, phase, progress, step, startedAt, log, children, actions, focusHandoff }: JobPanelProps) {
   const seconds = useSeconds();
   const titleId = useId();
   const panel = useRef<HTMLElement>(null);
@@ -172,13 +172,13 @@ export function JobPanel({ title, stage, progress, step, startedAt, log, childre
             {title}
           </h3>
           <p className="text-13 text-muted-foreground tabular-nums">
-            {stage}
+            {phase}
             {seconds === null ? null : ` · ${formatStopwatch(Math.max(0, seconds * 1000 - startedAt))}`}
           </p>
         </div>
         {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
       </div>
-      <Progress value={progress} aria-label={stage} />
+      <Progress value={progress} aria-label={phase} />
       {step ? (
         <p className="truncate font-mono text-12 text-muted-foreground" title={step}>
           {step}
@@ -193,7 +193,6 @@ export function JobPanel({ title, stage, progress, step, startedAt, log, childre
 interface JobButtonsProps {
   /** The server action that cancels the job; null when it can't be cancelled any more. */
   cancel: (() => Promise<ActionResult>) | null;
-  /** The gateway answered: poll now. */
   onChanged: () => void;
   /** Cancel stays busy once the gateway accepted, for a job that takes a moment to stop. */
   staysBusy?: boolean;
@@ -201,7 +200,6 @@ interface JobButtonsProps {
   children?: ReactNode;
 }
 
-/** A running job's buttons: Cancel and what else it offers, with why a cancel failed under them. */
 export function JobButtons({ cancel, onChanged, staysBusy = false, children }: JobButtonsProps) {
   const [pending, start] = useTransition();
   const [result, setResult] = useState<ActionResult | null>(null);
@@ -236,7 +234,6 @@ export function JobButtons({ cancel, onChanged, staysBusy = false, children }: J
   );
 }
 
-/** The job's log, collapsed until asked for. */
 function LogSection({ lines }: { lines: readonly string[] }) {
   if (lines.length === 0) return null;
   return (
@@ -271,7 +268,7 @@ interface JobOutcomeProps {
   focusHandoff?: RefObject<boolean>;
 }
 
-/** A finished job, inline in its card until dismissed: what happened, the error, the log on request. */
+/** A finished job, inline in its card until dismissed. */
 export function JobOutcome({ job, title, children, onDismiss, focusHandoff }: JobOutcomeProps) {
   const outcome = job.phase === "succeeded" || job.phase === "cancelled" ? job.phase : "failed";
   const { variant, Icon, tone } = OUTCOMES[outcome];
@@ -302,7 +299,7 @@ export function JobOutcome({ job, title, children, onDismiss, focusHandoff }: Jo
   );
 }
 
-/** A card's data can't be read: what failed, what that means, and Retry. */
+/** A card's data can't be read. */
 export function UnreachableAlert({
   title,
   message,

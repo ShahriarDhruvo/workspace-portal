@@ -1,4 +1,4 @@
-// Session-row helpers that need no request (no cookies or headers), so they can be unit tested.
+// Session-row helpers that need no request (no cookies or headers).
 import { lte, type SQL } from "drizzle-orm";
 import { sessions, type PortalDb } from "@portal/core";
 

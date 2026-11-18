@@ -1,5 +1,5 @@
 // Creates the admin account on first start. Takes the database and the settings as arguments (no
-// server-only imports) so it can be unit tested; startup.ts passes getDb() and adminSeedSettings().
+// server-only imports); startup.ts passes getDb() and adminSeedSettings().
 import { eq } from "drizzle-orm";
 import { users, writeAudit, type PortalDb } from "@portal/core";
 import { hashPassword } from "./passwords.ts";

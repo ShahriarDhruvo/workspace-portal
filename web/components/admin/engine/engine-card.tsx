@@ -35,14 +35,10 @@ type EngineDialog =
 
 interface EngineCardProps {
   data: Loaded<EngineOverview>;
-  /** Something changed, or Retry: poll now. */
   onChanged: () => void;
 }
 
-/**
- * The LLM engine on the Updates page, laid out as the agents' cards. Without portal-hostd on the LLM server it says
- * how to set it up.
- */
+/** The LLM engine on the Updates page. Without portal-hostd on the LLM server it says how to set it up. */
 export function EngineCard({ data, onChanged }: EngineCardProps) {
   const overview = data.data;
   const unreachable = data.error !== null;
@@ -138,7 +134,6 @@ export function EngineCard({ data, onChanged }: EngineCardProps) {
       status={status}
       version={{ label: "Running on the LLM server", value: engine.version ?? "unknown" }}
       actions={
-        // While a job runs its panel is the focus, and nothing else can start anyway.
         targetRow && !(job && isJobActive(job)) ? (
           <GuardedButton blockedReason={blocked} onClick={(event) => show({ kind: "install", row: targetRow, update: true }, event.currentTarget)}>
             Update to {targetRow.version}…
@@ -283,7 +278,6 @@ function EngineDialogs({ dialog, overview, open, onOpenChange, onDone, opener }:
   }
 }
 
-/** No portal-hostd for the LLM server: the fix, in one paragraph and a command. */
 function Setup() {
   return (
     <Empty className="border p-5">

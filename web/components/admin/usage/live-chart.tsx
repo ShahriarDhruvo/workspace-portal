@@ -32,7 +32,7 @@ interface LiveChartProps {
 const TICKS_S = [-60, -30, 0];
 const axisNumber = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
 
-/** One reading over the last minute. Animation is off: a new point arrives every 500 ms. */
+/** One reading over the last minute. Animation is off: the next point arrives before it would end. */
 export function LiveChart({ points, label, color, now, format, syncId, timeAxis = true, className }: LiveChartProps) {
   const config = { value: { label, color } } satisfies ChartConfig;
   const data = points.map((point) => ({ t: point.t, value: point.value }));

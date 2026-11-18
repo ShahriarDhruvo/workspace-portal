@@ -12,7 +12,6 @@ interface AgentJobProps {
   job: AgentUpdateJob;
   /** The job's agent as the overview shows it now. */
   agent: AgentVersionInfo;
-  /** Something changed: poll now. */
   onChanged: () => void;
   onDismiss: () => void;
   /** Hands the focus from the running panel to the outcome when the job ends. */
@@ -36,7 +35,7 @@ export function AgentJob({ job, agent, onChanged, onDismiss, focusHandoff }: Age
   return (
     <JobPanel
       title={jobTitle(job, agent.name)}
-      stage={`Step ${step.index} of ${step.count} · ${phaseLabel(job.phase)}${job.rebuild ? " · from scratch" : ""}`}
+      phase={`Step ${step.index} of ${step.count} · ${phaseLabel(job.phase)}${job.rebuild ? " · from scratch" : ""}`}
       progress={step.progress}
       step={job.step}
       startedAt={job.startedAt}

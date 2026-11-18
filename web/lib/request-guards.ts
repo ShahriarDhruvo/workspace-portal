@@ -1,5 +1,5 @@
-// Request checks for the JSON Route Handlers. Pure (no request context, no server-only imports), so they
-// can be unit tested; lib/api.ts applies them.
+// Request checks for the JSON Route Handlers. Pure (no request context, no server-only imports); lib/api.ts
+// applies them.
 import type { ApiError, User } from "@portal/core";
 
 /**

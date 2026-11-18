@@ -57,10 +57,7 @@ interface WorkspacesCardProps {
   now: number;
 }
 
-/**
- * Admin > Users' running workspaces, under the users table and refreshed with it: who, which kind and harness, what
- * it is doing and what it uses, and Open workspace.
- */
+/** Admin > Users' workspaces that aren't stopped. */
 export function WorkspacesCard({ workspaces, names, maxRunning, now }: WorkspacesCardProps) {
   const list = workspaces.filter((workspace) => workspace.status !== "stopped");
   const running = list.filter((w) => w.status === "running" || w.status === "starting").length;

@@ -1,4 +1,4 @@
-// What the Updates page decides about the agents (docs/ARCHITECTURE.md, "Agent versions and updates"). Pure; unit tested.
+// What the Updates page decides about the agents (docs/ARCHITECTURE.md, "Agent versions and updates").
 import type { AgentUpdateJob, AgentVersionInfo, ApiError, InstalledImage, ReleaseNotes, UpdatePhase } from "@portal/core/wire";
 import { isJobActive, jobStep, OFFLINE, type CardStatus, type JobStep } from "./update-jobs.ts";
 

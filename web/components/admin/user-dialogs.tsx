@@ -320,7 +320,7 @@ interface ActionFormProps {
   renderPassword?: (password: string) => ReactNode;
 }
 
-/** The confirmation form bound to one admin action: description, fields, error and the Cancel / confirm footer. */
+/** The confirmation form bound to one admin action. */
 function ActionForm(props: ActionFormProps) {
   const { user, action, onDone, confirmLabel, pendingLabel, danger, description, fields, blocked, renderPassword } = props;
   const [state, formAction] = useActionState(action, { status: "idle" });

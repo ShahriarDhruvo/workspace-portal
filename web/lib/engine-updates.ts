@@ -1,4 +1,4 @@
-// What the Updates page decides about the LLM engine (docs/ARCHITECTURE.md, "LLM engine updates"). Pure; unit tested.
+// What the Updates page decides about the LLM engine (docs/ARCHITECTURE.md, "LLM engine updates").
 import { z } from "zod";
 import { compareVersions, isStableVersion } from "@portal/core/wire";
 import type { ApiError, EngineImage, EngineOverview, EngineRelease, EngineStatus, EngineUpdateJob, ReleaseNotes } from "@portal/core/wire";

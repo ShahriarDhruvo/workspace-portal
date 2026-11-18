@@ -1,4 +1,4 @@
-// The workspace iframe's address. Pure; unit tested.
+// The workspace iframe's address.
 import type { AgentKind } from "@portal/core";
 import type { Theme } from "./theme.ts";
 

@@ -1,5 +1,4 @@
-// Input rules shared by the server actions, the admin seed and the forms.
-// Pure module (no server-only imports) so it can be unit tested with `node --test`.
+// Input rules shared by the server actions, the admin seed and the forms (no server-only imports).
 import { z } from "zod";
 import { AGENT_KINDS, isVersion, WORKSPACE_KINDS } from "@portal/core";
 import { NAME_MAX_LENGTH, PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, USERNAME_PATTERN } from "./limits.ts";

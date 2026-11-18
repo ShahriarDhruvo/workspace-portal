@@ -8,8 +8,8 @@ const FOLLOW_SLACK_PX = 12;
 
 /**
  * The tail of an update's build output, in a scrolling well. It follows new lines while scrolled to the bottom and
- * stays put once the admin scrolls up to read. Not a live region: screen readers hear the phases (the job panel
- * announces them), not every line. The keyboard can focus and scroll it.
+ * stays put once the admin scrolls up to read. Not a live region: screen readers hear the phases, not every line. The
+ * keyboard can focus and scroll it.
  */
 export function BuildLog({ lines }: { lines: readonly string[] }) {
   const viewport = useRef<HTMLDivElement>(null);

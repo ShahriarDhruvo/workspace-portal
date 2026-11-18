@@ -1,5 +1,5 @@
 // The portal's colour theme: dark (the default, as in the Qwen Code Web Shell) or light, kept in a cookie so the
-// server renders the right one and the page never flashes the other. Pure; unit tested.
+// server renders the right one and the page never flashes the other.
 
 export const THEMES = ["dark", "light"] as const;
 export type Theme = (typeof THEMES)[number];
@@ -10,7 +10,7 @@ const THEME_COOKIE_MAX_AGE = 365 * 24 * 3600;
 /** The canvas of each theme (--canvas in app/theme.css): <meta name="theme-color"> and the pre-paint background. */
 export const THEME_CANVAS: Readonly<Record<Theme, string>> = { dark: "#0d0d0d", light: "#ffffff" };
 
-/** The cookie's value as a theme: anything but "light" (missing, garbled, from an older version) is dark. */
+/** The cookie's value as a theme: anything but "light" (missing, garbled) is dark. */
 export function parseTheme(value: string | null | undefined): Theme {
   return value === "light" ? "light" : "dark";
 }

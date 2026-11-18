@@ -1,6 +1,6 @@
 // Release notes (GitHub markdown) as a few safe blocks: headings, list items and paragraphs, with bold and code
 // spans. Links keep their text and lose their address; images, HTML tags and everything else are reduced to plain
-// text. Nothing is ever rendered as HTML. Pure; unit tested.
+// text. Nothing is ever rendered as HTML.
 
 export interface NoteSpan {
   text: string;

@@ -1,6 +1,6 @@
 // Which agent ("harness") a workspace starts with. Each user picks one in Settings (users.agent); a start never
 // names an agent, and the gateway launches the user's choice when it is enabled, else the first enabled agent.
-// Pure, with type-only imports, so client components can use it too; unit tested.
+// Pure, with type-only imports, so client components can use it too.
 import type { AgentInfo, AgentKind } from "@portal/core";
 
 type Offered = readonly Pick<AgentInfo, "id">[];

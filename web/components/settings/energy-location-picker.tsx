@@ -14,7 +14,6 @@ interface EnergyLocationPickerProps {
   chosen: string | null;
   /** The place's current price ("14.99 ¢/kWh · August 2026 · EIA"), or why there is none yet. */
   summary: string | null;
-  /** The id of the visible title that names the choice. */
   labelledBy: string;
 }
 

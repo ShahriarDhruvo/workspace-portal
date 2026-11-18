@@ -40,7 +40,6 @@ export async function generateMetadata({ params }: PageProps<"/admin/users/[id]"
   return { title: user ? displayName(user) : "User" };
 }
 
-/** One user: who they are and their workspace, then their name, their workspaces and the account's actions. */
 export default async function UserPage({ params }: PageProps<"/admin/users/[id]">) {
   const session = await requireAdmin();
   const user = loadUser((await params).id);
@@ -60,7 +59,7 @@ export default async function UserPage({ params }: PageProps<"/admin/users/[id]"
   // The harness the workspace runs; stopped, the one it starts with next (the user's choice while enabled).
   const harness = running ? (workspace?.agent ?? null) : enabled ? startingAgent(user.agent, enabled) : user.agent;
   const version = running ? (workspace?.agentVersion ?? null) : (enabled?.find((agent) => agent.id === harness)?.version ?? null);
-  // The facts behind the status pill (idle time, memory, why it stopped), in its tooltip as in the users table.
+  // The facts behind the status pill (idle time, memory, why it stopped), for its tooltip.
   const summary = workspaceError ? null : summarizeWorkspace(workspace, config.idleTimeoutMinutes);
   const facts = summary ? [summary.detail, summary.title].filter((fact) => fact !== null).join(" · ") : "";
   const dialogUser = { id: user.id, name, username: user.username, busy: workspace?.busy ?? false };

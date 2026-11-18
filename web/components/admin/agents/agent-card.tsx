@@ -29,14 +29,13 @@ interface AgentCardProps {
   context: ActionContext;
   /** The npm registry's last check failed: its message, and when it last answered. */
   registry: { error: string | null; checkedAt: number | null };
-  /** An action was accepted, or the job changed: poll now. */
   onChanged: () => void;
 }
 
 /**
- * One enabled agent on the Updates page, laid out as the LLM engine's card. Its one dialog stays mounted while it
- * closes, so its content doesn't change mid-animation; several controls open it, so the card remembers which one did
- * and the dialog hands the focus back to it.
+ * One enabled agent on the Updates page. Its one dialog stays mounted while it closes, so its content doesn't change
+ * mid-animation; several controls open it, so the card remembers which one did and the dialog hands the focus back to
+ * it.
  */
 export function AgentCard({ agent, context, registry, onChanged }: AgentCardProps) {
   const heading = useRef<HTMLHeadingElement>(null);
@@ -79,7 +78,6 @@ export function AgentCard({ agent, context, registry, onChanged }: AgentCardProp
       headingRef={heading}
       version={{ label: "New workspaces start with", value: agent.current }}
       actions={
-        // While this agent's job runs its panel is the focus, and nothing else can start anyway.
         latest && !(job && isJobActive(job)) ? (
           <GuardedButton
             blockedReason={blocked}

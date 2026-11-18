@@ -10,7 +10,6 @@ import { Button } from "@/components/ui/button";
 
 interface EngineJobProps {
   job: EngineUpdateJob;
-  /** Something changed: poll now. */
   onChanged: () => void;
   /** Opens the "Restart now" confirmation (it cuts running requests off). */
   onRestartNow: (from: HTMLElement) => void;
@@ -30,7 +29,7 @@ export function EngineJob({ job, onChanged, onRestartNow, onDismiss }: EngineJob
   return (
     <JobPanel
       title={engineJobTitle(job)}
-      stage={`Step ${step.index} of ${step.count} · ${enginePhaseLabel(job)}`}
+      phase={`Step ${step.index} of ${step.count} · ${enginePhaseLabel(job)}`}
       progress={step.progress}
       // While draining, the requests still running say more than the step does.
       step={job.phase === "draining" ? null : job.step}

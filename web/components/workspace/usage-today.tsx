@@ -2,7 +2,7 @@ import type { UsageToday as Usage } from "@/lib/usage";
 import { formatCount } from "@/lib/format";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
-/** Home's secondary card: the user's LLM requests and tokens so far today, as stat tiles. */
+/** Home's secondary card: the user's LLM requests and tokens so far today. */
 export function UsageToday({ usage }: { usage: Usage }) {
   const tiles = [
     { label: "Requests", value: usage.requests },

@@ -37,8 +37,8 @@ const STATES: Record<HostLive["state"], ReactNode> = {
 };
 
 /**
- * One server's readings from its portal-hostd, every 500 ms. A reading the server can't give shows "—"; a server
- * without portal-hostd says how to set it up.
+ * One server's readings from its portal-hostd. A reading the server can't give shows "—"; a server without
+ * portal-hostd says how to set it up.
  */
 export function ServerCard({ host, history, now }: { host: HostLive; history: readonly HostSample[]; now: number }) {
   const sample = host.state === "online" ? host.sample : null;
@@ -168,7 +168,7 @@ function Direction({ icon, rate, today }: { icon: ReactNode; rate: number | null
   );
 }
 
-/** The readings behind CPU, GPU and memory, grouped like them; always shown. */
+/** The readings behind CPU, GPU and memory. */
 function Readouts({ host, sample }: { host: HostLive; sample: HostSample }) {
   const info = host.info;
   const { cpu, gpu, memory } = sample;
@@ -203,7 +203,6 @@ function Readouts({ host, sample }: { host: HostLive; sample: HostSample }) {
   );
 }
 
-/** Under Details: the disks, the network interfaces, the fans that turn and the system's own facts. */
 function Details({ host, sample }: { host: HostLive; sample: HostSample }) {
   const info = host.info;
   const { disk } = sample;

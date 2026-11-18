@@ -27,7 +27,6 @@ export function UsageLive({ sessions }: { sessions: SessionPage }) {
 
 function LiveCards({ frame, history, sessions }: { frame: LiveFrame; history: LiveHistory; sessions: SessionPage }) {
   return (
-    // items-start: one card's open Details doesn't stretch the others.
     <div className={USAGE_GRID}>
       <div className="min-w-0 xl:col-span-2 3xl:col-span-1">
         <LlmCard llm={frame.llm} tokens={history.tokens} now={frame.t} sessions={sessions} sessionsVersion={frame.sessionsVersion} />
