@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRef, useState } from "react";
 import { AGENT_NAMES, type AgentKind, type WorkspaceInfo } from "@portal/core/wire";
 import { startingAgent } from "@/lib/agent-choice";
-import { agentLabel, formatVersion } from "@/lib/format";
+import { formatVersion } from "@/lib/format";
 import type { AdminOverview } from "@/lib/overview";
 import type { UserSummary } from "@/lib/user-summary";
 import { UserAvatar } from "@/components/brand";
@@ -98,7 +98,8 @@ interface UserRowProps {
 function UserRow({ user, isSelf, workspace, nextAgent }: UserRowProps) {
   const running = workspace?.status === "running" || workspace?.status === "starting";
   // A running workspace shows its agent and version; a stopped one, the harness it starts with next.
-  const agent = running && workspace ? agentLabel(workspace) : nextAgent ? AGENT_NAMES[nextAgent] : null;
+  const harness = running ? workspace.agent : nextAgent;
+  const agent = harness ? AGENT_NAMES[harness] : null;
 
   return (
     <TableRow>
@@ -128,7 +129,7 @@ function UserRow({ user, isSelf, workspace, nextAgent }: UserRowProps) {
       >
         <span className="flex items-baseline gap-x-1.5">
           <span>{agent ?? "—"}</span>
-          {agent && running && workspace?.agentVersion ? (
+          {agent && running && workspace.agentVersion ? (
             <span className="font-mono text-12 text-muted-foreground">{formatVersion(workspace.agentVersion)}</span>
           ) : null}
         </span>

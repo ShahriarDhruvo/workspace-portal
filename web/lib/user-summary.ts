@@ -9,8 +9,6 @@ export interface UserSummary {
   initials: string;
   role: User["role"];
   active: boolean;
-  mustChangePassword: boolean;
-  createdAt: number;
   lastLoginAt: number | null;
   /** The harness chosen in Settings; null: the install's default. */
   agent: AgentKind | null;
@@ -24,8 +22,6 @@ export function toUserSummary(user: User): UserSummary {
     initials: initials(user.firstName, user.lastName),
     role: user.role,
     active: user.active,
-    mustChangePassword: user.mustChangePassword,
-    createdAt: user.createdAt,
     lastLoginAt: user.lastLoginAt,
     agent: user.agent,
   };

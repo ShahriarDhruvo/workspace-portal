@@ -2,7 +2,7 @@
 
 import { useId, useLayoutEffect, useRef, useState, useSyncExternalStore, useTransition, type ReactNode, type Ref, type RefObject } from "react";
 import type { UpdateJob } from "@portal/core/wire";
-import { formatElapsed } from "@/lib/agent-versions";
+import { formatStopwatch } from "@/lib/agent-versions";
 import type { CardStatus } from "@/lib/update-jobs";
 import { cn } from "@/lib/utils";
 import type { ActionResult } from "@/lib/validation";
@@ -173,7 +173,7 @@ export function JobPanel({ title, stage, progress, step, startedAt, log, childre
           </h3>
           <p className="text-13 text-muted-foreground tabular-nums">
             {stage}
-            {seconds === null ? null : ` · ${formatElapsed(Math.max(0, seconds * 1000 - startedAt))}`}
+            {seconds === null ? null : ` · ${formatStopwatch(Math.max(0, seconds * 1000 - startedAt))}`}
           </p>
         </div>
         {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}

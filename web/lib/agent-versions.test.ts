@@ -4,7 +4,7 @@ import {
   agentActionError,
   agentPackageRows,
   currentImageMissing,
-  formatElapsed,
+  formatStopwatch,
   jobElapsedMs,
   jobKind,
   jobOutcome,
@@ -13,7 +13,6 @@ import {
   removeBlocker,
   updateBlocker,
   updateWork,
-  versionStatus,
   agentStatus,
   agentJobStep,
 } from "./agent-versions.ts";
@@ -61,7 +60,7 @@ function job(overrides: Partial<AgentUpdateJob> = {}): AgentUpdateJob {
   };
 }
 
-test("polling is quick only while a job builds or verifies", () => {
+test("polling is quick only while a job runs", () => {
   assert.equal(pollDelay(null), IDLE_POLL_MS);
   assert.equal(pollDelay(job({ phase: "building" })), ACTIVE_POLL_MS);
   assert.equal(pollDelay(job({ phase: "verifying" })), ACTIVE_POLL_MS);
@@ -77,16 +76,6 @@ test("a poll without the gateway keeps the last versions on screen, with the err
   assert.deepEqual(mergeLoaded({ data: versions, error: null }, { data: null, error: down }), { data: versions, error: down });
   const fresh = { ...versions, checkedAt: 6 };
   assert.deepEqual(mergeLoaded({ data: versions, error: down }, { data: fresh, error: null }), { data: fresh, error: null });
-});
-
-test("the version badge: update available, up to date, ahead of latest, or unknown", () => {
-  assert.deepEqual(versionStatus(qwen), { tone: "warning", label: "Update available: 0.27.4" });
-  assert.deepEqual(versionStatus({ current: "0.27.4", latest: "0.27.4", updateAvailable: false }), { tone: "success", label: "Up to date" });
-  assert.deepEqual(versionStatus({ current: "0.2.2-rc.3", latest: "0.2.2-rc.1", updateAvailable: false }), {
-    tone: "neutral",
-    label: "Latest: 0.2.2-rc.1",
-  });
-  assert.deepEqual(versionStatus({ current: "0.27.0", latest: null, updateAvailable: false }), { tone: "neutral", label: "Latest unknown" });
 });
 
 test("the current version's image can be missing", () => {
@@ -117,7 +106,7 @@ test("Package images: every release the gateway lists, with its image and what i
   assert.equal(rows[0]!.publishedAt, 4);
   const missing = agentPackageRows({ ...qwen, installed: qwen.installed.slice(1) });
   assert.equal(missing.find((row) => row.current)?.action, "build", "the current version without its image: built again");
-  assert.equal(packageSummary(rows), "4 versions · 2 on this server");
+  assert.equal(packageSummary(rows, "this server"), "4 versions · 2 on this server");
   assert.equal(packageSummary(rows.slice(0, 1), "the LLM server"), "1 version · 0 on the LLM server");
 });
 
@@ -218,11 +207,11 @@ test("a finished job says what it means for new and running workspaces", () => {
 });
 
 test("elapsed time as a stopwatch", () => {
-  assert.equal(formatElapsed(0), "0:00");
-  assert.equal(formatElapsed(7_400), "0:07");
-  assert.equal(formatElapsed(750_000), "12:30");
-  assert.equal(formatElapsed(3_723_000), "1:02:03");
-  assert.equal(formatElapsed(-5), "0:00");
+  assert.equal(formatStopwatch(0), "0:00");
+  assert.equal(formatStopwatch(7_400), "0:07");
+  assert.equal(formatStopwatch(750_000), "12:30");
+  assert.equal(formatStopwatch(3_723_000), "1:02:03");
+  assert.equal(formatStopwatch(-5), "0:00");
   assert.equal(jobElapsedMs(job({ startedAt: 1_000 }), 61_000), 60_000, "running: until now");
   assert.equal(jobElapsedMs(job({ startedAt: 1_000, finishedAt: 31_000 }), 61_000), 30_000, "finished: until it ended");
 });
@@ -245,13 +234,15 @@ test("gateway errors in words", () => {
   assert.equal(agentActionError("cancel", { error: "unreachable", message: "The workspace service is not reachable." }), "The workspace service is not reachable.");
 });
 
-test("the Updates page's agent badge and job steps", () => {
+test("the agent's badge (updating, update available, up to date, ahead of latest, unknown) and job steps", () => {
   const agent = { id: "qwen" as const, current: "0.27.0", latest: "0.27.4", updateAvailable: true };
   assert.deepEqual(agentStatus(agent, null), { label: "Update available", variant: "warning", pending: false });
   assert.deepEqual(agentStatus({ ...agent, latest: "0.27.0", updateAvailable: false }, null), { label: "Up to date", variant: "success", pending: false });
   assert.deepEqual(agentStatus(agent, { agent: "qwen", finishedAt: null }), { label: "Updating…", variant: "info", pending: true });
   assert.equal(agentStatus(agent, { agent: "dsh", finishedAt: null }).label, "Update available");
-  assert.equal(agentStatus({ ...agent, latest: null, updateAvailable: false }, null).variant, "secondary");
+  assert.deepEqual(agentStatus({ ...agent, latest: null, updateAvailable: false }, null), { label: "Latest unknown", variant: "secondary", pending: false });
+  const ahead = { id: "dsh" as const, current: "0.2.2-rc.3", latest: "0.2.2-rc.1", updateAvailable: false };
+  assert.deepEqual(agentStatus(ahead, null), { label: "Latest: 0.2.2-rc.1", variant: "secondary", pending: false });
   assert.deepEqual(agentJobStep(job({ phase: "building" })), { index: 1, count: 2, progress: 25 });
   assert.deepEqual(agentJobStep(job({ phase: "verifying" })), { index: 2, count: 2, progress: 75 });
   assert.deepEqual(agentJobStep(job({ phase: "verifying", reuse: true })), { index: 1, count: 1, progress: 50 });

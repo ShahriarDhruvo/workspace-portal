@@ -30,10 +30,10 @@ function status(workspace: WorkspaceInfo): { tone: DotTone; label: string; pulse
       return { tone: "idle", label: "Stopped", pulse: false, title: null };
     case "running": {
       if (!workspace.ready) return { tone: "warning", label: "Starting", pulse: true, title: null };
-      if (workspace.busy) {
+      if (workspace.busyReason) {
         return {
           tone: "success",
-          label: `Working, ${BUSY[workspace.busyReason ?? "task"]}`,
+          label: `Working, ${BUSY[workspace.busyReason]}`,
           pulse: true,
           title: workspace.stopPending ? "Everyone signed out while the agent was working; it stops once the work is done." : null,
         };

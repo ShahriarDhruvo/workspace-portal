@@ -6,29 +6,17 @@ function plural(count: number, one: string, many = `${one}s`): string {
   return `${count} ${count === 1 ? one : many}`;
 }
 
-export interface VersionStatus {
-  tone: "success" | "warning" | "neutral";
-  label: string;
-}
-
-/** The badge beside the current version. */
-export function versionStatus(agent: Pick<AgentVersionInfo, "current" | "latest" | "updateAvailable">): VersionStatus {
-  if (agent.latest === null) return { tone: "neutral", label: "Latest unknown" };
-  if (agent.updateAvailable) return { tone: "warning", label: `Update available: ${agent.latest}` };
-  if (agent.latest === agent.current) return { tone: "success", label: "Up to date" };
-  // Ahead of latest (a prerelease the admin built), or not comparable: say what latest is.
-  return { tone: "neutral", label: `Latest: ${agent.latest}` };
-}
-
 /** The badge beside the agent's title on the Updates page; "Update to X.Y.Z" beside the version names the release. */
 export function agentStatus(
   agent: Pick<AgentVersionInfo, "id" | "current" | "latest" | "updateAvailable">,
   job: Pick<AgentUpdateJob, "agent" | "finishedAt"> | null,
 ): CardStatus {
   if (job && isJobActive(job) && job.agent === agent.id) return { label: "Updating…", variant: "info", pending: true };
-  const status = versionStatus(agent);
-  if (status.tone === "warning") return { label: "Update available", variant: "warning", pending: false };
-  return { label: status.label, variant: status.tone === "neutral" ? "secondary" : status.tone, pending: false };
+  if (agent.latest === null) return { label: "Latest unknown", variant: "secondary", pending: false };
+  if (agent.updateAvailable) return { label: "Update available", variant: "warning", pending: false };
+  if (agent.latest === agent.current) return { label: "Up to date", variant: "success", pending: false };
+  // Ahead of latest (a prerelease the admin built), or not comparable: say what latest is.
+  return { label: `Latest: ${agent.latest}`, variant: "secondary", pending: false };
 }
 
 /** The current version has no image on the server: new workspaces of this agent can't start until it is built. */
@@ -76,7 +64,7 @@ export function agentPackageRows(agent: Pick<AgentVersionInfo, "current" | "rele
 }
 
 /** "6 versions · 2 on this server": the section's summary while it is folded. */
-export function packageSummary(rows: ReadonlyArray<{ image: unknown }>, where = "this server"): string {
+export function packageSummary(rows: ReadonlyArray<{ image: unknown }>, where: string): string {
   const local = rows.filter((row) => row.image !== null).length;
   return `${plural(rows.length, "version")} · ${local} on ${where}`;
 }
@@ -110,16 +98,9 @@ export function removeBlocker(
   return null;
 }
 
-const PHASE_LABELS: Record<UpdatePhase, string> = {
-  building: "Building the image",
-  verifying: "Checking the version",
-  succeeded: "Finished",
-  failed: "Failed",
-  cancelled: "Cancelled",
-};
-
+/** What a running job is doing. */
 export function phaseLabel(phase: UpdatePhase): string {
-  return PHASE_LABELS[phase];
+  return phase === "building" ? "Building the image" : "Checking the version";
 }
 
 /** A build, then the version check; a switch to an image on the server only checks. */
@@ -219,7 +200,7 @@ export function jobElapsedMs(job: Pick<AgentUpdateJob, "startedAt" | "finishedAt
 }
 
 /** A stopwatch: "0:07", "12:30", "1:02:03". */
-export function formatElapsed(ms: number): string {
+export function formatStopwatch(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));
   const hours = Math.floor(total / 3600);
   const minutes = Math.floor((total % 3600) / 60);

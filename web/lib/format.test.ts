@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { WorkspaceInfo } from "@portal/core";
 import {
-  agentLabel,
   formatBytes,
   formatCount,
   formatDuration,
@@ -80,17 +79,16 @@ const running: WorkspaceInfo = {
 };
 
 test("summarizeWorkspace", () => {
-  assert.deepEqual(summarizeWorkspace(running, 30), { tone: "success", label: "Running", detail: "idle 12m · 412 MiB", title: null });
+  assert.deepEqual(summarizeWorkspace(running, 30), { detail: "idle 12m · 412 MiB", title: null });
   assert.equal(summarizeWorkspace({ ...running, idleSeconds: 5 }, 30).detail, "active · 412 MiB");
-  assert.equal(summarizeWorkspace({ ...running, ready: false }, 30).label, "Starting");
-  assert.equal(summarizeWorkspace(null, 30).label, "Stopped");
+  assert.deepEqual(summarizeWorkspace({ ...running, ready: false }, 30), { detail: null, title: null });
+  assert.deepEqual(summarizeWorkspace(null, 30), { detail: null, title: null });
   const idle = summarizeWorkspace({ ...running, status: "stopped", ready: false, stopReason: "idle" }, 30);
   assert.equal(idle.title, "Stopped after 30 minutes without activity");
   const working = summarizeWorkspace({ ...running, idleSeconds: 0, busy: true, busyReason: "task", stopPending: true }, 30);
-  assert.deepEqual([working.label, working.detail], ["Working", "task running · stops when done · 412 MiB"]);
+  assert.equal(working.detail, "task running · stops when done · 412 MiB");
   assert.ok(working.title?.includes("stops once the work is done"));
-  const failed = summarizeWorkspace({ ...running, status: "error", ready: false, lastError: "boom" }, 30);
-  assert.deepEqual([failed.tone, failed.label, failed.title], ["danger", "Error", "boom"]);
+  assert.deepEqual(summarizeWorkspace({ ...running, status: "error", ready: false, lastError: "boom" }, 30), { detail: null, title: "boom" });
 });
 
 test("formatVersion", () => {
@@ -98,16 +96,6 @@ test("formatVersion", () => {
   assert.equal(formatVersion("0.2.2-rc.1"), "v0.2.2-rc.1");
   assert.equal(formatVersion("v1.0.0"), "v1.0.0");
   assert.equal(formatVersion("nightly"), "nightly");
-});
-
-test("agentLabel names the running agent, or the last one once stopped", () => {
-  assert.equal(agentLabel(running), "Qwen Code");
-  assert.equal(agentLabel({ status: "starting", agent: "dsh" }), "DeepSeek Harness");
-  assert.equal(agentLabel({ status: "stopping", agent: "dsh" }), "DeepSeek Harness");
-  assert.equal(agentLabel({ status: "stopped", agent: "dsh" }), "last: DeepSeek Harness");
-  assert.equal(agentLabel({ status: "error", agent: "qwen" }), "last: Qwen Code");
-  assert.equal(agentLabel({ status: "stopped", agent: null }), null, "never started");
-  assert.equal(agentLabel(null), null, "no workspace row");
 });
 
 test("workspaceState: a word for each status; running splits into working and idle, and starts once ready", () => {

@@ -9,8 +9,6 @@ import { getSession, renewSession } from "./session";
 export interface WorkspaceStatusResponse extends WorkspaceInfo {
   /** Whose workspace this session uses (the gateway routes the iframe there). */
   targetUserId: number;
-  /** True when an admin is viewing someone else's workspace. */
-  actingAs: boolean;
   /** The agents enabled on this install, in display order. */
   agents: AgentInfo[];
   /**
@@ -58,5 +56,5 @@ export function route(options: { admin?: boolean }, handle: (session: SessionCon
  */
 export async function workspaceStatus(pending: Promise<WorkspaceInfo>, session: SessionContext): Promise<WorkspaceStatusResponse> {
   const [info, agents] = await Promise.all([pending, gateway.agents()]);
-  return { ...info, targetUserId: session.target.id, actingAs: session.actingAs, agents, nextAgent: startingAgent(session.target.agent, agents) };
+  return { ...info, targetUserId: session.target.id, agents, nextAgent: startingAgent(session.target.agent, agents) };
 }

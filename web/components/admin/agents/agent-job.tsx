@@ -2,7 +2,7 @@
 
 import type { RefObject } from "react";
 import { cancelAgentUpdate } from "@/lib/actions/updates";
-import { agentJobStep, formatElapsed, jobElapsedMs, jobOutcome, jobTitle, phaseLabel } from "@/lib/agent-versions";
+import { agentJobStep, formatStopwatch, jobElapsedMs, jobOutcome, jobTitle, phaseLabel } from "@/lib/agent-versions";
 import { isJobActive } from "@/lib/update-jobs";
 import type { AgentUpdateJob, AgentVersionInfo } from "@portal/core/wire";
 import { LocalTime } from "@/components/local-time";
@@ -21,13 +21,12 @@ interface AgentJobProps {
 
 /** The agents' update job, inline in its agent's card: its panel while it runs, then the outcome until dismissed. */
 export function AgentJob({ job, agent, onChanged, onDismiss, focusHandoff }: AgentJobProps) {
-  if (!isJobActive(job)) {
-    const finishedAt = job.finishedAt ?? job.startedAt;
+  if (job.finishedAt !== null) {
     return (
       <JobOutcome job={job} title={jobTitle(job, agent.name)} onDismiss={onDismiss} focusHandoff={focusHandoff}>
         {jobOutcome(job, agent)}{" "}
         <span className="tabular-nums">
-          Finished <LocalTime at={finishedAt} relative />, after {formatElapsed(jobElapsedMs(job, finishedAt))}
+          Finished <LocalTime at={job.finishedAt} relative />, after {formatStopwatch(jobElapsedMs(job, job.finishedAt))}
           {job.rebuild ? ", from scratch" : ""}.
         </span>
       </JobOutcome>

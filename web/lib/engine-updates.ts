@@ -110,19 +110,11 @@ export function engineRemoveBlocker(overview: EngineOverview | null, unreachable
   return null;
 }
 
-const PHASE_LABELS: Record<EngineUpdateJob["phase"], string> = {
-  pulling: "Downloading the image",
-  draining: "Waiting for running requests",
-  restarting: "Restarting the engine",
-  succeeded: "Finished",
-  failed: "Failed",
-  cancelled: "Cancelled",
-};
-
-/** The phase in words; once a restart failed (`rolledBack`), the LLM server is putting the previous version back. */
+/** What a running job is doing; once a restart failed (`rolledBack`), the LLM server is putting the previous version back. */
 export function enginePhaseLabel(job: Pick<EngineUpdateJob, "phase" | "rolledBack" | "fromVersion">): string {
-  if (job.rolledBack && job.phase === "restarting") return `Putting ${version(job.fromVersion)} back`;
-  return PHASE_LABELS[job.phase];
+  if (job.phase === "pulling") return "Downloading the image";
+  if (job.phase === "draining") return "Waiting for running requests";
+  return job.rolledBack ? `Putting ${version(job.fromVersion)} back` : "Restarting the engine";
 }
 
 /** It downloads, drains and restarts; with the image on the LLM server already, only the last two. */

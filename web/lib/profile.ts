@@ -11,7 +11,7 @@ export type ProfileState =
   | { status: "idle" }
   | { status: "invalid"; fieldErrors: FieldErrors; values: Record<(typeof NAME_FIELDS)[number], string> }
   | { status: "error"; message: string }
-  | { status: "saved"; at: number };
+  | { status: "saved" };
 
 /**
  * Saves `user`'s name from the Profile form (an admin's for any user, Settings' for one's own). Audited as
@@ -23,7 +23,7 @@ export function saveProfile(actorUserId: number, user: User, formData: FormData)
   if (!parsed.success) return { status: "invalid", fieldErrors: fieldErrors(parsed.error), values };
   const changes: Record<string, { from: string | null; to: string | null }> = {};
   for (const key of NAME_FIELDS) {
-    if ((user[key] ?? null) !== parsed.data[key]) changes[key] = { from: user[key] ?? null, to: parsed.data[key] };
+    if (user[key] !== parsed.data[key]) changes[key] = { from: user[key], to: parsed.data[key] };
   }
   if (Object.keys(changes).length > 0) {
     const db = getDb();
@@ -36,5 +36,5 @@ export function saveProfile(actorUserId: number, user: User, formData: FormData)
     });
     refresh();
   }
-  return { status: "saved", at: Date.now() };
+  return { status: "saved" };
 }

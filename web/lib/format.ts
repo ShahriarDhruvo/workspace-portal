@@ -1,5 +1,5 @@
 // Display formatting shared by server and client components. Pure; unit tested.
-import { AGENT_NAMES, type WorkspaceInfo } from "@portal/core/wire";
+import type { WorkspaceInfo } from "@portal/core/wire";
 
 const BYTE_UNITS = ["B", "KiB", "MiB", "GiB", "TiB"] as const;
 
@@ -95,67 +95,29 @@ export function formatVersion(version: string): string {
   return /^\d/.test(version) ? `v${version}` : version;
 }
 
+const BUSY_TEXT: Record<NonNullable<WorkspaceInfo["busyReason"]>, string> = { task: "task running", llm: "waiting on the model", cpu: "using CPU" };
+
 /**
- * The workspace's agent in a few words: its name while a container runs it, "last: <name>" once stopped, null
- * if it never started.
+ * A workspace beyond its status: `detail`, the facts of a ready one ("idle 12m · 412 MiB"), and `title`, the longer
+ * explanation (stop reason, last error). `info` null = the user has no workspace row (stopped).
  */
-export function agentLabel(info: Pick<WorkspaceInfo, "status" | "agent"> | null): string | null {
-  if (!info?.agent) return null;
-  const name = AGENT_NAMES[info.agent];
-  return info.status === "stopped" || info.status === "error" ? `last: ${name}` : name;
-}
-
-function busyText(reason: WorkspaceInfo["busyReason"]): string {
-  switch (reason) {
-    case "task":
-      return "task running";
-    case "llm":
-      return "waiting on the model";
-    case "cpu":
-      return "using CPU";
-    default:
-      return "working";
-  }
-}
-
-export interface WorkspaceSummary {
-  tone: "success" | "warning" | "danger" | "idle";
-  label: string;
-  /** Extra facts shown after the label ("idle 12m · 412 MiB"). */
-  detail: string | null;
-  /** Longer explanation for a tooltip (stop reason, last error). */
-  title: string | null;
-}
-
-/** One-line workspace status for tables. `info` null = the user has no workspace row (stopped). */
-export function summarizeWorkspace(info: WorkspaceInfo | null, idleTimeoutMinutes: number): WorkspaceSummary {
+export function summarizeWorkspace(info: WorkspaceInfo | null, idleTimeoutMinutes: number): { detail: string | null; title: string | null } {
   if (!info || info.status === "stopped") {
     const reason = info ? stopReasonText(info.stopReason, idleTimeoutMinutes) : null;
-    return { tone: "idle", label: "Stopped", detail: null, title: reason ? `Stopped ${reason}` : null };
+    return { detail: null, title: reason ? `Stopped ${reason}` : null };
   }
-  switch (info.status) {
-    case "running": {
-      if (!info.ready) return { tone: "warning", label: "Starting", detail: null, title: null };
-      const parts: string[] = [];
-      if (info.busy) parts.push(busyText(info.busyReason));
-      else if (info.idleSeconds !== null) parts.push(info.idleSeconds < 60 ? "active" : `idle ${formatDuration(info.idleSeconds)}`);
-      if (info.stopPending) parts.push("stops when done");
-      if (info.memoryBytes !== null) parts.push(formatBytes(info.memoryBytes));
-      if (info.connections.admin > 0) parts.push("admin connected");
-      return {
-        tone: "success",
-        label: info.busy ? "Working" : "Running",
-        detail: parts.join(" · ") || null,
-        title: info.stopPending ? "Everyone signed out while the agent was working; it stops once the work is done." : null,
-      };
-    }
-    case "starting":
-      return { tone: "warning", label: "Starting", detail: null, title: null };
-    case "stopping":
-      return { tone: "warning", label: "Stopping", detail: null, title: null };
-    case "error":
-      return { tone: "danger", label: "Error", detail: null, title: info.lastError };
-  }
+  if (info.status === "error") return { detail: null, title: info.lastError };
+  if (info.status !== "running" || !info.ready) return { detail: null, title: null };
+  const parts: string[] = [];
+  if (info.busyReason) parts.push(BUSY_TEXT[info.busyReason]);
+  else if (info.idleSeconds !== null) parts.push(info.idleSeconds < 60 ? "active" : `idle ${formatDuration(info.idleSeconds)}`);
+  if (info.stopPending) parts.push("stops when done");
+  if (info.memoryBytes !== null) parts.push(formatBytes(info.memoryBytes));
+  if (info.connections.admin > 0) parts.push("admin connected");
+  return {
+    detail: parts.join(" · ") || null,
+    title: info.stopPending ? "Everyone signed out while the agent was working; it stops once the work is done." : null,
+  };
 }
 
 export interface WorkspaceState {
