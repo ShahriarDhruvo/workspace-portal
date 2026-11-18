@@ -1,18 +1,8 @@
-// Switches the LLM engine on the LLM server to another release (newer or older) from Admin > Updates,
-// through that server's portal-hostd, which owns the engine's Podman quadlet (hostd/README.md).
-//
-// An update:
-//   1. pulling:    hostd downloads the version's image (by digest, resolved from the registry now);
-//                  the engine keeps serving meanwhile. Cancellable. Skipped when the LLM server has an
-//                  image of that version already (`reuse`): it is used as it is, without the registry.
-//   2. draining:   the gateway holds new LLM requests in its queue (they wait, they don't fail) and waits
-//                  for the running ones to finish: at most ENGINE_DRAIN_MINUTES, or until the admin says
-//                  "Restart now". Cancellable (the queue opens again, nothing changed).
-//   3. restarting: hostd points the quadlet at the new image, restarts the engine and checks it serves
-//                  the new version; if it doesn't, hostd puts the old image back and restarts that.
-//   4. the queue opens again; the held requests go to the (new or restored) engine.
-// One job at a time; the last one stays visible until the next starts.
+// Switches the LLM engine to another release through the LLM server's portal-hostd, which owns the engine's Podman
+// quadlet (hostd/README.md). The engine serves during the download; during the drain and the restart new LLM requests
+// wait in the gateway's queue. hostd puts the old image back when the new one does not serve.
 import crypto from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   isStableVersion,
   type EngineJob,
@@ -89,7 +79,6 @@ export class EngineUpdater {
   #hostJob: EngineJob | null = null;
   #cancelRequested = false;
   #restartNow = false;
-  #paused = false;
 
   constructor(options: EngineUpdaterOptions) {
     this.#options = options;
@@ -103,14 +92,14 @@ export class EngineUpdater {
 
   async overview(options: { refresh?: boolean } = {}): Promise<EngineOverview> {
     const { host, releases, config } = this.#options;
-    const base = { job: this.snapshot(), drainMinutes: Math.round(config.engine.drainMs / 60_000) };
-    if (host === null) return { ...base, state: "off", error: null, engine: null, releases: null };
+    const base = { job: this.snapshot(), drainMinutes: Math.round(config.engine.drainMs / 60_000), engine: null, releases: null };
+    if (host === null) return { ...base, state: "off", error: null };
     let engine: EngineStatus;
     try {
       engine = await host.status();
     } catch (error) {
-      if (error instanceof HostdError && error.code === "no_engine") return { ...base, state: "no_engine", error: error.message, engine: null, releases: null };
-      return { ...base, state: "offline", error: errorMessage(error), engine: null, releases: null };
+      if (error instanceof HostdError && error.code === "no_engine") return { ...base, state: "no_engine", error: error.message };
+      return { ...base, state: "offline", error: errorMessage(error) };
     }
     // What runs and the images on the LLM server are listed too, whether or not they are among the newest releases.
     const local = [{ version: engine.version, digest: engine.digest }, ...engine.images];
@@ -130,35 +119,44 @@ export class EngineUpdater {
    */
   async startUpdate(request: { version: string; actorUserId: number | null }): Promise<EngineUpdateJob> {
     const { version, actorUserId } = request;
+    const { host, releases, log } = this.#options;
     if (!isStableVersion(version)) throw invalidVersion();
-    const { engine, host } = await this.#ready();
+    if (host === null) throw unavailable("The LLM server's portal-hostd is not set up (HOSTD_LLM_URL, HOSTD_LLM_TOKEN).");
+    if (this.running) throw jobRunning();
+    const engine = await host.status().catch((error: unknown) => {
+      throw unavailable(error instanceof HostdError && error.code === "no_engine" ? error.message : `The LLM server's portal-hostd can't be reached: ${errorMessage(error)}`);
+    });
     if (engine.version === version) throw new HttpError(409, "already_current", `The engine already runs ${version}.`);
-    const local = engine.images.find((image) => image.version === version && image.digest !== null)?.digest ?? null;
-    let digest = local;
-    if (digest === null) {
-      try {
-        digest = await this.#options.releases.resolve(engine.repository, version);
-      } catch (error) {
-        if (error instanceof EngineReleaseError) throw new HttpError(404, "version_not_found", error.message);
-        throw error;
-      }
-    }
+    const local = engine.images.find((image) => image.version === version && image.digest !== null)?.digest;
+    const digest = local ?? (await releases.resolve(engine.repository, version).catch((error: unknown) => {
+      throw error instanceof EngineReleaseError ? new HttpError(404, "version_not_found", error.message) : error;
+    }));
     if (this.running) throw jobRunning();
     const image = `${engine.repository}@${digest}`;
-    const job = this.#begin(engine.version, version, image, local !== null, actorUserId);
-    void this.#run(job, host, {
-      beforeDrain: async () => {
-        if (job.reuse) {
-          this.#note(job, `Using the image already on the LLM server (${image}).`);
-          return;
-        }
-        this.#phase(job, "pulling", `Downloading ${version}`, true);
-        const pulled = await this.#follow(job, await host.pull(image), host, PULL_TIMEOUT_MS);
-        if (pulled.phase === "cancelled" || this.#cancelRequested) throw new Cancelled();
-        if (pulled.phase !== "succeeded") throw new Error(pulled.error ?? "The download failed.");
-      },
-      restart: () => host.apply(image, version),
-    });
+    const reuse = local != null;
+    this.#cancelRequested = false;
+    this.#restartNow = false;
+    this.#hostJob = null;
+    const job: EngineUpdateJob = {
+      id: crypto.randomBytes(6).toString("hex"),
+      fromVersion: engine.version,
+      toVersion: version,
+      image,
+      reuse,
+      phase: reuse ? "draining" : "pulling",
+      step: "Starting",
+      log: [],
+      startedAt: this.#now(),
+      finishedAt: null,
+      error: null,
+      rolledBack: false,
+      drain: null,
+      cancellable: true,
+      actorUserId,
+    };
+    this.#job = job;
+    log.info("engine update started", { from: engine.version, to: version, reuse });
+    void this.#run(job, host, image);
     return this.snapshot()!;
   }
 
@@ -199,52 +197,12 @@ export class EngineUpdater {
     this.#finish(job, "failed", GATEWAY_STOPPED);
   }
 
-  async #ready(): Promise<{ engine: EngineStatus; host: EngineHost }> {
-    const host = this.#options.host;
-    if (host === null) throw unavailable("The LLM server's portal-hostd is not set up (HOSTD_LLM_URL, HOSTD_LLM_TOKEN).");
-    if (this.running) throw jobRunning();
+  async #run(job: EngineUpdateJob, host: EngineHost, image: string): Promise<void> {
     try {
-      return { engine: await host.status(), host };
-    } catch (error) {
-      if (error instanceof HostdError && error.code === "no_engine") throw unavailable(error.message);
-      throw unavailable(`The LLM server's portal-hostd can't be reached: ${errorMessage(error)}`);
-    }
-  }
-
-  #begin(fromVersion: string | null, toVersion: string, image: string, reuse: boolean, actorUserId: number | null): EngineUpdateJob {
-    this.#cancelRequested = false;
-    this.#restartNow = false;
-    this.#hostJob = null;
-    const job: EngineUpdateJob = {
-      id: crypto.randomBytes(6).toString("hex"),
-      fromVersion,
-      toVersion,
-      image,
-      reuse,
-      phase: reuse ? "draining" : "pulling",
-      step: "Starting",
-      log: [],
-      startedAt: this.#now(),
-      finishedAt: null,
-      error: null,
-      rolledBack: false,
-      drain: null,
-      cancellable: true,
-      actorUserId,
-    };
-    this.#job = job;
-    this.#options.log.info("engine update started", { from: fromVersion, to: toVersion, reuse });
-    return job;
-  }
-
-  /** Runs a job: what comes before the drain (the download), the drain, then hostd's restart. */
-  async #run(job: EngineUpdateJob, host: EngineHost, plan: { beforeDrain: () => Promise<void>; restart: () => Promise<EngineJob> }): Promise<void> {
-    const { queue } = this.#options;
-    try {
-      await plan.beforeDrain();
+      await this.#download(job, host, image);
       await this.#drain(job);
       this.#phase(job, "restarting", `Restarting the engine with ${job.toVersion}`, false);
-      const result = await this.#follow(job, await plan.restart(), host, APPLY_TIMEOUT_MS);
+      const result = await this.#follow(job, await host.apply(image, job.toVersion), host, APPLY_TIMEOUT_MS);
       if (result.phase !== "succeeded") {
         job.rolledBack = result.rolledBack;
         throw new Error(result.error ?? "The engine did not come up with the new version.");
@@ -258,12 +216,18 @@ export class EngineUpdater {
       if (error instanceof Cancelled) this.#finish(job, "cancelled", CANCELLED);
       else this.#finish(job, "failed", errorMessage(error));
     } finally {
-      if (this.#paused) {
-        this.#paused = false;
-        queue.resume();
-      }
+      this.#options.queue.resume();
       this.#hostJob = null;
     }
+  }
+
+  /** hostd downloads the image, unless the LLM server has it. */
+  async #download(job: EngineUpdateJob, host: EngineHost, image: string): Promise<void> {
+    if (job.reuse) return this.#note(job, `Using the image already on the LLM server (${image}).`);
+    this.#phase(job, "pulling", `Downloading ${job.toVersion}`, true);
+    const pulled = await this.#follow(job, await host.pull(image), host, PULL_TIMEOUT_MS);
+    if (pulled.phase === "cancelled" || this.#cancelRequested) throw new Cancelled();
+    if (pulled.phase !== "succeeded") throw new Error(pulled.error ?? "The download failed.");
   }
 
   /** Holds new requests and waits for the running ones (or the deadline, or "Restart now"). */
@@ -272,7 +236,6 @@ export class EngineUpdater {
     const since = this.#now();
     const deadline = since + config.engine.drainMs;
     queue.pause();
-    this.#paused = true;
     job.drain = { since, deadline, inFlight: queue.inFlight };
     this.#phase(job, "draining", "Waiting for running requests to finish", true);
     this.#note(job, `New LLM requests wait in the portal's queue; ${queue.inFlight} still running.`);
@@ -348,7 +311,3 @@ export class EngineUpdater {
 }
 
 class Cancelled extends Error {}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
