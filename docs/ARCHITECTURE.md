@@ -65,9 +65,9 @@ The web app keeps sessions, renders the pages and calls the control API. Pages: 
 `/` (Home), `/workspace`, `/settings`, and for the admin `/admin` (Usage), `/admin/energy`, `/admin/users`
 with `/new`, `/[id]` and `/[id]/workspace`, `/admin/updates`, `/admin/audit`. JSON routes: `/api/health`,
 `/api/workspace/` `start`, `stop`, `status`, and `/api/admin/` `overview`, `agents`, `engine`, `energy`,
-`llm-sessions`, `live`. Stable entry points: `web/lib/gateway.ts` (the only control API client),
-`web/lib/config.ts` (the environment), `web/instrumentation.ts` (start-up: no start without the control
-secret; creates the admin account when there is none) and `web/scripts/reset-admin-password.mjs`.
+`llm-sessions`, and the event stream `live`. Stable entry points: `web/lib/gateway.ts` (the only control API
+client), `web/lib/config.ts` (the environment), `web/instrumentation.ts` (start-up: no start without the
+control secret; creates the admin account when there is none) and `web/scripts/reset-admin-password.mjs`.
 
 ## Ports and addresses
 
@@ -84,9 +84,9 @@ secret; creates the admin account when there is none) and `web/scripts/reset-adm
 A port is a browser origin. Each workspace has its own, so one workspace's page cannot read another's storage
 or token, and a user's Online workspace cannot read the Private one's. Web apps get the preview port for the
 same reason: an app's page is not the agent's origin. User ids 1 to `AGENT_PORT_COUNT - 1` have ports; any
-other id gets 409 `no_workspace_port`. The offset is fixed because the Web Shell trim holds the same number;
-`config.test.ts` compares the two. Online's ports listen even with `ONLINE_WORKSPACES=off`. A service listener
-waits up to 60 s for its bridge address; the gateway exits if it never appears.
+other id gets 409 `no_workspace_port`. The offset is fixed because the Web Shell trim and `deploy/lib.sh` hold
+the same number; `config.test.ts` compares the three. Online's ports listen even with `ONLINE_WORKSPACES=off`.
+A service listener waits up to 60 s for its bridge address; the gateway exits if it never appears.
 
 ## Data directory
 
@@ -111,7 +111,7 @@ of `db/` (`packages/core/src/db.ts`): the web app's account owns the database.
 
 ## Database
 
-One SQLite file, opened by the web app and the gateway through `getDatabase` in `@portal/core` (WAL, foreign
+One SQLite file, opened by the web app and the gateway through `openDatabase` in `@portal/core` (WAL, foreign
 keys on, a 5 s busy timeout). Times are integer milliseconds. `schema.ts` is the Drizzle view of it.
 
 | Table | Holds | Written by |
@@ -160,11 +160,11 @@ and the gateway hold. A driver declares one of two ways to let the browser's age
 
 | Status | Meaning |
 |---|---|
-| `stopped` | no container |
+| `stopped` | no container; when the container exited by itself, `lastError` says why |
 | `starting` | the container is being created, or is up and its agent does not answer yet |
 | `running` | the agent answered the driver's readiness probe; requests are forwarded |
 | `stopping` | connections closed, `docker stop -t 10`, then removal |
-| `error` | the start failed, the container exited, or it could not be removed; `lastError` says which |
+| `error` | the start failed, or the container could not be stopped; `lastError` says which |
 
 - **Start** happens only when the web app asks, or on "Try again" (below). No other request to a workspace
   port starts one, so an open tab's reconnect loop cannot wake a stopped workspace. Without a kind, a start
@@ -175,8 +175,8 @@ and the gateway hold. A driver declares one of two ways to let the browser's age
 - **Launch**: prepare the folders and settings, generate the credential, create the container (an earlier one
   of the user goes first), then probe readiness for up to 90 s. A failed start leaves `error`, the container's
   last log lines in `lastError`, and no container.
-- **Release** (a session ended) stops at once, or sets `stopPending` while the agent works. **Attach** (a
-  session arrived) clears `stopPending` and starts nothing.
+- **Release** (a session ended) stops a workspace no session uses any more: at once, or when its work is done
+  (`stopPending`). **Attach** (a session arrived) clears `stopPending` and starts nothing.
 - **Reap**, every 60 s, in this order: an Online workspace that lost its permission stops, working or not; a
   working one stays; one no session uses stops (`logout`); one idle for `IDLE_TIMEOUT_MINUTES` stops (`idle`).
 - **Working** means the agent reports a task, an LLM request is queued or in flight, or the container uses
@@ -188,7 +188,8 @@ and the gateway hold. A driver declares one of two ways to let the browser's age
   or with unknown labels are removed; Online containers that may not run are stopped. A container's exit is
   noticed within 15 s, or at once when a forwarded request fails.
 - **Erase files** empties one kind's `home/` and `workspace/` and is refused while that kind runs. **Delete
-  data** stops the workspace and removes `users/<id>/` and the row; if the stop fails nothing is deleted.
+  data** waits for an erase under way, stops the workspace and removes `users/<id>/` and the row; if the stop
+  fails nothing is deleted.
 
 The gateway's shutdown leaves the containers running, which lets it restart without ending anyone's work. Stop
 reasons in `workspaces.stop_reason` and the audit log: `admin`, `user`, `deactivated`, `deleted` (from the web
@@ -214,8 +215,8 @@ Then, on an agent port (`agent-proxy.ts`):
   at the cap it offers "Try again" (`POST /__portal/start`), which starts this port's kind.
 - A driver's blocked paths (phone pairing, OAuth) are refused in every spelling (403 `not_available`).
 - Going in, the gateway removes hop-by-hop headers, `Host`, `Cookie`, `Origin`, `Authorization`, `Expect`,
-  `Forwarded`, `X-Forwarded-*`, `X-Real-IP` and `Sec-Fetch-*`; the driver then sets `Host` and the credential.
-  A token agent gets the credential only on requests that presented the browser token.
+  `Forwarded`, `X-Forwarded-For`/`-Host`/`-Port`/`-Proto`, `X-Real-IP` and `Sec-Fetch-*`; the driver then
+  sets `Host` and the credential, which a token agent gets only on requests that presented the browser token.
 - Coming out, it removes `Set-Cookie` and `X-Frame-Options`, sets `frame-ancestors` to the portal's origin,
   and makes `Cache-Control` `private, no-store` unless the agent's forbids reuse or says `immutable`.
 - Bodies above `UPLOAD_LIMIT_MB` end in 413 `payload_too_large`; an agent that does not answer, in 502
@@ -223,8 +224,8 @@ Then, on an agent port (`agent-proxy.ts`):
 
 WebSockets (`ws-relay.ts`) exist only on the driver's socket paths. The gateway connects to the workspace
 first and accepts the browser once the workspace has accepted, so a refusal comes back as a plain HTTP status.
-It pings every 20 s, drops a peer after two missed pongs, and pauses a sender while 4 MiB wait for the other
-side. A session that ended, or moved to another workspace, has its connections closed with code 4001.
+It pings the browser every 20 s, drops it after two missed pongs, and pauses a sender while 4 MiB wait for the
+other side. A session that ended, or moved to another workspace, has its connections closed with code 4001.
 
 A preview port (`preview-proxy.ts`) passes the same five checks. `GET /__portal/port/<n>/<path>` stores n
 (1024 to 65535, never the agent's port) in a cookie of that preview port and redirects to the path; later
@@ -259,9 +260,9 @@ traffic between containers. State is per listener: nothing carries between kinds
   `READER_PAGE_CHARS` at a time. Both are limited per workspace and cached for some minutes.
 - **URL policy** (`url-policy.ts`, `READER_URL_POLICY=shown`): `read_page` opens a URL the workspace was shown
   (a search result, a page it read, its conversation except the assistant's own messages) or one on a trusted
-  host (`DEFAULT_TRUSTED_HOSTS` in `config.ts`). The reason: a page can tell the agent to fetch a URL that
-  carries data out in its query, and a URL the model composed is not a shown one. A URL admitted only for its
-  host may redirect only to trusted hosts.
+  host (`READER_TRUSTED_HOSTS`, else `DEFAULT_TRUSTED_HOSTS` in `config.ts`). The reason: a page can tell the
+  agent to fetch a URL that carries data out in its query, and a URL the model composed is not a shown one. A
+  URL admitted only for its host may redirect only to trusted hosts.
 - **The reader** (`reader/reader.py`) connects only to public IPv4 addresses on ports 80 and 443, to the very
   address it checked, redirects included. Each request is its own process, limited in time, bytes and memory.
 
@@ -300,8 +301,7 @@ traffic between containers. State is per listener: nothing carries between kinds
 | DELETE | `/control/workspaces/:userId/data` | `{ ok: true }` | 500 `stop_failed` |
 | POST | `/control/sessions/:sessionId/disconnect` | `{ closed }`: connections closed | |
 
-`reason` is one of `STOP_REASONS` in `wire/kinds.ts`. A `null` `agent` or `kind` counts as absent. Stop,
-release, delete and disconnect also drop the cached sessions concerned.
+`reason` is one of `STOP_REASONS` in `wire/kinds.ts`. A `null` `agent` or `kind` counts as absent.
 
 ## Wire contract
 
@@ -326,8 +326,8 @@ own copy at every start into `system/<agent>/`, mounted read-only. What the rend
   removed, and the MCP server `search` (plus `browser` with `WORKSPACE_BROWSER`).
 - **DeepSeek Harness** gets the same models as a patch file written as JSON, which is valid YAML: dsh
   evaluates YAML tags, and JSON has none, so no string of the admin's can become one. Models whose context
-  window leaves dsh too little room are left out (`fitDshModels` in `models.ts`). What users may not change is
-  a static lockdown patch in the image; the image build fails when a row of it does not apply.
+  window leaves dsh too little room are left out (`fitDshModels` in `dsh-settings.ts`). What users may not
+  change is a static lockdown patch in the image; the image build fails when a row of it does not apply.
 - **The Web Shell trim** (`workspace-image/qwen/trim-web-shell.mjs`) removes what the portal does not offer
   and points the Web preview at the preview port. An edit that does not fit is skipped with a warning: the
   build never fails.
@@ -361,9 +361,9 @@ container; the steps hostd runs are in [hostd/README.md](../hostd/README.md). Ph
   registry and hostd pulls by digest while the engine keeps serving. An image already there skips the pull.
 - Draining pauses the LLM queue and waits until no request is in flight, `ENGINE_DRAIN_MINUTES` have passed,
   or the admin chooses "Restart now". Waiting requests are held, not failed. Until then a cancel works.
-- Restarting is hostd's `apply`. If it fails hostd restores the previous image and the job ends `failed` with
-  `rolledBack`. The queue resumes in every case. A gateway that stops mid-job records it as failed, with a
-  note to check the engine's version: hostd carries on.
+- Restarting is hostd's `apply`. If it fails hostd puts the previous image back and the job ends `failed`;
+  `rolledBack` says whether the previous engine serves again. The queue resumes in every case. A gateway that
+  stops mid-job records it as failed, with a note to check the engine's version: hostd carries on.
 
 ## Live view
 
@@ -400,9 +400,10 @@ bridge by name and by subnet. Its `not_public` set must equal `NOT_PUBLIC` in `g
 this host's networks, its routers, the servers the `*_URL` settings name and `FIREWALL_NEVER_REACH`.
 
 The gateway has no `CAP_NET_ADMIN` and cannot list rules, so the table carries a marker: its first rule
-rejects TCP to `127.0.0.1:SERVICE_PORT`, where nothing listens. `fence.ts` connects there every 5 s, and
-`EHOSTUNREACH` means loaded. On any other answer the gateway stops every Online workspace (`online_disabled`)
-and refuses Online starts; it asks once more right before an Online container starts.
+rejects TCP to `127.0.0.1:SERVICE_PORT`, where nothing listens. Unless `ONLINE_WORKSPACES` is off, `fence.ts`
+connects there every 5 s (not while the check before still runs), and `EHOSTUNREACH` means loaded. On any
+other answer the gateway stops every Online workspace (`online_disabled`) and refuses Online starts; it asks
+once more right before an Online container starts.
 
 Docker's networks are checked attribute by attribute at start (`ensureNetwork`): a differing network is
 replaced when unused, otherwise the gateway refuses to start. `deploy/verify-isolation.sh` asserts these
@@ -413,10 +414,10 @@ guarantees on the running host, with probes from throwaway containers.
 [`.env.example`](../.env.example) is the one place for a setting's name, default and meaning. The installer
 copies every setting `.env` lacks from it, the deploy scripts fall back to it (`env_get` in `deploy/lib.sh`),
 and `config.test.ts` holds the defaults built into `gateway/src/config.ts` to it. Readers: the gateway
-(`config.ts`), the web app (`web/lib/config.ts`: paths, ports, the secret, `SESSION_*`,
-`IDLE_TIMEOUT_MINUTES`, `ADMIN_*`), the reader (`READER_FETCH_*`, `READER_MAX_*`), SearXNG (`SEARXNG_SECRET`)
-and the deploy scripts (`FIREWALL_*`, subnets, bridges, resolvers). `loadConfig` checks relations as well as
-values: port ranges that overlap, UID ranges, subnets, resolvers.
+(`config.ts`), the web app (`web/lib/config.ts`: the data directory, ports, the secret, `SESSION_*`,
+`IDLE_TIMEOUT_MINUTES`, `ADMIN_*`), the reader (the limits `.env.example` calls its own), SearXNG
+(`SEARXNG_SECRET`) and the deploy scripts. `loadConfig` checks relations as well as values: port ranges that
+overlap, UID ranges, subnets, resolvers.
 
 ## Testing
 
@@ -445,4 +446,3 @@ and a clock. So a test runs production's wiring, and a dependency on the outside
 - **Comments** state constraints and reasons, never what the code does.
 - **One implementation per concern.** Where a second copy is unavoidable (bash cannot import TypeScript), a
   comment names its twin and, where possible, a test compares them.
-- **Migrations are append-only**, and `.env.example` is the only home of a default.
