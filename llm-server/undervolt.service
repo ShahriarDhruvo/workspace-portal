@@ -1,0 +1,10 @@
+[Unit]
+Description=CPU undervolt: curve offset -50 on all cores
+
+[Service]
+Type=oneshot
+# 1048576 minus the offset. It lasts until a reboot, so a boot without this unit is stock again.
+ExecStart=/usr/bin/ryzenadj --set-coall=1048526
+
+[Install]
+WantedBy=multi-user.target

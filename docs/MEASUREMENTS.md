@@ -7,8 +7,8 @@ numbers led to are in [`llm-server/`](../llm-server).
 - **Portal server:** Pentium G4400T (2 cores), 8 GB, Fedora 45.
 - One unit of each, at room temperature. Power and temperature are the chip's own sensors, not a wall meter.
 - tok/s is tokens per second. Reading is prompt processing, writing is the answer.
-- The fan, undervolt, model, engine, image and full-machine measurements date from kernel 7.2.15 and were not
-  repeated with 7.3.4.
+- The fan, model, engine, image and full-machine measurements date from kernel 7.2.15 and were not repeated
+  with 7.3.4.
 
 ## Settings and what they buy
 
@@ -20,6 +20,7 @@ numbers led to are in [`llm-server/`](../llm-server).
 | Power profile | Performance | 120 W sustained, 160 W peak. 132 W can be forced but is slower. |
 | Fan curve | up to 95% | Chip about 6 °C cooler. Reading holds 1,760-1,787 tok/s instead of sagging to as low as 1,484 after long load: up to 20% faster when hot. |
 | CPU governor | performance | TuneD profile `accelerator-performance`. Baseline for all numbers. |
+| CPU undervolt | Curve offset -50 | 9% more CPU work at 5 W less and 4 °C cooler. Prompt reading gains about 1%. |
 | Speculative decoding | MTP | A helper file drafts tokens ahead and about 80% are accepted. Writing runs at 59 to 75 tok/s (19 runs, November 18, 2026), against 24 to 27 on llama.cpp without it. |
 
 ## Levers tried and left alone
@@ -67,23 +68,29 @@ numbers led to are in [`llm-server/`](../llm-server).
 
 ## CPU undervolt
 
-Not in use on the test machine. In the same 45-second all-core test:
+In use on the test machine since November 18, 2026 (`llm-server/undervolt.service`). Of the other numbers in
+this file only those of four 256K sessions were taken with it. The same 45-second all-core test, twice each way,
+kernel 7.3.4:
 
-| | Clock | Power | Temperature |
-|---|---|---|---|
-| Stock | 4,650 MHz | 140 W | 96-98 °C |
-| Curve offset -50 | 5,000 MHz | 127 W | 87 °C |
+| | Work | Clock | Power | Temperature |
+|---|---|---|---|---|
+| Stock | 23,369 and 23,395 operations a second | 4,540 MHz | 128 W | 98 °C, the chip's limit |
+| Curve offset -50 | 25,481 and 25,477 | 4,950 MHz | 123 W | 94 °C |
 
-- 7.4% more work at 13 W less and 10 °C cooler. Prompt reading went from 1,815 and 1,819 tok/s to 1,836 and
-  1,832, about 1%, because the GPU does most of the work.
-- -55 through -200 are accepted but behave exactly like -50.
-- It passed 17 minutes of checks and about 25 minutes of AI load. It was not run for days.
+- 9% more work at 5 W less and 4 °C cooler. Prompt reading gained about 1% on kernel 7.2.15, from 1,815 and
+  1,819 tok/s to 1,836 and 1,832: the GPU does most of that work, and it has no such setting.
+- -55 through -200 are accepted but behave exactly like -50 (kernel 7.2.15).
+- With the offset on, November 18: all cores checked their arithmetic for 5 minutes and each of the 16 cores
+  alone for 30 seconds, twice, without an error, and the tests of four 256K sessions under [Load](#load) ran.
+  It was not run for days, and the machine was not rebooted with the unit installed.
 - Set with [RyzenAdj](https://github.com/FlyGoat/RyzenAdj) 0.18.0 from
-  [COPR shdwchn10/ryzenadj](https://copr.fedorainfracloud.org/coprs/shdwchn10/ryzenadj/), whose driver loads at
-  the next boot: `sudo ryzenadj --set-coall=1048526`, which is 1048576 minus the offset and lasts until a reboot.
+  [COPR shdwchn10/ryzenadj](https://copr.fedorainfracloud.org/coprs/shdwchn10/ryzenadj/):
+  `sudo ryzenadj --set-coall=1048526`, which is 1048576 minus the offset and lasts until a reboot. The package
+  builds a kernel driver, `ryzen_smu`, in the minute after its install; the command works with and without it.
 - Every chip is different. Check the arithmetic on all cores and on each core alone
-  (`stress-ng --cpu-method matrixprod --verify`), and run the full-load test (`llm-server/acceptance.py`) once
-  with the offset on before relying on it. After a freeze or a failed check, a reboot clears the offset.
+  (`stress-ng --cpu-method matrixprod --verify`), and run the full-load test (`llm-server/acceptance.py`) with
+  the offset on before installing the unit. After a freeze or a failed check, a reboot clears the offset
+  unless the unit is enabled.
 
 ## Memory
 

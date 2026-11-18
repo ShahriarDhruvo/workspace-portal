@@ -10,6 +10,7 @@ none of it: any OpenAI-compatible model server will do. The measurements behind 
 | `download-model.sh` | Fetches the six model files (115 GB) to `/models/qwen3.8-flash-next` and checks each SHA256. Run it again after an interruption. |
 | `acceptance.py` | Full-load test: fills every session at once, has each find three keys and make a tool round trip, and watches memory. Prints `FUNCTIONAL` and `CAPACITY`, `PASS` or `FAIL`. About eleven minutes with the whole server. |
 | `fans/` | Fan curve and power profile for one machine, the Bosgame M5 (board AXB35-02, BIOS 3.11). |
+| `undervolt.service` | Sets the CPU's curve offset to -50 at every boot with RyzenAdj, which must be installed. It goes to `/etc/systemd/system/`. Check the offset on your chip first: [CPU undervolt](../docs/MEASUREMENTS.md#cpu-undervolt). |
 
 ## Fans
 
