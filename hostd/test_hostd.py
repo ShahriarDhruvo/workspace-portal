@@ -301,7 +301,6 @@ class TestHostAmd(TmpRoot):
 
     def test_info(self):
         info = self.host.info()
-        self.assertEqual(info['hostd'], 2)
         self.assertEqual(info['role'], 'llm')
         self.assertEqual(info['os'], 'Fedora Linux 44 (Server Edition)')
         self.assertEqual(info['kernel'], '7.2.15-200.fc44.x86_64')
@@ -1069,8 +1068,7 @@ class TestHttp(HttpCase):
         self.assertEqual((st, body['error']), (401, 'unauthorized'))
         self.assertEqual(self.req('GET', '/v1/info', token='b' * 40)[0], 401)
         st, info = self.req('GET', '/v1/info')
-        self.assertEqual(st, 200)
-        self.assertEqual(info['hostd'], 2)
+        self.assertEqual((st, info['role']), (200, 'llm'))
         self.assertEqual(self.req('GET', '/v1/meter', token=None)[0], 401)
 
     def test_errors(self):
@@ -1125,7 +1123,7 @@ class TestHttp(HttpCase):
         self.assertIn('200', head.splitlines()[0])
         self.assertIn('Content-Type: text/event-stream', head)
         self.assertTrue(events[0].startswith('event: info\ndata: '))
-        self.assertEqual(json.loads(events[0].split('data: ', 1)[1])['hostd'], 2)
+        self.assertEqual(json.loads(events[0].split('data: ', 1)[1])['role'], 'llm')
         self.assertTrue(events[1].startswith('event: sample\ndata: '))
         sample = json.loads(events[2].split('data: ', 1)[1])
         self.assertIn('cpu', sample)

@@ -30,7 +30,6 @@ import urllib.parse
 import urllib.request
 from collections import deque
 
-API_VERSION = 2
 DEFAULT_PORT = 9180
 MAX_CONNECTIONS = 16
 MAX_STREAMS = 4
@@ -673,7 +672,6 @@ class Host:
             src = self.sources()
             power_label = {'socket': 'APU socket power', 'rapl': 'CPU package + DRAM (RAPL)'}.get(src['power'])
             self._info = {
-                'hostd': API_VERSION,
                 'hostname': socket.gethostname().split('.')[0],
                 'role': self.role,
                 'os': m.group(1) if m else None,

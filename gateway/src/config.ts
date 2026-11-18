@@ -2,8 +2,7 @@
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { AGENT_KINDS, isAgentKind, type AgentKind, type WorkspaceKind } from "@portal/core";
-import { isVersion } from "./lib/versions.ts";
+import { AGENT_KINDS, isAgentKind, isVersion, type AgentKind, type WorkspaceKind } from "@portal/core";
 
 /**
  * A workspace's preview port is its agent port plus this. Fixed: the Web Shell's Web preview works it out too
