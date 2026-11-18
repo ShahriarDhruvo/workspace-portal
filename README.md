@@ -1,225 +1,160 @@
 # Workspace Portal
 
-A web portal on one server that gives each user an AI coding workspace in a locked-down container: Qwen Code or
-DeepSeek Harness, driven by a model you host. Internals, APIs and the security model: `docs/ARCHITECTURE.md`.
+A self-hosted portal that gives every user a coding agent in the browser, running in a container on your own
+server and talking to a model you host. A user signs in and gets two workspaces, of which one runs at a time:
 
-1. [Install and start](#1-install-and-start)
-2. [What runs after the install](#2-what-runs-after-the-install)
-3. [What can break on upgrades](#3-what-can-break-on-upgrades)
+- **Private**: no route off the portal server. The agent reaches the model, web search and the page reader
+  through the gateway, and nothing else.
+- **Online**: the same, plus the public internet over TCP. It never reaches the LAN, the servers or another
+  workspace. The admin can bar it per user; `ONLINE_WORKSPACES=off` turns it off for everyone.
 
-## 1. Install and start
+Each workspace has its own files (`/home/user`, `/workspace`) and runs the agent the user picks in Settings:
+Qwen Code or DeepSeek Harness. Web apps started in a workspace open in the browser on its preview port. The
+admin manages users, watches usage and energy, updates the agents and the LLM engine, and reads the audit log.
 
-**Requirements:** Linux with Docker Engine 25.0.5 or newer and the compose plugin, `nft`, `python3`, `openssl`
-and `curl` (tested on Fedora 44 with Docker 29). An OpenAI-compatible model server the host can reach. RAM:
-about 0.4 GB for the portal, 0.5 GB per idle workspace, up to 3 GB per busy one.
+## What runs where
 
-```sh
-git clone <this repository> workspace-portal
-cd workspace-portal
-cp .env.example .env            # optional: edit ports, paths or limits first (every setting is explained there)
-sudo bash deploy/install.sh
-```
-
-The installer is idempotent. It:
-
-1. checks the host (Docker version, `nft`, port and UID ranges);
-2. creates `.env` if missing (mode 600) and fills in `GATEWAY_CONTROL_SECRET` and `ADMIN_PASSWORD`;
-3. creates the data directory `/srv/workspace-portal` with its owners and SELinux labels;
-4. builds every image: web, gateway, SearXNG, page reader, and one workspace image per agent;
-5. installs the host firewall and opens the portal's ports to your LAN, and to Tailscale when `tailscale0`
-   exists (firewalld or ufw);
-6. starts the stack with `docker compose up -d` and prints the URL.
-
-Open `http://<server>:3000` and sign in as `admin` with the password from `grep ^ADMIN_PASSWORD .env`. The
-portal asks for a new password at that first sign-in.
-
-### Connect the model
-
-1. In `.env`, set the model server's base URL **without** `/v1`:
-
-   ```sh
-   LLM_UPSTREAM_URL=http://127.0.0.1:8080
-   LLM_API_KEY=                   # sent as "Authorization: Bearer ..."; empty for none
-   LLM_MAX_CONCURRENCY=3          # the model server's parallel slots
-   ```
-
-2. List the models users can pick in Qwen Code's `system-defaults.json` (both agents use it). Each entry's `id`
-   must be an `id` from `$LLM_UPSTREAM_URL/v1/models`; leave out `baseUrl` and keys, the portal sets them:
-
-   ```sh
-   cp qwen-config/system-defaults.json /tmp/system-defaults.json     # edit it
-   sudo bash deploy/qwen-config.sh install /tmp/system-defaults.json
-   ```
-
-3. `sudo docker compose up -d`. Workspaces pick up model changes at their next start.
-
-### Server monitoring and LLM engine updates
-
-The installer sets up `portal-hostd` on the portal server. For the LLM server's readings and one-click engine
-updates in the admin console, install it there too (it prints two lines for the portal's `.env`, then run
-`sudo docker compose up -d` on the portal):
-
-```sh
-sudo bash workspace-portal/hostd/install.sh llm --portal <portal server IP>
-```
-
-### Start, stop, update
-
-In the project directory on the server:
-
-```sh
-sudo docker compose up -d                   # start, or apply .env changes
-sudo docker compose restart web gateway     # restart the portal; running workspaces keep running
-sudo docker compose down                    # stop the portal
-sudo docker compose ps                      # status
-sudo docker compose logs -f gateway web     # logs
-sudo bash deploy/uninstall.sh               # remove the stack, workspaces, firewall and images; keeps the data
-```
-
-The stack and the firewall start at boot. Changing a port, subnet, bridge or DNS setting in `.env` needs a
-re-run of the installer (the firewall is generated from them); other settings need only `docker compose up -d`.
-
-**Update the portal** when no agent is working (the admin console shows it); running workspaces keep running:
-
-```sh
-git pull --ff-only
-sudo bash deploy/install.sh
-sudo bash deploy/verify-isolation.sh        # must end with "failed 0"
-```
-
-## 2. What runs after the install
-
-| Service | What it does | Listens on |
+| Where | What | Address (defaults) |
 |---|---|---|
-| `web` (container) | the portal: sign-in, Home, Settings, admin console | `:3000` (LAN, Tailscale) |
-| `gateway` (container) | starts and stops workspaces and serves them to the browser; the LLM proxy and queue; the agents' `web_search` and `read_page` tools; usage, energy and updates | workspaces: `:3101-3299` Private, `:3301-3499` Online; the apps inside them (Web preview): `:4101-4299` Private, `:4301-4499` Online; `127.0.0.1:4002` control API; `172.29.0.1:4001` and `172.28.0.1:4001`, the only address a workspace can reach |
-| `searxng` (container) | web search behind `web_search` | `127.0.0.1:8888` |
-| `reader` (container) | fetches one public page or PDF as text for `read_page` | `127.0.0.1:4003` |
-| `wp-ws-<id>` / `wp-wo-<id>` (containers) | a user's Private or Online workspace: Qwen Code (`qwen serve`) or DeepSeek Harness (`dsh`), with a shell, files and headless Chromium. Started by the user's Start, at most one per user | only through the gateway (port `<base> + user id`) |
-| `workspace-portal-firewall` (systemd) | the nftables table `inet workspace_portal`: what workspaces, SearXNG and the reader may reach. Docker won't start without it | |
-| `portal-hostd` (systemd, each server) | hardware readings, daily energy and traffic; on the LLM server also engine updates | `127.0.0.1:9180`; `:9180` on the LLM server, open to the portal only |
+| Portal server | web app: sign-in, Home, Settings, admin pages | `:3000` |
+| | gateway: agent ports, one per user and kind | `:3101-3299` Private, `:3301-3499` Online |
+| | gateway: preview ports (agent port + 1000) | `:4101-4299`, `:4301-4499` |
+| | gateway: control API, for the web app | `127.0.0.1:4002` |
+| | gateway: service API, for workspaces (model, search, reader) | `172.29.0.1:4001`, `172.28.0.1:4001` |
+| | one container per running workspace | a Docker network per kind |
+| | SearXNG and the page reader | `127.0.0.1:8888`, `127.0.0.1:4003` |
+| | portal-hostd: hardware readings | `127.0.0.1:9180` |
+| LLM server (can be the same machine) | an OpenAI-compatible API | `LLM_UPSTREAM_URL` |
+| | portal-hostd: readings and engine updates (optional) | `:9180`, open to the portal server only |
 
-Networks the gateway and compose create: `workspace-portal-ws` (Private, `172.29.0.0/16`, internal: no route
-off the host), `workspace-portal-online` (Online, `172.28.0.0/16`, NAT to the public internet only), and one
-small network each for SearXNG and the reader.
+## Requirements
 
-Data lives in `/srv/workspace-portal`: `db/portal.sqlite` (accounts, sessions, usage, audit log),
-`users/<id>/private/` and `users/<id>/online/` (each workspace's home and files), `config/qwen/` (the model
-list and Qwen Code settings) and `config/agent-versions.env` (the agent versions in use).
+- Linux with systemd, root for the installer, and `nft`, `python3`, `openssl` and `curl`.
+- Docker Engine 25.0.5 or newer with the compose plugin. Older engines let containers on internal networks
+  resolve internet names (CVE-2024-29018); the installer and the gateway refuse them.
+- An OpenAI-compatible model server the portal server can reach.
+- firewalld is optional: the installer opens the portal's ports in it when it is active, and names them for
+  another firewall. SELinux can stay enforcing: the installer labels the data directory for containers.
+- The workspace UIDs (`WORKSPACE_UID_BASE`, `ONLINE_UID_BASE`) must lie outside every range in `/etc/subuid`
+  and `/etc/subgid`; the installer checks.
 
-Check a running install:
+## Install
+
+From a checkout of this repository on the portal server:
 
 ```sh
-sudo docker compose ps                      # web, gateway, searxng, reader: running (healthy)
-sudo bash deploy/verify-isolation.sh        # ends with "failed 0"
-curl -s http://127.0.0.1:8888/healthz       # OK
+sudo bash deploy/install.sh
 ```
 
-## 3. What can break on upgrades
+The installer creates `.env` from [`.env.example`](.env.example) and generates the secrets, checks what only
+this host can tell, prepares the data directory, builds the images, installs the firewall (an nftables table
+loaded by a systemd unit that Docker requires) and portal-hostd for this server, then starts the stack and
+waits until it is healthy. It keeps an existing `.env`: to set values before the first start, copy
+`.env.example` to `.env` and edit it. It ends by printing the portal's URL, the port ranges, the agent
+versions, where the model settings are, and the state of search, the page reader and monitoring.
 
-Nothing upgrades by itself. The agents and the LLM engine move when the admin picks a version in **Admin >
-Updates** (or runs `sudo bash deploy/update-image.sh <qwen|dsh> <version>`); everything else moves only when a pin
-in this repository changes. An older version's image stays on the server, so going back is picking it again.
+First sign-in: open the URL, sign in as `admin` (`ADMIN_USERNAME`) with the password from
+`grep ^ADMIN_PASSWORD .env`, and choose your own when asked. Then create the users under Users.
+A lost admin password: `docker compose exec web node scripts/reset-admin-password.mjs`.
 
-The portal changes the agents' own code at image build time and relies on some of their interfaces. Below is
-everything an upgrade can break, and how it shows.
+## Configure
 
-### Qwen Code
+`.env` in the repository root holds every setting; [`.env.example`](.env.example) lists each one with its
+default and meaning. Look at these first:
 
-**Changes to the Web Shell's code** (`workspace-image/qwen/trim-web-shell.mjs`, applied when the image is
-built). Qwen Code has no settings for these, so each one rewrites a piece of its minified bundle. Tested with
-Qwen Code 0.27.0 and 0.27.4. When a new version no longer fits an edit, the image **still builds**, the build output says
-`trim-web-shell: warning: <edit>: ...`, and that part works as Qwen Code ships it:
+- `LLM_UPSTREAM_URL` (without `/v1`), `LLM_API_KEY`, and `LLM_MAX_CONCURRENCY`, the model server's slots;
+- `MAX_RUNNING_WORKSPACES`, `WORKSPACE_MEMORY` and `WORKSPACE_CPUS`, sized to the portal server;
+- `IDLE_TIMEOUT_MINUTES` and `MAX_BUSY_HOURS`, when an unused or a long-working workspace stops;
+- `FIREWALL_ALLOW_SOURCE`, who may reach the portal's ports through firewalld, and `FIREWALL_NEVER_REACH`,
+  more addresses that Online workspaces, SearXNG and the page reader must never reach;
+- `SESSION_COOKIE_SECURE=true` when the portal is served over HTTPS.
 
-| Edit | What you see when it no longer fits |
-|---|---|
-| Web preview: the workspace's own addresses through the gateway | `http://localhost:3000` in the Web preview points at the user's own computer again and stays blank. The forwarding still works with the full address: `http://<server>:<preview port>/__portal/port/3000/`, where the preview port is the workspace's port + 1000 (Private `4100 + user id`, Online `4300 + user id`). |
-| Web preview: pointer lock and dialogs in its frame | games in the preview can't capture the mouse, and `alert`/`confirm` do nothing. "Open externally" still works. |
-| Plan mode on for new sessions | new sessions start without Plan mode: the agent acts at once, in the approval mode the composer shows. |
-| sidebar: only Home, New session and the toggle | Live, Plugins, Channels, Scheduled Tasks, PR watches, Goals and the "More" menu come back where the stylesheet below doesn't reach, such as the phone drawer. |
-| header: no Mobile access | nothing while the stylesheet still finds the button; else Mobile access comes back (it can't pair a phone through the portal). |
+Run the installer again after a change of a port, subnet, bridge, resolver or `FIREWALL_*` setting or of a
+server's address in a `*_URL` setting (the firewall is built from them), and after adding an agent to
+`WORKSPACE_AGENTS` (it builds the image). Any other change takes effect with `docker compose up -d`.
 
-The image also gets a stylesheet that hides the rail's extra buttons, Activity and Mobile access, keyed on the Web
-Shell's `data-*` attributes and icon names. A version that renames those brings the buttons back on desktop too.
+The models are not in `.env` but in two files in Qwen Code's settings format, in
+`$PORTAL_DATA_DIR/config/qwen`: `system-defaults.json` holds the models and the defaults users may change,
+`settings.json` what users cannot override. DeepSeek Harness takes its models from the same files. Every model
+`id` must be one the model server serves. Start from the copies in [`qwen-config/`](qwen-config); workspaces
+read the installed files at their next start.
 
-**What the gateway relies on.** A change here shows as a workspace that doesn't start or work properly:
+```sh
+sudo bash deploy/qwen-config.sh install system-defaults.json settings.json
+sudo bash deploy/qwen-config.sh check        # or: show
+```
 
-- `qwen serve` with `--hostname`, `--port`, `--workspace`, `--no-token-qr`, `--permission-response-timeout-ms` and
-  the bearer token in `QWEN_SERVER_TOKEN` (`workspace-image/start-qwen.sh`): otherwise the workspace fails to
-  start.
-- `GET /health?deep=1` with `status`, `activePrompts`, `pendingPermissions`, `activeWork`, `channelAlive` and
-  `idleSinceMs`; `GET /daemon/status` with `daemon.startup.preheat.status`. Without them the workspace never
-  becomes ready, or the gateway can't see that the agent is working, and the idle timeout stops a workspace in
-  the middle of a task.
-- The system settings files at `QWEN_CODE_SYSTEM_SETTINGS_PATH` and `QWEN_CODE_SYSTEM_DEFAULTS_PATH`, and these
-  keys: `modelProviders.openai` (with `capabilities.reasoning.efforts` and `defaultEffort`), `model.reasoningEffort`,
-  `mcpServers`, `security.auth.enforcedType`/`selectedType`, `permissions.deny`, `tools.webSearch`,
-  `general.enableAutoUpdate`, `privacy.usageStatisticsEnabled`, `telemetry.enabled`, `model.catalogRefresh`. A key
-  Qwen Code renames is ignored without an error: models or the default reasoning effort stop applying, the search
-  tools disappear, or an internet feature comes back on (it still can't reach the internet from Private).
+## Operate
 
-### DeepSeek Harness
+```sh
+docker compose ps                  # from the repository root
+docker compose logs -f gateway     # services: web, gateway, searxng, reader
+docker compose down                # stops the portal; running workspaces stay up, the gateway adopts them
+docker compose up -d
+sudo bash deploy/verify-isolation.sh
+sudo bash deploy/update-image.sh qwen 0.28.0     # dsh: DeepSeek Harness
+sudo bash deploy/update-image.sh --refresh       # rebuild the versions in use with fresh Debian packages
+```
 
-- **Lockdown** (`workspace-image/dsh/lockdown.patch.yml`): turns off dsh's DeepSeek account, web, plugin,
-  feedback and telemetry features, and fixes its sandbox and approvals. The **build fails**, and the current version stays, when a row no longer exists in the new
-  version or dsh rewords the warning the check reads. A row the new version dropped on purpose can be marked
-  `# optional`. Plugins a new version adds are not locked down until the file lists them.
-- **Agent presets** (`workspace-image/dsh/adapt-presets.mjs`): their web and plugin rows are switched off. The
-  **build fails** when a preset no longer fits.
-- **What the gateway relies on:** `dsh --profile web --patch ...`, its login cookie `dsh-auth-<hash>` and its
-  signature (the gateway mints it), the Host and Origin `localhost:3080`, its API `session/list` (ready),
-  `session/state` and `job/list` (working), and the one WebSocket `/api/remote.mux`. A change shows as a UI that won't load or sign in, a workspace that never becomes ready, or
-  one the idle timeout stops mid-task.
+`verify-isolation.sh` checks the running portal: the host's networks and firewall, every running workspace,
+the folder owners, and what a throwaway Private and Online container, the page reader and SearXNG can reach.
+It prints `PASS` or `FAIL` per check, then the counts, and exits non-zero when one failed: a `FAIL` names a
+guarantee of the security model that does not hold on this host. It touches no user data.
 
-### LLM engine (gufo)
+Agent versions change under Admin > Updates, which builds an image, checks it and starts the next workspaces
+from it, or with `update-image.sh`, which also runs the isolation check. Running workspaces keep their image
+until they stop.
 
-- **The update** (`portal-hostd`): changes only `Image=` (and the version in `Documentation=`) of the gufo
-  quadlet, waits for `/ready` to answer 200 and checks that `/props` reports the new version in `build_info`.
-  A version that answers those differently is **rolled back** every time.
-- **The release list** comes from the image registry's version tags and the release notes from the GitHub
-  repository in `ENGINE_RELEASE_NOTES_REPO`.
-- **Speeds in Admin > Usage**: the gateway reads the `timings` object at the end of each streamed answer
-  (`prompt_n`, `prompt_ms`, `predicted_n`, `predicted_ms`, `cache_n`, as llama.cpp sends them). Without it the read
-  and write speeds stay empty; answers still work.
+Back up `.env` and the data directory (`PORTAL_DATA_DIR`): `db/` is the SQLite database (accounts, sessions,
+audit log, usage, energy), `users/<id>/private` and `users/<id>/online` are the workspace files, `config/`
+holds the model settings and the agent versions in use. Stop the stack for a consistent copy of `db/`, and
+keep numeric owners and modes: each workspace's files belong to a UID of its own.
 
-### SearXNG
+## Update and uninstall
 
-Pinned by the `FROM` line in `searxng/Dockerfile`; `searxng/settings.yml` beside it was tested with that release.
-A newer release may drop or rename an engine (keenable, yahoo, yandex, metacrawler, and the fallbacks
-duckduckgo, swisscows, privacywall, mojeek): searches then come back thin or empty. The gateway reads
-`/search?format=json` (`results` with `url`, `title`, `content`, and `unresponsive_engines`). After moving the pin,
-`verify-isolation.sh` checks that JSON is allowed and every fallback engine is loaded; then try a few searches
-(not a load test: search engines block addresses that send many queries).
+```sh
+git pull && sudo bash deploy/install.sh       # update
+sudo bash deploy/uninstall.sh                 # keeps .env and the data directory
+sudo bash deploy/uninstall.sh --purge-data    # deletes the data directory too
+```
 
-### Page reader
+A re-run of the installer rebuilds the images and restarts what changed. It keeps `.env`, adding the settings
+it lacks, the model settings and all data, and refuses while an update from Admin > Updates is running.
 
-`reader/package.json` pins Defuddle (HTML to markdown) and `reader/requirements.txt` pins pypdfium2 (PDFs). A new
-Defuddle can change what `read_page` returns: which part of a page counts as content, and how code blocks come
-out. The tests in `reader/` cover both.
+## LLM server: readings and engine updates
 
-### Workspace tools (Chromium, Playwright MCP)
+`sudo bash hostd/install.sh llm --portal <portal IPv4>` on the LLM server installs portal-hostd and prints
+`HOSTD_LLM_URL` and `HOSTD_LLM_TOKEN` for the portal's `.env`. With them Admin > Usage and Energy show that
+server too, and Admin > Updates updates its engine: see [hostd/README.md](hostd/README.md).
 
-The Debian packages, Chromium among them, change only with `sudo bash deploy/update-image.sh --refresh`. The
-agents' browser tool is Playwright MCP (`PLAYWRIGHT_MCP_VERSION` in `workspace-image/Dockerfile`) driving Debian's
-Chromium at `/usr/bin/chromium`. A Chromium that version can't drive breaks only the browser tool.
+## Security model
 
-### Host: Docker, kernel, firewall
+- **A workspace** is a container that runs as a UID of its own on a read-only root, with no capabilities, no
+  privilege escalation, limits on memory, CPU and processes, and only its own folders mounted. It holds no
+  secret of the portal: the model's key stays in the gateway.
+- **The firewall** is loaded before Docker starts. A Private workspace reaches the gateway's service port and
+  nothing else. An Online workspace also reaches public IPv4 addresses over TCP, and never a private address,
+  this host, its router or the servers `.env` names. SearXNG and the page reader reach the public web only.
+  Without the rules the gateway runs no Online workspace.
+- **A browser** reaches a workspace only on that workspace's own port, and only with the portal session of its
+  user or of the admin who opened it.
+- **The admin** sees accounts, running workspaces, token and energy use, and the audit log. The admin can
+  open a user's workspace, files and conversations included: the audit log records it and the user sees
+  "Admin connected" meanwhile. The database stores no prompt and no answer, and passwords only as argon2id
+  hashes. Root on the portal server can read every workspace's files.
 
-The installer and the gateway refuse Docker older than 25.0.5 (internal networks could resolve internet names,
-CVE-2024-29018). The firewall is an nftables table of its own, which rules from Docker, firewalld or Tailscale
-can't reopen. After a Docker or kernel upgrade, run `sudo bash deploy/verify-isolation.sh`: it must end with
-`failed 0`.
+The contracts behind this are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-### The portal's own packages
+## Development
 
-Next.js, React and the other npm packages are pinned by `package-lock.json` and change only in this repository.
-After changing them run `npm run typecheck && npm test && npm run build`.
+```sh
+npm ci                # Node.js 24 or newer; an npm workspace of packages/core, gateway and web
+npm test              # all three; the gateway's integration tests need no Docker
+npm run typecheck
+npm run build         # the gateway bundle, then the web app
+python3 -m unittest hostd/test_hostd.py
+```
 
-### After any upgrade
-
-1. The build output has no `trim-web-shell: warning`, and `sudo bash deploy/verify-isolation.sh` ends with
-   `failed 0` (Admin > Updates doesn't run it: run it after an update there).
-2. Start a workspace: the sidebar is trimmed, a new session has Plan on, the Web preview opens
-   `http://localhost:3000` of an app running in the workspace, and a web search returns results.
-3. If something broke, pick the previous version in Admin > Updates (its image is still there), or for the portal
-   itself `git checkout <commit>` and run the installer again.
+The page reader's tests run in its image build. `npm run dev -w @portal/gateway` runs the gateway from source
+with the settings in `.env`; it needs Docker and a data directory it can write. `npm run dev -w @portal/web`
+runs the web app on port 3000 with the settings in its environment. Licensed under [Apache-2.0](LICENSE).
