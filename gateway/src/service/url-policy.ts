@@ -112,7 +112,7 @@ export function hostTrusted(host: string, trusted: readonly string[]): boolean {
   return trusted.some((entry) => host === entry || host.endsWith(`.${entry}`));
 }
 
-export interface ShownLimits {
+interface ShownLimits {
   /** URLs remembered per workspace; the oldest go first. */
   urlsPerUser?: number;
   /** Characters of URLs remembered per workspace. */
@@ -167,9 +167,6 @@ export class ShownUrls {
     return this.find(userId, url) !== null;
   }
 
-  forget(userId: number): void {
-    this.#byUser.delete(userId);
-  }
 
   /** The workspace's entry, moved to the recently used end. */
   #touch(userId: number): { urls: Set<string>; chars: number } | undefined {

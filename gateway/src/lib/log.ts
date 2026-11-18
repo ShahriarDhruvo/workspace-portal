@@ -1,7 +1,6 @@
 // JSON-lines logger. Only the fields a caller passes are written, so never pass request headers, cookies, tokens or
 // secrets. Error values are reduced to their message and code.
-export type LogFields = Record<string, unknown>;
-type Log = (message: string, fields?: LogFields) => void;
+type Log = (message: string, fields?: Record<string, unknown>) => void;
 
 export interface Logger {
   info: Log;

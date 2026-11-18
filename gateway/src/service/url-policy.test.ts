@@ -71,8 +71,6 @@ test("ShownUrls remembers per workspace and drops the oldest when full", () => {
     [true, false, true, true],
     "2 was the oldest; 1 had just been shown again",
   );
-  shown.forget(1);
-  assert.equal(shown.has(1, "https://a.example/4"), false);
 });
 
 test("ShownUrls is bounded by characters and by workspaces, whatever is thrown at it", () => {
