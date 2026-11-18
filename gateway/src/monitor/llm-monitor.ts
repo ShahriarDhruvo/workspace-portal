@@ -1,22 +1,18 @@
-// The live view of the LLM server for Admin > Usage: for each request it is working on, how fast it reads the
-// prompt ("Read": prompt tokens processed per second) and writes the answer ("Write": generated tokens per
-// second), the totals, and who is waiting. (What each workspace session added up to is session-log.ts's.)
-//
-// Two sources, joined:
-// - The engine's own sessions, from `GET /slots` (llama.cpp's server and engines derived from it, such
-//   as gufo): live prompt progress and generated-token counts per session. About 2 KB and under 2 ms
-//   per call, polled every POLL_MS only while someone watches (live.ts starts and stops it).
-// - The gateway's record of each request (llm-requests.ts): whose it is, its queue time, its first
-//   token and, once it ends, the engine's exact timings.
-// The engine doesn't say whose request a session serves. It numbers requests (id_task) in the order
-// they arrive, and the gateway forwards them in order, so new sessions are paired, in task order, with
-// the oldest unpaired requests that were forwarded before the session was first seen. Without /slots
-// (another kind of server) the rows come from the gateway alone: Write from the streamed tokens, and
-// Read only for finished requests (from their timings).
+// The live view of the LLM server for Admin > Usage: for each request it is working on, how fast it reads the prompt
+// ("Read": prompt tokens processed per second) and writes the answer ("Write": generated tokens per second), the
+// totals, and who is waiting. Two sources, joined:
+// - The engine's own sessions, from `GET /slots` (llama.cpp's server and engines derived from it, such as gufo): live
+//   prompt progress and generated-token counts per session, polled every POLL_MS only while someone watches.
+// - The gateway's record of each request (llm-requests.ts): whose it is, its queue time and its first token.
+// The engine doesn't say whose request a session serves. It numbers requests (id_task) in the order they arrive, and
+// the gateway forwards them in order, so new sessions are paired, in task order, with the oldest unpaired requests
+// that were forwarded before the session was first seen. Without /slots (another kind of server) the rows come from
+// the gateway alone: Write from the streamed tokens, and no Read.
 import type { EngineState, LlmLive, LlmSession, LlmWaiting } from "@portal/core";
 import type { LlmQueue } from "../service/llm-queue.ts";
 import type { ActiveLlmRequest, LlmRequests } from "./llm-requests.ts";
 import { errorMessage, type Logger } from "../lib/log.ts";
+import { tokenCount as count } from "./usage.ts";
 
 const POLL_MS = 500;
 const SLOTS_TIMEOUT_MS = 1_500;
@@ -110,8 +106,8 @@ export function windowRate(samples: ReadonlyArray<{ t: number; tokens: number }>
 }
 
 /**
- * Updates the tracks from a /slots answer: new sessions start a track (keyed by slot and task), known
- * ones record their progress, and sessions that stopped processing are dropped.
+ * Updates the tracks from a /slots answer: new sessions start a track (keyed by slot and task), known ones record
+ * their progress, and sessions that stopped processing are dropped.
  */
 export function updateTracks(tracks: Map<string, SessionTrack>, slots: readonly EngineSlot[], now: number): void {
   const seen = new Set<string>();
@@ -154,9 +150,9 @@ export function updateTracks(tracks: Map<string, SessionTrack>, slots: readonly 
 }
 
 /**
- * Pairs engine sessions with the gateway's forwarded requests. A pairing whose request has ended is
- * undone. New sessions, in task order, take the oldest unpaired requests that were forwarded before
- * the session was first seen (a session can't serve a request sent after it started).
+ * Pairs engine sessions with the gateway's forwarded requests. A pairing whose request has ended is undone. New
+ * sessions, in task order, take the oldest unpaired requests that were forwarded before the session was first seen
+ * (a session can't serve a request sent after it started).
  */
 export function pairSessions(tracks: Iterable<SessionTrack>, requests: readonly ActiveLlmRequest[]): void {
   const forwarded = requests.filter((request) => request.forwardedAt !== null);
@@ -376,9 +372,6 @@ export class LlmMonitor {
   }
 }
 
-function count(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
-}
 
 function integer(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) ? value : null;

@@ -1,13 +1,13 @@
-// Token usage of LLM responses, read from a copy of the stream as it passes through: the `usage`
-// object of a JSON body, or of the last SSE event that carries one. Recorded per user and day.
-// The SSE parser also reports each streamed token and the engine's closing `timings` to an optional
-// observer (llm-requests.ts, for the admin's live view of running requests).
+// Token usage of LLM responses, read from a copy of the stream as it passes through: the `usage` object of a JSON
+// body, or of the last SSE event that carries one. Recorded per user and day. The SSE parser also reports each
+// streamed token and the engine's closing `timings` to an observer (llm-requests.ts).
 import type { IncomingHttpHeaders } from "node:http";
 import { StringDecoder } from "node:string_decoder";
 import { Transform, type TransformCallback } from "node:stream";
 import { sql } from "drizzle-orm";
 import { llmUsage, usageDay, type PortalDb } from "@portal/core";
 import { MIB } from "../config.ts";
+import { isRecord, parseJson } from "../lib/json.ts";
 
 export interface TokenUsage {
   promptTokens: number;
@@ -209,22 +209,10 @@ export function recordUsage(db: PortalDb, userId: number, usage: TokenUsage | nu
     .run();
 }
 
-function tokenCount(value: unknown): number | null {
+export function tokenCount(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
 function duration(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function parseJson(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
 }

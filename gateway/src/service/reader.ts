@@ -3,6 +3,7 @@
 // may open a URL (url-policy.ts), asks the reader, keeps the answer for a while so paging through a long page costs
 // one download, and hands the model one slice at a time.
 import { readBoundedText } from "../lib/bounded-body.ts";
+import { parseJson } from "../lib/json.ts";
 import { canonicalUrl, MAX_URL_CHARS } from "./url-policy.ts";
 
 /** One page as the reader returns it. */
@@ -59,12 +60,7 @@ export function createReaderBackend(options: { baseUrl: string; timeoutMs: numbe
       const body = JSON.stringify(fence === null ? { url } : { url, redirect_hosts: fence });
       const response = await askService(options, "read", { method: "POST", headers, body }, signal);
       if (response === null) throw new ReadError("The page reader did not answer. Try again in a moment.");
-      let data: unknown;
-      try {
-        data = JSON.parse((await readBoundedText(response, MAX_ANSWER_BYTES)) ?? "");
-      } catch {
-        data = null;
-      }
+      const data = parseJson((await readBoundedText(response, MAX_ANSWER_BYTES).catch(() => null)) ?? "");
       if (!response.ok || data === null || typeof data !== "object") {
         throw new ReadError("The page reader failed on that page. Try another source.");
       }
