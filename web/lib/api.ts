@@ -29,13 +29,13 @@ export function jsonError(status: number, error: string, message: string): Respo
 }
 
 /**
- * A JSON Route Handler. Anything but a GET must come from this origin: a workspace page on another port of the same
+ * A JSON Route Handler. Anything but a GET or HEAD must come from this origin: a workspace page on another port of the same
  * site gets the session cookie too (browsers send no Origin with a same-origin GET, so those can't be checked). The
  * caller's session is checked and renewed; what `handle` returns is sent as JSON, a gateway error with its status.
  */
 export function route(options: { admin?: boolean }, handle: (session: SessionContext, request: Request) => unknown) {
   return async (request: Request): Promise<Response> => {
-    if (request.method !== "GET" && !isSameOrigin(request)) return jsonError(403, "forbidden", "Cross-origin request refused.");
+    if (request.method !== "GET" && request.method !== "HEAD" && !isSameOrigin(request)) return jsonError(403, "forbidden", "Cross-origin request refused.");
     const access = checkApiAccess(await getSession(), options);
     if ("problem" in access) {
       const { status, error, message } = access.problem;
