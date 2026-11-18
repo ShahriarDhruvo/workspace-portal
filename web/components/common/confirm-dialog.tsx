@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode, type RefObject } from "react";
+import { useRef, useState, type ReactNode, type RefObject } from "react";
 import { returnFocus } from "@/lib/focus";
 import type { ActionResult } from "@/lib/validation";
 import { FormError } from "@/components/forms/form-error";
@@ -57,9 +57,12 @@ function ConfirmForm({
   onClose,
 }: Omit<ConfirmDialogProps, "open" | "onOpenChange" | "returnFocusTo"> & { onClose: () => void }) {
   const [error, setError] = useState<string | null>(null);
+  const form = useRef<HTMLFormElement>(null);
 
   async function submit() {
     const result = await onConfirm();
+    // Closed while the action ran: its answer is nobody's any more.
+    if (!form.current) return;
     if (!result.ok) {
       setError(result.message);
       return;
@@ -74,7 +77,7 @@ function ConfirmForm({
     </AlertDialogDescription>
   );
   return (
-    <form action={submit} className="grid gap-4">
+    <form ref={form} action={submit} className="grid gap-4">
       <AlertDialogHeader>
         <AlertDialogTitle>{title}</AlertDialogTitle>
         {apart ? null : description}
