@@ -5,20 +5,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { auditLog, type AgentUpdateJob, type AgentVersionsOverview } from "@portal/core";
-import { json, startGateway, type Gateway, type GatewayOptions, type Reply } from "./harness.ts";
+import { BOTH, json, withGateway, type Gateway, type Reply } from "./harness.ts";
 import { workspaceImage } from "../src/docker/image-names.ts";
 import { gate } from "./fakes.ts";
-
-const BOTH = { env: { WORKSPACE_AGENTS: "qwen,dsh" } } satisfies GatewayOptions;
-
-async function withGateway(options: GatewayOptions, run: (gateway: Gateway) => Promise<void>): Promise<void> {
-  const gateway = await startGateway(options);
-  try {
-    await run(gateway);
-  } finally {
-    await gateway.close();
-  }
-}
 
 const overview = async (g: Gateway, query = ""): Promise<AgentVersionsOverview> => json(await g.control("GET", `/control/agents/versions${query}`));
 const update = (g: Gateway, agent: string, body: unknown) => g.control("POST", `/control/agents/${agent}/update`, body);

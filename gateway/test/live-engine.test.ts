@@ -4,18 +4,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { auditLog, type LiveFrame, type LiveInit } from "@portal/core";
-import { CONTROL_SECRET, json, startGateway, waitFor, type Gateway, type GatewayOptions } from "./harness.ts";
+import { CONTROL_SECRET, json, waitFor, withGateway, type Gateway } from "./harness.ts";
 import { ENGINE_REPOSITORY, engineDigest } from "./fakes.ts";
 import { SseParser } from "../src/monitor/hostd.ts";
-
-async function withGateway(options: GatewayOptions, run: (gateway: Gateway) => Promise<void>): Promise<void> {
-  const gateway = await startGateway(options);
-  try {
-    await run(gateway);
-  } finally {
-    await gateway.close();
-  }
-}
 
 /** Opens the live stream and collects its events until `close()`. */
 function openLive(g: Gateway, secret = CONTROL_SECRET): Promise<{ status: number; type: string; events: Array<{ event: string; data: unknown }>; close: () => void }> {

@@ -497,6 +497,21 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
   return g;
 }
 
+/** Both agents enabled. */
+export const BOTH = { env: { WORKSPACE_AGENTS: "qwen,dsh" } } satisfies GatewayOptions;
+
+/** A gateway for `run`, closed after it. */
+export async function withGateway(options: GatewayOptions, run: (gateway: Gateway) => Promise<void>): Promise<void> {
+  const gateway = await startGateway(options);
+  try {
+    await run(gateway);
+  } finally {
+    await gateway.close();
+  }
+}
+
+export const logged = (gateway: Gateway, msg: string): boolean => gateway.logs.some((line) => (JSON.parse(line) as { msg: string }).msg === msg);
+
 /** Below Linux's ephemeral port range, so the servers on port 0 rarely get in the way. */
 function randomBase(): number {
   return 20_000 + Math.floor(Math.random() * 10_000);

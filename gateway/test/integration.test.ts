@@ -23,13 +23,14 @@ import {
   closed,
   cookie,
   json,
+  logged,
   MIN,
   request,
   startGateway,
   waitFor,
+  withGateway,
   type AgentSocket,
   type Gateway,
-  type GatewayOptions,
   type Reply,
   type WsOutcome,
 } from "./harness.ts";
@@ -1075,17 +1076,6 @@ test("nothing unexpected was logged as an error", () => {
 });
 
 // ------------------------------------------------------------------ lifecycle (a gateway per test)
-
-async function withGateway(options: GatewayOptions, run: (gateway: Gateway) => Promise<void>): Promise<void> {
-  const gateway = await startGateway(options);
-  try {
-    await run(gateway);
-  } finally {
-    await gateway.close();
-  }
-}
-
-const logged = (gateway: Gateway, msg: string): boolean => gateway.logs.some((line) => (JSON.parse(line) as { msg: string }).msg === msg);
 
 test("a working agent keeps its workspace past the idle timeout; it stops once health says idle", () =>
   withGateway({}, async (gw) => {

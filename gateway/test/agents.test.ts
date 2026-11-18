@@ -5,19 +5,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { users, workspaces, type WorkspaceInfo } from "@portal/core";
 import { eq } from "drizzle-orm";
-import { cookie, json, MIN, request, startGateway, type Gateway, type GatewayOptions } from "./harness.ts";
+import { BOTH, cookie, json, MIN, request, withGateway, type Gateway } from "./harness.ts";
 import { driverFor } from "../src/agents/index.ts";
-
-const BOTH = { env: { WORKSPACE_AGENTS: "qwen,dsh" } } satisfies GatewayOptions;
-
-async function withGateway(options: GatewayOptions, run: (gateway: Gateway) => Promise<void>): Promise<void> {
-  const gateway = await startGateway(options);
-  try {
-    await run(gateway);
-  } finally {
-    await gateway.close();
-  }
-}
 
 const start = (g: Gateway, userId: number, body?: unknown) => g.control("POST", `/control/workspaces/${userId}/start`, body);
 

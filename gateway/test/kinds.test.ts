@@ -10,16 +10,7 @@ import { llmUsage, users, workspaces, type WorkspaceInfo, type WorkspaceKind } f
 import { eq } from "drizzle-orm";
 import { userPaths, userRoot } from "../src/workspaces/paths.ts";
 import { WorkspaceManager } from "../src/workspaces/manager.ts";
-import { bearerSubprotocol, cookie, json, request, startGateway, waitFor, type Gateway, type GatewayOptions, type Reply } from "./harness.ts";
-
-async function withGateway(options: GatewayOptions, run: (gateway: Gateway) => Promise<void>): Promise<void> {
-  const gateway = await startGateway(options);
-  try {
-    await run(gateway);
-  } finally {
-    await gateway.close();
-  }
-}
+import { bearerSubprotocol, cookie, json, logged, request, waitFor, withGateway, type Gateway, type Reply } from "./harness.ts";
 
 const start = (g: Gateway, userId: number, body?: unknown): Promise<Reply> => g.control("POST", `/control/workspaces/${userId}/start`, body);
 const erase = (g: Gateway, userId: number, kind: string, body?: unknown): Promise<Reply> =>
@@ -38,8 +29,6 @@ function tryAgain(g: Gateway, token: string, userId: number, kind: WorkspaceKind
     headers: { cookie: cookie(token), origin: g.agentOrigin(userId, kind), "sec-fetch-site": "same-origin" },
   });
 }
-
-const logged = (g: Gateway, msg: string): boolean => g.logs.some((line) => (JSON.parse(line) as { msg: string }).msg === msg);
 
 test("an Online start: its own files, UID, settings with the Online service address, and the kind everywhere", () =>
   withGateway({}, async (g) => {

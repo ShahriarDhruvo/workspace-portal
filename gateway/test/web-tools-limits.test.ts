@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import net from "node:net";
 import { withPageCache, type ReaderBackend } from "../src/service/reader.ts";
-import { json, request, startGateway } from "./harness.ts";
+import { json, request, startGateway, withGateway } from "./harness.ts";
 
 const rpc = (method: string, params?: unknown) => ({ jsonrpc: "2.0", id: 1, method, ...(params === undefined ? {} : { params }) });
 const readCall = (url: string) => rpc("tools/call", { name: "read_page", arguments: { url } });
@@ -21,9 +21,8 @@ const rawPost = (port: number, body: string, read = true): Promise<net.Socket> =
   });
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-test("an LLM request full of brackets after a URL does not hold up the gateway", async () => {
-  const gw = await startGateway({ env: { READER_URL: "http://127.0.0.1:9" }, reader: { read: async (url) => ({ url, kind: "html", title: "", text: "", truncated: false, note: "" }) } });
-  try {
+test("an LLM request full of brackets after a URL does not hold up the gateway", () =>
+  withGateway({ env: { READER_URL: "http://127.0.0.1:9" }, reader: { read: async (url) => ({ url, kind: "html", title: "", text: "", truncated: false, note: "" }) } }, async (gw) => {
     gw.caller.userId = gw.ids.alice;
     let longest = 0;
     let last = performance.now();
@@ -40,10 +39,7 @@ test("an LLM request full of brackets after a URL does not hold up the gateway",
     assert.ok(longest < 1500, `the event loop stood still for ${Math.round(longest)} ms`);
     const read = json<{ result: { isError?: boolean } }>(await mcp(gw.ports.service, readCall("https://kept.example/page")));
     assert.equal(read.result.isError, undefined, "the rest of the message was still read");
-  } finally {
-    await gw.close();
-  }
-});
+  }));
 
 test("hanging up does not free a workspace's read slot while its download goes on", async () => {
   let inFlight = 0;
@@ -60,8 +56,7 @@ test("hanging up does not free a workspace's read slot while its download goes o
         }, 400);
       }),
   };
-  const gw = await startGateway({ env: { READER_URL: "http://127.0.0.1:9", READER_URL_POLICY: "any", READER_MAX_CONCURRENT_PER_USER: "2" }, reader: withPageCache(slow, { ttlMs: 900_000 }) });
-  try {
+  await withGateway({ env: { READER_URL: "http://127.0.0.1:9", READER_URL_POLICY: "any", READER_MAX_CONCURRENT_PER_USER: "2" }, reader: withPageCache(slow, { ttlMs: 900_000 }) }, async (gw) => {
     gw.caller.userId = gw.ids.alice;
     for (let index = 0; index < 12; index++) {
       const socket = await rawPost(gw.ports.service, JSON.stringify(readCall(`https://slow-site.net/${index}`)));
@@ -74,9 +69,7 @@ test("hanging up does not free a workspace's read slot while its download goes o
     await wait(450);
     const after = json<{ result: { isError?: boolean } }>(await mcp(gw.ports.service, readCall("https://slow-site.net/next")));
     assert.equal(after.result.isError, undefined, "the slots come back when the downloads end");
-  } finally {
-    await gw.close();
-  }
+  });
 });
 
 test("a batch is at most 8 messages, and one address has at most 128 connections open", async () => {

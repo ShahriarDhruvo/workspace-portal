@@ -5,18 +5,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { energyPrices } from "@portal/core";
 import { EIA_URL } from "../src/monitor/energy-prices.ts";
-import { startGateway } from "./harness.ts";
+import { withGateway } from "./harness.ts";
 
 const FIXTURES = path.join(import.meta.dirname, "fixtures");
+const priceSource = async (url: string): Promise<string> => {
+  if (url === EIA_URL) return fs.readFileSync(path.join(FIXTURES, "eia-table-5-6-a.html"), "utf8");
+  throw new Error("HTTP 503");
+};
 
-test("GET /control/energy-prices is the downloads' state; POST …/refresh downloads and answers when stored", async () => {
-  const g = await startGateway({
-    priceSource: async (url) => {
-      if (url === EIA_URL) return fs.readFileSync(path.join(FIXTURES, "eia-table-5-6-a.html"), "utf8");
-      throw new Error("HTTP 503");
-    },
-  });
-  try {
+test("GET /control/energy-prices is the downloads' state; POST …/refresh downloads and answers when stored", () =>
+  withGateway({ priceSource }, async (g) => {
     const idle = await g.control("GET", "/control/energy-prices");
     assert.equal(idle.status, 200);
     assert.deepEqual(JSON.parse(idle.body), {
@@ -31,7 +29,4 @@ test("GET /control/energy-prices is the downloads' state; POST …/refresh downl
     assert.equal(g.db.select().from(energyPrices).all().length, 102);
     assert.equal((await g.control("GET", "/control/energy-prices/refresh")).status, 405);
     assert.equal((await g.control("POST", "/control/energy-prices/refresh", undefined, "wrong")).status, 401);
-  } finally {
-    await g.close();
-  }
-});
+  }));
