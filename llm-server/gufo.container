@@ -6,22 +6,17 @@ Documentation=https://github.com/gufo-org/gufo/blob/v0.35.0/docs/SERVER.md
 ContainerName=gufo
 Image=ghcr.io/gufo-org/toolboxes/gufo-runtime@sha256:99e9b5471b7a9b007c686c2aa795afaf966744d64e753cb009c89541f9e9c2b6
 Pull=missing
-UserNS=keep-id:uid=1000,gid=1000
 AddDevice=/dev/kfd
 AddDevice=/dev/dri
-GroupAdd=keep-groups
-Ulimit=memlock=-1
-SecurityLabelDisable=true
-Network=llm
-NetworkAlias=gufo
 # Listens on every interface; the firewall only lets the portal server reach 8080.
 PublishPort=8080:8080
-Volume=/models/qwen3.8-flash-next:/models:ro
+Volume=/models/qwen3.8-flash-next:/models:ro,z
 HealthCmd=curl -fsS -o /dev/null http://127.0.0.1:8080/ready
 HealthInterval=30s
 HealthTimeout=10s
 HealthRetries=3
-HealthStartPeriod=5m
+HealthStartupCmd=curl -fsS -o /dev/null http://127.0.0.1:8080/ready
+HealthStartupInterval=2s
 HealthOnFailure=kill
 Notify=healthy
 Exec=gufo serve --host 0.0.0.0 --port 8080 --sessions 7 --max-connections 64 --max-request-bytes 67108864 llm \
@@ -38,8 +33,6 @@ Exec=gufo serve --host 0.0.0.0 --port 8080 --sessions 7 --max-connections 64 --m
       --log-progress
 
 [Service]
-# User services default to 200; 100 is the lowest a user service may set.
-OOMScoreAdjust=100
 Restart=always
 RestartSec=15
 TimeoutStartSec=600
