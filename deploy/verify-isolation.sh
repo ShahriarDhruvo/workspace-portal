@@ -310,7 +310,7 @@ workspace_probe() { # kind network uid-base [docker run options...]
   shift 3
   for agent in "${ENABLED_AGENTS[@]}"; do
     image=$(workspace_image "$agent")
-    echo "-- from the ${AGENT_NAME[$agent]} image ($image), as a $kind workspace"
+    echo "-- from the ${AGENT_NAME[$agent]} image ($image), as ${kind^} workspaces run"
     tally "$image" "$(docker run --rm --pull never --name "$NAME" --network "$network" --user "$uid:$uid" \
       --read-only --tmpfs /tmp:rw,nosuid,nodev,size=16m --cap-drop ALL --security-opt no-new-privileges \
       --pids-limit 128 --memory 256m -e KIND="$kind" -e SERVICE_PORT="$SERVICE_PORT" -e ROUTER="$ROUTER" "$@" \
