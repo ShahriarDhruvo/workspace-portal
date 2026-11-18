@@ -10,7 +10,7 @@
 import { sql } from "drizzle-orm";
 import { ENERGY_LOCATIONS, ENERGY_PRICE_SOURCES, energyPrices, type EnergyCurrency, type EnergyPriceSource, type EnergyPriceStatus, type PortalDb } from "@portal/core";
 import { fetchBounded } from "../lib/bounded-body.ts";
-import type { Logger } from "../lib/log.ts";
+import { errorMessage, type Logger } from "../lib/log.ts";
 import { singleFlight } from "../lib/single-flight.ts";
 
 export const EIA_URL = "https://www.eia.gov/electricity/monthly/epm_table_grapher.php?t=epmt_5_6_a";
@@ -261,7 +261,7 @@ export class EnergyPrices {
       const periods = [...new Set(rows.map((row) => row.period))].sort();
       this.#log.info("energy prices downloaded", { source, rows: rows.length, periods: periods.join(",") });
     } catch (error) {
-      status.error = error instanceof Error ? error.message : String(error);
+      status.error = errorMessage(error);
       // A changed layout needs a new parser; a network failure only a later try.
       const fields = { source, url: SOURCE_URLS[source], error: status.error, kept: "the prices stored before" };
       if (error instanceof PriceFormatError) this.#log.error("energy prices: the source's format changed", fields);

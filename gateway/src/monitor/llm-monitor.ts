@@ -16,7 +16,7 @@
 import type { EngineState, LlmLive, LlmSession, LlmWaiting } from "@portal/core";
 import type { LlmQueue } from "../service/llm-queue.ts";
 import type { ActiveLlmRequest, LlmRequests } from "./llm-requests.ts";
-import type { Logger } from "../lib/log.ts";
+import { errorMessage, type Logger } from "../lib/log.ts";
 
 const POLL_MS = 500;
 const SLOTS_TIMEOUT_MS = 1_500;
@@ -346,7 +346,7 @@ export class LlmMonitor {
         signal: AbortSignal.timeout(SLOTS_TIMEOUT_MS),
       });
     } catch (error) {
-      this.#setEngine("offline", false, null, error instanceof Error ? error.message : String(error));
+      this.#setEngine("offline", false, null, errorMessage(error));
       return null;
     }
     if (response.status === 503) {

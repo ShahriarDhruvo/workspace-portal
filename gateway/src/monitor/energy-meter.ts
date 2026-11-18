@@ -5,7 +5,7 @@
 import { sql } from "drizzle-orm";
 import { HOST_ROLES, hostDaily, hostMeter, usageDay, type HostRole, type HostToday, type PortalDb } from "@portal/core";
 import { HostdError, type MeterReading } from "./hostd.ts";
-import type { Logger } from "../lib/log.ts";
+import { errorMessage, type Logger } from "../lib/log.ts";
 import { singleFlight } from "../lib/single-flight.ts";
 
 const POLL_MS = 30_000;
@@ -117,7 +117,7 @@ export class EnergyMeter {
     } catch (error) {
       // 404: a portal-hostd from before the meter (API version 1); it only needs updating.
       const missing = error instanceof HostdError && error.status === 404;
-      this.#setState(role, source, missing ? "no_meter" : "unavailable", error instanceof Error ? error.message : String(error));
+      this.#setState(role, source, missing ? "no_meter" : "unavailable", errorMessage(error));
       return null;
     }
   }
