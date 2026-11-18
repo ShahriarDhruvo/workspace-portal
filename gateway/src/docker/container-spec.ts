@@ -57,7 +57,7 @@ export function workspaceContainerOptions(
   const ws = config.workspace;
   const own = ws.kinds[kind];
   const paths = userPaths(config.dataDir, userId, kind);
-  const owner = workspaceOwner(own.uidBase, userId);
+  const owner = workspaceOwner(config, userId, kind);
   const version = parseWorkspaceImage(image)?.version;
   return {
     name: containerName(userId, kind),

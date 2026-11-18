@@ -15,24 +15,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { AgentKind, WorkspaceKind } from "@portal/core";
+import { driverFor } from "../agents/index.ts";
+import type { Config } from "../config.ts";
 
-/** One kind of one user's workspace: what its container mounts. */
-export interface UserPaths {
-  /** users/<id>/<kind>. */
-  root: string;
-  /** Mounted at /home/user. */
-  home: string;
-  /** Mounted at /workspace: the user's files. */
-  workspace: string;
-  /** Read-only files the gateway renders before every start. */
-  system: string;
-  /** Mounted at the agent's settingsMount: the settings rendered for that agent. */
-  agentSettings(kind: AgentKind): string;
-  passwd: string;
-  group: string;
-}
-
-export interface FileOwner {
+interface FileOwner {
   uid: number;
   gid: number;
 }
@@ -42,7 +28,7 @@ export function userRoot(dataDir: string, userId: number): string {
   return path.join(dataDir, "users", String(userId));
 }
 
-export function userPaths(dataDir: string, userId: number, kind: WorkspaceKind): UserPaths {
+export function userPaths(dataDir: string, userId: number, kind: WorkspaceKind) {
   const root = path.join(userRoot(dataDir, userId), kind);
   const system = path.join(root, "system");
   return {
@@ -50,34 +36,41 @@ export function userPaths(dataDir: string, userId: number, kind: WorkspaceKind):
     home: path.join(root, "home"),
     workspace: path.join(root, "workspace"),
     system,
-    agentSettings: (agent) => path.join(system, agent),
+    agentSettings: (agent: AgentKind) => path.join(system, agent),
     passwd: path.join(system, "passwd"),
     group: path.join(system, "group"),
   };
 }
 
-/** The account a workspace of a kind runs as (`uidBase`: that kind's). */
-export function workspaceOwner(uidBase: number, userId: number): FileOwner {
-  return { uid: uidBase + userId, gid: uidBase + userId };
+/** The account a workspace of a kind runs as. */
+export function workspaceOwner(config: Config, userId: number, kind: WorkspaceKind): FileOwner {
+  const id = config.workspace.kinds[kind].uidBase + userId;
+  return { uid: id, gid: id };
 }
 
 /**
- * Creates one kind's directories and gives its home and workspace to that kind's own UID. A tree left by another
- * owner (an older install, or a changed UID base) is handed over whole.
+ * Everything a workspace container of `kind` mounts, ready before it is created. The read-only files are rendered at
+ * every start, so changed admin settings apply on restart. Throws AgentConfigError for unusable settings.
  */
-export async function ensureUserDirs(paths: UserPaths, owner: FileOwner, agent: AgentKind): Promise<void> {
-  ensureDir(path.dirname(paths.root), 0o711, { uid: 0, gid: 0 });
-  ensureDir(paths.root, 0o711, { uid: 0, gid: 0 });
-  ensureDir(paths.system, 0o755, { uid: 0, gid: 0 });
-  ensureDir(paths.agentSettings(agent), 0o755, { uid: 0, gid: 0 });
-  for (const dir of [paths.home, paths.workspace]) {
-    ensureDir(dir, 0o700, owner);
-    const stat = fs.lstatSync(dir);
-    if (stat.uid !== owner.uid || stat.gid !== owner.gid) await chownTree(dir, owner);
-  }
+export function prepareWorkspaceFiles(config: Config, userId: number, kind: WorkspaceKind, agent: AgentKind): void {
+  const paths = userPaths(config.dataDir, userId, kind);
+  const owner = workspaceOwner(config, userId, kind);
+  // Rendered first: invalid settings fail the start before anything is written.
+  const files = driverFor(agent).renderSettings(config, kind);
+  ensureDir(path.dirname(paths.root), 0o711);
+  ensureDir(paths.root, 0o711);
+  ensureDir(paths.system, 0o755);
+  ensureDir(paths.agentSettings(agent), 0o755);
+  for (const dir of [paths.home, paths.workspace]) ensureDir(dir, 0o700, owner);
+  for (const [name, content] of Object.entries(files)) writeFileAtomic(path.join(paths.agentSettings(agent), name), content);
+  writeFileAtomic(
+    paths.passwd,
+    `root:x:0:0:root:/root:/usr/sbin/nologin\nnobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin\nuser:x:${owner.uid}:${owner.gid}:Workspace user:/home/user:/bin/bash\n`,
+  );
+  writeFileAtomic(paths.group, `root:x:0:\nnogroup:x:65534:\nuser:x:${owner.gid}:\n`);
 }
 
-/** Empties one kind's home and workspace (Admin's "Erase files"): both are removed, then created again empty for `owner`. */
+/** Empties one kind's home and workspace (Admin's "Erase files"); the caller makes sure that kind has no container. */
 export async function eraseKindFiles(dataDir: string, userId: number, kind: WorkspaceKind, owner: FileOwner): Promise<void> {
   const paths = userPaths(dataDir, userId, kind);
   for (const dir of [paths.home, paths.workspace]) await removeTree(dir);
@@ -85,45 +78,13 @@ export async function eraseKindFiles(dataDir: string, userId: number, kind: Work
   for (const dir of [paths.home, paths.workspace]) ensureDir(dir, 0o700, owner);
 }
 
-function ensureDir(dir: string, mode: number, owner: FileOwner): void {
+function ensureDir(dir: string, mode: number, owner: FileOwner = { uid: 0, gid: 0 }): void {
   fs.mkdirSync(dir, { recursive: true });
   const stat = fs.lstatSync(dir);
   if (!stat.isDirectory()) throw new Error(`${dir} is not a directory`);
-  if (canChown() && (stat.uid !== owner.uid || stat.gid !== owner.gid)) fs.lchownSync(dir, owner.uid, owner.gid);
+  // Only root can hand files to other UIDs; in tests and local runs the gateway is an ordinary user.
+  if (process.getuid?.() === 0 && (stat.uid !== owner.uid || stat.gid !== owner.gid)) fs.lchownSync(dir, owner.uid, owner.gid);
   if ((stat.mode & 0o7777) !== mode) fs.chmodSync(dir, mode);
-}
-
-/**
- * Changes the owner of a whole tree without following symlinks. Asynchronous, one entry at a time:
- * a large home directory must not stall the gateway (or exhaust file descriptors).
- */
-async function chownTree(dir: string, owner: FileOwner): Promise<void> {
-  if (!canChown()) return;
-  await fs.promises.lchown(dir, owner.uid, owner.gid);
-  for (const entry of await fs.promises.readdir(dir, { withFileTypes: true })) {
-    const child = path.join(dir, entry.name);
-    if (entry.isDirectory()) await chownTree(child, owner);
-    else await fs.promises.lchown(child, owner.uid, owner.gid);
-  }
-}
-
-/** Only root can hand files to other UIDs; in tests and local runs the gateway is an ordinary user. */
-function canChown(): boolean {
-  return typeof process.getuid === "function" && process.getuid() === 0;
-}
-
-/** /etc/passwd of a workspace: the system accounts and `user`, the workspace's own UID. */
-export function renderPasswd(owner: FileOwner): string {
-  return [
-    "root:x:0:0:root:/root:/usr/sbin/nologin",
-    "nobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin",
-    `user:x:${owner.uid}:${owner.gid}:Workspace user:/home/user:/bin/bash`,
-    "",
-  ].join("\n");
-}
-
-export function renderGroup(owner: FileOwner): string {
-  return ["root:x:0:", "nogroup:x:65534:", `user:x:${owner.gid}:`, ""].join("\n");
 }
 
 /** Deletes everything both of the user's workspaces ever stored (user deletion). */
@@ -131,10 +92,7 @@ export function removeUserData(dataDir: string, userId: number): Promise<void> {
   return removeTree(userRoot(dataDir, userId));
 }
 
-/**
- * Removes a tree without blocking the gateway on a large one. Agents can leave directories without write
- * permission behind; the gateway restores access and retries.
- */
+/** Asynchronous: a large tree must not stall the gateway. Agents can leave directories without write permission behind; access is restored and the removal retried. */
 async function removeTree(dir: string): Promise<void> {
   try {
     await fs.promises.rm(dir, { recursive: true, force: true });

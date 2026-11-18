@@ -10,7 +10,7 @@
 // differs between agents is behind their drivers (agents/). Each start uses the agent's current
 // version, which AgentVersions (agent-versions.ts) knows; a running container keeps its image.
 // The decisions themselves (busy, idle, what to stop or evict) are pure functions in policy.ts; the
-// files a container mounts are prepared by workspace-files.ts.
+// files a container mounts are prepared by paths.ts.
 //
 // When a workspace stops: never while its agent is working. Otherwise when nobody has used it for
 // IDLE_TIMEOUT_MINUTES, or soon after the last session using it has ended (sign-out, expiry).
@@ -54,7 +54,7 @@ import {
 } from "./policy.ts";
 import { READY_TIMEOUT_MS, waitForReady, type ReadyResult } from "./readiness.ts";
 import { WorkspaceImageMissingError, type ContainerRuntime, type ContainerState, type ContainerSummary } from "../docker/runtime.ts";
-import { eraseWorkspaceFiles, prepareWorkspaceFiles, removeWorkspaceFiles } from "./files.ts";
+import { eraseKindFiles, prepareWorkspaceFiles, removeUserData, workspaceOwner } from "./paths.ts";
 
 /** The workspace's data (or, `erasing`, that kind's files) is being deleted: it can't be started meanwhile. */
 const beingDeleted = (erasing: WorkspaceKind | null = null): HttpError =>
@@ -641,7 +641,7 @@ export class WorkspaceManager {
       // A container a failed stop left behind (of either kind) goes first.
       await this.#removeLeftover(entry);
       if (entry.status !== "starting") return this.info(userId);
-      await prepareWorkspaceFiles(this.#config, userId, kind, agent);
+      prepareWorkspaceFiles(this.#config, userId, kind, agent);
       const credential = driver.generateCredential();
       const { version, image } = this.#versions.selection(agent);
       // The fence once more, as late as it gets: an Online container runs only inside it.
@@ -806,7 +806,7 @@ export class WorkspaceManager {
       await this.#removeLeftover(entry).catch((error: unknown) => {
         throw new HttpError(500, "stop_failed", `could not stop the workspace container, so its data was not deleted: ${errorMessage(error)}`);
       });
-      await removeWorkspaceFiles(this.#config, userId);
+      await removeUserData(this.#config.dataDir, userId);
     } catch (error) {
       if (created) this.#entries.delete(userId);
       throw error;
@@ -845,7 +845,7 @@ export class WorkspaceManager {
       if (containers.some((container) => container.userId === userId && (container.kind === kind || container.kind === null))) {
         throw workspaceRunning(kind);
       }
-      await eraseWorkspaceFiles(this.#config, userId, kind);
+      await eraseKindFiles(this.#config.dataDir, userId, kind, workspaceOwner(this.#config, userId, kind));
     })();
     entry.erasing = { kind, done };
     try {
