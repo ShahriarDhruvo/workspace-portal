@@ -88,28 +88,28 @@ test("formText reads strings and maps missing fields to empty strings", () => {
   assert.deepEqual(formText(data, ["firstName", "middleName", "file"]), { firstName: "Ada", middleName: "", file: "" });
 });
 
-test("agent updates take an exact version, never a dist-tag, and the rebuild checkbox", () => {
-  assert.deepEqual(agentUpdateSchema.parse({ agent: "qwen", version: " 0.27.4 ", rebuild: "" }), {
+test("agent updates take an exact version, never a dist-tag, and whether to rebuild", () => {
+  assert.deepEqual(agentUpdateSchema.parse({ agent: "qwen", version: " 0.27.4 ", rebuild: false }), {
     agent: "qwen",
     version: "0.27.4",
     rebuild: false,
   });
-  assert.deepEqual(agentUpdateSchema.parse({ agent: "dsh", version: "0.2.2-rc.3", rebuild: "on" }), {
+  assert.deepEqual(agentUpdateSchema.parse({ agent: "dsh", version: "0.2.2-rc.3", rebuild: true }), {
     agent: "dsh",
     version: "0.2.2-rc.3",
     rebuild: true,
   });
   // A dist-tag could name a newer version than the one confirmed.
-  const tag = agentUpdateSchema.safeParse({ agent: "dsh", version: "next", rebuild: "" });
+  const tag = agentUpdateSchema.safeParse({ agent: "dsh", version: "next", rebuild: false });
   assert.equal(tag.success, false);
   assert.deepEqual(fieldErrors(tag.error!), { version: "Enter a version like 0.27.4." });
   // Every bad version, an empty one included, gets the same message.
   for (const version of ["", "  ", "0.27", "v0.27.4", "0.27.4 && reboot", "latest", `0.27.4-${"a".repeat(100)}`]) {
-    const parsed = agentUpdateSchema.safeParse({ agent: "qwen", version, rebuild: "" });
+    const parsed = agentUpdateSchema.safeParse({ agent: "qwen", version, rebuild: false });
     assert.equal(parsed.success, false, JSON.stringify(version));
     assert.deepEqual(fieldErrors(parsed.error!), { version: "Enter a version like 0.27.4." }, JSON.stringify(version));
   }
-  const unknown = agentUpdateSchema.safeParse({ agent: "claude", version: "0.27.4", rebuild: "" });
+  const unknown = agentUpdateSchema.safeParse({ agent: "claude", version: "0.27.4", rebuild: false });
   assert.equal(unknown.success, false);
   assert.deepEqual(fieldErrors(unknown.error!), { agent: "Unknown agent." });
 });

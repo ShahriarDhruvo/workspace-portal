@@ -10,6 +10,9 @@ const HAS_LETTER = /\p{L}/u;
 
 export type FieldErrors = Partial<Record<string, string>>;
 
+/** What a server action without a form answers: done, or why not. */
+export type ActionResult = { ok: true } | { ok: false; message: string };
+
 /** NFC-normalizes, trims and collapses runs of whitespace into single spaces. */
 export function normalizeName(value: string): string {
   return value.normalize("NFC").trim().replace(/\s+/gu, " ");
@@ -145,16 +148,11 @@ export const agentImageSchema = z.object({
 });
 
 /**
- * An update: the exact version to install (a Package images row's) and the rebuild checkbox. Never an npm dist-tag
- * ("latest"), which could name a newer version than the one the admin saw and confirmed.
+ * An update: the exact version to install (a Package images row's) and whether to build from scratch. Never an npm
+ * dist-tag ("latest"), which could name a newer version than the one the admin saw and confirmed.
  */
-export const agentUpdateSchema = z.object({
-  agent: agentKindSchema,
-  version: z
-    .string()
-    .trim()
-    .refine(isVersion, AGENT_VERSION_ERROR),
-  rebuild: checkboxSchema,
+export const agentUpdateSchema = agentImageSchema.extend({
+  rebuild: z.boolean(),
 });
 
 /** The first message for each top-level field. */

@@ -1,14 +1,12 @@
 "use client";
 
-import { useState, useTransition } from "react";
-import { cancelEngineUpdate } from "@/lib/actions/engine";
+import { cancelEngineUpdate } from "@/lib/actions/updates";
 import type { EngineUpdateJob } from "@portal/core/wire";
-import { engineJobOutcome, engineJobStep, engineJobTitle, engineStageLabel, isEngineJobActive } from "@/lib/engine-updates";
-import { FormError } from "@/components/forms/form-error";
-import { JobOutcome, JobPanel } from "@/components/admin/agents/version-card";
+import { engineJobOutcome, engineJobStep, engineJobTitle, enginePhaseLabel } from "@/lib/engine-updates";
+import { isJobActive } from "@/lib/update-jobs";
+import { JobButtons, JobOutcome, JobPanel } from "@/components/admin/agents/version-card";
 import { LocalTime } from "@/components/local-time";
 import { Button } from "@/components/ui/button";
-import { Spinner } from "@/components/ui/spinner";
 
 interface EngineJobProps {
   job: EngineUpdateJob;
@@ -20,21 +18,13 @@ interface EngineJobProps {
 }
 
 /**
- * The engine's job, inline in its card. Running: the stage on a Progress, the step, while draining how many requests
- * still run and until when it waits, Cancel (downloading or draining) and "Restart now" (draining); the log on
- * request. Finished: the outcome until dismissed.
+ * The engine's job, inline in its card. Running: its panel, while draining how many requests still run and until
+ * when it waits, Cancel (downloading or draining) and "Restart now" (draining). Finished: the outcome until dismissed.
  */
 export function EngineJob({ job, onChanged, onRestartNow, onDismiss }: EngineJobProps) {
-  if (!isEngineJobActive(job)) {
-    const outcome = job.phase === "succeeded" ? "succeeded" : job.phase === "cancelled" ? "cancelled" : "failed";
+  if (!isJobActive(job)) {
     return (
-      <JobOutcome
-        outcome={outcome}
-        title={engineJobTitle(job)}
-        error={outcome === "failed" ? job.error : null}
-        log={job.log}
-        onDismiss={onDismiss}
-      >
+      <JobOutcome job={job} title={engineJobTitle(job)} onDismiss={onDismiss}>
         {engineJobOutcome(job)}
       </JobOutcome>
     );
@@ -43,13 +33,23 @@ export function EngineJob({ job, onChanged, onRestartNow, onDismiss }: EngineJob
   return (
     <JobPanel
       title={engineJobTitle(job)}
-      stage={`Step ${step.index} of ${step.count} · ${engineStageLabel(job)}`}
+      stage={`Step ${step.index} of ${step.count} · ${enginePhaseLabel(job)}`}
       progress={step.progress}
       // While draining, the requests still running say more than the step does.
       step={job.phase === "draining" ? null : job.step}
       startedAt={job.startedAt}
       log={job.log}
-      actions={<JobButtons job={job} onChanged={onChanged} onRestartNow={onRestartNow} />}
+      actions={
+        job.cancellable || job.phase === "draining" ? (
+          <JobButtons cancel={job.cancellable ? cancelEngineUpdate : null} onChanged={onChanged}>
+            {job.phase === "draining" ? (
+              <Button type="button" variant="destructive" size="sm" onClick={(event) => onRestartNow(event.currentTarget)}>
+                Restart now…
+              </Button>
+            ) : null}
+          </JobButtons>
+        ) : null
+      }
     >
       {job.phase === "draining" && job.drain ? (
         <p className="text-13 text-muted-foreground">
@@ -61,8 +61,8 @@ export function EngineJob({ job, onChanged, onRestartNow, onDismiss }: EngineJob
         </p>
       ) : job.phase === "restarting" && job.rolledBack ? (
         <p className="text-13 text-muted-foreground">
-          {job.toVersion ?? "The new version"} didn&apos;t start properly, so the LLM server is putting{" "}
-          {job.fromVersion ?? "the previous version"} back. New requests keep waiting in the portal&apos;s queue.
+          {job.toVersion} didn&apos;t start properly, so the LLM server is putting {job.fromVersion ?? "the previous version"} back. New
+          requests keep waiting in the portal&apos;s queue.
         </p>
       ) : job.phase === "restarting" ? (
         <p className="text-13 text-muted-foreground">
@@ -71,45 +71,5 @@ export function EngineJob({ job, onChanged, onRestartNow, onDismiss }: EngineJob
         </p>
       ) : null}
     </JobPanel>
-  );
-}
-
-function JobButtons({ job, onChanged, onRestartNow }: Omit<EngineJobProps, "onDismiss">) {
-  const [cancelling, startCancel] = useTransition();
-  const [error, setError] = useState<string | null>(null);
-  if (!job.cancellable && job.phase !== "draining") return null;
-  return (
-    <div className="flex flex-col items-end gap-2">
-      <div className="flex flex-wrap items-center gap-2">
-        {job.cancellable ? (
-          // Not disabled while cancelling, so the focus stays on it; a second press changes nothing.
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            aria-disabled={cancelling || undefined}
-            aria-busy={cancelling || undefined}
-            onClick={() => {
-              if (cancelling) return;
-              setError(null);
-              startCancel(async () => {
-                const result = await cancelEngineUpdate();
-                if (!result.ok) setError(result.message);
-                onChanged();
-              });
-            }}
-          >
-            {cancelling ? <Spinner aria-hidden="true" /> : null}
-            {cancelling ? "Cancelling…" : "Cancel"}
-          </Button>
-        ) : null}
-        {job.phase === "draining" ? (
-          <Button type="button" variant="destructive" size="sm" onClick={(event) => onRestartNow(event.currentTarget)}>
-            Restart now…
-          </Button>
-        ) : null}
-      </div>
-      {error ? <FormError>{error}</FormError> : null}
-    </div>
   );
 }

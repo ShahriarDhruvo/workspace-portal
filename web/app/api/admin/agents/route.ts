@@ -1,25 +1,11 @@
-import { apiSession, json, jsonError } from "@/lib/api";
-import { loadAdminAgents } from "@/lib/overview";
-import { isSameOrigin } from "@/lib/request-guards";
+import { route } from "@/lib/api";
+import { gateway } from "@/lib/gateway";
+import { loaded } from "@/lib/overview";
 
 export const dynamic = "force-dynamic";
 
-/** The agents' versions and the update job for the Updates page (polled every second while a job runs, else every 15 s). */
-export async function GET(): Promise<Response> {
-  const session = await apiSession({ admin: true });
-  if (session instanceof Response) return session;
-  return json(await loadAdminAgents());
-}
+/** The agents' versions and the update job for the Updates page. */
+export const GET = route({ admin: true }, () => loaded(gateway.agentVersions()));
 
-/**
- * "Check for updates": the same answer, after the gateway asked the npm registry (and GitHub) again instead of using
- * its cached releases. A POST with the same-origin check of the state-changing routes: a workspace page the admin has
- * open (another port, so another origin, but the same site, so it gets the session cookie) must not be able to make
- * the server query npm in a loop. A GET couldn't be checked: browsers send no Origin with a same-origin GET.
- */
-export async function POST(request: Request): Promise<Response> {
-  if (!isSameOrigin(request)) return jsonError(403, "forbidden", "Cross-origin request refused.");
-  const session = await apiSession({ admin: true });
-  if (session instanceof Response) return session;
-  return json(await loadAdminAgents({ refresh: true }));
-}
+/** "Check for updates": the same answer, after the gateway asked the npm registry (and GitHub) again. */
+export const POST = route({ admin: true }, () => loaded(gateway.agentVersions({ refresh: true })));

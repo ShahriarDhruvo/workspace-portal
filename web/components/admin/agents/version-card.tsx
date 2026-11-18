@@ -1,8 +1,12 @@
 "use client";
 
-import { useId, useLayoutEffect, useRef, useSyncExternalStore, type ReactNode, type Ref, type RefObject } from "react";
+import { useId, useLayoutEffect, useRef, useState, useSyncExternalStore, useTransition, type ReactNode, type Ref, type RefObject } from "react";
+import type { UpdateJob } from "@portal/core/wire";
 import { formatElapsed } from "@/lib/agent-versions";
+import type { CardStatus } from "@/lib/update-jobs";
 import { cn } from "@/lib/utils";
+import type { ActionResult } from "@/lib/validation";
+import { FormError } from "@/components/forms/form-error";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -17,15 +21,6 @@ import { BuildLog } from "./build-log";
 // way: the title, its source and a status badge; the focal point, the current version large in mono, with the one
 // primary action beside it; the running job's panel inline under it; and the Package images section folded at the
 // bottom.
-
-export type StatusVariant = "success" | "warning" | "info" | "secondary" | "destructive";
-
-export interface CardStatus {
-  label: string;
-  variant: StatusVariant;
-  /** Something is under way: a spinner in the badge. */
-  pending?: boolean;
-}
 
 interface VersionCardProps {
   title: string;
@@ -198,11 +193,57 @@ export function JobPanel({ title, stage, progress, step, startedAt, log, childre
   );
 }
 
+interface JobButtonsProps {
+  /** The server action that cancels the job; null when it can't be cancelled any more. */
+  cancel: (() => Promise<ActionResult>) | null;
+  /** The gateway answered: poll now. */
+  onChanged: () => void;
+  /** Cancel stays busy once the gateway accepted, for a job that takes a moment to stop. */
+  staysBusy?: boolean;
+  /** The job's other buttons, beside Cancel. */
+  children?: ReactNode;
+}
+
+/** A running job's buttons: Cancel and what else it offers, with why a cancel failed under them. */
+export function JobButtons({ cancel, onChanged, staysBusy = false, children }: JobButtonsProps) {
+  const [pending, start] = useTransition();
+  const [result, setResult] = useState<ActionResult | null>(null);
+  const cancelling = pending || (staysBusy && result?.ok === true);
+  return (
+    <div className="flex flex-col items-end gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        {cancel ? (
+          // Not disabled while cancelling, so the focus stays on it; presses are ignored.
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            aria-disabled={cancelling || undefined}
+            aria-busy={cancelling || undefined}
+            onClick={() => {
+              if (cancelling) return;
+              start(async () => {
+                setResult(await cancel());
+                onChanged();
+              });
+            }}
+          >
+            {cancelling ? <Spinner aria-hidden="true" /> : null}
+            {cancelling ? "Cancelling…" : "Cancel"}
+          </Button>
+        ) : null}
+        {children}
+      </div>
+      {result?.ok === false ? <FormError>{result.message}</FormError> : null}
+    </div>
+  );
+}
+
 /** The job's log, collapsed until asked for. */
-function LogSection({ lines, defaultOpen = false }: { lines: readonly string[]; defaultOpen?: boolean }) {
+function LogSection({ lines }: { lines: readonly string[] }) {
   if (lines.length === 0) return null;
   return (
-    <Collapsible defaultOpen={defaultOpen} className="group/log flex flex-col gap-2">
+    <Collapsible className="group/log flex flex-col gap-2">
       <CollapsibleTrigger asChild>
         <Button type="button" variant="ghost" size="sm" className="-ml-2 w-fit text-muted-foreground">
           <ChevronDownIcon className="transition-transform group-data-[state=open]/log:rotate-180" />
@@ -224,20 +265,18 @@ const OUTCOMES = {
 } as const;
 
 interface JobOutcomeProps {
-  outcome: keyof typeof OUTCOMES;
+  job: Pick<UpdateJob<string>, "phase" | "error" | "log">;
   title: string;
   /** What it means now. */
   children: ReactNode;
-  /** The failure in the gateway's words. */
-  error?: string | null;
-  log: readonly string[];
   onDismiss: () => void;
   /** The running job's panel had the focus as it went: the title takes it. */
   focusHandoff?: RefObject<boolean>;
 }
 
 /** A finished job, inline in its card until dismissed: what happened, the error, the log on request. */
-export function JobOutcome({ outcome, title, children, error, log, onDismiss, focusHandoff }: JobOutcomeProps) {
+export function JobOutcome({ job, title, children, onDismiss, focusHandoff }: JobOutcomeProps) {
+  const outcome = job.phase === "succeeded" || job.phase === "cancelled" ? job.phase : "failed";
   const { variant, Icon, tone } = OUTCOMES[outcome];
   const heading = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -253,10 +292,10 @@ export function JobOutcome({ outcome, title, children, error, log, onDismiss, fo
         {title}
       </AlertTitle>
       <AlertDescription className="flex flex-col items-start gap-2 [&_p:not(:last-child)]:mb-0">
-        {error ? <p className="font-mono text-12 wrap-anywhere whitespace-pre-wrap">{error}</p> : null}
+        {outcome === "failed" && job.error ? <p className="font-mono text-12 wrap-anywhere whitespace-pre-wrap">{job.error}</p> : null}
         <p>{children}</p>
         <div className="w-full">
-          <LogSection lines={log} />
+          <LogSection lines={job.log} />
         </div>
       </AlertDescription>
       <Button type="button" variant="ghost" size="icon-sm" aria-label="Dismiss" className="absolute top-1.5 right-1.5" onClick={onDismiss}>

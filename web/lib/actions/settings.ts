@@ -6,14 +6,12 @@ import { users, writeAudit } from "@portal/core";
 import { getDb } from "../db";
 import { gateway, toApiError } from "../gateway";
 import { requireUser } from "../session";
-import { fieldErrors, formText, harnessSchema, profileSchema } from "../validation";
+import { fieldErrors, formText, harnessSchema, profileSchema, type ActionResult } from "../validation";
 import { restartKind } from "../workspace-stop";
 import type { ProfileState } from "./admin";
 
 // The signed-in user's own settings (/settings). They are about the user's own account and workspace, also for
 // an administrator whose session is viewing someone else's.
-
-export type SettingsResult = { ok: true } | { ok: false; message: string };
 
 const NAME_FIELDS = ["firstName", "middleName", "lastName"] as const;
 
@@ -49,7 +47,7 @@ export async function saveName(_previous: ProfileState, formData: FormData): Pro
  * enables. Audited as `agent_preference_changed` with the stored values (from null: never chosen). A running
  * workspace keeps its agent until it starts again.
  */
-export async function saveHarness(agent: string): Promise<SettingsResult> {
+export async function saveHarness(agent: string): Promise<ActionResult> {
   const { user } = await requireUser();
   const parsed = harnessSchema.safeParse({ agent });
   if (!parsed.success) return { ok: false, message: "There is no such harness." };
@@ -73,7 +71,7 @@ export async function saveHarness(agent: string): Promise<SettingsResult> {
  * harness now saved. The page warns first when the agent is working or the workspace is open elsewhere. One that
  * stopped since the page rendered stays stopped: the user starts it from Home, choosing its kind there.
  */
-export async function restartWorkspace(): Promise<SettingsResult> {
+export async function restartWorkspace(): Promise<ActionResult> {
   const { user } = await requireUser();
   try {
     const kind = restartKind(await gateway.getWorkspace(user.id));

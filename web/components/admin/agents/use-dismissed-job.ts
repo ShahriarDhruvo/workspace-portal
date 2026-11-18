@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useSyncExternalStore } from "react";
+import type { UpdateJob } from "@portal/core/wire";
+import { isJobActive } from "@/lib/update-jobs";
 
 // The gateway shows its last finished job (of the agents, and of the LLM engine) until it restarts; once the admin
 // has read the outcome, this browser stops showing it. Only the latest dismissal of each kind is kept: a newer job
@@ -34,10 +36,13 @@ function read(kind: DismissedKind): string | null {
 }
 
 /**
- * The id of the job dismissed in this browser, and a way to dismiss one. undefined until hydrated (the server
- * can't know), so a dismissed outcome never flashes up on load.
+ * The job to show (a running one, or a finished one not dismissed in this browser), and a way to dismiss one. What
+ * was dismissed is unknown until hydrated (the server can't know), so a dismissed outcome never flashes up on load.
  */
-export function useDismissedJob(kind: DismissedKind): [string | null | undefined, (jobId: string) => void] {
+export function useShownJob<Job extends Pick<UpdateJob<string>, "id" | "finishedAt">>(
+  kind: DismissedKind,
+  job: Job | null,
+): [Job | null, (jobId: string) => void] {
   const dismissed = useSyncExternalStore<string | null | undefined>(subscribe, () => read(kind), () => undefined);
   const dismiss = useCallback((jobId: string) => {
     dismissedHere[kind] = jobId;
@@ -48,5 +53,5 @@ export function useDismissedJob(kind: DismissedKind): [string | null | undefined
     }
     for (const listener of listeners) listener();
   }, [kind]);
-  return [dismissed, dismiss];
+  return [job && (isJobActive(job) || (dismissed !== undefined && dismissed !== job.id)) ? job : null, dismiss];
 }

@@ -3,10 +3,11 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchJson } from "@/lib/fetch-json";
-import type { ApiError } from "@portal/core/wire";
+import { mergeLoaded, pollDelay, type Loaded } from "@/lib/update-jobs";
+import type { UpdateJob } from "@portal/core/wire";
 
 export interface Polled<T> {
-  data: T;
+  data: Loaded<T>;
   /** A refresh (a POST: the gateway asks its registries again) is under way. */
   refreshing: boolean;
   /** Polls at once: after an action, to show its effect without waiting for the timer. */
@@ -15,22 +16,13 @@ export interface Polled<T> {
   refresh: () => Promise<void>;
 }
 
-interface PollOptions<T extends { error: ApiError | null }> {
-  /** The JSON route: GET polls, POST refreshes. */
-  route: string;
-  /** How long until the next poll, from what is on screen. */
-  delayOf: (data: T) => number;
-  /** A poll's answer; when the gateway can't be reached, the last data stays with the error. */
-  merge: (current: T, next: T) => T;
-}
-
 /**
- * Live data for an admin page: polls `route` (every delayOf ms, again whenever the window gets the focus back, and
- * at once when asked). Requests run one after another, so an older answer never replaces a newer one. Signed out
- * or no longer an admin (401/403) re-renders the page, which redirects; a failed poll keeps the last data with the
- * error.
+ * An updater's overview, live: GETs `route` every second while its job runs, else every 15 s, again whenever the
+ * window gets the focus back, and at once when asked; refresh POSTs there. Requests run one after another, so an older
+ * answer never replaces a newer one. Signed out or no longer an admin (401/403) re-renders the page, which redirects;
+ * a failed poll keeps the last data with the error.
  */
-export function usePolled<T extends { error: ApiError | null }>(initial: T, { route, delayOf, merge }: PollOptions<T>): Polled<T> {
+export function usePolled<T extends { job: Pick<UpdateJob<string>, "finishedAt"> | null }>(initial: Loaded<T>, route: string): Polled<T> {
   const router = useRouter();
   const [data, setData] = useState(initial);
   const [refreshing, setRefreshing] = useState(false);
@@ -50,9 +42,9 @@ export function usePolled<T extends { error: ApiError | null }>(initial: T, { ro
       const request = async () => {
         const signal = mounted.current?.signal;
         if (signal?.aborted) return;
-        const result = await fetchJson<T>(route, { method: refresh ? "POST" : "GET", signal });
+        const result = await fetchJson<Loaded<T>>(route, { method: refresh ? "POST" : "GET", signal });
         if (signal?.aborted) return;
-        if (result.ok) setData((current) => merge(current, result.data));
+        if (result.ok) setData((current) => mergeLoaded(current, result.data));
         else if (result.status === 401 || result.status === 403) router.refresh();
         else setData((current) => ({ ...current, error: result.error }));
         setAnswers((count) => count + 1);
@@ -61,10 +53,10 @@ export function usePolled<T extends { error: ApiError | null }>(initial: T, { ro
       queue.current = done.catch(() => undefined);
       return done;
     },
-    [route, merge, router],
+    [route, router],
   );
 
-  const delay = delayOf(data);
+  const delay = pollDelay(data.data?.job ?? null);
   useEffect(() => {
     const timer = setTimeout(() => void load(false), delay);
     return () => clearTimeout(timer);

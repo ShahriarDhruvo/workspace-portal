@@ -1,19 +1,14 @@
-import { apiSession, jsonError, workspaceResponse } from "@/lib/api";
+import { jsonError, route, workspaceStatus } from "@/lib/api";
 import { gateway } from "@/lib/gateway";
-import { isSameOrigin } from "@/lib/request-guards";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Stops the user's own workspace (Stop on Home and in the workspace bar; audited by the gateway with reason
- * "user"). Immediate, even while the agent is working: the pages warn first. An admin viewing someone else's
- * workspace stops it from the admin console instead. A Route Handler like start: the stop includes
+ * Stops the user's own workspace, at once, even while the agent is working: the pages warn first. An admin viewing
+ * someone else's stops it from the admin console instead. A Route Handler like start: the stop includes
  * `docker stop -t 10`, and actions run one at a time per page.
  */
-export async function POST(request: Request): Promise<Response> {
-  if (!isSameOrigin(request)) return jsonError(403, "forbidden", "Cross-origin request refused.");
-  const session = await apiSession();
-  if (session instanceof Response) return session;
+export const POST = route({}, (session) => {
   if (session.actingAs) return jsonError(403, "forbidden", "You can only stop your own workspace here.");
-  return workspaceResponse(gateway.stop(session.target.id, "user", session.user.id), session);
-}
+  return workspaceStatus(gateway.stop(session.target.id, "user", session.user.id), session);
+});

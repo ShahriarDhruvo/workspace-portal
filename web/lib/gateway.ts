@@ -17,6 +17,7 @@ import type {
 } from "@portal/core";
 import { config } from "./config";
 import type { DeletedSessions } from "./session-store";
+import type { ActionResult } from "./validation";
 
 // Client for the gateway control API (docs/ARCHITECTURE.md, "Gateway control API").
 
@@ -57,12 +58,11 @@ function errorBody(payload: unknown): Partial<ApiError> {
   };
 }
 
-async function call<T>(
-  method: "GET" | "POST" | "DELETE",
-  path: string,
-  options: { body?: unknown; timeoutMs?: number } = {},
-): Promise<T> {
-  const headers: Record<string, string> = { authorization: `Bearer ${config.controlSecret}`, accept: "application/json" };
+type Method = "GET" | "POST" | "DELETE";
+
+/** One control request; no answer, or a refusal, is a GatewayError. */
+async function send(method: Method, path: string, options: { body?: unknown; signal: AbortSignal; accept?: string }): Promise<Response> {
+  const headers: Record<string, string> = { authorization: `Bearer ${config.controlSecret}`, accept: options.accept ?? "application/json" };
   if (options.body !== undefined) headers["content-type"] = "application/json";
 
   let response: Response;
@@ -71,7 +71,7 @@ async function call<T>(
       method,
       headers,
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
-      signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+      signal: options.signal,
       cache: "no-store",
     });
   } catch (error) {
@@ -80,20 +80,25 @@ async function call<T>(
     }
     throw new GatewayError(502, "unreachable", "The workspace service is not reachable.");
   }
-
-  const payload: unknown = await response.json().catch(() => null);
   if (!response.ok) {
-    const body = errorBody(payload);
+    const body = errorBody(await response.json().catch(() => null));
     throw new GatewayError(
       response.status,
       body.error ?? "gateway_error",
       body.message ?? `The workspace service answered with HTTP ${response.status}.`,
     );
   }
-  return payload as T;
+  return response;
+}
+
+async function call<T>(method: Method, path: string, options: { body?: unknown; timeoutMs?: number } = {}): Promise<T> {
+  const response = await send(method, path, { body: options.body, signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS) });
+  return (await response.json().catch(() => null)) as T;
 }
 
 export const gateway = {
+  /** The live view's event stream (docs/ARCHITECTURE.md, "Live view"), open until `signal` aborts. */
+  live: (signal: AbortSignal) => send("GET", "/control/live", { signal, accept: "text/event-stream" }),
   stats: () => call<HostStats>("GET", "/control/stats"),
   /** The agents enabled on this install, in display order. */
   agents: async (timeoutMs?: number) =>
@@ -187,6 +192,16 @@ export function toApiError(error: unknown): ApiError {
   if (error instanceof GatewayError) return { error: error.code, message: error.message };
   console.error("[portal] unexpected error:", error);
   return { error: "internal", message: "Something went wrong in the portal." };
+}
+
+/** A server action's gateway work: done, or the failure as `words` puts it. */
+export async function attempt(work: () => Promise<unknown>, words = (error: ApiError) => error.message): Promise<ActionResult> {
+  try {
+    await work();
+  } catch (error) {
+    return { ok: false, message: words(toApiError(error)) };
+  }
+  return { ok: true };
 }
 
 /** One log line with the gateway's code and status. */

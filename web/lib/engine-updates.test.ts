@@ -3,24 +3,21 @@ import assert from "node:assert/strict";
 import type { EngineImage, EngineOverview, EngineRelease, EngineUpdateJob } from "@portal/core/wire";
 import {
   compareEngineVersions,
-  ENGINE_ACTIVE_POLL_MS,
-  ENGINE_IDLE_POLL_MS,
   engineActionError,
   engineImageSchema,
   engineJobOutcome,
   engineJobStep,
   engineJobTitle,
-  enginePollDelay,
+  enginePhaseLabel,
   engineRemoveBlocker,
-  engineStageLabel,
   engineStatusBadge,
   engineUpdateBlocker,
   engineUpdateTarget,
   engineVersionSchema,
   latestEngineRelease,
   enginePackageRows,
-  mergeEngine,
 } from "./engine-updates.ts";
+import { ACTIVE_POLL_MS, IDLE_POLL_MS, mergeLoaded, pollDelay } from "./update-jobs.ts";
 
 const release = (version: string, latest = false): EngineRelease => ({ version, digest: null, latest, notes: null });
 
@@ -52,17 +49,18 @@ function overview(patch: Partial<EngineOverview> = {}, version: string | null = 
 }
 
 function job(patch: Partial<EngineUpdateJob> = {}): EngineUpdateJob {
+  const phase = patch.phase ?? "pulling";
   return {
     id: "j1",
     fromVersion: "0.31.0",
     toVersion: "0.34.0",
     image: null,
     reuse: false,
-    phase: "pulling",
+    phase,
     step: "",
     log: [],
     startedAt: 0,
-    finishedAt: null,
+    finishedAt: phase === "succeeded" || phase === "failed" || phase === "cancelled" ? 60_000 : null,
     error: null,
     rolledBack: false,
     drain: null,
@@ -132,8 +130,8 @@ test("one job at a time; the running image can't be removed", () => {
 
 test("job steps, titles and outcomes", () => {
   assert.deepEqual(engineJobStep(job()), { index: 1, count: 3, progress: 17 });
-  assert.equal(engineStageLabel(job({ phase: "draining" })), "Waiting for running requests");
-  assert.equal(engineStageLabel(job({ phase: "restarting", rolledBack: true })), "Putting 0.31.0 back");
+  assert.equal(enginePhaseLabel(job({ phase: "draining" })), "Waiting for running requests");
+  assert.equal(enginePhaseLabel(job({ phase: "restarting", rolledBack: true })), "Putting 0.31.0 back");
   assert.deepEqual(engineJobStep(job({ reuse: true, phase: "restarting" })), { index: 2, count: 2, progress: 75 }, "no download");
   assert.equal(engineJobStep(job({ phase: "succeeded" })).progress, 100);
   assert.equal(engineJobTitle(job({ phase: "draining" })), "Updating the LLM engine 0.31.0 → 0.34.0");
@@ -145,12 +143,12 @@ test("job steps, titles and outcomes", () => {
 });
 
 test("polling, merging and input", () => {
-  assert.equal(enginePollDelay(job()), ENGINE_ACTIVE_POLL_MS);
-  assert.equal(enginePollDelay(job({ finishedAt: 5, phase: "succeeded" })), ENGINE_IDLE_POLL_MS);
-  assert.equal(enginePollDelay(null), ENGINE_IDLE_POLL_MS);
-  const before = { engine: overview(), error: null };
-  const failed = { engine: null, error: { error: "unreachable", message: "down" } };
-  assert.deepEqual(mergeEngine(before, failed), { engine: before.engine, error: failed.error });
+  assert.equal(pollDelay(job()), ACTIVE_POLL_MS);
+  assert.equal(pollDelay(job({ finishedAt: 5, phase: "succeeded" })), IDLE_POLL_MS);
+  assert.equal(pollDelay(null), IDLE_POLL_MS);
+  const before = { data: overview(), error: null };
+  const failed = { data: null, error: { error: "unreachable", message: "down" } };
+  assert.deepEqual(mergeLoaded(before, failed), { data: before.data, error: failed.error });
   assert.equal(engineVersionSchema.safeParse("0.34.0").success, true);
   for (const bad of ["latest", "v0.34.0", "0.34", "0.34.0-rc.1", ""]) assert.equal(engineVersionSchema.safeParse(bad).success, false, bad);
   assert.equal(engineImageSchema.safeParse({ digest: `sha256:${"0".repeat(64)}`, version: "0.30.0" }).success, true);

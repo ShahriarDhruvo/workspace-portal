@@ -1,20 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  ACTIVE_POLL_MS,
-  IDLE_POLL_MS,
   agentActionError,
   agentPackageRows,
   currentImageMissing,
   formatElapsed,
-  isJobActive,
   jobElapsedMs,
   jobKind,
   jobOutcome,
   jobTitle,
-  mergeAgents,
   packageSummary,
-  pollDelay,
   removeBlocker,
   updateBlocker,
   updateWork,
@@ -22,6 +17,7 @@ import {
   agentStatus,
   agentJobStep,
 } from "./agent-versions.ts";
+import { ACTIVE_POLL_MS, IDLE_POLL_MS, isJobActive, mergeLoaded, pollDelay } from "./update-jobs.ts";
 import type { AgentUpdateJob, AgentVersionInfo, AgentVersionsOverview } from "@portal/core/wire";
 
 const qwen: AgentVersionInfo = {
@@ -46,6 +42,7 @@ const qwen: AgentVersionInfo = {
 };
 
 function job(overrides: Partial<AgentUpdateJob> = {}): AgentUpdateJob {
+  const phase = overrides.phase ?? "building";
   return {
     id: "job-1",
     agent: "dsh",
@@ -54,11 +51,11 @@ function job(overrides: Partial<AgentUpdateJob> = {}): AgentUpdateJob {
     rebuild: false,
     reuse: false,
     actorUserId: 1,
-    phase: "building",
+    phase,
     step: null,
     log: [],
     startedAt: 1_000_000,
-    finishedAt: null,
+    finishedAt: phase === "building" || phase === "verifying" ? null : 1_060_000,
     error: null,
     ...overrides,
   };
@@ -77,9 +74,9 @@ test("polling is quick only while a job builds or verifies", () => {
 test("a poll without the gateway keeps the last versions on screen, with the error", () => {
   const versions = { agents: [qwen], job: null, registryError: null, checkedAt: 5 } satisfies AgentVersionsOverview;
   const down = { error: "unreachable", message: "The workspace service is not reachable." };
-  assert.deepEqual(mergeAgents({ versions, error: null }, { versions: null, error: down }), { versions, error: down });
+  assert.deepEqual(mergeLoaded({ data: versions, error: null }, { data: null, error: down }), { data: versions, error: down });
   const fresh = { ...versions, checkedAt: 6 };
-  assert.deepEqual(mergeAgents({ versions, error: down }, { versions: fresh, error: null }), { versions: fresh, error: null });
+  assert.deepEqual(mergeLoaded({ data: versions, error: down }, { data: fresh, error: null }), { data: fresh, error: null });
 });
 
 test("the version badge: update available, up to date, ahead of latest, or unknown", () => {
@@ -252,11 +249,11 @@ test("the Updates page's agent badge and job steps", () => {
   const agent = { id: "qwen" as const, current: "0.27.0", latest: "0.27.4", updateAvailable: true };
   assert.deepEqual(agentStatus(agent, null), { label: "Update available", variant: "warning", pending: false });
   assert.deepEqual(agentStatus({ ...agent, latest: "0.27.0", updateAvailable: false }, null), { label: "Up to date", variant: "success", pending: false });
-  assert.deepEqual(agentStatus(agent, { agent: "qwen", phase: "building" }), { label: "Updating…", variant: "info", pending: true });
-  assert.equal(agentStatus(agent, { agent: "dsh", phase: "building" }).label, "Update available");
+  assert.deepEqual(agentStatus(agent, { agent: "qwen", finishedAt: null }), { label: "Updating…", variant: "info", pending: true });
+  assert.equal(agentStatus(agent, { agent: "dsh", finishedAt: null }).label, "Update available");
   assert.equal(agentStatus({ ...agent, latest: null, updateAvailable: false }, null).variant, "secondary");
-  assert.deepEqual(agentJobStep({ phase: "building", reuse: false }), { index: 1, count: 2, progress: 25 });
-  assert.deepEqual(agentJobStep({ phase: "verifying", reuse: false }), { index: 2, count: 2, progress: 75 });
-  assert.deepEqual(agentJobStep({ phase: "verifying", reuse: true }), { index: 1, count: 1, progress: 50 });
-  assert.equal(agentJobStep({ phase: "succeeded", reuse: false }).progress, 100);
+  assert.deepEqual(agentJobStep(job({ phase: "building" })), { index: 1, count: 2, progress: 25 });
+  assert.deepEqual(agentJobStep(job({ phase: "verifying" })), { index: 2, count: 2, progress: 75 });
+  assert.deepEqual(agentJobStep(job({ phase: "verifying", reuse: true })), { index: 1, count: 1, progress: 50 });
+  assert.equal(agentJobStep(job({ phase: "succeeded" })).progress, 100);
 });

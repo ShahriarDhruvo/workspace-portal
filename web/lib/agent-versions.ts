@@ -1,33 +1,10 @@
-// What the Updates page decides about the agents, kept out of its components: the status badge, the rows of the
-// Package images table and what each offers, which actions are allowed right now and why not, the job's labels and
-// timings, how often to poll, and the gateway's errors in plain words. Pure; unit tested. The gateway's view of
-// versions: docs/ARCHITECTURE.md, "Agent versions and updates".
+// What the Updates page decides about the agents (docs/ARCHITECTURE.md, "Agent versions and updates"). Pure; unit tested.
 import type { AgentUpdateJob, AgentVersionInfo, ApiError, InstalledImage, ReleaseNotes, UpdatePhase } from "@portal/core/wire";
-import type { AdminAgents } from "./overview.ts";
-
-/** Poll intervals: a running job's log and step move every few seconds; otherwise little changes. */
-export const ACTIVE_POLL_MS = 1_000;
-export const IDLE_POLL_MS = 15_000;
-
-/** Still building or verifying: it holds the one job slot, and it can be cancelled. */
-export function isJobActive(job: Pick<AgentUpdateJob, "phase"> | null): boolean {
-  return job?.phase === "building" || job?.phase === "verifying";
-}
-
-export function pollDelay(job: AgentUpdateJob | null): number {
-  return isJobActive(job) ? ACTIVE_POLL_MS : IDLE_POLL_MS;
-}
-
-/** A poll's answer; when the gateway can't be reached, the last versions stay on screen with the error. */
-export function mergeAgents(current: AdminAgents, next: AdminAgents): AdminAgents {
-  return { versions: next.versions ?? current.versions, error: next.error };
-}
+import { isJobActive, jobStep, OFFLINE, type CardStatus, type JobStep } from "./update-jobs.ts";
 
 function plural(count: number, one: string, many = `${one}s`): string {
   return `${count} ${count === 1 ? one : many}`;
 }
-
-// ---- Versions ------------------------------------------------------------------------------------------------
 
 export interface VersionStatus {
   tone: "success" | "warning" | "neutral";
@@ -43,18 +20,11 @@ export function versionStatus(agent: Pick<AgentVersionInfo, "current" | "latest"
   return { tone: "neutral", label: `Latest: ${agent.latest}` };
 }
 
-export interface AgentStatus {
-  label: string;
-  variant: "success" | "warning" | "info" | "secondary";
-  /** A job runs for this agent: the badge shows a spinner. */
-  pending: boolean;
-}
-
 /** The badge beside the agent's title on the Updates page; "Update to X.Y.Z" beside the version names the release. */
 export function agentStatus(
   agent: Pick<AgentVersionInfo, "id" | "current" | "latest" | "updateAvailable">,
-  job: Pick<AgentUpdateJob, "agent" | "phase"> | null,
-): AgentStatus {
+  job: Pick<AgentUpdateJob, "agent" | "finishedAt"> | null,
+): CardStatus {
   if (job && isJobActive(job) && job.agent === agent.id) return { label: "Updating…", variant: "info", pending: true };
   const status = versionStatus(agent);
   if (status.tone === "warning") return { label: "Update available", variant: "warning", pending: false };
@@ -83,8 +53,6 @@ export function updateWork(agent: Pick<AgentVersionInfo, "current" | "installed"
   if (!agent.installed.some((image) => image.version === version)) return "build";
   return version === agent.current ? "none" : "switch";
 }
-
-// ---- The Package images table --------------------------------------------------------------------------------
 
 /** One row of an agent's Package images table. */
 export interface AgentPackageRow {
@@ -120,16 +88,12 @@ export function packageSummary(rows: ReadonlyArray<{ image: unknown }>, where = 
   return `${plural(rows.length, "version")} · ${local} on ${where}`;
 }
 
-// ---- What may run now ----------------------------------------------------------------------------------------
-
 /** What every action depends on: the job (one at a time, for all agents) and whether the gateway answers. */
 export interface ActionContext {
   job: AgentUpdateJob | null;
   /** The last poll failed: what is shown may be out of date and actions would fail. */
   offline: boolean;
 }
-
-const OFFLINE = "The workspace service is unavailable right now.";
 
 /** Why no update can start right now (any agent, any version), or null when one can. */
 export function updateBlocker(context: ActionContext): string | null {
@@ -153,8 +117,6 @@ export function removeBlocker(
   return null;
 }
 
-// ---- The job ---------------------------------------------------------------------------------------------------
-
 const PHASE_LABELS: Record<UpdatePhase, string> = {
   building: "Building the image",
   verifying: "Checking the version",
@@ -167,15 +129,9 @@ export function phaseLabel(phase: UpdatePhase): string {
   return PHASE_LABELS[phase];
 }
 
-/**
- * Where a running job is, for its Progress bar (halfway through the current step): a build, then the version check;
- * a switch to an image on the server only checks.
- */
-export function agentJobStep(job: Pick<AgentUpdateJob, "phase" | "reuse">): { index: number; count: number; progress: number } {
-  const phases: UpdatePhase[] = job.reuse ? ["verifying"] : ["building", "verifying"];
-  const found = phases.indexOf(job.phase);
-  const index = found === -1 ? phases.length : found + 1;
-  return { index, count: phases.length, progress: isJobActive(job) ? Math.round(((index - 0.5) / phases.length) * 100) : 100 };
+/** A build, then the version check; a switch to an image on the server only checks. */
+export function agentJobStep(job: Pick<AgentUpdateJob, "phase" | "reuse" | "finishedAt">): JobStep {
+  return jobStep(job.reuse ? ["verifying"] : ["building", "verifying"], job);
 }
 
 /**
@@ -282,8 +238,6 @@ export function formatElapsed(ms: number): string {
   const seconds = String(total % 60).padStart(2, "0");
   return hours > 0 ? `${hours}:${String(minutes).padStart(2, "0")}:${seconds}` : `${minutes}:${seconds}`;
 }
-
-// ---- Errors ----------------------------------------------------------------------------------------------------
 
 export type AgentAction = "update" | "cancel" | "remove";
 

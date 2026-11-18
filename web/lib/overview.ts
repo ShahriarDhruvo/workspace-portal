@@ -1,6 +1,7 @@
 import "server-only";
-import type { AgentVersionsOverview, ApiError, EngineOverview, HostStats, WorkspaceInfo } from "@portal/core/wire";
+import type { ApiError, HostStats, WorkspaceInfo } from "@portal/core/wire";
 import { gateway, toApiError } from "./gateway";
+import type { Loaded } from "./update-jobs";
 
 /** GET /api/admin/overview. Either part is null when the gateway could not provide it. */
 export interface AdminOverview {
@@ -8,18 +9,6 @@ export interface AdminOverview {
   t: number;
   workspaces: WorkspaceInfo[] | null;
   stats: HostStats | null;
-  error: ApiError | null;
-}
-
-/** GET (and POST, refreshing) /api/admin/agents. `versions` is null when the gateway could not provide it. */
-export interface AdminAgents {
-  versions: AgentVersionsOverview | null;
-  error: ApiError | null;
-}
-
-/** GET (and POST, refreshing) /api/admin/engine. `engine` is null when the gateway could not provide it. */
-export interface AdminEngine {
-  engine: EngineOverview | null;
   error: ApiError | null;
 }
 
@@ -35,20 +24,11 @@ export async function loadAdminOverview(): Promise<AdminOverview> {
   };
 }
 
-/** The agents' versions and the update job for the Agents page; null with the error when the gateway can't say. */
-export async function loadAdminAgents(options: { refresh?: boolean } = {}): Promise<AdminAgents> {
+/** A gateway read for the Updates page (/api/admin/agents, /api/admin/engine); null with the error when it can't say. */
+export async function loaded<T>(read: Promise<T>): Promise<Loaded<T>> {
   try {
-    return { versions: await gateway.agentVersions(options), error: null };
+    return { data: await read, error: null };
   } catch (error) {
-    return { versions: null, error: toApiError(error) };
-  }
-}
-
-/** The LLM engine's versions and update job for the Updates page; null with the error when the gateway can't say. */
-export async function loadAdminEngine(options: { refresh?: boolean } = {}): Promise<AdminEngine> {
-  try {
-    return { engine: await gateway.engine(options), error: null };
-  } catch (error) {
-    return { engine: null, error: toApiError(error) };
+    return { data: null, error: toApiError(error) };
   }
 }

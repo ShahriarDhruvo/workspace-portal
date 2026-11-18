@@ -1,10 +1,9 @@
 "use client";
 
-import type { AgentKind } from "@portal/core";
+import { AGENT_NAMES, type AgentVersionsOverview, type EngineOverview } from "@portal/core/wire";
 import type { ActionContext } from "@/lib/agent-versions";
-import type { AdminAgents, AdminEngine } from "@/lib/overview";
+import type { Loaded } from "@/lib/update-jobs";
 import { EngineCard } from "@/components/admin/engine/engine-card";
-import { useEngine } from "@/components/admin/engine/use-engine";
 import { PageHeading } from "@/components/layout/page-heading";
 import { LocalTime } from "@/components/local-time";
 import { Button } from "@/components/ui/button";
@@ -12,14 +11,12 @@ import { RefreshIcon } from "@/components/ui/icons";
 import { Spinner } from "@/components/ui/spinner";
 import { AgentCard } from "./agent-card";
 import { JobAnnouncer } from "./agent-job";
-import { useAgentVersions } from "./use-agent-versions";
+import { usePolled } from "./use-polled";
 import { UnreachableAlert, VersionCard } from "./version-card";
 
 interface UpdatesConsoleProps {
-  initialAgents: AdminAgents;
-  initialEngine: AdminEngine;
-  /** AGENT_NAMES, which this client component can't import from @portal/core. */
-  agentNames: Readonly<Record<AgentKind, string>>;
+  initialAgents: Loaded<AgentVersionsOverview>;
+  initialEngine: Loaded<EngineOverview>;
 }
 
 /**
@@ -27,13 +24,13 @@ interface UpdatesConsoleProps {
  * server), all in the same layout (VersionCard, PackageImages), each with its running or last job inline. Live: each
  * part polls its own route, every second while its job runs; "Check for updates" asks the registries again for both.
  */
-export function UpdatesConsole({ initialAgents, initialEngine, agentNames }: UpdatesConsoleProps) {
-  const agents = useAgentVersions(initialAgents);
-  const engine = useEngine(initialEngine);
-  const versions = agents.data.versions;
+export function UpdatesConsole({ initialAgents, initialEngine }: UpdatesConsoleProps) {
+  const agents = usePolled(initialAgents, "/api/admin/agents");
+  const engine = usePolled(initialEngine, "/api/admin/engine");
+  const versions = agents.data.data;
   const job = versions?.job ?? null;
   const context: ActionContext = { job, offline: agents.data.error !== null };
-  const checked = [versions?.checkedAt, engine.data.engine?.releases?.checkedAt].filter((at): at is number => typeof at === "number");
+  const checked = [versions?.checkedAt, engine.data.data?.releases?.checkedAt].filter((at): at is number => typeof at === "number");
 
   return (
     <>
@@ -47,7 +44,7 @@ export function UpdatesConsole({ initialAgents, initialEngine, agentNames }: Upd
           />
         }
       />
-      <JobAnnouncer job={job} name={job ? agentNames[job.agent] : ""} />
+      <JobAnnouncer job={job} name={job ? AGENT_NAMES[job.agent] : ""} />
       <div className="flex flex-col gap-4">
         <EngineCard data={engine.data} onChanged={engine.pollNow} />
         {versions ? (
@@ -61,7 +58,7 @@ export function UpdatesConsole({ initialAgents, initialEngine, agentNames }: Upd
             />
           ))
         ) : (
-          <VersionCard title="Agents" status={{ label: "Can't reach", variant: "destructive" }}>
+          <VersionCard title="Agents" status={{ label: "Can't reach", variant: "destructive", pending: false }}>
             <UnreachableAlert
               title="The workspace service can't be reached"
               message={agents.data.error?.message ?? null}

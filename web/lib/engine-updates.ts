@@ -1,31 +1,8 @@
-// What the Updates page decides about the LLM engine, kept out of its components: its status in a word, the version
-// to offer, the rows of its Package images table, which actions may run now and why not, the job's stages and words,
-// how often to poll, and the gateway's errors in plain words. Pure; unit tested. The gateway's side:
-// docs/ARCHITECTURE.md, "LLM engine updates".
+// What the Updates page decides about the LLM engine (docs/ARCHITECTURE.md, "LLM engine updates"). Pure; unit tested.
 import { z } from "zod";
 import { compareVersions, isStableVersion } from "@portal/core/wire";
 import type { ApiError, EngineImage, EngineOverview, EngineRelease, EngineStatus, EngineUpdateJob, ReleaseNotes } from "@portal/core/wire";
-import type { AdminEngine } from "./overview.ts";
-
-/** Poll intervals: a running job moves every second; otherwise little changes (the page also polls on focus). */
-export const ENGINE_ACTIVE_POLL_MS = 1_000;
-export const ENGINE_IDLE_POLL_MS = 15_000;
-
-/** Still downloading, draining or restarting: it holds the one engine job slot. */
-export function isEngineJobActive(job: Pick<EngineUpdateJob, "finishedAt"> | null): boolean {
-  return job !== null && job.finishedAt === null;
-}
-
-export function enginePollDelay(job: EngineUpdateJob | null): number {
-  return isEngineJobActive(job) ? ENGINE_ACTIVE_POLL_MS : ENGINE_IDLE_POLL_MS;
-}
-
-/** A poll's answer; when the gateway can't be reached, the last overview stays on screen with the error. */
-export function mergeEngine(current: AdminEngine, next: AdminEngine): AdminEngine {
-  return { engine: next.engine ?? current.engine, error: next.error };
-}
-
-// ---- Input -----------------------------------------------------------------------------------------------------
+import { isJobActive, jobStep, OFFLINE, type CardStatus, type JobStep } from "./update-jobs.ts";
 
 /** An engine release: the registry's stable X.Y.Z tags, the only versions the gateway installs. */
 export const engineVersionSchema = z
@@ -39,18 +16,16 @@ export const engineImageSchema = z.object({
   version: z.string().trim().max(64).nullable(),
 });
 
-// ---- Versions --------------------------------------------------------------------------------------------------
-
 /** Compares X.Y.Z versions numerically (anything else sorts as 0.0.0). */
 export function compareEngineVersions(a: string, b: string): number {
   const release = (version: string) => (isStableVersion(version) ? version : "0.0.0");
   return compareVersions(release(a), release(b))!;
 }
 
-/** The release `latest` points at, else the newest one listed. */
+/** The release `latest` points at, else the newest one listed (the gateway lists them newest first). */
 export function latestEngineRelease(overview: Pick<EngineOverview, "releases">): EngineRelease | null {
   const releases = overview.releases?.releases ?? [];
-  return releases.find((release) => release.latest) ?? [...releases].sort((a, b) => compareEngineVersions(b.version, a.version))[0] ?? null;
+  return releases.find((release) => release.latest) ?? releases[0] ?? null;
 }
 
 /** The version "Update to …" installs: the latest release, when it is newer than what runs. */
@@ -93,17 +68,8 @@ export function enginePackageRows(releases: readonly EngineRelease[], engine: Pi
   }));
 }
 
-export type StatusVariant = "success" | "warning" | "info" | "secondary" | "destructive";
-
-export interface EngineStatusBadge {
-  label: string;
-  variant: StatusVariant;
-  /** Something is under way: the badge shows a spinner. */
-  pending: boolean;
-}
-
 /** The badge beside the engine's title. `unreachable`: the portal can't reach the gateway itself. */
-export function engineStatusBadge(overview: EngineOverview | null, unreachable: boolean): EngineStatusBadge {
+export function engineStatusBadge(overview: EngineOverview | null, unreachable: boolean): CardStatus {
   if (!overview) return { label: "Can't reach", variant: "destructive", pending: false };
   switch (overview.state) {
     case "off":
@@ -115,7 +81,7 @@ export function engineStatusBadge(overview: EngineOverview | null, unreachable: 
     case "ok":
       break;
   }
-  if (isEngineJobActive(overview.job)) {
+  if (isJobActive(overview.job)) {
     return { label: overview.job?.rolledBack ? "Rolling back…" : "Updating…", variant: "info", pending: true };
   }
   if (unreachable) return { label: "Can't reach", variant: "destructive", pending: false };
@@ -125,16 +91,13 @@ export function engineStatusBadge(overview: EngineOverview | null, unreachable: 
   return { label: "Up to date", variant: "success", pending: false };
 }
 
-// ---- What may run now ------------------------------------------------------------------------------------------
-
-const UNREACHABLE = "The workspace service is unavailable right now.";
 const JOB_RUNNING = "An engine update is running. Wait for it to finish, or cancel it.";
 
 /** Why no update can start right now, or null when one can. */
 export function engineUpdateBlocker(overview: EngineOverview | null, unreachable: boolean): string | null {
-  if (unreachable || !overview) return UNREACHABLE;
+  if (unreachable || !overview) return OFFLINE;
   if (overview.state !== "ok") return "The LLM server's portal-hostd isn't available.";
-  if (isEngineJobActive(overview.job)) return JOB_RUNNING;
+  if (isJobActive(overview.job)) return JOB_RUNNING;
   return null;
 }
 
@@ -147,9 +110,7 @@ export function engineRemoveBlocker(overview: EngineOverview | null, unreachable
   return null;
 }
 
-// ---- The job ---------------------------------------------------------------------------------------------------
-
-const STAGE_LABELS: Record<EngineUpdateJob["phase"], string> = {
+const PHASE_LABELS: Record<EngineUpdateJob["phase"], string> = {
   pulling: "Downloading the image",
   draining: "Waiting for running requests",
   restarting: "Restarting the engine",
@@ -158,27 +119,15 @@ const STAGE_LABELS: Record<EngineUpdateJob["phase"], string> = {
   cancelled: "Cancelled",
 };
 
-/** The stage in words; once a restart failed (`rolledBack`), the LLM server is putting the previous version back. */
-export function engineStageLabel(job: Pick<EngineUpdateJob, "phase" | "rolledBack" | "fromVersion">): string {
+/** The phase in words; once a restart failed (`rolledBack`), the LLM server is putting the previous version back. */
+export function enginePhaseLabel(job: Pick<EngineUpdateJob, "phase" | "rolledBack" | "fromVersion">): string {
   if (job.rolledBack && job.phase === "restarting") return `Putting ${version(job.fromVersion)} back`;
-  return STAGE_LABELS[job.phase];
+  return PHASE_LABELS[job.phase];
 }
 
-export interface EngineJobStep {
-  /** 1-based. */
-  index: number;
-  count: number;
-  /** The Progress bar's value, 0-100: halfway through the current step. */
-  progress: number;
-}
-
-/** Where a running job is: it downloads, drains and restarts; with the image on the LLM server already, only the last two. */
-export function engineJobStep(job: Pick<EngineUpdateJob, "reuse" | "phase">): EngineJobStep {
-  const stages = job.reuse ? ["draining", "restarting"] : ["pulling", "draining", "restarting"];
-  const found = stages.indexOf(job.phase);
-  const index = found === -1 ? stages.length : found + 1;
-  const done = job.phase === "succeeded" || job.phase === "failed" || job.phase === "cancelled";
-  return { index, count: stages.length, progress: done ? 100 : Math.round(((index - 0.5) / stages.length) * 100) };
+/** It downloads, drains and restarts; with the image on the LLM server already, only the last two. */
+export function engineJobStep(job: Pick<EngineUpdateJob, "reuse" | "phase" | "finishedAt">): JobStep {
+  return jobStep(job.reuse ? ["draining", "restarting"] : ["pulling", "draining", "restarting"], job);
 }
 
 type JobWords = Pick<EngineUpdateJob, "phase" | "fromVersion" | "toVersion">;
@@ -190,19 +139,19 @@ const version = (value: string | null) => value ?? "an unknown version";
  * → 0.34.0", "LLM engine switched to 0.30.0", "Update of the LLM engine to 0.34.0 failed"…
  */
 export function engineJobTitle(job: JobWords): string {
-  const older = job.fromVersion !== null && job.toVersion !== null && compareEngineVersions(job.toVersion, job.fromVersion) < 0;
+  const older = job.fromVersion !== null && compareEngineVersions(job.toVersion, job.fromVersion) < 0;
   const [verb, done, noun] = older ? ["Switching", "switched", "Switch"] : ["Updating", "updated", "Update"];
   switch (job.phase) {
     case "pulling":
     case "draining":
     case "restarting":
-      return `${verb} the LLM engine ${version(job.fromVersion)} → ${version(job.toVersion)}`;
+      return `${verb} the LLM engine ${version(job.fromVersion)} → ${job.toVersion}`;
     case "succeeded":
-      return `LLM engine ${done} to ${version(job.toVersion)}`;
+      return `LLM engine ${done} to ${job.toVersion}`;
     case "failed":
-      return `${noun} of the LLM engine to ${version(job.toVersion)} failed`;
+      return `${noun} of the LLM engine to ${job.toVersion} failed`;
     case "cancelled":
-      return `${noun} of the LLM engine to ${version(job.toVersion)} cancelled`;
+      return `${noun} of the LLM engine to ${job.toVersion} cancelled`;
   }
 }
 
@@ -210,19 +159,17 @@ export function engineJobTitle(job: JobWords): string {
 export function engineJobOutcome(job: JobWords & Pick<EngineUpdateJob, "rolledBack">): string {
   switch (job.phase) {
     case "succeeded":
-      return `The engine runs ${version(job.toVersion)}. Requests that waited during the restart went to it.`;
+      return `The engine runs ${job.toVersion}. Requests that waited during the restart went to it.`;
     case "cancelled":
       return `Nothing changed: the engine still runs ${version(job.fromVersion)}.`;
     case "failed":
       return job.rolledBack
-        ? `${version(job.toVersion)} didn't start properly, so ${version(job.fromVersion)} runs again.`
+        ? `${job.toVersion} didn't start properly, so ${version(job.fromVersion)} runs again.`
         : "Check the engine on the LLM server: the status above shows what runs now.";
     default:
       return "";
   }
 }
-
-// ---- Errors ----------------------------------------------------------------------------------------------------
 
 export type EngineAction = "update" | "cancel" | "restart" | "remove";
 

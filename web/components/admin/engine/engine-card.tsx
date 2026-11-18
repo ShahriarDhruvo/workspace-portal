@@ -1,29 +1,28 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { removeEngineImage, restartEngineNow, updateEngine } from "@/lib/actions/engine";
+import { removeEngineImage, restartEngineNow, updateEngine } from "@/lib/actions/updates";
 import type { EngineImage, EngineOverview } from "@portal/core/wire";
-import type { AdminEngine } from "@/lib/overview";
+import { isJobActive, type Loaded } from "@/lib/update-jobs";
 import {
   enginePackageRows,
   engineRemoveBlocker,
   engineStatusBadge,
   engineUpdateBlocker,
   engineUpdateTarget,
-  isEngineJobActive,
   type EnginePackageRow,
 } from "@/lib/engine-updates";
 import { formatBytes } from "@/lib/format";
+import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { CopyButton } from "@/components/common/secret-value";
 import { GuardedButton } from "@/components/common/guarded-button";
 import { PackageImages, type PackageImageRow } from "@/components/admin/agents/package-images";
-import { useDismissedJob } from "@/components/admin/agents/use-dismissed-job";
+import { useShownJob } from "@/components/admin/agents/use-dismissed-job";
 import { UnreachableAlert, VersionCard } from "@/components/admin/agents/version-card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { WarningIcon } from "@/components/ui/icons";
-import { ConfirmActionDialog } from "./confirm-action-dialog";
 import { EngineJob } from "./engine-job";
 
 const SETUP_COMMAND = "sudo bash ~/workspace-portal/hostd/install.sh llm --portal <portal IP>";
@@ -35,7 +34,7 @@ type EngineDialog =
   | { kind: "remove"; image: EngineImage };
 
 interface EngineCardProps {
-  data: AdminEngine;
+  data: Loaded<EngineOverview>;
   /** Something changed, or Retry: poll now. */
   onChanged: () => void;
 }
@@ -46,10 +45,10 @@ interface EngineCardProps {
  * the LLM server or Download… for one that isn't, newer or older, and Remove…). Without portal-hostd on the LLM server it says how to set it up.
  */
 export function EngineCard({ data, onChanged }: EngineCardProps) {
-  const overview = data.engine;
+  const overview = data.data;
   const unreachable = data.error !== null;
   const status = engineStatusBadge(overview, unreachable && !overview);
-  const [dismissedJob, dismissJob] = useDismissedJob("engine");
+  const [shownJob, dismissJob] = useShownJob("engine", overview?.job ?? null);
   const [dialog, setDialog] = useState<EngineDialog | null>(null);
   const [open, setOpen] = useState(false);
   const opener = useRef<HTMLElement | null>(null);
@@ -108,7 +107,6 @@ export function EngineCard({ data, onChanged }: EngineCardProps) {
   const job = overview.job;
   const blocked = engineUpdateBlocker(overview, unreachable);
   const target = engineUpdateTarget(overview);
-  const shownJob = job && (isEngineJobActive(job) || (dismissedJob !== undefined && dismissedJob !== job.id)) ? job : null;
   const packages = enginePackageRows(overview.releases?.releases ?? [], engine);
   const targetRow = packages.find((row) => row.version === target) ?? null;
   const rows = packages.map((row): PackageImageRow => {
@@ -142,7 +140,7 @@ export function EngineCard({ data, onChanged }: EngineCardProps) {
       version={{ label: "Running on the LLM server", value: engine.version ?? "unknown" }}
       actions={
         // While a job runs its panel is the focus, and nothing else can start anyway.
-        targetRow && !(job && isEngineJobActive(job)) ? (
+        targetRow && !(job && isJobActive(job)) ? (
           <GuardedButton blockedReason={blocked} onClick={(event) => show({ kind: "install", row: targetRow, update: true }, event.currentTarget)}>
             Update to {targetRow.version}…
           </GuardedButton>
@@ -177,7 +175,7 @@ export function EngineCard({ data, onChanged }: EngineCardProps) {
         </Alert>
       ) : null}
       <p role="status" className="sr-only">
-        {job && isEngineJobActive(job) ? `${status.label} ${job.step}` : ""}
+        {job && isJobActive(job) ? `${status.label} ${job.step}` : ""}
       </p>
       {shownJob ? (
         <EngineJob
@@ -226,7 +224,7 @@ function EngineDialogs({ dialog, overview, open, onOpenChange, onDone, opener }:
       // Said as the button that opened it said it.
       const verb = row.image ? "Use" : "Download";
       return (
-        <ConfirmActionDialog
+        <ConfirmDialog
           {...common}
           title={dialog.update ? `Update the LLM engine to ${row.version}?` : `${verb} LLM engine ${row.version}?`}
           confirm={dialog.update ? `Update to ${row.version}` : `${verb} ${row.version}`}
@@ -244,12 +242,12 @@ function EngineDialogs({ dialog, overview, open, onOpenChange, onDone, opener }:
             {drain} with {em(row.version)}.
           </p>
           <p>If it doesn&apos;t start properly, the LLM server puts {em(current)} back by itself.</p>
-        </ConfirmActionDialog>
+        </ConfirmDialog>
       );
     }
     case "restart":
       return (
-        <ConfirmActionDialog
+        <ConfirmDialog
           {...common}
           title="Restart the engine now?"
           confirm="Restart now"
@@ -263,12 +261,12 @@ function EngineDialogs({ dialog, overview, open, onOpenChange, onDone, opener }:
               : "Requests still running are cut off: their agents get an error and may retry."}
           </p>
           <p>Requests waiting in the queue go to the engine once it answers again.</p>
-        </ConfirmActionDialog>
+        </ConfirmDialog>
       );
     case "remove": {
       const { image } = dialog;
       return (
-        <ConfirmActionDialog
+        <ConfirmDialog
           {...common}
           title="Remove engine image?"
           confirm="Remove"
@@ -280,7 +278,7 @@ function EngineDialogs({ dialog, overview, open, onOpenChange, onDone, opener }:
             Remove the {em(image.version ?? "unknown")} image{image.sizeBytes ? ` (${formatBytes(image.sizeBytes)})` : ""} from the LLM
             server? Using that version later downloads it again.
           </p>
-        </ConfirmActionDialog>
+        </ConfirmDialog>
       );
     }
   }

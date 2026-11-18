@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, type ReactNode, type RefObject } from "react";
-import type { EngineActionResult } from "@/lib/actions/engine";
 import { returnFocus } from "@/lib/focus";
+import type { ActionResult } from "@/lib/validation";
 import { FormError } from "@/components/forms/form-error";
 import { SubmitButton } from "@/components/forms/submit-button";
 import {
@@ -15,25 +15,26 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
-interface ConfirmActionDialogProps {
+interface ConfirmDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
   /** What the action does and costs. */
   children: ReactNode;
+  /** The description sits under the header (left-aligned on a phone) instead of in it. */
+  apart?: boolean;
   confirm: string;
   pending: string;
   destructive?: boolean;
   /** Runs the server action; the dialog closes once it succeeded and shows its error otherwise. */
-  onConfirm: () => Promise<EngineActionResult>;
-  /** The gateway accepted: poll now. */
+  onConfirm: () => Promise<ActionResult>;
   onDone: () => void;
   /** Gets the focus when the dialog closes: the control that opened it (the dialog has no Trigger of its own). */
   returnFocusTo: RefObject<HTMLElement | null>;
 }
 
-/** Confirms one LLM engine action (switch to a version, restart now, remove an image) and runs it. */
-export function ConfirmActionDialog({ open, onOpenChange, returnFocusTo, ...props }: ConfirmActionDialogProps) {
+/** Confirms one action and runs it. */
+export function ConfirmDialog({ open, onOpenChange, returnFocusTo, ...props }: ConfirmDialogProps) {
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent onCloseAutoFocus={returnFocus(returnFocusTo)}>
@@ -47,13 +48,14 @@ export function ConfirmActionDialog({ open, onOpenChange, returnFocusTo, ...prop
 function ConfirmForm({
   title,
   children,
+  apart = false,
   confirm,
   pending,
   destructive = false,
   onConfirm,
   onDone,
   onClose,
-}: Omit<ConfirmActionDialogProps, "open" | "onOpenChange" | "returnFocusTo"> & { onClose: () => void }) {
+}: Omit<ConfirmDialogProps, "open" | "onOpenChange" | "returnFocusTo"> & { onClose: () => void }) {
   const [error, setError] = useState<string | null>(null);
 
   async function submit() {
@@ -66,14 +68,18 @@ function ConfirmForm({
     onDone();
   }
 
+  const description = (
+    <AlertDialogDescription asChild>
+      <div className="flex flex-col gap-2">{children}</div>
+    </AlertDialogDescription>
+  );
   return (
     <form action={submit} className="grid gap-4">
       <AlertDialogHeader>
         <AlertDialogTitle>{title}</AlertDialogTitle>
-        <AlertDialogDescription asChild>
-          <div className="flex flex-col gap-2">{children}</div>
-        </AlertDialogDescription>
+        {apart ? null : description}
       </AlertDialogHeader>
+      {apart ? description : null}
       {error ? <FormError>{error}</FormError> : null}
       <AlertDialogFooter>
         <AlertDialogCancel>Cancel</AlertDialogCancel>

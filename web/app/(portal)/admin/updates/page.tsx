@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
-import { AGENT_NAMES } from "@portal/core";
-import { loadAdminAgents, loadAdminEngine } from "@/lib/overview";
+import { gateway } from "@/lib/gateway";
+import { loaded } from "@/lib/overview";
 import { requireAdmin } from "@/lib/session";
 import { PageMain } from "@/components/layout/page-main";
 import { UpdatesConsole } from "@/components/admin/agents/updates-console";
@@ -13,10 +13,10 @@ export const metadata: Metadata = { title: "Updates" };
  */
 export default async function UpdatesPage() {
   await requireAdmin();
-  const [agents, engine] = await Promise.all([loadAdminAgents(), loadAdminEngine()]);
+  const [agents, engine] = await Promise.all([loaded(gateway.agentVersions()), loaded(gateway.engine())]);
   return (
     <PageMain width="lg">
-      <UpdatesConsole initialAgents={agents} initialEngine={engine} agentNames={AGENT_NAMES} />
+      <UpdatesConsole initialAgents={agents} initialEngine={engine} />
     </PageMain>
   );
 }

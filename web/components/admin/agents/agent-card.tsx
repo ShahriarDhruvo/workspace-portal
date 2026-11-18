@@ -5,24 +5,22 @@ import {
   agentPackageRows,
   agentStatus,
   currentImageMissing,
-  isJobActive,
   removeBlocker,
   updateBlocker,
   type ActionContext,
   type AgentPackageRow,
 } from "@/lib/agent-versions";
-import type { AgentUpdateJob, AgentVersionInfo, InstalledImage } from "@portal/core/wire";
+import { isJobActive } from "@/lib/update-jobs";
+import type { AgentUpdateJob, AgentVersionInfo } from "@portal/core/wire";
 import { GuardedButton } from "@/components/common/guarded-button";
 import { LocalTime } from "@/components/local-time";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { WarningIcon } from "@/components/ui/icons";
 import { AgentJob } from "./agent-job";
 import { PackageImages, type PackageImageRow } from "./package-images";
-import { RemoveImageDialog, UpdateConfirmDialog, type UpdatePlan } from "./update-dialogs";
-import { useDismissedJob } from "./use-dismissed-job";
+import { AgentDialogs, type AgentDialog, type UpdatePlan } from "./update-dialogs";
+import { useShownJob } from "./use-dismissed-job";
 import { VersionCard } from "./version-card";
-
-type AgentDialog = { kind: "update"; plan: UpdatePlan } | { kind: "remove"; image: InstalledImage };
 
 const ACTION_LABELS: Record<AgentPackageRow["action"], string> = { use: "Use…", build: "Build…", rebuild: "Rebuild…" };
 
@@ -50,11 +48,10 @@ export function AgentCard({ agent, context, registry, onChanged }: AgentCardProp
   const focusHandoff = useRef(false);
   const [dialog, setDialog] = useState<AgentDialog>({ kind: "update", plan: { kind: "rebuild" } });
   const [open, setOpen] = useState(false);
-  const [dismissedJob, dismissJob] = useDismissedJob("agents");
   const blocked = updateBlocker(context);
   const latest = agent.updateAvailable ? agent.latest : null;
   const job: AgentUpdateJob | null = context.job?.agent === agent.id ? context.job : null;
-  const shownJob = job && (isJobActive(job) || (dismissedJob !== undefined && dismissedJob !== job.id)) ? job : null;
+  const [shownJob, dismissJob] = useShownJob("agents", job);
 
   function show(next: AgentDialog, from: HTMLElement) {
     opener.current = from;
@@ -158,28 +155,18 @@ export function AgentCard({ agent, context, registry, onChanged }: AgentCardProp
         />
       ) : null}
 
-      {dialog.kind === "update" ? (
-        <UpdateConfirmDialog
-          plan={dialog.plan}
-          agent={agent}
-          open={open}
-          onOpenChange={setOpen}
-          onDone={onChanged}
-          returnFocusTo={opener}
-        />
-      ) : (
-        <RemoveImageDialog
-          agent={agent}
-          image={dialog.image}
-          open={open}
-          onOpenChange={setOpen}
-          onDone={() => {
-            opener.current = imagesTrigger.current;
-            onChanged();
-          }}
-          returnFocusTo={opener}
-        />
-      )}
+      <AgentDialogs
+        dialog={dialog}
+        agent={agent}
+        open={open}
+        onOpenChange={setOpen}
+        onDone={() => {
+          // The removed image's row, and its Remove button, is gone.
+          if (dialog.kind === "remove") opener.current = imagesTrigger.current;
+          onChanged();
+        }}
+        returnFocusTo={opener}
+      />
     </VersionCard>
   );
 }
