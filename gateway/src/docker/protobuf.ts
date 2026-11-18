@@ -6,7 +6,7 @@
 // skipped, so a newer BuildKit adding one does not break the reader. Groups (3, 4) were never used by
 // BuildKit and are refused, as is anything truncated.
 
-export type ProtoField = { field: number; wireType: 0; value: bigint } | { field: number; wireType: 2; value: Uint8Array };
+type ProtoField = { field: number; wireType: 0; value: bigint } | { field: number; wireType: 2; value: Uint8Array };
 
 export class ProtobufError extends Error {
   constructor(message: string) {

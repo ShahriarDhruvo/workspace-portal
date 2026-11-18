@@ -48,8 +48,6 @@ test("cpuSeconds reads the cumulative CPU time", () => {
   assert.equal(cpuSeconds(stats({ cpu_stats: {} })), null);
 });
 
-// ------------------------------------------------------------------ the workspace networks
-
 /** What `docker network inspect` reports for the network the gateway creates for a kind. */
 function createdNetwork(kind: WorkspaceKind = "private"): Docker.NetworkInspectInfo {
   const own = config.workspace.kinds[kind];
@@ -178,8 +176,6 @@ test("ensureNetwork refuses a differing network that containers use, and says ho
   assert.deepEqual(calls, ["inspect workspace-portal-ws"], "nothing was removed or created");
 });
 
-// ------------------------------------------------------------------ workspace containers
-
 /** A dockerode stand-in for containers: records removals and creations, lists the given rows. */
 function containerDocker(rows: unknown[] = []) {
   const calls: string[] = [];
@@ -230,7 +226,7 @@ test("list reads each container's kind from its label, and its address on its ow
   const { runtime } = containerDocker([
     row("unlabelled", {}, { "workspace-portal-ws": "172.29.128.1" }),
     row("private", { "workspace-portal.kind": "private" }, { "workspace-portal-ws": "172.29.128.2" }),
-    row("on",{ "workspace-portal.kind": "online" }, { "workspace-portal-online": "172.28.128.2" }),
+    row("on", { "workspace-portal.kind": "online" }, { "workspace-portal-online": "172.28.128.2" }),
     // An Online container somehow also on the Private network: only its Online address is its own.
     row("both", { "workspace-portal.kind": "online" }, { "workspace-portal-ws": "172.29.128.9" }),
     row("odd", { "workspace-portal.kind": "public" }, { "workspace-portal-ws": "172.29.128.3" }),
@@ -247,8 +243,6 @@ test("list reads each container's kind from its label, and its address on its ow
     ],
   );
 });
-
-// ------------------------------------------------------------------ the engine
 
 test("isSupportedDockerVersion: 25.0.5 and later; older or unparseable versions are refused", () => {
   for (const version of ["25.0.5", "25.0.14", "25.1.0", "26.0.0", "26.1.4", "27.0.0-rc.1", "28.3.2", " 29.0.1 "]) {

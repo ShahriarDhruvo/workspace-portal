@@ -1,57 +1,34 @@
-// ImageBuilder backed by the Docker Engine API (the gateway already holds the Docker socket, so the
-// admin console can update agents without a shell on the host).
-//
-// Builds:
-//   * BuildKit (`version: "2"`): workspace-image/Dockerfile uses `COPY --chmod`, which the classic
-//     builder refuses. The engine streams BuildKit's progress as base64 protobuf (build-progress.ts).
-//   * The context is the project's workspace-image/ directory, which docker-compose.yml mounts read-only
-//     at /app/workspace-image (WORKSPACE_IMAGE_CONTEXT overrides it), so an edit there applies to the
-//     next build. dockerode tars and gzips it on the fly into the request: nothing is written to disk
-//     (the gateway's root filesystem is read-only and its /tmp a small tmpfs).
-//   * A BuildKit build needs a session: a second connection to the engine, hijacked for a gRPC server
-//     on our side. dockerode's buildImage opens it, but closes it only when the build stream emits
-//     "end": a refused build, an abort before the engine answers, and a stream that is destroyed
-//     (cancel, time limit) or breaks never do, and each would leave that connection and its gRPC server
-//     open in the gateway. So the builder opens the session itself, with dockerode's own session code,
-//     sends the build request the way buildImage does (docker-modem), and closes the session whatever
-//     happens.
-//   * Options as `deploy/lib.sh build_workspace_image` uses them: --pull, --target <agent>,
-//     --build-arg <KEY>=<version>; noCache for a rebuild from scratch.
-//   * Builds use their own Docker client without dockerode's client timeout: that timeout is a socket
-//     inactivity timeout (DOCKER_API_TIMEOUT_MS, 60 s), and a build can stay silent for longer (a long
-//     `npm install`, and the BuildKit session connection is idle all along). The caller bounds a build
-//     with its AbortSignal instead; aborting closes the connection, and the engine cancels the build.
-//
-// The version check runs `<cli> --version` like `deploy/lib.sh image_agent_version`, but locked down
-// further: no network, nobody's UID, no capabilities, no-new-privileges, read-only root with a small
-// tmpfs /tmp, memory and PID limits, and the container is removed afterwards.
+// ImageBuilder backed by the Docker Engine API: the gateway already holds the Docker socket, so the admin console
+// can update agents without a shell on the host.
+//   * BuildKit (`version: "2"`): workspace-image/Dockerfile uses `COPY --chmod`, which the classic builder refuses.
+//   * The context is the project's workspace-image/ directory, mounted read-only (docker-compose.yml;
+//     WORKSPACE_IMAGE_CONTEXT), so an edit there applies to the next build. dockerode tars it into the request:
+//     nothing is written to disk (the gateway's root filesystem is read-only and its /tmp a small tmpfs).
+//   * A BuildKit build needs a session: a second connection to the engine, hijacked for a gRPC server on our side.
+//     dockerode's buildImage closes it only when the build stream emits "end", which a refused, aborted or broken
+//     build never does. So the builder opens the session itself (with dockerode's own session code), sends the build
+//     request the way buildImage does, and closes the session whatever happens.
+//   * Builds use a Docker client without dockerode's timeout: that is a socket inactivity timeout
+//     (DOCKER_API_TIMEOUT_MS), and a build can stay silent for longer. The caller's AbortSignal bounds a build
+//     instead: aborting closes the connection, and the engine cancels the build.
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import Docker from "dockerode";
 import { BuildProgress, JsonLineDecoder } from "./build-progress.ts";
 import { MIB } from "../config.ts";
-import { demuxDockerLogs, DOCKER_API_TIMEOUT_MS, engineMessage, statusCode } from "./docker-runtime.ts";
-import {
-  BuildError,
-  imageInUse,
-  imageNotFound,
-  VerifyError,
-  type BuildObserver,
-  type BuildSpec,
-  type ImageBuilder,
-  type SweepResult,
-  type WorkspaceImageSummary,
-} from "./image-builder.ts";
+import { AGENT_LABEL } from "./container-spec.ts";
+import { demuxDockerLogs, DOCKER_API_TIMEOUT_MS, engineMessage, orMissing, statusCode } from "./docker-runtime.ts";
+import { BuildError, imageInUse, imageNotFound, VerifyError, type BuildObserver, type BuildSpec, type ImageBuilder, type SweepResult, type WorkspaceImageSummary } from "./image-builder.ts";
 import { parseWorkspaceImage, STAGING_REPOSITORY, WORKSPACE_REPOSITORY } from "./image-names.ts";
 import { findVersion } from "@portal/core";
 
 /** BuildKit's session for one build (see above). */
-export interface BuildSession {
+interface BuildSession {
   id: string;
   close(): void;
 }
 
-export type OpenBuildSession = (docker: Docker) => Promise<BuildSession>;
+type OpenBuildSession = (docker: Docker) => Promise<BuildSession>;
 
 /** The build's query parameters, with the session BuildKit uses (missing from dockerode's types). */
 type BuildRequestOptions = Docker.ImageBuildOptions & { session: string };
@@ -82,10 +59,8 @@ const VERIFY_TIMEOUT_MS = 45_000;
 const VERIFY_LOG_LINES = 20;
 /** Marks the throwaway containers of version checks (never workspace containers). */
 const VERIFY_LABEL = "workspace-portal.verify";
-/** workspace-image/Dockerfile's agent stages label their images with the agent (sweep finds old builds by it). */
-const AGENT_LABEL = "workspace-portal.agent";
 
-export interface DockerImageBuilderOptions {
+interface DockerImageBuilderOptions {
   /** The workspace-image/ directory: the build context. */
   contextDir: string;
   /** For short API calls (with the gateway's usual client timeout). */
@@ -219,23 +194,13 @@ export class DockerImageBuilder implements ImageBuilder {
   }
 
   async removeUntagged(id: string): Promise<void> {
-    let tags: string[];
-    try {
-      tags = (await this.#docker.getImage(id).inspect()).RepoTags ?? [];
-    } catch (error) {
-      if (statusCode(error) === 404) return;
-      throw error;
-    }
+    const image = await this.#docker.getImage(id).inspect().catch(orMissing(null));
     // Removing by id would take a remaining tag with it: an image that is still tagged is someone's to keep.
-    if (tags.length > 0) return;
-    await removedUnlessBusy(this.#docker.getImage(id).remove());
+    if (image !== null && (image.RepoTags ?? []).length === 0) await removedUnlessBusy(this.#docker.getImage(id).remove());
   }
 
   async discard(staging: string): Promise<void> {
-    await this.#docker
-      .getImage(staging)
-      .remove()
-      .catch(() => undefined);
+    await this.#docker.getImage(staging).remove().catch(() => undefined);
   }
 
   async exists(image: string): Promise<boolean> {
@@ -257,7 +222,7 @@ export class DockerImageBuilder implements ImageBuilder {
     }
     // A rebuild moves the workspace tag; the build it replaced loses its last tag but stays while a
     // workspace container uses it (or if the gateway stopped before removing it), and only the label
-    // still tells it apart.
+    // workspace-image/Dockerfile's agent stages set still tells it apart.
     for (const { Id } of await this.#docker.listImages({ filters: { dangling: ["true"], label: [AGENT_LABEL] } })) {
       if (await removedUnlessBusy(this.#docker.getImage(Id).remove())) removed.images.push(Id);
     }
@@ -288,24 +253,13 @@ export class DockerImageBuilder implements ImageBuilder {
   }
 
   async #imageId(image: string): Promise<string | null> {
-    try {
-      return (await this.#docker.getImage(image).inspect()).Id;
-    } catch (error) {
-      if (statusCode(error) === 404) return null;
-      throw error;
-    }
+    return (await this.#docker.getImage(image).inspect().catch(orMissing(null)))?.Id ?? null;
   }
 }
 
+/** As `deploy/lib.sh build_workspace_image` builds: --pull, --target <agent>, --build-arg <KEY>=<version>. */
 export function buildOptions(spec: BuildSpec): Docker.ImageBuildOptions {
-  return {
-    t: spec.image,
-    target: spec.kind,
-    buildargs: { [spec.versionKey]: spec.version },
-    pull: true,
-    nocache: spec.noCache,
-    version: "2",
-  };
+  return { t: spec.image, target: spec.kind, buildargs: { [spec.versionKey]: spec.version }, pull: true, nocache: spec.noCache, version: "2" };
 }
 
 /** POST /build as dockerode's buildImage sends it, minus the session it would open itself. */
@@ -332,7 +286,7 @@ async function removedUnlessBusy(removal: Promise<unknown>): Promise<boolean> {
   }
 }
 
-/** The throwaway container that asks an image's agent CLI for its version. */
+/** The throwaway container that asks an image's agent CLI for its version, as `deploy/lib.sh image_agent_version` does but with nothing it doesn't need. */
 export function verifyContainerOptions(image: string, cli: string): Docker.ContainerCreateOptions {
   return {
     Image: image,

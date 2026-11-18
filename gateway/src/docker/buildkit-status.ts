@@ -14,7 +14,7 @@
 // messages. VertexStatus (layer download progress), a log's stream and a warning's step are skipped.
 import { decodeString, readFields } from "./protobuf.ts";
 
-export interface VertexUpdate {
+interface VertexUpdate {
   digest: string;
   /** The step as BuildKit names it, e.g. `[qwen 1/3] RUN npm install -g …`. */
   name: string;
@@ -27,7 +27,7 @@ export interface VertexUpdate {
 }
 
 /** Output of a step (stdout and stderr alike: the job log shows both). */
-export interface VertexLog {
+interface VertexLog {
   vertex: string;
   data: Uint8Array;
 }

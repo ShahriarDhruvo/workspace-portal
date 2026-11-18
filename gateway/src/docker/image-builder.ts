@@ -43,18 +43,12 @@ export interface SweepResult {
 
 /** The engine refused or failed the build; the message is what it reported. */
 export class BuildError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "BuildError";
-  }
+  override name = "BuildError";
 }
 
 /** The image's own CLI could not report a version. */
 export class VerifyError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "VerifyError";
-  }
+  override name = "VerifyError";
 }
 
 export const imageNotFound = (image: string): HttpError => new HttpError(404, "not_found", `There is no image ${image}.`);

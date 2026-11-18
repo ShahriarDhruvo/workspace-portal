@@ -25,27 +25,19 @@ export class JsonLineDecoder {
     this.#buffer += typeof chunk === "string" ? chunk : this.#text.decode(chunk, { stream: true });
     const lines = this.#buffer.split("\n");
     this.#buffer = lines.pop() ?? "";
-    return parseLines(lines);
+    return lines.flatMap((line) => {
+      try {
+        return [JSON.parse(line)];
+      } catch {
+        // Not a progress message (the engine sends nothing else, but a proxy might).
+        return [];
+      }
+    });
   }
 
   end(): unknown[] {
-    const rest = this.#buffer + this.#text.decode();
-    this.#buffer = "";
-    return parseLines([rest]);
+    return this.push(`${this.#text.decode()}\n`);
   }
-}
-
-function parseLines(lines: string[]): unknown[] {
-  const values: unknown[] = [];
-  for (const line of lines) {
-    if (line.trim() === "") continue;
-    try {
-      values.push(JSON.parse(line));
-    } catch {
-      // Not a progress message (the engine sends nothing else, but a proxy might).
-    }
-  }
-  return values;
 }
 
 interface VertexState {
@@ -73,33 +65,27 @@ export class BuildProgress {
   push(message: unknown): string[] {
     if (typeof message !== "object" || message === null) return [];
     const record = message as Record<string, unknown>;
-    const lines: string[] = [];
     if (typeof record.error === "string" || (typeof record.errorDetail === "object" && record.errorDetail !== null)) {
       const detail = (record.errorDetail as { message?: unknown } | null | undefined)?.message;
       this.error = (typeof detail === "string" && detail) || (typeof record.error === "string" && record.error) || "the build failed";
-      lines.push(...this.#flushAll(), clean(`ERROR: ${this.error}`));
-      return lines;
+      return [...this.finish(), clean(`ERROR: ${this.error}`)];
     }
-    if (record.id === "moby.buildkit.trace" && typeof record.aux === "string") {
-      let update: StatusUpdate;
-      try {
-        update = decodeStatusResponse(Buffer.from(record.aux, "base64"));
-      } catch (error) {
-        if (!(error instanceof ProtobufError)) throw error;
-        // Progress is only for show: a message this reader can't decode (a newer BuildKit, a damaged
-        // stream) must not fail the build, whose outcome comes from the engine. One warning is enough.
-        if (this.#unreadable) return [];
-        this.#unreadable = true;
-        return [clean(`WARNING: unreadable build progress (${error.message})`)];
-      }
-      return this.#apply(update);
+    if (record.id !== "moby.buildkit.trace" || typeof record.aux !== "string") return [];
+    try {
+      return this.#apply(decodeStatusResponse(Buffer.from(record.aux, "base64")));
+    } catch (error) {
+      if (!(error instanceof ProtobufError)) throw error;
+      // Progress is only for show: a message this reader can't decode (a newer BuildKit, a damaged
+      // stream) must not fail the build, whose outcome comes from the engine. One warning is enough.
+      if (this.#unreadable) return [];
+      this.#unreadable = true;
+      return [clean(`WARNING: unreadable build progress (${error.message})`)];
     }
-    return [];
   }
 
   /** Output still waiting for a newline when the stream ends. */
   finish(): string[] {
-    return this.#flushAll();
+    return [...this.#vertexes.values()].flatMap((state) => this.#flush(state));
   }
 
   #apply(update: StatusUpdate): string[] {
@@ -113,32 +99,23 @@ export class BuildProgress {
         lines.push(clean(`#${this.#number(state)} ${state.name}`));
       }
       if (vertex.startedAt !== null) state.startedAt = vertex.startedAt;
-      if (vertex.error) {
-        state.done = true;
-        lines.push(...this.#flush(state), clean(`#${state.n} ERROR: ${vertex.error}`));
-      } else if (vertex.cached && vertex.completedAt !== null) {
-        state.done = true;
-        lines.push(...this.#flush(state), `#${state.n} CACHED`);
-      } else if (vertex.completedAt !== null) {
-        state.done = true;
-        const seconds = state.startedAt === null ? null : Math.max(0, vertex.completedAt - state.startedAt) / 1000;
-        lines.push(...this.#flush(state), seconds === null ? `#${state.n} DONE` : `#${state.n} DONE ${seconds.toFixed(1)}s`);
-      }
+      if (!vertex.error && vertex.completedAt === null) continue;
+      state.done = true;
+      const took = state.startedAt === null || vertex.completedAt === null ? "" : ` ${(Math.max(0, vertex.completedAt - state.startedAt) / 1000).toFixed(1)}s`;
+      lines.push(...this.#flush(state), clean(`#${state.n} ${vertex.error ? `ERROR: ${vertex.error}` : vertex.cached ? "CACHED" : `DONE${took}`}`));
     }
     for (const log of update.logs) {
       const state = this.#vertex(log.vertex);
       this.#number(state);
       state.partial += Buffer.from(log.data).toString("utf8");
-      const parts = state.partial.split("\n");
-      state.partial = parts.pop() ?? "";
-      if (state.partial.length > MAX_PARTIAL_LENGTH) {
-        parts.push(state.partial);
-        state.partial = "";
-      }
-      for (const part of parts) lines.push(...splitOutput(part).map((line) => clean(`#${state.n} ${line}`)));
+      const newline = state.partial.lastIndexOf("\n") + 1;
+      const end = state.partial.length - newline > MAX_PARTIAL_LENGTH ? state.partial.length : newline;
+      lines.push(...outputLines(state.n, state.partial.slice(0, end)));
+      state.partial = state.partial.slice(end);
     }
     for (const warning of update.warnings) lines.push(clean(`WARNING: ${warning}`));
-    this.#updateStep();
+    const running = [...this.#vertexes.values()].filter((state) => state.announced && !state.done && state.startedAt !== null);
+    this.step = running.sort((a, b) => b.n - a.n)[0]?.name ?? this.step;
     return lines;
   }
 
@@ -156,42 +133,27 @@ export class BuildProgress {
     return state.n;
   }
 
-  #updateStep(): void {
-    let latest: VertexState | null = null;
-    for (const state of this.#vertexes.values()) {
-      if (state.announced && !state.done && state.startedAt !== null && (latest === null || state.n > latest.n)) latest = state;
-    }
-    if (latest) this.step = latest.name;
-  }
-
   #flush(state: VertexState): string[] {
     const rest = state.partial;
     state.partial = "";
-    return rest.trim() === "" ? [] : splitOutput(rest).map((line) => clean(`#${state.n} ${line}`));
-  }
-
-  #flushAll(): string[] {
-    return [...this.#vertexes.values()].flatMap((state) => this.#flush(state));
+    return outputLines(state.n, rest);
   }
 }
 
 /**
- * Lines of command output, as a terminal would leave them: a carriage return starts the line over
+ * A step's output as plain progress shows it, as a terminal would leave it: a carriage return starts the line over
  * (progress bars), blank lines are dropped.
  */
-function splitOutput(text: string): string[] {
+function outputLines(n: number, text: string): string[] {
   return text
     .split("\n")
-    .map((line) => {
-      const parts = line.replace(/\r+$/, "").split("\r");
-      return parts[parts.length - 1] ?? "";
-    })
-    .filter((line) => line.trim() !== "");
+    .map((line) => line.replace(/\r+$/, "").split("\r").at(-1) ?? "")
+    .filter((line) => line.trim() !== "")
+    .map((line) => clean(`#${n} ${line}`));
 }
 
 /** Without terminal escapes and control characters, and not too long. */
 function clean(line: string): string {
-  // eslint-disable-next-line no-control-regex
   const text = line.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "").replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "").trimEnd();
   return text.length > MAX_LINE_LENGTH ? `${text.slice(0, MAX_LINE_LENGTH - 1)}…` : text;
 }

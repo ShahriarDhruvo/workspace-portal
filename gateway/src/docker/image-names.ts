@@ -26,11 +26,6 @@ export function stagingImage(kind: AgentKind, version: string): string {
  * container (`workspace-portal/workspace:dsh-0.2.2-rc.1`); null for anything else, an image id included.
  */
 export function parseWorkspaceImage(reference: string): { kind: AgentKind; version: string } | null {
-  const prefix = `${WORKSPACE_REPOSITORY}:`;
-  const rest = reference.startsWith(prefix) ? reference.slice(prefix.length) : reference.startsWith(`docker.io/${prefix}`) ? reference.slice(prefix.length + 10) : null;
-  if (rest === null) return null;
-  const dash = rest.indexOf("-");
-  const kind = rest.slice(0, dash);
-  const version = rest.slice(dash + 1);
-  return dash > 0 && isAgentKind(kind) && isVersion(version) ? { kind, version } : null;
+  const [, kind, version] = new RegExp(`^(?:docker\\.io/)?${WORKSPACE_REPOSITORY}:([^-]+)-(.*)$`, "s").exec(reference) ?? [];
+  return isAgentKind(kind) && isVersion(version) ? { kind, version } : null;
 }

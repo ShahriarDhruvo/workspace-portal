@@ -1,21 +1,10 @@
 // Docker objects the gateway creates: per-user workspace containers (one per kind: Private wp-ws-<id>, Online
 // wp-wo-<id>, never both at once) and the two workspace networks.
 //
-// A workspace container gets as little as possible:
-//   * its own UID (its kind's base + user id: no other workspace, not the same user's other kind, and no host
-//     account shares it), no capabilities, no-new-privileges, memory/CPU/PID limits, and the OOM killer's
-//     attention first;
-//   * a read-only root filesystem; writable are only that kind's home and workspace directories of the user and
-//     an in-memory /tmp;
-//   * read-only, per-user and per-kind copies of the agent's settings and of /etc/passwd and /etc/group;
-//     nothing on the host is mounted that another workspace (or the other kind) also sees;
-//   * its kind's network, with inter-container traffic disabled. Private: *internal*, the only address it can
-//     reach is the gateway's service port (model + web search): no internet, no LAN, no other workspace. Online: a
-//     bridge with NAT, where the host firewall (deploy/firewall.sh) lets it reach the public internet (any TCP port,
-//     DNS to its two resolvers) and the gateway's service port on its own bridge, and nothing else.
-// All of this is the same whichever agent and kind the workspace runs; the driver adds only its port, environment
-// and settings, the kind only its network, DNS, UID and mounts, and the image is the agent's current version
-// (WorkspaceManager asks agent-versions.ts at every start).
+// A workspace container gets as little as possible: a UID no other workspace (not even the same user's other kind)
+// and no host account shares, nothing mounted that another workspace or the other kind also sees, and its kind's
+// network (workspaceNetworkOptions). That is the same whichever agent and kind it runs: the driver adds only its
+// port, environment and settings, the kind only its network, DNS, UID and mounts.
 import type Docker from "dockerode";
 import type { AgentKind, WorkspaceKind } from "@portal/core";
 import { LLM_KEY_ENV, type AgentDriver } from "../agents/index.ts";

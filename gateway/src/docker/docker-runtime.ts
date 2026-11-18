@@ -3,25 +3,9 @@ import Docker from "dockerode";
 import { compareVersions, isAgentKind, isVersion, isWorkspaceKind, WORKSPACE_KINDS, type AgentKind, type WorkspaceKind } from "@portal/core";
 import { driverFor } from "../agents/index.ts";
 import type { Config, KindConfig } from "../config.ts";
-import {
-  AGENT_LABEL,
-  containerName,
-  KIND_LABEL,
-  USER_ID_LABEL,
-  VERSION_LABEL,
-  WORKSPACE_LABEL,
-  workspaceContainerOptions,
-  workspaceNetworkOptions,
-  type WorkspaceStartOptions,
-} from "./container-spec.ts";
-import {
-  WorkspaceImageMissingError,
-  type ContainerRuntime,
-  type ContainerSample,
-  type ContainerState,
-  type ContainerSummary,
-  type StartedContainer,
-} from "./runtime.ts";
+import { errorMessage } from "../lib/log.ts";
+import { AGENT_LABEL, containerName, KIND_LABEL, USER_ID_LABEL, VERSION_LABEL, WORKSPACE_LABEL, workspaceContainerOptions, workspaceNetworkOptions, type WorkspaceStartOptions } from "./container-spec.ts";
+import { WorkspaceImageMissingError, type ContainerRuntime, type ContainerSample, type ContainerState, type ContainerSummary, type StartedContainer } from "./runtime.ts";
 
 const STOP_GRACE_SECONDS = 10;
 /**
@@ -35,6 +19,14 @@ export const DOCKER_API_TIMEOUT_MS = 60_000;
  * which would give workspaces a way out. Fixed in 25.0.5 and 26.0.0.
  */
 export const MIN_DOCKER_VERSION_TEXT = "25.0.5";
+
+/** For `.catch`: the engine's "no such container, image or network" (404) becomes `missing`; any other failure stays one. */
+export function orMissing<T>(missing: T): (error: unknown) => T {
+  return (error) => {
+    if (statusCode(error) !== 404) throw error;
+    return missing;
+  };
+}
 
 export class DockerRuntime implements ContainerRuntime {
   readonly #docker: Docker;
@@ -61,12 +53,7 @@ export class DockerRuntime implements ContainerRuntime {
   async ensureNetwork(kind: WorkspaceKind): Promise<"exists" | "created" | "replaced"> {
     const own = this.#config.workspace.kinds[kind];
     const name = own.network;
-    let existing: Docker.NetworkInspectInfo | null = null;
-    try {
-      existing = (await this.#docker.getNetwork(name).inspect()) as Docker.NetworkInspectInfo;
-    } catch (error) {
-      if (statusCode(error) !== 404) throw error;
-    }
+    const existing = (await this.#docker.getNetwork(name).inspect().catch(orMissing(null))) as Docker.NetworkInspectInfo | null;
     const mismatches = existing ? networkMismatches(existing, own) : [];
     if (existing && mismatches.length === 0) return "exists";
     if (existing) {
@@ -82,13 +69,7 @@ export class DockerRuntime implements ContainerRuntime {
   }
 
   async imageAvailable(image: string): Promise<boolean> {
-    try {
-      await this.#docker.getImage(image).inspect();
-      return true;
-    } catch (error) {
-      if (statusCode(error) === 404) return false;
-      throw error;
-    }
+    return (await this.#docker.getImage(image).inspect().catch(orMissing(null))) !== null;
   }
 
   async startWorkspace(userId: number, options: WorkspaceStartOptions): Promise<StartedContainer> {
@@ -99,10 +80,7 @@ export class DockerRuntime implements ContainerRuntime {
     try {
       container = await this.#docker.createContainer(workspaceContainerOptions(this.#config, userId, driver, options));
     } catch (error) {
-      if (statusCode(error) === 404 && /no such image/i.test(engineMessage(error))) {
-        throw new WorkspaceImageMissingError(options.image);
-      }
-      throw error;
+      throw statusCode(error) === 404 && /no such image/i.test(engineMessage(error)) ? new WorkspaceImageMissingError(options.image) : error;
     }
     try {
       await container.start();
@@ -119,30 +97,18 @@ export class DockerRuntime implements ContainerRuntime {
 
   async stopContainer(id: string): Promise<void> {
     // A failed graceful stop (already stopped, gone, daemon timeout) is settled by the forced removal.
-    await this.#docker
-      .getContainer(id)
-      .stop({ t: STOP_GRACE_SECONDS })
-      .catch(() => undefined);
+    await this.#docker.getContainer(id).stop({ t: STOP_GRACE_SECONDS }).catch(() => undefined);
     await this.removeContainer(id);
   }
 
   async removeContainer(id: string): Promise<void> {
-    try {
-      await this.#docker.getContainer(id).remove({ force: true });
-    } catch (error) {
-      if (statusCode(error) !== 404) throw error;
-    }
+    await this.#docker.getContainer(id).remove({ force: true }).catch(orMissing(undefined));
   }
 
   async state(id: string): Promise<ContainerState> {
-    try {
-      const { State } = await this.#docker.getContainer(id).inspect();
-      if (State.Running) return { running: true };
-      return { running: false, exitCode: State.ExitCode, oomKilled: State.OOMKilled };
-    } catch (error) {
-      if (statusCode(error) === 404) return { running: false, exitCode: null, oomKilled: false };
-      throw error;
-    }
+    const info = await this.#docker.getContainer(id).inspect().catch(orMissing(null));
+    if (info === null) return { running: false, exitCode: null, oomKilled: false };
+    return info.State.Running ? { running: true } : { running: false, exitCode: info.State.ExitCode, oomKilled: info.State.OOMKilled };
   }
 
   async list(): Promise<ContainerSummary[]> {
@@ -169,22 +135,13 @@ export class DockerRuntime implements ContainerRuntime {
 
   /** The credential a running container's agent was started with (to adopt it after a gateway restart). */
   async credential(id: string, agent: AgentKind): Promise<string | null> {
-    try {
-      const info = await this.#docker.getContainer(id).inspect();
-      const prefix = `${driverFor(agent).credentialEnv}=`;
-      const entry = (info.Config.Env ?? []).find((item) => item.startsWith(prefix));
-      return entry ? entry.slice(prefix.length) || null : null;
-    } catch (error) {
-      if (statusCode(error) === 404) return null;
-      throw error;
-    }
+    const info = await this.#docker.getContainer(id).inspect().catch(orMissing(null));
+    const prefix = `${driverFor(agent).credentialEnv}=`;
+    return info?.Config.Env?.find((item) => item.startsWith(prefix))?.slice(prefix.length) || null;
   }
 
   async logsTail(id: string, lines: number): Promise<string> {
-    const output = await this.#docker
-      .getContainer(id)
-      .logs({ stdout: true, stderr: true, tail: lines, follow: false });
-    return demuxDockerLogs(output);
+    return demuxDockerLogs(await this.#docker.getContainer(id).logs({ stdout: true, stderr: true, tail: lines, follow: false }));
   }
 
   async sample(id: string): Promise<ContainerSample> {
@@ -276,6 +233,5 @@ export function statusCode(error: unknown): number | undefined {
  */
 export function engineMessage(error: unknown): string {
   const json = (error as { json?: { message?: unknown } } | null)?.json;
-  if (typeof json?.message === "string" && json.message.trim() !== "") return json.message.trim();
-  return error instanceof Error ? error.message : String(error);
+  return (typeof json?.message === "string" && json.message.trim()) || errorMessage(error);
 }
