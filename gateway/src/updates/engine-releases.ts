@@ -4,17 +4,15 @@
 // minutes like the agents' releases (release-cache.ts): the console polls, and GitHub allows 60
 // anonymous requests an hour.
 import { byNewestVersion, compareVersions, isStableVersion, type EngineRelease, type EngineReleaseList, type ReleaseNotes } from "@portal/core";
+import { RELEASES_OFFERED } from "./agent-overview.ts";
 import { fetchBounded } from "../lib/bounded-body.ts";
 import { createGitHubReleases, type GitHubReleases } from "./github-releases.ts";
 import { errorMessage, type Logger } from "../lib/log.ts";
+import { RELEASES_RETRY_MS, RELEASES_TTL_MS } from "./release-cache.ts";
 import { singleFlight } from "../lib/single-flight.ts";
 
-const TTL_MS = 10 * 60_000;
-const RETRY_MS = 60_000;
 /** The tag list (n=1000) and a token answer are small; anything larger than this is refused while it streams in. */
 const MAX_BYTES = 4 * 1024 * 1024;
-/** Versions offered to install, newest first, as for the agents (agent-overview.ts RELEASES_OFFERED). */
-export const RELEASES_OFFERED = 5;
 /** The newest tags whose digests are read: those offered, and enough to find what `latest` points at. */
 const VERSIONS_CHECKED = 8;
 const MANIFEST_TYPES = [
@@ -188,8 +186,8 @@ export class EngineReleases {
   ): Promise<EngineReleaseList> {
     const cached = this.#list?.repository === repository ? this.#list : null;
     const now = this.#now();
-    const fresh = cached?.checkedAt != null && now - cached.checkedAt < TTL_MS;
-    const retryDue = this.#attemptedAt === null || now - this.#attemptedAt >= RETRY_MS || cached === null;
+    const fresh = cached?.checkedAt != null && now - cached.checkedAt < RELEASES_TTL_MS;
+    const retryDue = this.#attemptedAt === null || now - this.#attemptedAt >= RELEASES_RETRY_MS || cached === null;
     if (options.refresh || (!fresh && retryDue)) await this.#check(repository);
     const list = this.#list?.repository === repository ? this.#list : { repository, releases: [], checkedAt: null, error: null };
     return { ...list, releases: withLocalVersions(list.releases, local, this.#notes) };

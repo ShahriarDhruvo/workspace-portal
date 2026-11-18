@@ -29,6 +29,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import Docker from "dockerode";
 import { BuildProgress, JsonLineDecoder } from "./build-progress.ts";
+import { MIB } from "../config.ts";
 import { demuxDockerLogs, DOCKER_API_TIMEOUT_MS, engineMessage, statusCode } from "./docker-runtime.ts";
 import {
   BuildError,
@@ -76,7 +77,6 @@ const { prepareBuildContext } = requireFromDockerode("dockerode/lib/util.js") as
 export const openDockerodeSession: OpenBuildSession = (docker) =>
   new Promise((resolve, reject) => withSession(docker, undefined, (error, id, done) => (error ? reject(error) : resolve({ id, close: done }))));
 
-const MIB = 1024 * 1024;
 /** `--version` prints and exits; a slow, busy 2-core host still answers well within this. */
 const VERIFY_TIMEOUT_MS = 45_000;
 const VERIFY_LOG_LINES = 20;
