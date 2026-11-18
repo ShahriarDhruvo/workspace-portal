@@ -37,8 +37,8 @@ const STATES: Record<HostLive["state"], ReactNode> = {
 };
 
 /**
- * One server's readings from its portal-hostd, every 500 ms. A reading the server can't give (an older portal-hostd
- * has no network or disk) shows "—"; a server without portal-hostd says how to set it up.
+ * One server's readings from its portal-hostd, every 500 ms. A reading the server can't give shows "—"; a server
+ * without portal-hostd says how to set it up.
  */
 export function ServerCard({ host, history, now }: { host: HostLive; history: readonly HostSample[]; now: number }) {
   const sample = host.state === "online" ? host.sample : null;

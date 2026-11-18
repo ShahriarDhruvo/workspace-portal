@@ -17,6 +17,9 @@ function sample(t: number): HostSample {
     memory: { totalBytes: 100, availableBytes: 60, usedBytes: 40, gpuBytes: null, swapTotalBytes: 0, swapUsedBytes: 0, readBps: 1e9, writeBps: 5e8 },
     power: { watts: 20, parts: { gpu: null, cpu: 5, dram: 2 } },
     fans: [],
+    throttling: null,
+    net: null,
+    disk: null,
   };
 }
 

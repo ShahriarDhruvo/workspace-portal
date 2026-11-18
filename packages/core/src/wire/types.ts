@@ -333,11 +333,11 @@ export interface HostSample {
   };
   power: { watts: number | null; parts: { gpu: number | null; cpu: number | null; dram: number | null } };
   fans: Array<{ label: string; rpm: number | null; duty: number | null }>;
-  throttling?: boolean | null;
+  throttling: boolean | null;
   /** Bytes per second over the physical interfaces together. */
-  net?: { rxBps: number | null; txBps: number | null } | null;
+  net: { rxBps: number | null; txBps: number | null } | null;
   /** Bytes per second over the whole disks together, and the local filesystems' space together. */
-  disk?: { readBps: number | null; writeBps: number | null; totalBytes: number | null; freeBytes: number | null } | null;
+  disk: { readBps: number | null; writeBps: number | null; totalBytes: number | null; freeBytes: number | null } | null;
 }
 
 /** A server's totals for the current local day, as host_daily has them. */
