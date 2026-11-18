@@ -19,8 +19,8 @@ import urllib.request
 P = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 P.add_argument('--base', default='http://127.0.0.1:8080')
 P.add_argument('--model', default='qwen3.8-flash-next')
-P.add_argument('--users', type=int, default=7, help='sessions the server has')
-P.add_argument('--target', type=int, default=128000, help='prompt tokens per session')
+P.add_argument('--users', type=int, default=4, help='sessions the server has')
+P.add_argument('--target', type=int, default=225000, help='prompt tokens per session')
 A = P.parse_args()
 
 TIMEOUT = 1800   # three times what a full run takes

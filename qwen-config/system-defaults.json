@@ -2,10 +2,15 @@
 // Install your own:  sudo bash deploy/qwen-config.sh install system-defaults.json
 // In every entry of modelProviders.openai the portal sets "baseUrl" to its gateway and "envKey" to a placeholder
 // (LLM_API_KEY never enters a workspace) and removes "apiKey". "id" must be a model that LLM_UPSTREAM_URL serves.
+// contextWindowSize is one session of the LLM server. Without samplingParams.max_tokens Qwen Code asks for replies of
+// 64,000 tokens (thinking included) and continues one that was cut off; with it, a cut-off reply ends the turn.
+// autoCompactThreshold keeps that reply and Qwen Code's margin (5% of the context) free behind the conversation:
+// contextWindowSize × (1 − autoCompactThreshold) ≥ 64,000 + 5%.
 {
   "$version": 4,
   "security": { "auth": { "selectedType": "openai" } },
   "model": { "name": "qwen3.8-flash-next" },
+  "context": { "autoCompactThreshold": 0.67 },
   "modelProviders": {
     "openai": [
       {
@@ -18,11 +23,10 @@
         "generationConfig": {
           "timeout": 3600000,
           "streamIdleTimeoutMs": 3600000,
-          "streamMaxLifetimeMs": 3600000,
           "maxRetries": 1,
-          "contextWindowSize": 262144,
+          "contextWindowSize": 230400,
           "modalities": { "image": true },
-          "samplingParams": { "temperature": 1, "top_p": 0.95, "presence_penalty": 0, "frequency_penalty": 0, "max_tokens": 32768 },
+          "samplingParams": { "temperature": 1, "top_p": 0.95, "presence_penalty": 0, "frequency_penalty": 0 },
           "extra_body": { "top_k": 20, "min_p": 0, "repeat_penalty": 1 }
         }
       }

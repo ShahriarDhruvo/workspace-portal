@@ -6,7 +6,8 @@ import { asObject, type RenderedSettings } from "./qwen-settings.ts";
 
 /** Used when an entry doesn't say (generationConfig.contextWindowSize / samplingParams.max_tokens). */
 export const DEFAULT_CONTEXT_WINDOW = 131_072;
-export const DEFAULT_MAX_TOKENS = 32_768;
+/** What Qwen Code asks of a qwen3 model when its entry doesn't say. */
+export const DEFAULT_MAX_TOKENS = 64_000;
 
 export interface PortalModel {
   /** What the LLM server serves (the request's `model`). */

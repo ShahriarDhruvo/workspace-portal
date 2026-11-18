@@ -15,7 +15,7 @@ numbers led to are in [`llm-server/`](../llm-server).
 | Setting | Value | Measured |
 |---|---|---|
 | UMA, the GPU's fixed memory | 512 MB | Linux sees 124.9 GiB. The machine shipped at 64 GB fixed, which leaves Linux about 62. |
-| GTT limit, RAM the GPU may borrow | 124 GiB | The model and all seven sessions sit on the GPU: 112.9 GiB in use. |
+| GTT limit, RAM the GPU may borrow | 124 GiB | The model and all four sessions sit on the GPU: 109.3 GiB in use. |
 | IOMMU | off | Other owners report 5-15% faster prompt reading. Not compared here; every number was taken with it off. |
 | Power profile | Performance | 120 W sustained, 160 W peak. 132 W can be forced but is slower. |
 | Fan curve | up to 95% | Chip about 6 °C cooler. Reading holds 1,760-1,787 tok/s instead of sagging to as low as 1,484 after long load: up to 20% faster when hot. |
@@ -87,17 +87,23 @@ Not in use on the test machine. In the same 45-second all-core test:
 
 ## Memory
 
-The LLM server's 128 GiB with the model loaded and seven 128K sessions:
+The LLM server's 128 GiB with the model loaded and four 225K sessions, three of them busy (`/proc/meminfo` and
+the GPU's `mem_info_gtt_used`):
 
 | Use | GiB | Share |
 |---|---|---|
-| Model, MTP, vision and 7 sessions on the GPU | 112.9 | 88% |
-| Prompt cache (4 GiB), Gufo and Linux | about 6 | 5% |
-| Free | about 6 | 5% |
-| Firmware and kernel bookkeeping, never available to Linux | 3.1 | 2% |
+| Model, MTP, vision and 4 sessions on the GPU | 109.3 | 85% |
+| Prompt cache (4 GiB), Gufo and Linux | about 7 | 5% |
+| Free | about 9 | 7% |
+| Never available to programs | 3.1 | 2% |
+
+The last row, from the boot log: 2.0 GiB is the kernel's record of every 4 KiB page (64 bytes each), 0.5 GiB the
+GPU's fixed memory, 0.35 GiB firmware and 0.23 GiB the kernel itself. The portal server's 8 GiB lose 0.37 GiB the
+same way (0.12 page records, 0.11 firmware with 32 MiB for graphics, 0.14 kernel) and show as 7.6 GiB.
 
 | Layout | Free memory | Timings |
 |---|---|---|
+| 4 × 225K | 12.7 GiB after load. Lowest: 9.1 GiB with four full prompts at once | See [Load](#load) |
 | 7 × 128K | 11.7 GiB after load, about 6 GiB while in use. Lowest: 5.7 GiB with seven full prompts at once on Gufo 0.34.0 (8.8 GiB on 0.35.0, right after a restart), 4.0 GiB while a raw 12 MP photo was read | See [Load](#load) |
 | 3 × 256K | About 12 GiB under full load, with an idle workspace stack next to the model | Three 259,000-token prompts at once: first words after 8 minutes, follow-up turns after 0.7 seconds |
 
@@ -113,7 +119,14 @@ tried with busy sandboxes.
 
 ## Load
 
-Seven 128,000-token prompts at once (`llm-server/acceptance.py`), two runs on November 18, 2026, Gufo 0.35.0:
+Four 225,000-token prompts at once (`llm-server/acceptance.py`), one run on November 18, 2026, Gufo 0.35.0:
+
+- All four sessions wrote their first word after 546 to 554 seconds, and every tool call was correct.
+- The follow-up turns answered in 0.7 to 1.0 seconds.
+- Nothing was written to swap, nothing was killed for lack of memory, and free memory stayed above 9.1 GiB.
+- The chip reached 99 °C.
+
+Seven 128,000-token prompts at once (`--users 7 --target 128000`), two runs the same day:
 
 - All seven sessions wrote their first word after 523 to 532 seconds, and every tool call was correct.
 - The follow-up turns answered in 0.4 to 1.8 seconds, because the 128,000 tokens were already cached.
@@ -148,6 +161,39 @@ Engine update through Admin > Updates, November 17, 2026:
 
 After a reboot, November 18, 2026: Gufo answers after 32 seconds and the portal, over HTTPS, after 22, counted
 from the start of the kernel. A restart of Gufo alone is healthy after 17 to 18 seconds.
+
+## Replies and thinking
+
+On Gufo a reply's `max_tokens` includes its thinking, and the effort level is an instruction to the model, not
+a limit. November 18, 2026, Gufo 0.35.0, Qwen Code 0.28.0:
+
+- With seven 128K sessions, Qwen Code's context at 131,072 and `max_tokens` at 32,768, three turns of one agent
+  session ended without an answer. Their prompts were 88,000 to 93,000 tokens, Qwen Code had shrunk the replies
+  to 26,000-26,700 tokens to fit the context, and the model spent all of them thinking, 7 minutes each. With
+  `max_tokens` in its settings Qwen Code does not continue a reply that was cut off.
+- The same kind of task, a 93,700-token document to summarize, with four 225K sessions, 64,000-token replies
+  and `--reasoning-budget 32000`, both efforts at once:
+
+| Effort | Thinking | Answer | Time |
+|---|--:|--:|--:|
+| `xhigh` | 26,349 tokens | 25,999 tokens, complete | 17.7 min |
+| `low` | 387 tokens | 7,490 tokens, complete | 5.0 min |
+
+- `--reasoning-budget` ends the thinking after that many tokens. Neither run reached it.
+- Qwen Code asks for 64,000 tokens for a qwen3 model when its settings name no `max_tokens`: every request of a
+  session in a portal workspace carried it. It asks for less when the context has less left after a 5% margin:
+  with its own compaction point, 85% of the context, 23,000 tokens in a 230,400-token session; with
+  `autoCompactThreshold` 0.67 (`qwen-config/system-defaults.json`) it compacts at 154,000 tokens, where 64,000
+  still fit. The last two numbers come from running Qwen Code's own functions, not from a session that long.
+- That session, at `low`: the agent read the same document with its file tool and answered a 110,500-token
+  prompt with 33,300 tokens, three quarters of them thinking, in 13.8 minutes. The old settings left such a
+  reply 10,500 tokens.
+- A reply cut off at its limit (forced, 3,000 tokens): Qwen Code asked the model to resume, and the model picked
+  up mid-word in 7 of 8 tries; in one it wrote a single letter and stopped.
+- Qwen Code ends a reply's stream after an hour (`QWEN_STREAM_MAX_LIFETIME_MS` in the workspace image; 15 minutes
+  without it, and 0.28.0 does not read `streamMaxLifetimeMs` from a model's entry), then asks the model to
+  resume, which it did. A 64,000-token reply stays under the hour at 18 tokens a second; with three sessions
+  writing, two long replies got 30 and 34.
 
 ## Model and engine
 
@@ -268,8 +314,9 @@ machine has about 6.3 GB free with the portal and search running.
 |---|---|
 | 1.25 GiB each | Every agent was killed. |
 | 2 GiB each, four agents | Ran for 21 minutes without a kill. |
-| Two at 2.25 GiB plus 512 MiB of swap each | About 1 GB left with both filled to the limit. In use. |
+| Two at 2.25 GiB plus 512 MiB of swap each | About 1 GB left with both filled to the limit. |
 | Three at 2 GiB | A realistic run finished with 2.8 GB to spare. In the pinned worst case free memory fell to 13 MB and the kernel killed a workspace process. |
+| Three at 2.25 GiB | In use since November 18, 2026. Not measured: its worst case is that of the row above. |
 
 With more RAM, count about 2.75 GiB per workspace.
 

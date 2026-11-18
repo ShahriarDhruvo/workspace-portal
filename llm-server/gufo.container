@@ -1,6 +1,6 @@
 [Unit]
-Description=Qwen3.8 Flash-Next Q4, seven 128K sessions (only service on this host)
-Documentation=https://github.com/gufo-org/gufo/blob/v0.35.0/docs/SERVER.md
+Description=Qwen3.8 Flash-Next Q4, four 225K sessions (only service on this host)
+Documentation=https://github.com/gufo-org/gufo/blob/v0.35.0/docs/server.md
 
 [Container]
 ContainerName=gufo
@@ -19,13 +19,14 @@ HealthStartupCmd=curl -fsS -o /dev/null http://127.0.0.1:8080/ready
 HealthStartupInterval=2s
 HealthOnFailure=kill
 Notify=healthy
-Exec=gufo serve --host 0.0.0.0 --port 8080 --sessions 7 --max-connections 64 --max-request-bytes 67108864 llm \
+Exec=gufo serve --host 0.0.0.0 --port 8080 --sessions 4 --max-connections 64 --max-request-bytes 67108864 llm \
       --model /models/UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf \
       --mmproj /models/mmproj-BF16.gguf \
       --speculative mtp \
       --mtp-model /models/MTP/mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf \
-      --context 131072 \
-      --max-tokens 32768 \
+      --context 230400 \
+      --max-tokens 64000 \
+      --reasoning-budget 32000 \
       --served-model-name qwen3.8-flash-next \
       --cache-ram-bytes 4294967296 \
       --max-pending 32 \
