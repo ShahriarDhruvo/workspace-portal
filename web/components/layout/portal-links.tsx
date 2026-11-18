@@ -10,8 +10,8 @@ const ADMIN_LINKS: NavLink[] = [
   { href: "/admin", label: "Usage", icon: <UsageIcon /> },
   { href: "/admin/energy", label: "Energy", icon: <EnergyIcon /> },
   { href: "/admin/users", label: "Users", icon: <UsersIcon />, prefixes: ["/admin/users/"] },
-  { href: "/admin/updates", label: "Updates", icon: <PackageIcon />, prefixes: ["/admin/updates/"] },
-  { href: "/admin/audit", label: "Audit log", icon: <AuditIcon />, prefixes: ["/admin/audit/"] },
+  { href: "/admin/updates", label: "Updates", icon: <PackageIcon /> },
+  { href: "/admin/audit", label: "Audit log", icon: <AuditIcon /> },
 ];
 
 export function portalLinks(isAdmin: boolean): NavLink[] {

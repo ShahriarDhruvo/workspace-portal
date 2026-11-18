@@ -42,7 +42,6 @@ function controlSecret(): string {
 const dataDir = text("PORTAL_DATA_DIR", "/srv/workspace-portal");
 
 export const config = {
-  dataDir,
   dbFile: path.join(dataDir, "db", "portal.sqlite"),
   /**
    * User N's Private workspace is served by the gateway on port agentPortBase + N, the Online one on
