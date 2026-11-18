@@ -47,11 +47,10 @@ export function HarnessPicker({ agents, chosen, running, labelledBy }: HarnessPi
     });
   }
 
-  async function restart(): Promise<string | null> {
+  async function restart() {
     const result = await restartWorkspace();
-    if (!result.ok) return result.message;
-    setRestarted(value);
-    return null;
+    if (result.ok) setRestarted(value);
+    return result;
   }
 
   const differs = running?.agent != null && running.agent !== value;

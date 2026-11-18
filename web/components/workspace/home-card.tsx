@@ -7,6 +7,7 @@ import { AGENT_NAMES, WORKSPACE_KIND_NAMES, type WorkspaceKind, type WorkspaceSt
 import { fetchJson, needsReauth, startWorkspace, stopWorkspace } from "@/lib/fetch-json";
 import { formatVersion, stopReasonText, workspaceState } from "@/lib/format";
 import type { WorkspaceStatusResponse } from "@/lib/api";
+import type { ActionResult } from "@/lib/validation";
 import { initialKind, onlineAccessAfter, otherKind, startErrorText } from "@/lib/workspace-kind";
 import { stopWarnings } from "@/lib/workspace-stop";
 import { usePoll } from "@/components/common/use-poll";
@@ -84,21 +85,15 @@ export function HomeCard({ initial, initialError, idleTimeoutMinutes }: HomeCard
     setActionError({ message: startErrorText(result.error, kind, "Your"), status: fresh.ok ? fresh.data.status : status });
   }
 
-  /** Stops the workspace; resolves to an error message when it couldn't. */
-  async function stop(): Promise<string | null> {
+  async function stop(): Promise<ActionResult> {
     setRequest("stop");
     setActionError(null);
     const result = await stopWorkspace();
     setRequest(null);
-    if (result.ok) {
-      setInfo(result.data);
-      return null;
-    }
-    if (needsReauth(result)) {
-      router.refresh();
-      return null;
-    }
-    return result.error.message;
+    if (result.ok) setInfo(result.data);
+    else if (needsReauth(result)) router.refresh();
+    else return { ok: false, message: result.error.message };
+    return { ok: true };
   }
 
   if (!info) {

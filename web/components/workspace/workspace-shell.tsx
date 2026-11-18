@@ -8,6 +8,7 @@ import { agentFrameUrl, type AgentFrame } from "@/lib/agent-url";
 import { needsReauth, startWorkspace, stopWorkspace } from "@/lib/fetch-json";
 import { stopReasonText, workspaceState, type WorkspaceState } from "@/lib/format";
 import type { WorkspaceStatusResponse } from "@/lib/api";
+import type { ActionResult } from "@/lib/validation";
 import { hasContainer, initialKind, onlineAccessAfter, otherKind, startErrorText } from "@/lib/workspace-kind";
 import { stopWarnings } from "@/lib/workspace-stop";
 import { PortalMark } from "@/components/brand";
@@ -289,20 +290,17 @@ export function WorkspaceShell({ viewer, target, frames, idleTimeoutMinutes, ban
     }
   }
 
-  /** Stops the user's workspace, then goes Home; resolves to an error message when it couldn't. */
-  async function stop(): Promise<string | null> {
+  /** Stops the user's workspace, then goes Home. */
+  async function stop(): Promise<ActionResult> {
     dispatch({ type: "stopRequested" });
     const result = await stopWorkspace();
-    if (result.ok) {
-      router.push("/");
-      return null;
+    if (result.ok) router.push("/");
+    else if (needsReauth(result)) router.refresh();
+    else {
+      dispatch({ type: "stopFailed" });
+      return { ok: false, message: result.error.message };
     }
-    if (needsReauth(result)) {
-      router.refresh();
-      return null;
-    }
-    dispatch({ type: "stopFailed" });
-    return result.error.message;
+    return { ok: true };
   }
 
   const home = target.isViewer ? (
