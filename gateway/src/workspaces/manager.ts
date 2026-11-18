@@ -276,7 +276,8 @@ export class WorkspaceManager {
 
   startBackgroundTasks(): void {
     const every = (intervalMs: number, name: string, task: () => unknown): void => {
-      const run = (): unknown => Promise.resolve().then(task).catch((error: unknown) => this.#log.error(`${name} failed`, { error }));
+      // A tick during a run joins it: no task runs alongside itself, and a run that fails is logged once.
+      const run = singleFlight(() => Promise.resolve().then(task).catch((error: unknown) => this.#log.error(`${name} failed`, { error })));
       this.#timers.push(setInterval(run, intervalMs).unref());
     };
     every(REAP_INTERVAL_MS, "reaper", () => this.reap());
@@ -824,10 +825,10 @@ export class WorkspaceManager {
   }
 
   /** Stops workspaces nobody uses any more, or that have been idle for IDLE_TIMEOUT_MINUTES. */
-  readonly reap = singleFlight(async (): Promise<void> => {
+  async reap(): Promise<void> {
     const running = [...this.#entries.values()].filter((entry) => entry.status === "running" && entry.ready && !entry.starting && !entry.stopping);
     await Promise.all(running.map((entry) => this.#reapOne(entry)));
-  });
+  }
 
   async #reapOne(entry: Entry): Promise<void> {
     // The admin's switch (or ONLINE_WORKSPACES) went off: an Online workspace stops, working or not.
@@ -856,7 +857,7 @@ export class WorkspaceManager {
    * Every 15 s: memory and CPU from docker stats, whether the agent is working from its status check, and
    * containers that exited. Work counts as activity, so the idle countdown only starts once the agent is done.
    */
-  readonly refreshSamples = singleFlight(async (): Promise<void> => {
+  async refreshSamples(): Promise<void> {
     const running = [...this.#entries.values()].filter((entry) => entry.status === "running" && !entry.stopping);
     await Promise.all(
       running.map(async (entry) => {
@@ -883,7 +884,7 @@ export class WorkspaceManager {
         this.#updateBusy(entry);
       }),
     );
-  });
+  }
 
   /**
    * Asks the workspace's agent whether it is working. Without an answer the last one is kept and the
