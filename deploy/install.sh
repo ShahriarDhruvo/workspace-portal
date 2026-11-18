@@ -182,7 +182,7 @@ cat <<DONE
 
   Workspace Portal is running.
 
-    Portal:     http://$(host_ip || echo '<server-ip>'):$WEB_PORT
+    Portal:     $(portal_url)
     Workspaces: Private ports $AGENT_PORTS, Online ports $ONLINE_AGENT_PORTS (one per user and kind)
     Previews:   Private ports $PREVIEW_PORTS, Online ports $ONLINE_PREVIEW_PORTS (the apps running in them)
     Online:     $ONLINE

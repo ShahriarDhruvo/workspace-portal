@@ -156,6 +156,19 @@ word_after() { awk -v key="$1" '{for (i = 1; i < NF; i++) if ($i == key) print $
 host_ip() { ip -4 route get 1.1.1.1 2>/dev/null | word_after src; }
 routers() { ip -4 route show default | word_after via; }
 
+# This server's name in its tailnet's HTTPS certificates. Fails when the tailnet issues none.
+tailscale_name() {
+  tailscale status --json 2>/dev/null | python3 -I -c 'import json, sys; print(json.load(sys.stdin)["CertDomains"][0])' 2>/dev/null
+}
+# Where browsers find the portal: with deploy/tailscale-https.sh under that name, else at this host's address.
+portal_url() {
+  if env_is SESSION_COOKIE_SECURE true; then
+    printf 'https://%s:%s' "$(tailscale_name || echo '<https-name>')" "$(env_get WEB_PORT)"
+  else
+    printf 'http://%s:%s' "$(host_ip || echo '<server-ip>')" "$(env_get WEB_PORT)"
+  fi
+}
+
 url_host() { python3 -I -c 'import sys, urllib.parse as u; print(u.urlsplit(sys.argv[1]).hostname or "")' "$1" 2>/dev/null; }
 url_port() {
   python3 -I -c 'import sys, urllib.parse as u

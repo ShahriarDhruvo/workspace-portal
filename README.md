@@ -66,8 +66,7 @@ default and meaning. Look at these first:
 - `MAX_RUNNING_WORKSPACES`, `WORKSPACE_MEMORY` and `WORKSPACE_CPUS`, sized to the portal server;
 - `IDLE_TIMEOUT_MINUTES` and `MAX_BUSY_HOURS`, when an unused or a long-working workspace stops;
 - `FIREWALL_ALLOW_SOURCE`, who may reach the portal's ports through firewalld, and `FIREWALL_NEVER_REACH`,
-  more addresses that Online workspaces, SearXNG and the page reader must never reach;
-- `SESSION_COOKIE_SECURE=true` when the portal is served over HTTPS.
+  more addresses that Online workspaces, SearXNG and the page reader must never reach.
 
 Run the installer again after changing `PORTAL_DATA_DIR`, `HOSTD_PORTAL_*`, `FIREWALL_*`, `WORKSPACE_AGENTS`,
 an agent's `*_VERSION`, a port, subnet, `*_GATEWAY_IP`, bridge, DNS server or the server in a `*_URL`
@@ -83,6 +82,23 @@ read the installed files at their next start.
 sudo bash deploy/qwen-config.sh install qwen-config/system-defaults.json qwen-config/settings.json
 sudo bash deploy/qwen-config.sh check        # or: show
 ```
+
+## HTTPS
+
+Plain HTTP is for a LAN you trust. With [Tailscale](https://tailscale.com) on the portal server, and MagicDNS and
+HTTPS certificates enabled for the tailnet:
+
+```sh
+sudo bash deploy/tailscale-https.sh         # with "off": back to HTTP on the LAN
+```
+
+Tailscale then ends TLS on each of the portal's ports, under the server's name in the tailnet, and passes the
+stream to the same port on 127.0.0.1. The script binds the ports to 127.0.0.1, sets `SESSION_COOKIE_SECURE=true`
+and prints the URL: from then on the portal is reached by the tailnet's devices only. Run it again after
+changing a port.
+
+Over HTTPS a browser offers to install the portal as an app: Chrome on Android under "Add to Home screen",
+Safari on an iPhone under Share > Add to Home Screen.
 
 ## Operate
 
