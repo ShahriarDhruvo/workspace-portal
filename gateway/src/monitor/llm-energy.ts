@@ -8,6 +8,7 @@
 import type { MeterSource } from "./energy-meter.ts";
 import { isMeterReading } from "./energy-meter.ts";
 import type { Logger } from "../lib/log.ts";
+import { singleFlight } from "../lib/single-flight.ts";
 import type { EnergyShare } from "./session-log.ts";
 
 const READ_MS = 2_000;
@@ -40,7 +41,6 @@ export class LlmEnergy {
   /** The last reading of this busy spell: the start of the next stretch. */
   #last: { instance: string; energyJ: number; t: number } | null = null;
   #timer: ReturnType<typeof setInterval> | null = null;
-  #reading: Promise<void> | null = null;
   #failing = false;
   #stopped = false;
 
@@ -74,12 +74,7 @@ export class LlmEnergy {
   }
 
   /** One reading (the timer's; exposed for tests). Readings never overlap. */
-  read(): Promise<void> {
-    this.#reading ??= this.#readOnce().finally(() => {
-      this.#reading = null;
-    });
-    return this.#reading;
-  }
+  readonly read = singleFlight(() => this.#readOnce());
 
   async #readOnce(): Promise<void> {
     if (this.#source === null) return;

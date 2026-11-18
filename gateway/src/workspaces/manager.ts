@@ -43,6 +43,7 @@ import { parseWorkspaceImage } from "../docker/image-names.ts";
 import type { LlmQueue } from "../service/llm-queue.ts";
 import { HttpError } from "../lib/http-util.ts";
 import { errorMessage, type Logger } from "../lib/log.ts";
+import { singleFlight } from "../lib/single-flight.ts";
 import type { SessionLog } from "../monitor/session-log.ts";
 import {
   assessActivity,
@@ -232,7 +233,6 @@ export class WorkspaceManager {
   readonly #entries = new Map<number, Entry>();
   readonly #checking = new Set<number>();
   readonly #timers: NodeJS.Timeout[] = [];
-  #reconciling: Promise<void> | null = null;
   #reaping = false;
   #sampling = false;
   readonly #fenceCheck: () => Promise<FenceState>;
@@ -1091,12 +1091,7 @@ export class WorkspaceManager {
    * Aligns state with Docker: adopts running workspace containers of users we have rows for,
    * removes any other workspace container, and records containers that are gone.
    */
-  reconcile(): Promise<void> {
-    this.#reconciling ??= this.#reconcileOnce().finally(() => {
-      this.#reconciling = null;
-    });
-    return this.#reconciling;
-  }
+  readonly reconcile = singleFlight(() => this.#reconcileOnce());
 
   async #reconcileOnce(): Promise<void> {
     const running = new Set<string>();

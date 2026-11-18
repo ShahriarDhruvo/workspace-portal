@@ -13,6 +13,7 @@
 import type { ReleaseNotes } from "@portal/core";
 import { tagVersion, type GitHubReleases } from "./github-releases.ts";
 import { errorMessage, type Logger } from "../lib/log.ts";
+import { singleFlight } from "../lib/single-flight.ts";
 import type { NpmPackage, NpmRegistry, PublishedVersion } from "./npm-registry.ts";
 
 export const RELEASES_TTL_MS = 10 * 60_000;
@@ -65,7 +66,6 @@ export class ReleaseCache {
   #checkedAt: number | null = null;
   #attemptedAt: number | null = null;
   #error: string | null = null;
-  #checking: Promise<void> | null = null;
 
   constructor(options: ReleaseCacheOptions) {
     this.#registry = options.registry;
@@ -93,12 +93,7 @@ export class ReleaseCache {
     return age >= this.#ttlMs || packages.some((name) => !this.#packages.has(name));
   }
 
-  #check(packages: readonly string[], refresh: boolean): Promise<void> {
-    this.#checking ??= this.#checkOnce(packages, refresh).finally(() => {
-      this.#checking = null;
-    });
-    return this.#checking;
-  }
+  readonly #check = singleFlight((packages: readonly string[], refresh: boolean) => this.#checkOnce(packages, refresh));
 
   async #checkOnce(packages: readonly string[], refresh: boolean): Promise<void> {
     const results = await Promise.allSettled(packages.map((name) => this.#checkPackage(name, refresh)));

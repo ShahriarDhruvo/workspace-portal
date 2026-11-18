@@ -6,6 +6,7 @@ import { sql } from "drizzle-orm";
 import { HOST_ROLES, hostDaily, hostMeter, usageDay, type HostRole, type HostToday, type PortalDb } from "@portal/core";
 import { HostdError, type MeterReading } from "./hostd.ts";
 import type { Logger } from "../lib/log.ts";
+import { singleFlight } from "../lib/single-flight.ts";
 
 const POLL_MS = 30_000;
 
@@ -46,7 +47,6 @@ export class EnergyMeter {
   readonly #today = new Map<HostRole, HostToday>();
   readonly #state = new Map<HostRole, SourceState>();
   #timer: ReturnType<typeof setInterval> | null = null;
-  #polling: Promise<void> | null = null;
   #stopped = false;
 
   constructor(options: EnergyMeterOptions) {
@@ -85,12 +85,7 @@ export class EnergyMeter {
   }
 
   /** One round: reads every hostd at once, then books what is new in one transaction. Rounds never overlap. */
-  poll(): Promise<void> {
-    this.#polling ??= this.#round().finally(() => {
-      this.#polling = null;
-    });
-    return this.#polling;
-  }
+  readonly poll = singleFlight(() => this.#round());
 
   async #round(): Promise<void> {
     const readings = await Promise.all(this.#sources.map(async ([role, source]) => [role, await this.#read(role, source)] as const));

@@ -7,6 +7,7 @@ import { byNewestVersion, compareVersions, isStableVersion, type EngineRelease, 
 import { fetchBounded } from "../lib/bounded-body.ts";
 import { createGitHubReleases, type GitHubReleases } from "./github-releases.ts";
 import { errorMessage, type Logger } from "../lib/log.ts";
+import { singleFlight } from "../lib/single-flight.ts";
 
 const TTL_MS = 10 * 60_000;
 const RETRY_MS = 60_000;
@@ -173,7 +174,6 @@ export class EngineReleases {
   /** Every stable release's notes from the last answer GitHub gave, for the versions on the LLM server too. */
   #notes: ReadonlyMap<string, ReleaseNotes> = new Map();
   #attemptedAt: number | null = null;
-  #checking: Promise<void> | null = null;
 
   constructor(options: EngineReleasesOptions) {
     this.#options = options;
@@ -203,12 +203,7 @@ export class EngineReleases {
     return digest;
   }
 
-  #check(repository: string): Promise<void> {
-    this.#checking ??= this.#fetch(repository).finally(() => {
-      this.#checking = null;
-    });
-    return this.#checking;
-  }
+  readonly #check = singleFlight((repository: string) => this.#fetch(repository));
 
   async #fetch(repository: string): Promise<void> {
     const { registry, notes, notesRepo } = this.#options;

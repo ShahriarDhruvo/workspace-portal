@@ -11,6 +11,7 @@ import { sql } from "drizzle-orm";
 import { ENERGY_LOCATIONS, ENERGY_PRICE_SOURCES, energyPrices, type EnergyCurrency, type EnergyPriceSource, type EnergyPriceStatus, type PortalDb } from "@portal/core";
 import { fetchBounded } from "../lib/bounded-body.ts";
 import type { Logger } from "../lib/log.ts";
+import { singleFlight } from "../lib/single-flight.ts";
 
 export const EIA_URL = "https://www.eia.gov/electricity/monthly/epm_table_grapher.php?t=epmt_5_6_a";
 export const EUROSTAT_URL =
@@ -208,7 +209,6 @@ export class EnergyPrices {
     eia: { at: null, okAt: null, rows: 0, error: null },
     eurostat: { at: null, okAt: null, rows: 0, error: null },
   };
-  #running: Promise<EnergyPriceStatus> | null = null;
   #timer: ReturnType<typeof setInterval> | null = null;
 
   constructor(options: EnergyPricesOptions) {
@@ -240,12 +240,7 @@ export class EnergyPrices {
    * Downloads both sources and stores what they publish. A refresh already running is joined; on demand (without
    * `force`), a source downloaded within FRESH_MS is not asked again.
    */
-  refresh({ force = false }: { force?: boolean } = {}): Promise<EnergyPriceStatus> {
-    this.#running ??= this.#refreshAll(force).finally(() => {
-      this.#running = null;
-    });
-    return this.#running;
-  }
+  readonly refresh = singleFlight(({ force = false }: { force?: boolean } = {}) => this.#refreshAll(force));
 
   async #refreshAll(force: boolean): Promise<EnergyPriceStatus> {
     const due = ENERGY_PRICE_SOURCES.filter((source) => {
