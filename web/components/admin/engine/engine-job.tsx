@@ -58,8 +58,8 @@ export function EngineJob({ job, onChanged, onRestartNow, onDismiss }: EngineJob
         </p>
       ) : job.phase === "restarting" && job.rolledBack ? (
         <p className="text-13 text-muted-foreground">
-          {job.toVersion} didn&apos;t start properly, so the LLM server is putting {job.fromVersion ?? "the previous version"} back. New
-          requests keep waiting in the portal&apos;s queue.
+          {job.toVersion} didn&apos;t start properly, so the LLM server is putting{" "}
+          {job.fromVersion ?? "the previous version"} back. New requests keep waiting in the portal&apos;s queue.
         </p>
       ) : job.phase === "restarting" ? (
         <p className="text-13 text-muted-foreground">
