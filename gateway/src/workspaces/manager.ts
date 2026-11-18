@@ -996,7 +996,7 @@ export class WorkspaceManager {
     if (!credential) {
       this.#log.warn("cannot adopt workspace container: its credential is unknown", { userId: entry.userId, containerId: container.id });
       if (!entry.starting && !entry.stopping && !isActive(entry)) {
-        this.#persist(entry, { lastError: "After a gateway restart the running workspace could not be taken over (its access token was missing), so it was removed. Opening it starts it again." });
+        this.#persist(entry, { lastError: "After a gateway restart the running workspace could not be taken over (its access token was missing), so it was removed. Start it again." });
       }
       return false;
     }

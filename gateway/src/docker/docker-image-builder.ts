@@ -286,7 +286,7 @@ async function removedUnlessBusy(removal: Promise<unknown>): Promise<boolean> {
   }
 }
 
-/** The throwaway container that asks an image's agent CLI for its version, as `deploy/lib.sh image_agent_version` does but with nothing it doesn't need. */
+/** The throwaway container that asks an image's agent CLI for its version, as `deploy/lib.sh check_workspace_image` does but with nothing it doesn't need. */
 export function verifyContainerOptions(image: string, cli: string): Docker.ContainerCreateOptions {
   return {
     Image: image,

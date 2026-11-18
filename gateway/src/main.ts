@@ -47,7 +47,7 @@ async function main(log: Logger): Promise<void> {
     );
     process.exit(1);
   }
-  // Online's network only while Online workspaces are on; one that exists from before stays as it is, unused.
+  // Online's network only while Online workspaces are on; with them off, an existing one is left as it is, unused.
   const kinds: WorkspaceKind[] = WORKSPACE_KINDS.filter((kind) => kind === "private" || config.workspace.onlineEnabled);
   for (const kind of kinds) {
     const own = config.workspace.kinds[kind];
@@ -60,7 +60,7 @@ async function main(log: Logger): Promise<void> {
     if (!(await runtime.imageAvailable(image))) {
       log.error(`${driverFor(agent).name} workspace image not found; its workspaces cannot start until it is built`, {
         image,
-        hint: "update the agent in the admin console (Agents), or: sudo bash deploy/install.sh",
+        hint: "update the agent in the admin console (Updates), or: sudo bash deploy/install.sh",
       });
     }
   }

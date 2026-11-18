@@ -3,7 +3,7 @@
 // .env defaults, the selection file, the control API, the web app's forms, the npm registry's dist-tags), the same
 // expression as deploy/lib.sh valid_version: it admits nothing that could break out of an image tag, a build argument
 // or a KEY=VALUE line. Unanchored, it finds the version in an agent CLI's `--version` output (deploy/lib.sh
-// image_agent_version greps for it too).
+// check_workspace_image greps for it too).
 
 const VERSION_SYNTAX = String.raw`\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.]+)?`;
 const VERSION_PATTERN = new RegExp(`^${VERSION_SYNTAX}$`);
