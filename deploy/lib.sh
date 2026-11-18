@@ -233,12 +233,13 @@ subid_overlaps() { # WORKSPACE_UID_BASE | ONLINE_UID_BASE
 }
 
 # FIRST-LAST of the four ranges browsers reach besides WEB_PORT: the Private and the Online workspaces, then each
-# kind's previews, 1000 above (PREVIEW_PORT_OFFSET in gateway/src/config.ts).
+# kind's previews, PREVIEW_PORT_OFFSET above (the gateway's, in gateway/src/config.ts: a test compares the two).
+PREVIEW_PORT_OFFSET=1000
 port_ranges() {
   local base count online
   base=$(env_get AGENT_PORT_BASE) count=$(env_get AGENT_PORT_COUNT)
   online=$(env_get ONLINE_AGENT_PORT_BASE "$((base + count))")
-  for base in "$base" "$online" "$((base + 1000))" "$((online + 1000))"; do
+  for base in "$base" "$online" "$((base + PREVIEW_PORT_OFFSET))" "$((online + PREVIEW_PORT_OFFSET))"; do
     printf '%s-%s ' "$((base + 1))" "$((base + count - 1))"
   done
   echo
