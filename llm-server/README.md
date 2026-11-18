@@ -6,9 +6,9 @@ none of it: any OpenAI-compatible model server will do. The measurements behind 
 
 | File | What it is |
 |---|---|
-| `gufo.container` | Podman quadlet of the Gufo engine: Qwen3.8-Flash-Next with four sessions of 230,400 tokens, replies of 64,000 tokens of which thinking takes at most 32,000, MTP and vision, on port 8080, without a login: open that port in the firewall to the portal server alone. It goes to `~/.config/containers/systemd/`. The engine runs confined by SELinux, which needs `sudo setsebool -P container_use_devices 1` for the GPU. On an engine update portal-hostd rewrites the `Image=` and `Documentation=` lines of the installed copy. |
+| `gufo.container` | Podman quadlet of the Gufo engine: Qwen3.8-Flash-Next with four sessions of 262,144 tokens, replies of 64,000 tokens of which thinking takes at most 32,000, MTP and vision, on port 8080, without a login: open that port in the firewall to the portal server alone. It goes to `~/.config/containers/systemd/`. The engine runs confined by SELinux, which needs `sudo setsebool -P container_use_devices 1` for the GPU. On an engine update portal-hostd rewrites the `Image=` and `Documentation=` lines of the installed copy. |
 | `download-model.sh` | Fetches the six model files (115 GB) to `/models/qwen3.8-flash-next` and checks each SHA256. Run it again after an interruption. |
-| `acceptance.py` | Full-load test: fills every session at once, has each find three keys and make a tool round trip, and watches memory. Prints `FUNCTIONAL` and `CAPACITY`, `PASS` or `FAIL`. About ten minutes with the whole server. |
+| `acceptance.py` | Full-load test: fills every session at once, has each find three keys and make a tool round trip, and watches memory. Prints `FUNCTIONAL` and `CAPACITY`, `PASS` or `FAIL`. About eleven minutes with the whole server. |
 | `fans/` | Fan curve and power profile for one machine, the Bosgame M5 (board AXB35-02, BIOS 3.11). |
 
 ## Fans

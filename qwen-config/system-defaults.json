@@ -10,7 +10,7 @@
   "$version": 4,
   "security": { "auth": { "selectedType": "openai" } },
   "model": { "name": "qwen3.8-flash-next" },
-  "context": { "autoCompactThreshold": 0.67 },
+  "context": { "autoCompactThreshold": 0.7 },
   "modelProviders": {
     "openai": [
       {
@@ -24,7 +24,7 @@
           "timeout": 3600000,
           "streamIdleTimeoutMs": 3600000,
           "maxRetries": 1,
-          "contextWindowSize": 230400,
+          "contextWindowSize": 262144,
           "modalities": { "image": true },
           "samplingParams": { "temperature": 1, "top_p": 0.95, "presence_penalty": 0, "frequency_penalty": 0 },
           "extra_body": { "top_k": 20, "min_p": 0, "repeat_penalty": 1 }

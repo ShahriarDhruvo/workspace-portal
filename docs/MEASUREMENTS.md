@@ -15,12 +15,12 @@ numbers led to are in [`llm-server/`](../llm-server).
 | Setting | Value | Measured |
 |---|---|---|
 | UMA, the GPU's fixed memory | 512 MB | Linux sees 124.9 GiB. The machine shipped at 64 GB fixed, which leaves Linux about 62. |
-| GTT limit, RAM the GPU may borrow | 124 GiB | The model and all four sessions sit on the GPU: 109.3 GiB in use. |
+| GTT limit, RAM the GPU may borrow | 124 GiB | The model and all four sessions sit on the GPU: 111.5 GiB in use. |
 | IOMMU | off | Other owners report 5-15% faster prompt reading. Not compared here; every number was taken with it off. |
 | Power profile | Performance | 120 W sustained, 160 W peak. 132 W can be forced but is slower. |
 | Fan curve | up to 95% | Chip about 6 °C cooler. Reading holds 1,760-1,787 tok/s instead of sagging to as low as 1,484 after long load: up to 20% faster when hot. |
 | CPU governor | performance | TuneD profile `accelerator-performance`. Baseline for all numbers. |
-| Speculative decoding | MTP | A helper file drafts tokens ahead and about 80% are accepted. Writing runs at 61 to 70 tok/s (14 runs, November 18, 2026), against 24 to 27 on llama.cpp without it. |
+| Speculative decoding | MTP | A helper file drafts tokens ahead and about 80% are accepted. Writing runs at 59 to 75 tok/s (19 runs, November 18, 2026), against 24 to 27 on llama.cpp without it. |
 
 ## Levers tried and left alone
 
@@ -87,14 +87,14 @@ Not in use on the test machine. In the same 45-second all-core test:
 
 ## Memory
 
-The LLM server's 128 GiB with the model loaded and four 225K sessions, three of them busy (`/proc/meminfo` and
-the GPU's `mem_info_gtt_used`):
+The LLM server's 128 GiB with the model loaded and four 256K sessions, idle after the tests under [Load](#load)
+(`/proc/meminfo` and the GPU's `mem_info_gtt_used`):
 
 | Use | GiB | Share |
 |---|---|---|
-| Model, MTP, vision and 4 sessions on the GPU | 109.3 | 85% |
-| Prompt cache (4 GiB), Gufo and Linux | about 7 | 5% |
-| Free | about 9 | 7% |
+| Model, MTP, vision and 4 sessions on the GPU | 111.5 | 87% |
+| Prompt cache (3.6 of its 4 GiB in use), Gufo and Linux | about 7 | 5% |
+| Free | 6.6 | 5% |
 | Never available to programs | 3.1 | 2% |
 
 The last row, from the boot log: 2.0 GiB is the kernel's record of every 4 KiB page (64 bytes each), 0.5 GiB the
@@ -103,6 +103,7 @@ same way (0.12 page records, 0.11 firmware with 32 MiB for graphics, 0.14 kernel
 
 | Layout | Free memory | Timings |
 |---|---|---|
+| 4 × 256K | 9.6 GiB after load. Lowest: 7.0 GiB with four full prompts at once, 4.7 GiB while four raw 12 MP photos were read | See [Load](#load) |
 | 4 × 225K | 12.7 GiB after load. Lowest: 9.1 GiB with four full prompts at once | See [Load](#load) |
 | 7 × 128K | 11.7 GiB after load, about 6 GiB while in use. Lowest: 5.7 GiB with seven full prompts at once on Gufo 0.34.0 (8.8 GiB on 0.35.0, right after a restart), 4.0 GiB while a raw 12 MP photo was read | See [Load](#load) |
 | 3 × 256K | About 12 GiB under full load, with an idle workspace stack next to the model | Three 259,000-token prompts at once: first words after 8 minutes, follow-up turns after 0.7 seconds |
@@ -119,7 +120,23 @@ tried with busy sandboxes.
 
 ## Load
 
-Four 225,000-token prompts at once (`llm-server/acceptance.py`), one run on November 18, 2026, Gufo 0.35.0:
+Four 256,000-token prompts at once (`llm-server/acceptance.py`), one run on November 18, 2026, Gufo 0.35.0:
+
+- All four sessions wrote their first word after 629 to 634 seconds, and every tool call was correct.
+- The follow-up turns answered in 0.7 to 1.1 seconds.
+- Nothing was written to swap, nothing was killed for lack of memory, and free memory stayed above 7.0 GiB.
+- The chip reached 100 °C.
+
+The same sessions with images, right after it. The photo is a generated JPEG of 4,000 × 3,000 pixels, sent
+straight to the API, 11,800 tokens to the model:
+
+- Three 256,000-token prompts and the photo in the fourth session: first words after 507 to 519 seconds, the
+  photo answered after 69 seconds, free memory above 4.8 GiB.
+- Four such photos at once: answered after 37 to 38 seconds, free memory above 4.7 GiB.
+- Four pictures of 1,568 pixels, the size Qwen Code sends: 5 to 6 seconds, and free memory did not move.
+- In all of it nothing was written to swap, no request failed and the model never restarted.
+
+Four 225,000-token prompts at once, one run the same day with four sessions of 230,400 tokens:
 
 - All four sessions wrote their first word after 546 to 554 seconds, and every tool call was correct.
 - The follow-up turns answered in 0.7 to 1.0 seconds.
@@ -182,12 +199,17 @@ a limit. November 18, 2026, Gufo 0.35.0, Qwen Code 0.28.0:
 - `--reasoning-budget` ends the thinking after that many tokens. Neither run reached it.
 - Qwen Code asks for 64,000 tokens for a qwen3 model when its settings name no `max_tokens`: every request of a
   session in a portal workspace carried it. It asks for less when the context has less left after a 5% margin:
-  with its own compaction point, 85% of the context, 23,000 tokens in a 230,400-token session; with
-  `autoCompactThreshold` 0.67 (`qwen-config/system-defaults.json`) it compacts at 154,000 tokens, where 64,000
+  with its own compaction point, 85% of the context, 26,000 tokens in a 262,144-token session; with
+  `autoCompactThreshold` 0.7 (`qwen-config/system-defaults.json`) it compacts at 183,500 tokens, where 64,000
   still fit. The last two numbers come from running Qwen Code's own functions, not from a session that long.
 - That session, at `low`: the agent read the same document with its file tool and answered a 110,500-token
   prompt with 33,300 tokens, three quarters of them thinking, in 13.8 minutes. The old settings left such a
   reply 10,500 tokens.
+- With four 256K sessions, in a portal workspace at `low`, twice: the agent read a 152,600-token document with
+  its file tool, in prompts that grew to 175,800 and 166,500 tokens and asked for 64,000 each. It answered a
+  168,600-token prompt with 21,600 tokens in 6.5 minutes and a 162,100-token prompt with 18,000 in 5.2. The
+  first answer came in Chinese, to an English document and request, and ended at a heading mark; the second
+  was English and complete. With sessions of 230,400 tokens Qwen Code compacts such a conversation at 154,000.
 - A reply cut off at its limit (forced, 3,000 tokens): Qwen Code asked the model to resume, and the model picked
   up mid-word in 7 of 8 tries; in one it wrote a single letter and stopped.
 - Qwen Code ends a reply's stream after an hour (`QWEN_STREAM_MAX_LIFETIME_MS` in the workspace image; 15 minutes
