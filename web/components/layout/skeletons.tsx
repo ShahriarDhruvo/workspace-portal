@@ -29,6 +29,17 @@ export function FieldSkeleton({ hint = false }: { hint?: boolean }) {
   );
 }
 
+/** Three FormFields side by side from `sm`: the names, the passwords. */
+export function FieldRowSkeleton() {
+  return (
+    <div className="grid grid-cols-1 gap-x-4 gap-y-5 sm:grid-cols-3">
+      <FieldSkeleton />
+      <FieldSkeleton />
+      <FieldSkeleton />
+    </div>
+  );
+}
+
 /**
  * A Section card: its title (and description) over `children`, then `footer`'s buttons in the footer strip, on its
  * right unless `footerStart` (a footer whose buttons start on the left, like a user's Account card).

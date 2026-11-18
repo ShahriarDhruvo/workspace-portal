@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, type Ref } from "react";
+import type { Ref } from "react";
 import { packageSummary } from "@/lib/agent-versions";
 import { formatBytes } from "@/lib/format";
 import type { ReleaseNotes } from "@portal/core/wire";
@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { TableBody, TableCell, TableHeader, TableRow } from "@/components/ui/table";
 import { ReleaseNotesDialog, type ReleaseNotesTarget } from "./release-notes";
+import { useDialog } from "./use-dialog";
 import { VersionSection } from "./version-card";
 
 /** A row's button: what it says, why it can't run now (null: it can), and what it opens. */
@@ -64,9 +65,7 @@ interface PackageImagesProps {
  */
 export function PackageImages({ name, rows, currentLabel, missingLabel, where, workspaces = false, empty, triggerRef }: PackageImagesProps) {
   const { rows: page, pagination } = usePagination(rows);
-  const [notes, setNotes] = useState<ReleaseNotesTarget | null>(null);
-  const [open, setOpen] = useState(false);
-  const opener = useRef<HTMLElement | null>(null);
+  const notes = useDialog<ReleaseNotesTarget | null>(null);
   const columns = workspaces ? 7 : 6;
 
   return (
@@ -111,10 +110,7 @@ export function PackageImages({ name, rows, currentLabel, missingLabel, where, w
                       variant="ghost"
                       size="sm"
                       onClick={(event) => {
-                        if (!row.notes) return;
-                        opener.current = event.currentTarget;
-                        setNotes({ name, version: row.version, notes: row.notes });
-                        setOpen(true);
+                        if (row.notes) notes.show({ name, version: row.version, notes: row.notes }, event.currentTarget);
                       }}
                     >
                       Release notes
@@ -128,7 +124,7 @@ export function PackageImages({ name, rows, currentLabel, missingLabel, where, w
           )}
         </TableBody>
       </DataTable>
-      <ReleaseNotesDialog target={notes} open={open} onOpenChange={setOpen} returnFocusTo={opener} />
+      <ReleaseNotesDialog target={notes.dialog} open={notes.open} onOpenChange={notes.setOpen} returnFocusTo={notes.opener} />
     </VersionSection>
   );
 }

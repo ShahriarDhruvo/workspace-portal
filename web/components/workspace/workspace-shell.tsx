@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useReducer, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { AGENT_NAMES, WORKSPACE_KIND_NAMES, type ApiError, type OnlineAccess, type WorkspaceKind } from "@portal/core/wire";
+import { AGENT_NAMES, WORKSPACE_KIND_NAMES, type ApiError, type OnlineAccess, type WorkspaceKind, type WorkspaceStatus } from "@portal/core/wire";
 import { agentFrameUrl, type AgentFrame } from "@/lib/agent-url";
 import { needsReauth, startWorkspace, stopWorkspace } from "@/lib/fetch-json";
 import { stopReasonText, workspaceState, type WorkspaceState } from "@/lib/format";
@@ -165,27 +165,24 @@ function phaseOf(state: State, targetId: number): Phase {
   }
 }
 
-const STARTING: WorkspaceState = { tone: "warning", label: "Starting", activity: null, pulse: true };
-const STOPPING: WorkspaceState = { tone: "warning", label: "Stopping", activity: null, pulse: true };
-const STOPPED: WorkspaceState = { tone: "idle", label: "Stopped", activity: null, pulse: false };
-const ERROR: WorkspaceState = { tone: "danger", label: "Error", activity: null, pulse: false };
+const stateOf = (status: WorkspaceStatus) => workspaceState({ status, ready: false, busy: false });
 
 /** The bar's status pill for each phase. */
 function pillOf(phase: Phase, state: State): WorkspaceState {
   switch (phase.kind) {
     case "ready":
-      return state.pollError || !state.info ? ERROR : workspaceState(state.info);
+      return state.pollError || !state.info ? stateOf("error") : workspaceState(state.info);
     case "connecting":
     case "starting":
-      return STARTING;
+      return stateOf("starting");
     case "stopping":
-      return STOPPING;
+      return stateOf("stopping");
     case "switched":
-      return STOPPED;
+      return stateOf("stopped");
     case "idle":
-      return phase.idle.kind === "fresh" || phase.idle.kind === "stopped" ? STOPPED : ERROR;
+      return stateOf(phase.idle.kind === "fresh" || phase.idle.kind === "stopped" ? "stopped" : "error");
     case "unreachable":
-      return ERROR;
+      return stateOf("error");
   }
 }
 

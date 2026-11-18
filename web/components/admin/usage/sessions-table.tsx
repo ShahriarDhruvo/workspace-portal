@@ -9,12 +9,12 @@ import { formatCost, formatElapsed, formatNumber, formatWatts, formatWh } from "
 import { SESSION_PAGE_SIZE } from "@/lib/pagination";
 import type { SessionPage, SessionRow } from "@/lib/workspace-sessions";
 import { WORKSPACE_KIND_NAMES, type LlmLive } from "@portal/core/wire";
+import { Estimate } from "@/components/admin/estimate";
 import { DataTable, DataTableEmpty, DataTableHead, DataTablePagination } from "@/components/common/data-table";
 import { LocalTime } from "@/components/local-time";
 import { GlobeIcon, LockIcon } from "@/components/ui/icons";
 import { TableBody, TableCell, TableHeader, TableRow } from "@/components/ui/table";
 import { SESSIONS_TABLE_HEIGHT } from "./usage-skeleton";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 const PAGE_SIZES = [SESSION_PAGE_SIZE];
 const COLUMNS = 10;
@@ -193,14 +193,5 @@ function LiveStatus({ userId, llm }: { userId: number; llm: LlmLive }) {
 function Cost({ row, currency }: { row: SessionRow; currency: SessionPage["currency"] }) {
   const text = formatCost(row.cost, currency);
   if (!row.costEstimate || row.cost === null) return text;
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span tabIndex={0} className="cursor-default rounded-sm underline decoration-dotted underline-offset-4">
-          {text}
-        </span>
-      </TooltipTrigger>
-      <TooltipContent>At the latest published price</TooltipContent>
-    </Tooltip>
-  );
+  return <Estimate text={text}>At the latest published price</Estimate>;
 }

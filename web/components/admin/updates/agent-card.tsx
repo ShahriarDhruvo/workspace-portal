@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useRef } from "react";
 import {
   agentPackageRows,
   agentStatus,
@@ -19,6 +19,7 @@ import { WarningIcon } from "@/components/ui/icons";
 import { AgentDialogs, type AgentDialog, type UpdatePlan } from "./agent-dialogs";
 import { AgentJob } from "./agent-job";
 import { PackageImages, type PackageImageRow } from "./package-images";
+import { useDialog } from "./use-dialog";
 import { useShownJob } from "./use-shown-job";
 import { VersionCard } from "./version-card";
 
@@ -40,20 +41,12 @@ interface AgentCardProps {
 export function AgentCard({ agent, context, registry, onChanged }: AgentCardProps) {
   const heading = useRef<HTMLHeadingElement>(null);
   const imagesTrigger = useRef<HTMLButtonElement>(null);
-  const opener = useRef<HTMLElement | null>(null);
   const focusHandoff = useRef(false);
-  const [dialog, setDialog] = useState<AgentDialog>({ kind: "update", plan: { kind: "rebuild" } });
-  const [open, setOpen] = useState(false);
+  const { dialog, open, setOpen, opener, show } = useDialog<AgentDialog>({ kind: "update", plan: { kind: "rebuild" } });
   const blocked = updateBlocker(context);
   const latest = agent.updateAvailable ? agent.latest : null;
   const job: AgentUpdateJob | null = context.job?.agent === agent.id ? context.job : null;
   const [shownJob, dismissJob] = useShownJob("agents", job);
-
-  function show(next: AgentDialog, from: HTMLElement) {
-    opener.current = from;
-    setDialog(next);
-    setOpen(true);
-  }
 
   const rows = agentPackageRows(agent).map((row): PackageImageRow => {
     const plan: UpdatePlan = row.action === "rebuild" ? { kind: "rebuild" } : { kind: row.action, version: row.version };

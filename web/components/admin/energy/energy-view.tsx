@@ -8,6 +8,7 @@ import type { DayPrice, EnergyMonth, EnergyTotal } from "@/lib/energy";
 import { fetchJson, needsReauth } from "@/lib/fetch-json";
 import { formatDay, formatKwh, formatMoney, formatMonth, formatPricePeriod, formatUnitPrice, priceUnit } from "@/lib/live-format";
 import { cn } from "@/lib/utils";
+import { Estimate } from "@/components/admin/estimate";
 import { DataTable, DataTableEmpty, DataTableHead, DataTablePagination, usePagination } from "@/components/common/data-table";
 import { PageHeading } from "@/components/layout/page-heading";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -146,16 +147,7 @@ function priceSourceText(location: EnergyLocation): string {
 function PriceValue({ price, currency }: { price: DayPrice | null; currency: EnergyCurrency | null }) {
   const text = formatUnitPrice(price?.price, currency);
   if (!price?.estimate) return text;
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span tabIndex={0} className="cursor-default rounded-sm underline decoration-dotted underline-offset-4">
-          {text}
-        </span>
-      </TooltipTrigger>
-      <TooltipContent>{formatPricePeriod(price.period)} average, the latest published</TooltipContent>
-    </Tooltip>
-  );
+  return <Estimate text={text}>{formatPricePeriod(price.period)} average, the latest published</Estimate>;
 }
 
 /** Energy and, once a place is picked for prices, its cost over a stretch of time, side by side. */

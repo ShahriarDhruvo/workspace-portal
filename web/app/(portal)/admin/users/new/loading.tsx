@@ -1,5 +1,5 @@
 import { PageMain } from "@/components/layout/page-main";
-import { ButtonSkeleton, FieldSkeleton, HeadingSkeleton } from "@/components/layout/skeletons";
+import { ButtonSkeleton, FieldRowSkeleton, FieldSkeleton, HeadingSkeleton } from "@/components/layout/skeletons";
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -12,11 +12,7 @@ export default function NewUserLoading() {
       </div>
       <Card aria-busy="true" aria-label="Loading the form">
         <CardContent className="flex flex-col gap-5">
-          <div className="grid grid-cols-1 gap-x-4 gap-y-5 sm:grid-cols-3">
-            <FieldSkeleton />
-            <FieldSkeleton />
-            <FieldSkeleton />
-          </div>
+          <FieldRowSkeleton />
           <div className="grid grid-cols-1 items-start gap-x-4 gap-y-5 sm:grid-cols-2">
             <FieldSkeleton hint />
             <FieldSkeleton />

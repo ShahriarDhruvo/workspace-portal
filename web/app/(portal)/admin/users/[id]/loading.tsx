@@ -1,5 +1,5 @@
 import { PageMain } from "@/components/layout/page-main";
-import { ButtonSkeleton, FieldSkeleton, SectionSkeleton } from "@/components/layout/skeletons";
+import { ButtonSkeleton, FieldRowSkeleton, SectionSkeleton } from "@/components/layout/skeletons";
 import { Skeleton } from "@/components/ui/skeleton";
 
 export default function UserLoading() {
@@ -20,11 +20,7 @@ export default function UserLoading() {
       </div>
       <div className="flex flex-col gap-4">
         <SectionSkeleton footer={<ButtonSkeleton className="w-16" />}>
-          <div className="grid grid-cols-1 gap-x-4 gap-y-5 sm:grid-cols-3">
-            <FieldSkeleton />
-            <FieldSkeleton />
-            <FieldSkeleton />
-          </div>
+          <FieldRowSkeleton />
         </SectionSkeleton>
         <SectionSkeleton
           footerStart

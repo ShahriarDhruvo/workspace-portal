@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useRef } from "react";
 import { removeEngineImage, restartEngineNow, updateEngine } from "@/lib/actions/updates";
 import type { EngineImage, EngineOverview } from "@portal/core/wire";
 import { isJobActive, type Loaded } from "@/lib/update-jobs";
@@ -22,6 +22,7 @@ import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "
 import { WarningIcon } from "@/components/ui/icons";
 import { EngineJob } from "./engine-job";
 import { PackageImages, type PackageImageRow } from "./package-images";
+import { useDialog } from "./use-dialog";
 import { useShownJob } from "./use-shown-job";
 import { UnreachableAlert, VersionCard } from "./version-card";
 
@@ -44,57 +45,38 @@ export function EngineCard({ data, onChanged }: EngineCardProps) {
   const unreachable = data.error !== null;
   const status = engineStatusBadge(overview, unreachable && !overview);
   const [shownJob, dismissJob] = useShownJob("engine", overview?.job ?? null);
-  const [dialog, setDialog] = useState<EngineDialog | null>(null);
-  const [open, setOpen] = useState(false);
-  const opener = useRef<HTMLElement | null>(null);
+  const { dialog, open, setOpen, opener, show } = useDialog<EngineDialog | null>(null);
   /** Takes the focus once a removed image's row, and its Remove button, is gone. */
   const imagesTrigger = useRef<HTMLButtonElement>(null);
 
-  function show(next: EngineDialog, from: HTMLElement) {
-    opener.current = from;
-    setDialog(next);
-    setOpen(true);
-  }
-
   const title = "LLM engine";
+  const card = (children: React.ReactNode) => <VersionCard title={title} status={status}>{children}</VersionCard>;
   if (!overview) {
-    return (
-      <VersionCard title={title} status={status}>
-        <UnreachableAlert title="The workspace service can't be reached" message={data.error?.message ?? null} onRetry={onChanged}>
-          Engine updates are unavailable until it answers.
-        </UnreachableAlert>
-      </VersionCard>
+    return card(
+      <UnreachableAlert title="The workspace service can't be reached" message={data.error?.message ?? null} onRetry={onChanged}>
+        Engine updates are unavailable until it answers.
+      </UnreachableAlert>,
     );
   }
-  if (overview.state === "off") {
-    return (
-      <VersionCard title={title} status={status}>
-        <Setup />
-      </VersionCard>
-    );
-  }
+  if (overview.state === "off") return card(<Setup />);
   if (overview.state === "offline") {
-    return (
-      <VersionCard title={title} status={status}>
-        <UnreachableAlert title="portal-hostd on the LLM server can't be reached" message={overview.error} onRetry={onChanged}>
-          Engine updates are unavailable until it answers. The engine itself may still be serving.
-        </UnreachableAlert>
-      </VersionCard>
+    return card(
+      <UnreachableAlert title="portal-hostd on the LLM server can't be reached" message={overview.error} onRetry={onChanged}>
+        Engine updates are unavailable until it answers. The engine itself may still be serving.
+      </UnreachableAlert>,
     );
   }
   if (overview.state === "no_engine" || !overview.engine) {
-    return (
-      <VersionCard title={title} status={status}>
-        <Empty className="border">
-          <EmptyHeader>
-            <EmptyTitle>No engine to update</EmptyTitle>
-            <EmptyDescription>
-              {overview.error ??
-                "portal-hostd on the LLM server doesn't control an engine. Install it there with the engine's systemd unit and quadlet."}
-            </EmptyDescription>
-          </EmptyHeader>
-        </Empty>
-      </VersionCard>
+    return card(
+      <Empty className="border">
+        <EmptyHeader>
+          <EmptyTitle>No engine to update</EmptyTitle>
+          <EmptyDescription>
+            {overview.error ??
+              "portal-hostd on the LLM server doesn't control an engine. Install it there with the engine's systemd unit and quadlet."}
+          </EmptyDescription>
+        </EmptyHeader>
+      </Empty>,
     );
   }
 
