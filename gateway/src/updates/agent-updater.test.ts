@@ -8,8 +8,7 @@ import { AgentUpdater, GATEWAY_RESTARTED } from "./agent-updater.ts";
 import { AgentVersions } from "./agent-versions.ts";
 import { loadConfig } from "../config.ts";
 import { stagingImage, workspaceImage } from "../docker/image-names.ts";
-import type { Logger } from "../lib/log.ts";
-import { FakeImageBuilder, FakeRegistry, FakeRuntime, gate, quiet } from "../../test/fakes.ts";
+import { FakeImageBuilder, FakeRegistry, FakeRuntime, gate, quiet, recorder } from "../../test/fakes.ts";
 
 function setup(options: { agents?: string; buildTimeoutMs?: number } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-updater-"));
@@ -17,12 +16,7 @@ function setup(options: { agents?: string; buildTimeoutMs?: number } = {}) {
   const db = openDatabase(config.dbFile);
   const admin = db.insert(users).values({ username: "admin", firstName: "A", lastName: "B", passwordHash: "x", role: "admin", createdAt: 1, updatedAt: 1 }).returning().get();
   assert.equal(admin.id, ADMIN, "the acting admin");
-  const logs: Array<{ level: string; msg: string; fields?: Record<string, unknown> }> = [];
-  const log: Logger = {
-    info: (msg, fields) => void logs.push({ level: "info", msg, fields }),
-    warn: (msg, fields) => void logs.push({ level: "warn", msg, fields }),
-    error: (msg, fields) => void logs.push({ level: "error", msg, fields }),
-  };
+  const { log, lines: logs } = recorder((level, msg, fields) => ({ level, msg, fields }));
   const versions = AgentVersions.fromConfig(config, log);
   const runtime = new FakeRuntime(dir);
   const builder = new FakeImageBuilder(runtime);

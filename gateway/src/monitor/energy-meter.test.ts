@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { hostDaily, type PortalDb } from "@portal/core";
-import { closeServer, FakeMeter, listenLocal, quiet, tempDb } from "../../test/fakes.ts";
+import { closeServer, FakeMeter, listenLocal, quiet, recorder, tempDb } from "../../test/fakes.ts";
 import { EnergyMeter, splitByDay } from "./energy-meter.ts";
 import { HostdClient, HostdError } from "./hostd.ts";
 
@@ -114,9 +114,8 @@ test("an unreachable hostd is skipped and logged once per change; nothing is los
   let now = at(16, 8);
   const portal = new FakeMeter("p", now);
   const llm = new FakeMeter("l", now);
-  const lines: string[] = [];
-  const record = (level: string) => (message: string) => void lines.push(`${level}: ${message}`);
-  const meter = new EnergyMeter({ db, sources: { portal, llm }, log: { info: record("info"), warn: record("warn"), error: record("error") }, now: () => now });
+  const { log, lines } = recorder((level, message) => `${level}: ${message}`);
+  const meter = new EnergyMeter({ db, sources: { portal, llm }, log, now: () => now });
   await meter.poll();
 
   llm.error = new HostdError(null, "unreachable", "http://fake-hostd:9180: connect ECONNREFUSED");

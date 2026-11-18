@@ -36,6 +36,13 @@ import type { Logger } from "../src/lib/log.ts";
 
 export const quiet: Logger = { info() {}, warn() {}, error() {} };
 
+/** A logger that keeps what it is told, each line as `entry` shapes it. */
+export function recorder<T>(entry: (level: string, ...line: Parameters<Logger["info"]>) => T): { log: Logger; lines: T[] } {
+  const lines: T[] = [];
+  const at = (level: string): Logger["info"] => (...line) => void lines.push(entry(level, ...line));
+  return { lines, log: { info: at("info"), warn: at("warn"), error: at("error") } };
+}
+
 export async function listenLocal(server: http.Server, port = 0, host = "127.0.0.1"): Promise<number> {
   await new Promise<void>((resolve, reject) => {
     const onError = (error: Error): void => reject(error);

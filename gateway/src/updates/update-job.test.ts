@@ -1,18 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { auditLog, openDatabase, type AgentUpdateJob } from "@portal/core";
+import { recorder } from "../../test/fakes.ts";
 import { appendLog, finishJob } from "./update-job.ts";
 
 const START: AgentUpdateJob = { id: "job-1", agent: "dsh", fromVersion: "0.2.2-rc.1", toVersion: "0.2.2-rc.3", rebuild: false, reuse: false, actorUserId: null, phase: "building", step: null, log: [], startedAt: 1_000, finishedAt: null, error: null };
 const start = (): AgentUpdateJob => ({ ...START, log: [] });
 const db = openDatabase(":memory:");
 const audits = () => db.select().from(auditLog).all().map((row) => [row.action, row.actorUserId, row.details]);
-const logged: unknown[][] = [];
-const log = {
-  info: (...line: unknown[]) => void logged.push(["info", ...line]),
-  warn: (...line: unknown[]) => void logged.push(["warn", ...line]),
-  error: (...line: unknown[]) => void logged.push(["error", ...line]),
-};
+const { log, lines: logged } = recorder((...line) => line);
 
 test("a job logs and succeeds: audited, and logged with how long it took", () => {
   const job = start();
