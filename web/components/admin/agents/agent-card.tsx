@@ -34,12 +34,9 @@ interface AgentCardProps {
 }
 
 /**
- * One enabled agent on the Updates page, in the same layout as the LLM engine's card: the version new workspaces
- * start with and its status, "Update to X.Y.Z" when latest is newer, the update job inline while it runs and once
- * it has finished, and the Package images below (each row's Use…, Build…, Rebuild…, Remove…). One dialog at a
- * time; it stays mounted while it closes, so its content doesn't change mid-animation. Several controls open it,
- * so it has no Trigger of its own: the card remembers which one did and the dialog hands the focus back to it (to
- * the section's trigger once a removed image's row, and its Remove button, is gone).
+ * One enabled agent on the Updates page, laid out as the LLM engine's card. Its one dialog stays mounted while it
+ * closes, so its content doesn't change mid-animation; several controls open it, so the card remembers which one did
+ * and the dialog hands the focus back to it.
  */
 export function AgentCard({ agent, context, registry, onChanged }: AgentCardProps) {
   const heading = useRef<HTMLHeadingElement>(null);

@@ -149,11 +149,7 @@ function UserRow({ user, isSelf, workspace, nextAgent }: UserRowProps) {
   );
 }
 
-/**
- * The row's "…" menu and the confirmation dialog its items open; closing the dialog refocuses the "…" button.
- * The menu is as wide as its longest item (not the button's width, the radix-nova default) and opens under the
- * button, its right edge on the button's, kept 8px inside the screen.
- */
+/** The row's "…" menu and the confirmation dialog its items open; closing the dialog refocuses the "…" button. */
 function UserActions({ user, isSelf, running, active }: { user: DialogUser; isSelf: boolean; running: boolean; active: boolean }) {
   const [dialog, setDialog] = useState<UserDialogKind>("stop");
   const [dialogOpen, setDialogOpen] = useState(false);

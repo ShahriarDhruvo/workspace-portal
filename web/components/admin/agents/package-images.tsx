@@ -59,10 +59,8 @@ interface PackageImagesProps {
 }
 
 /**
- * The one Package images section of each Updates card (the LLM engine, Qwen Code, DeepSeek Harness), folded by
- * default: newest version first, its badges (current, latest, Breaking changes), release date and image, and its
- * buttons, each kind in a column of its own so they line up from row to row. Release notes open in a dialog here,
- * the same on every card; the other buttons are the card's (its confirmations).
+ * The Package images section of each Updates card, folded by default, newest version first. Release notes open in
+ * a dialog here; the other buttons are the card's.
  */
 export function PackageImages({ name, rows, currentLabel, missingLabel, where, workspaces = false, empty, triggerRef }: PackageImagesProps) {
   const { rows: page, pagination } = usePagination(rows);

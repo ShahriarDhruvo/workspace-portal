@@ -2,10 +2,8 @@ import { cn } from "@/lib/utils";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 
 /**
- * Workspace Portal's own mark: a rounded square in the primary colour with a "W" in the on-primary colour.
- * Monochrome on purpose, so it sits in the Web Shell's neutral chrome in either theme without borrowing anyone's
- * logo or brand colour. app/icon.svg is a standalone file that can't read the theme, so it repeats the dark
- * theme's two values.
+ * Workspace Portal's own mark, monochrome on purpose: it sits in the Web Shell's neutral chrome in either theme.
+ * app/icon.svg can't read the theme, so it repeats the dark theme's two values.
  */
 export function PortalMark({ size = 22 }: { size?: number }) {
   return (

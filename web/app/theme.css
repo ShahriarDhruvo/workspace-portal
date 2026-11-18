@@ -98,7 +98,7 @@
   --scrollbar-thumb-hover: #aeb1b5;
 }
 
-/* ---- Base rules mirroring the Web Shell -------------------------------------------------------- */
+/* Base rules mirroring the Web Shell. */
 html,
 body {
   height: 100%;

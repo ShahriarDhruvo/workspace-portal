@@ -17,9 +17,8 @@ export interface Viewer {
 }
 
 /**
- * The one top bar of every signed-in page but the workspace: the mark and name (to Home), the page tabs (Settings,
- * and for the admin Usage, Energy, Users, Updates and Audit log), then the theme switch, who is signed in and Sign out.
- * Below `md` the tabs, the user and Sign out move into the bar's menu. It stays on screen while the page scrolls.
+ * The top bar of every signed-in page but the workspace. Below `md` the tabs, the user and Sign out move into the
+ * bar's menu.
  */
 export function AppHeader({ viewer }: { viewer: Viewer }) {
   const links = portalLinks(viewer.isAdmin);

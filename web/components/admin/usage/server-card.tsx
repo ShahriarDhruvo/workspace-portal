@@ -37,13 +37,8 @@ const STATES: Record<HostLive["state"], ReactNode> = {
 };
 
 /**
- * One server's readings from its portal-hostd, every 500 ms. Its power draw is the card's focal number, charted
- * over the last minute (the chart takes the height the card gets beyond its own, level with its neighbours); under
- * it five metrics that each read at a glance: one figure, a bar where it is a share of a whole, at most two quiet
- * facts. Under them the readings behind CPU, GPU and memory (clocks, temperatures, per-part power, swap,
- * bandwidth); the disks, interfaces, fans and the system are one click away under Details, which works the same
- * on touch screens. A reading the server can't give (an older portal-hostd has no
- * network or disk) shows "—"; a server without portal-hostd says how to set it up.
+ * One server's readings from its portal-hostd, every 500 ms. A reading the server can't give (an older portal-hostd
+ * has no network or disk) shows "—"; a server without portal-hostd says how to set it up.
  */
 export function ServerCard({ host, history, now }: { host: HostLive; history: readonly HostSample[]; now: number }) {
   const sample = host.state === "online" ? host.sample : null;
@@ -133,10 +128,8 @@ function Readings({ host, sample, history, now }: { host: HostLive; sample: Host
 }
 
 /**
- * One metric: its name, one figure (an optional quiet unit after it), a bar when the figure is a share of a whole
- * (null draws an empty bar: unknown) and at most two quiet facts: one under the other in a phone's narrow card,
- * side by side from 22rem, where the widest pair fits a tile. Never wrapped by their length, so the tiles keep
- * their height whatever the figures (the skeleton's tiles change at the same width).
+ * One metric: a figure, a bar when it is a share of a whole (null: unknown, an empty bar) and at most two quiet
+ * facts, never wrapped by their length, so the tiles keep their height whatever the figures.
  */
 function Metric({ label, value, unit, share, children }: { label: string; value: string; unit?: string; share?: number | null; children?: ReactNode }) {
   return (

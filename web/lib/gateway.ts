@@ -27,11 +27,8 @@ const START_TIMEOUT_MS = 30_000;
 /** Stop, release and data deletion include `docker stop -t 10`. */
 const STOP_TIMEOUT_MS = 30_000;
 /**
- * Calls that may wait on the registries (the versions overviews when their 10-minute cache is stale or a refresh is
- * asked for, and an update, which resolves the version first). The gateway gives each request 10 s, and a check can
- * chain several: npm then GitHub for an agent; the engine registry's token challenge, the tag list, then digests and
- * GitHub together. Normally a second; this only bounds a very slow registry, which must not read as the gateway
- * being down.
+ * Calls that may wait on the registries (the versions overviews, and an update, which resolves the version first):
+ * a check chains several 10 s requests, and a very slow registry must not read as the gateway being down.
  */
 const REGISTRY_TIMEOUT_MS = 45_000;
 /** Removing an image is Docker deleting its layers. */

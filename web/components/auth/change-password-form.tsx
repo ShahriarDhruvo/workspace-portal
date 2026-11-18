@@ -12,10 +12,8 @@ import { CheckIcon } from "@/components/ui/icons";
 const INITIAL: ChangePasswordState = { fieldErrors: {} };
 
 /**
- * `temporary`: the forced change at first sign-in, on its own screen, where the current password is the one an
- * administrator issued: the fields one under another and a full-width button; it leads on to Home. Otherwise
- * the body of Settings' Password card: the three fields in a row (stacked on a phone) and the button in the
- * card's footer, which says when the change is done. The length rule is the new password's placeholder.
+ * `temporary`: the forced change at first sign-in, on its own screen, which leads on to Home. Otherwise the body of
+ * Settings' Password card.
  */
 export function ChangePasswordForm({ username, temporary }: { username: string; temporary: boolean }) {
   const [state, action] = useActionState(changePassword, INITIAL);

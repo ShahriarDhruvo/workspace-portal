@@ -9,10 +9,8 @@ import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } f
 const CONFIG = { kwh: { label: "Energy", color: "var(--chart-1)" } } satisfies ChartConfig;
 
 /**
- * Both servers' kWh per day across the whole month (days still to come stay empty, so the month's progress shows),
- * one series in the first chart colour: the card's title names it, so there is no legend. Thin columns from one
- * baseline, rounded at the data end, over solid hairlines; each column's tooltip gives the day, its kWh and, once a
- * place is picked for prices (`currency`), its cost (the table under the chart has every value too).
+ * Both servers' kWh per day across the whole month (days still to come stay empty, so the month's progress shows).
+ * One series, named by the card's title, so there is no legend.
  */
 export function EnergyChart({ month, days, currency }: { month: string; days: readonly EnergyDay[]; currency: EnergyCurrency | null }) {
   const byDay = new Map(days.map((day) => [day.day, day]));

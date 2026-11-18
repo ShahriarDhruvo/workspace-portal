@@ -32,11 +32,7 @@ function Fact({ label, labelId, children }: { label: string; labelId?: string; c
   );
 }
 
-/**
- * Settings of the signed-in user's own account, also for an administrator viewing someone else's workspace:
- * the account (username, role and the theme switch, then the name, which the user can change), the harness,
- * and the password.
- */
+/** Settings of the signed-in user's own account, also for an administrator viewing someone else's workspace. */
 export default async function SettingsPage() {
   const { user } = await requireUser();
 

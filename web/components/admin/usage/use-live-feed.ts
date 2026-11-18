@@ -24,11 +24,9 @@ export interface LiveFeed {
 }
 
 /**
- * The Usage page's live data: follows GET /api/admin/live (frames every 500 ms) while the tab is visible. A hidden tab
- * closes the stream, so the gateway and both servers stop measuring when nobody looks. A stream that breaks is
- * opened again after 2 s, doubling to 30 s; one refused because the session is no longer an admin's re-renders the
- * page, which redirects. "Live" means frames arrive: while the browser reconnects a dropped stream, or an open one
- * has sent nothing for STALE_MS, the status is "retrying".
+ * Follows GET /api/admin/live while the tab is visible; a hidden tab closes the stream, so the gateway and both
+ * servers stop measuring when nobody looks. A broken stream is opened again after 2 s, doubling to 30 s. "Live" means
+ * frames arrive: reconnecting, or nothing for STALE_MS, is "retrying".
  */
 export function useLiveFeed(): LiveFeed {
   const router = useRouter();

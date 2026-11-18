@@ -20,9 +20,8 @@ interface UpdatesConsoleProps {
 }
 
 /**
- * The Updates page: one card each for the LLM engine (on the LLM server) and the enabled agents (images on this
- * server), all in the same layout (VersionCard, PackageImages), each with its running or last job inline. Live: each
- * part polls its own route, every second while its job runs; "Check for updates" asks the registries again for both.
+ * The Updates page: one card each for the LLM engine and the enabled agents. Each part polls its own route; "Check
+ * for updates" asks the registries again for both.
  */
 export function UpdatesConsole({ initialAgents, initialEngine }: UpdatesConsoleProps) {
   const agents = usePolled(initialAgents, "/api/admin/agents");

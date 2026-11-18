@@ -10,16 +10,8 @@ import { Pagination, PaginationContent, PaginationEllipsis, PaginationItem, Pagi
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableCell, TableHead, TableRow } from "@/components/ui/table";
 
-// Every table in the portal is built from these, so they all look and behave alike: the same frame, header cells,
-// side padding, empty row and pager ("1–30 of 74 · Rows per page [30] · ‹ 1 2 3 ›", 30 rows by default).
-//
-//   const { rows, pagination } = usePagination(items);
-//   <DataTable footer={<DataTablePagination {...pagination} />}>
-//     <TableHeader><TableRow><DataTableHead>Name</DataTableHead>…</TableRow></TableHeader>
-//     <TableBody>{rows.map(…)}</TableBody>
-//   </DataTable>
-//
-// A table paged on the server (the audit log) uses DataTableUrlPagination instead, which keeps ?page= and ?size=.
+// Every table in the portal is built from these: the same frame, header cells, empty row and pager. A table paged
+// on the server (the audit log) uses DataTableUrlPagination, which keeps ?page= and ?size=.
 
 interface DataTableProps {
   children: ReactNode;
@@ -99,11 +91,8 @@ export interface DataTablePaginationProps {
 }
 
 /**
- * The pager under a table: which rows show and how many there are on the left; rows per page and the pages on the
- * right (‹ 1 2 … 9 ›). Nothing when the table is empty: its empty row says so.
- *
- * The rows summary is not a live region, since live tables (Usage's, every 500 ms) change their totals all the
- * time. A screen reader hears it once after the user pages or picks a page size, when that page has arrived.
+ * The pager under a table; nothing when the table is empty. The rows summary is not a live region (live tables
+ * change their totals all the time): a screen reader hears it once after the user pages or picks a page size.
  */
 export function DataTablePagination({
   page,

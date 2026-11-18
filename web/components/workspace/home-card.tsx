@@ -19,12 +19,7 @@ import { KindBadge } from "./kind-badge";
 import { KindPicker, StartWorkspaceButton, useKindChoice } from "./start-workspace";
 import { StopDialog } from "./stop-dialog";
 
-// Home's one focal point: the user's workspace, with the one thing to do next in the card's top right corner, where
-// the button itself says the state: "Start Online" / "Start Private" (or Try again), "Starting…", "Open workspace"
-// with Stop beside it, or "Stopping…"; while a workspace is there, its kind's badge sits beside the buttons.
-// Stopped, the card's body holds the choice between the two workspaces (KindPicker). Start confirms the chosen
-// kind first, then launches the harness chosen in Settings and goes to /workspace. It polls
-// /api/workspace/status, every 2 s while something is under way.
+// Home's one focal point: the user's workspace, with the one thing to do next as the button in the card's corner.
 
 /**
  * The stop reasons worth a line on the card. Not the owner's own Stop or sign-out, and not an idle stop: the

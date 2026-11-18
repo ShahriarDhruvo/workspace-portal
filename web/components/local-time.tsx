@@ -8,10 +8,8 @@ const dateTime = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeS
 const dateOnly = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
 
 /**
- * A timestamp in the viewer's own time zone. The server has no idea which zone that is, so it
- * renders UTC and the browser swaps in local time after hydration. `relative` says how long ago it was (the
- * date alone once that is over a month) and keeps the exact time in a tooltip; a touch screen has no hover, so
- * there the exact time is written out too.
+ * A timestamp in the viewer's own time zone: the server can't know it, so it renders UTC and the browser swaps in
+ * local time after hydration. `relative` keeps the exact time in a tooltip, and writes it out on a touch screen.
  */
 export function LocalTime({ at, relative = false }: { at: number; relative?: boolean }) {
   const hydrated = useSyncExternalStore(noopSubscribe, () => true, () => false);

@@ -38,10 +38,8 @@ const ENGINE_BADGES: Record<LlmLive["engine"], ReactNode> = {
 };
 
 /**
- * Usage's focal card: the LLM server's total Read and Write rates, each charted over the last minute (stacked on
- * one time axis, each on its own scale: reading runs about ten times faster than writing; they take the height
- * the card gets beyond its own), then the workspace sessions with what their LLM requests added up to
- * (SessionsTable).
+ * Usage's focal card: the LLM server's Read and Write rates over the last minute (each on its own scale: reading
+ * runs about ten times faster than writing), then the workspace sessions.
  */
 export function LlmCard({ llm, tokens, now, sessions, sessionsVersion }: LlmCardProps) {
   const busy = llm.sessionsReported && llm.engineSessions !== null ? llm.sessions.length : llm.inFlight;

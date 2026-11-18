@@ -30,13 +30,9 @@ interface SessionsTableProps {
 }
 
 /**
- * The LLM sessions card's table: each run of a user's workspace, from Start to its stop, and what its LLM requests
- * added up to: Read and Write averaged over the engine's own time, tokens, time on the LLM server, its share of
- * the LLM server's energy as its average draw (the watt-hours on hover), and what that cost. One line a row, the
- * lesser facts in a quieter font. The running ones come first and say what the LLM is doing for them now (from
- * the live frame). The page is read again when the card appears, whenever the frame
- * says the sessions changed (about every 2 s while the LLM works: energy shares and finished requests; a quarter
- * second's wait folds a burst into one read), and on paging; six rows a page.
+ * The LLM sessions card's table: each run of a user's workspace and what its LLM requests added up to, the running
+ * ones first. The page is read again whenever the live frame says the sessions changed (a quarter second's wait
+ * folds a burst into one read) and on paging.
  */
 export function SessionsTable({ initial, version, llm, now }: SessionsTableProps) {
   const router = useRouter();

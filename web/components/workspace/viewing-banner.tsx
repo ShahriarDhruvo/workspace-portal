@@ -5,11 +5,7 @@ import { SubmitButton } from "@/components/forms/submit-button";
 import { Button } from "@/components/ui/button";
 import { EyeIcon } from "@/components/ui/icons";
 
-/**
- * Red-tinted notice strip (the Web Shell's notice bar in the danger tone) shown while an admin's session is
- * pointed at someone else's workspace. It says whose in full: a long name wraps, and on a narrow screen the
- * buttons move under it.
- */
+/** The notice strip shown while an admin's session is pointed at someone else's workspace. */
 export function ViewingBanner({ children, returnHref }: { children: ReactNode; returnHref?: string }) {
   return (
     <div

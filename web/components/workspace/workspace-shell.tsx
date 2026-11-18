@@ -32,13 +32,8 @@ import { StateCard } from "./state-card";
 import { StatusPill } from "./status-pill";
 import { StopDialog } from "./stop-dialog";
 
-// The /workspace page body: a slim 46px top bar and the workspace's agent (Qwen Code or DeepSeek Harness) in an
-// iframe, served by the gateway on the running kind's own port (Private: AGENT_PORT_BASE + user id, Online:
-// ONLINE_AGENT_PORT_BASE + user id). It polls /api/workspace/status (2 s until ready, then 10 s) and only mounts
-// the iframe once the agent is ready. Nothing here starts a workspace by itself: stopped, it says so and offers
-// the Private and Online cards and Start, which confirms the kind (the owner's harness from Settings). Stop (own
-// workspace only) always asks first, saying what it would interrupt, then goes back to Home. The bar's menu names
-// the harness.
+// The /workspace page body: a top bar and the workspace's agent in an iframe, mounted only once the agent is ready.
+// Nothing here starts a workspace by itself, and Stop (own workspace only) always asks first.
 
 interface WorkspaceShellProps {
   viewer: Viewer;

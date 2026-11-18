@@ -40,9 +40,8 @@ interface EngineCardProps {
 }
 
 /**
- * The LLM engine on the Updates page, in the same layout as the agents' cards: what runs and its status, "Update to
- * X.Y.Z" when a newer release is out, the job inline, and the Package images below (each row's Use… for an image on
- * the LLM server or Download… for one that isn't, newer or older, and Remove…). Without portal-hostd on the LLM server it says how to set it up.
+ * The LLM engine on the Updates page, laid out as the agents' cards. Without portal-hostd on the LLM server it says
+ * how to set it up.
  */
 export function EngineCard({ data, onChanged }: EngineCardProps) {
   const overview = data.data;

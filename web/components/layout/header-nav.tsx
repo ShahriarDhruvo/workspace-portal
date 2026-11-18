@@ -22,11 +22,7 @@ function isCurrent(pathname: string, link: NavLink): boolean {
   return pathname === link.href || (link.prefixes ?? []).some((prefix) => pathname.startsWith(prefix));
 }
 
-/**
- * Web Shell tabs (as on Daemon Status): icon and label, 13px/500, muted until hovered or current; the current one
- * gets a 2px primary underline on the bar's bottom rule. Below `lg` (a tablet) the icons give way so that the
- * admin's six tabs fit the bar.
- */
+/** Web Shell tabs. Below `lg` (a tablet) the icons give way so that the admin's six tabs fit the bar. */
 export function HeaderNav({ label, links, className }: { label: string; links: NavLink[]; className?: string }) {
   const pathname = usePathname();
   return (

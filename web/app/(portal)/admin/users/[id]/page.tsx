@@ -40,11 +40,7 @@ export async function generateMetadata({ params }: PageProps<"/admin/users/[id]"
   return { title: user ? displayName(user) : "User" };
 }
 
-/**
- * One user: who they are, their account state, workspace state, its kind and harness as pills in the top block
- * (with Open workspace, and Stop while it runs), then their name, their workspaces (the Online permission and
- * erasing either kind's files), then the account's actions.
- */
+/** One user: who they are and their workspace, then their name, their workspaces and the account's actions. */
 export default async function UserPage({ params }: PageProps<"/admin/users/[id]">) {
   const session = await requireAdmin();
   const user = loadUser((await params).id);

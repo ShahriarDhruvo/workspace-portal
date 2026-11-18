@@ -15,13 +15,8 @@ import {
 import { LogOutIcon, MenuIcon } from "@/components/ui/icons";
 import { Spinner } from "@/components/ui/spinner";
 
-// A top bar's menu: a button at the right end of the bar that opens a DropdownMenu with who is signed in, the
-// bar's own items, then "Sign out". The portal's pages show it (a three-line button) below the width where the
-// signed-in user and Sign out fit in the bar; the workspace bar always shows it (the user's avatar), as its only
-// way to the other pages.
-// The menu's content unmounts as soon as an item is chosen, so a form inside it would be gone before it submits.
-// Sign out runs its server action from the menu instead, which stays mounted, and shows a spinner on the menu's
-// button until the action's redirect arrives.
+// A top bar's menu. Its content unmounts as soon as an item is chosen, so a form inside it would be gone before it
+// submits: Sign out runs its server action from the menu instead, which stays mounted.
 
 interface BarMenuProps {
   viewer: { name: string; initials: string };

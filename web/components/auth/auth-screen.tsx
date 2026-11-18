@@ -3,12 +3,7 @@ import { Brand } from "@/components/brand";
 import { ThemeToggle } from "@/components/common/theme-toggle";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 
-/**
- * The full-screen pages without the top bar (sign-in, the forced password change, page not found, an error), laid
- * out like the Web Shell's "Connect" card: the brand over a 400px card centred both ways on the canvas, a centred
- * title and description, the form or button, and a muted footer strip. The theme switch sits in the corner, as in
- * the top bars of the signed-in pages.
- */
+/** The full-screen pages without the top bar (sign-in, the forced password change, not found, an error). */
 export function AuthScreen({
   title,
   description,

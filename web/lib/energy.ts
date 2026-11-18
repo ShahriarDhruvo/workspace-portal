@@ -1,8 +1,5 @@
-// Energy and its cost for Admin > Energy: both servers' daily totals (host_daily, kept current by the gateway's
-// energy meter) priced at the published electricity price of the place the admin picked in Settings
-// (portal_settings.energy_price_location; energy_prices, downloaded by the gateway from EIA or Eurostat). Server
-// side only, but it takes the database as an argument (no server-only imports) so it can be unit tested; the
-// pages, GET /api/admin/energy and lib/actions/energy.ts pass getDb().
+// Energy and its cost for Admin > Energy. It takes the database as an argument (no server-only imports), so it can
+// be unit tested.
 import { and, asc, desc, eq, gte, lte, sql } from "drizzle-orm";
 import {
   ENERGY_SOURCE_NAMES,

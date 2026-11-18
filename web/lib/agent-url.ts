@@ -11,18 +11,9 @@ export interface AgentFrame {
 }
 
 /**
- * src for the workspace iframe: the web UI of the agent the workspace runs, which the gateway serves on the
- * workspace's own port. Same protocol and hostname the user typed: cookies are host-scoped, so the gateway
- * only sees the portal session when the iframe uses exactly that hostname.
- *
- * - Qwen Code (the Web Shell):
- *   - `?theme=`: the portal's theme. The Web Shell reads it at boot and it beats the shell's own saved choice,
- *     so the iframe always matches the portal (a theme switch changes the address, which reloads the iframe).
- *   - `#token=…`: the Web Shell reads its bearer token from `#token=` (a fragment never reaches a server or a
- *     Referer). It is the session-bound workspace token; the gateway swaps it for the container's real token,
- *     which never leaves the server.
- * - DeepSeek Harness: the root, with no token and no theme. dsh authenticates by cookie, which the gateway
- *   injects, and has no theme parameter.
+ * src for the workspace iframe, on the workspace's own port and the hostname the user typed (the session cookie is
+ * host-scoped). Qwen Code takes the portal's theme (`?theme=`, which beats its saved one) and its session-bound token
+ * in the fragment, which never reaches a server; DeepSeek Harness takes neither: the gateway injects its cookie.
  */
 export function agentFrameUrl(
   location: Pick<Location, "protocol" | "hostname">,

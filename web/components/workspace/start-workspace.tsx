@@ -21,11 +21,8 @@ import { Field, FieldContent, FieldDescription, FieldLabel, FieldTitle } from "@
 import { GlobeIcon, LockIcon, PlayIcon } from "@/components/ui/icons";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 
-// Starting a stopped workspace, the same on Home, on the workspace page and in the admin's view of someone's
-// workspace: the choice of kind (KindPicker, two radio cards that say what each kind is), a Start button that
-// names the chosen kind, and the confirmation that says what it means for the files. No workspace starts without
-// that choice and that confirmation. The caller lays the picker and the button out (Home: the button in the
-// card's corner, the picker in its body) and holds the choice with useKindChoice.
+// Starting a stopped workspace, the same on Home, on the workspace page and in the admin's view: no workspace starts
+// without the choice of kind and the confirmation. The caller lays the picker and the button out and holds the choice.
 
 /**
  * The kind chosen for the next start: what the user picked, else `initialKind` (lib/workspace-kind.ts: Online
@@ -56,11 +53,7 @@ interface KindPickerProps {
   className?: string;
 }
 
-/**
- * The choice between the user's two workspaces as radio cards, like Settings' harness choice: icon and name, the
- * line that says what it is, the radio on the right. With Online unavailable its card is disabled and its line
- * says why.
- */
+/** The user's two workspaces as radio cards. With Online unavailable its card is disabled and its line says why. */
 export function KindPicker({ value, onValueChange, onlineBlocked, idPrefix, className }: KindPickerProps) {
   return (
     <RadioGroup
@@ -168,11 +161,8 @@ function KindWarning({ kind }: { kind: WorkspaceKind }) {
 }
 
 /**
- * The confirmation of a start, in the user's own sketch: what the chosen kind means, "Use Private" / "Use Online"
- * to flip to the other kind (it doesn't start anything), and "Start Online" / "Start Private". The swap button
- * keeps its place, and so the focus, as the dialog flips. It stays open while the start request runs (its Start
- * button says "Starting…", the others wait: the caller's own state changes only show once the request is
- * answered) and closes then; the page shows what came of it.
+ * Confirms a start: what the chosen kind means, the swap to the other kind (it keeps its place, and so the focus, as
+ * the dialog flips) and Start. It stays open while the start request runs and closes then.
  */
 function StartDialog({ open, onOpenChange, kind, onSwitch, whose, onConfirm, returnFocusTo }: StartDialogProps) {
   const Icon = kind === "online" ? GlobeIcon : LockIcon;

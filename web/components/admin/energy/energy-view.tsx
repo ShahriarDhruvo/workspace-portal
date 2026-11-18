@@ -22,12 +22,9 @@ import { EnergyChart } from "./energy-chart";
 const REFRESH_MS = 60_000;
 
 /**
- * Admin > Energy: both servers' energy and what it cost, from GET /api/admin/energy. The month picker in the
- * heading; today so far and the chosen month (the page's focal numbers) over the month's days as bars, then the
- * days as a table. Costs use the published price of the place picked in Settings (a day whose month isn't
- * published yet uses the latest figure, marked); without a place the page shows energy only and points to
- * Settings. The page renders the current month; the view asks again every minute while the tab is visible, and on
- * a change of month, keeping the old numbers on screen, dimmed, until the new ones arrive.
+ * Admin > Energy: both servers' energy and, once a place is picked in Settings, what it cost (a day whose month
+ * isn't published yet uses the latest price, marked). On a change of month the old numbers stay on screen, dimmed,
+ * until the new ones arrive.
  */
 export function EnergyView({ initial }: { initial: EnergyMonth }) {
   const { data, month, choose, pending, error } = useEnergyMonth(initial);
@@ -178,10 +175,9 @@ function Total({ label, total, currency }: { label: string; total: EnergyTotal; 
 }
 
 /**
- * The shown month's data, and `month`, the one asked for (the month picker shows it while its data loads): null
- * follows the current month (also across midnight at a month's end). Asks again every REFRESH_MS while the tab is
- * visible and when it becomes visible; an answer for an earlier request than the latest is dropped. A session that
- * is no longer an admin's re-renders the page, which redirects.
+ * The shown month's data, and `month`, the one asked for: null follows the current month (also across midnight at a
+ * month's end). Asks again every REFRESH_MS while the tab is visible; an answer to an earlier request than the latest
+ * is dropped.
  */
 function useEnergyMonth(initial: EnergyMonth) {
   const router = useRouter();

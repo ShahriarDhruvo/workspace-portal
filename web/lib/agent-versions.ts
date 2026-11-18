@@ -37,15 +37,8 @@ export function currentImageMissing(agent: Pick<AgentVersionInfo, "installed">):
 }
 
 /**
- * What making `version` current takes on the gateway, which uses an image already on this server unless asked to
- * build it from scratch (gateway/src/agent-updater.ts):
- *   - "none": the current version, whose image is here: nothing would change.
- *   - "switch": another version whose image is on this server. Nothing is built and the npm registry isn't
- *     asked: the image is checked and becomes current, in seconds.
- *   - "build": a version with no image here (the current one included, when its image is missing): minutes, and
- *     the server's CPU meanwhile.
- * The confirmations say it by what the gateway will do when they are shown: an image may have been built or removed
- * since the button was drawn.
+ * What making `version` current takes on the gateway: "none" (it is current and its image is here), "switch" (its
+ * image is here: checked and made current in seconds) or "build" (no image here: minutes, and the server's CPU).
  */
 export type UpdateWork = "none" | "switch" | "build";
 
@@ -135,12 +128,9 @@ export function agentJobStep(job: Pick<AgentUpdateJob, "phase" | "reuse" | "fini
 }
 
 /**
- * What a job does, from what the gateway reports of it:
- *   - "update": another version becomes current (built, from scratch or not, or its image on the server checked);
- *   - "rebuild": the current version built again from scratch (`rebuild`), replacing its image;
- *   - "build": the current version built with the cache, which the gateway does only when its image is missing;
- *   - "check": the current version's image on the server checked and kept, nothing built (the dialogs don't offer
- *     it, the control API takes it).
+ * What a job does: "update" makes another version current; "rebuild" builds the current one from scratch; "build"
+ * builds it with the cache (the gateway does that only when its image is missing); "check" only checks its image
+ * (the dialogs don't offer it, the control API takes it).
  */
 export type JobKind = "update" | "rebuild" | "build" | "check";
 
@@ -161,9 +151,7 @@ const SAME_VERSION_WORDS: Record<Exclude<JobKind, "update">, { running: string; 
 
 /**
  * The job in a few words, by phase: "Updating DeepSeek Harness 0.2.2-rc.1 → 0.2.2-rc.3", "Qwen Code updated to
- * 0.27.4", "Update of Qwen Code to 0.27.4 failed"; for the current version, "Rebuilding Qwen Code 0.27.0" (from
- * scratch), "Building …" (its image was missing) or "Checking …" (jobKind). Whether a version change is from
- * scratch is said beside the title.
+ * 0.27.4", "Update of Qwen Code to 0.27.4 failed"; "Rebuilding…", "Building…" or "Checking…" for the current version.
  */
 export function jobTitle(job: JobTitleFields, name: string): string {
   const kind = jobKind(job);

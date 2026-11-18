@@ -21,11 +21,6 @@ export function NewUser() {
   return <NewUserForm key={round} onAnother={() => setRound((n) => n + 1)} />;
 }
 
-/**
- * The names in a row, then username and temporary password side by side (all stacked on a phone), the "Online
- * workspace" permission (on by default, as the user page's switch), and the buttons in the card's footer, as on
- * the other forms.
- */
 function NewUserForm({ onAnother }: { onAnother: () => void }) {
   const [state, action] = useActionState(createUser, { status: "idle" });
   const [password, setPassword] = useState("");

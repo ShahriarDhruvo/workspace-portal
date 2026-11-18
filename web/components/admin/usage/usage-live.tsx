@@ -11,11 +11,8 @@ import { useLiveFeed } from "./use-live-feed";
 import { ServiceIssue } from "../service-issue";
 
 /**
- * Admin > Usage, live while the tab is visible: the LLM sessions (the page's focal point) and both servers (the
- * same metrics at the same height, to compare); times are measured on the gateway's clock (the frame's `t`).
+ * Admin > Usage, live while the tab is visible; times are measured on the gateway's clock (the frame's `t`).
  * `sessions`: the sessions table's first page, read as the page rendered.
- * Below 3xl the sessions span the width over the two servers; on a wide desktop the three sit side by side. The
- * stream says nothing while it flows; a lost connection is shown until it is back.
  */
 export function UsageLive({ sessions }: { sessions: SessionPage }) {
   const { status, frame, history, error } = useLiveFeed();
