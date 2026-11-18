@@ -127,8 +127,6 @@ test("the user may stop their own workspace (reason \"user\")", () =>
     assert.equal(g.db.select().from(workspaces).where(eq(workspaces.userId, alice)).get()?.agent, "qwen");
   }));
 
-// ------------------------------------------------------------------ DeepSeek Harness
-
 test("a DeepSeek Harness workspace: its own image, credential and settings, the same sandbox paths", () =>
   withGateway(BOTH, async (g) => {
     const { alice } = g.ids;

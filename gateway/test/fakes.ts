@@ -88,8 +88,6 @@ export interface RecordedRequest {
   headers: http.IncomingHttpHeaders;
 }
 
-// ------------------------------------------------------------------ qwen serve
-
 /** What `GET /health?deep=1` reports; tests change it to simulate the agent working. */
 export interface FakeHealth {
   activePrompts: number;
@@ -254,8 +252,6 @@ export async function startFakeQwen(token: string, options: { readyAfterMs: numb
   return fake;
 }
 
-// ------------------------------------------------------------------ dsh web
-
 export interface FakeDsh {
   host: string;
   port: number;
@@ -400,8 +396,6 @@ export async function startFakeDsh(secret: string, options: { readyAfterMs: numb
   fake.port = await listenLocal(server, 0, options.host);
   return fake;
 }
-
-// ------------------------------------------------------------------ container runtime
 
 interface FakeContainer {
   id: string;
@@ -625,8 +619,6 @@ export class FakeRuntime implements ContainerRuntime {
   }
 }
 
-// ------------------------------------------------------------------ image builds
-
 interface FakeImage {
   id: string;
   sizeBytes: number;
@@ -785,8 +777,6 @@ export class FakeImageBuilder implements ImageBuilder {
   }
 }
 
-// ------------------------------------------------------------------ npm registry
-
 /** The registry as the agents' packages look on it, with switches for outages and slow answers. */
 export class FakeRegistry implements NpmRegistry {
   tags: Record<string, Record<string, string>> = {
@@ -823,8 +813,6 @@ export class FakeRegistry implements NpmRegistry {
     return this.published.has(`${packageName}@${version}`) || Object.values(this.tags[packageName] ?? {}).includes(version);
   }
 }
-
-// ------------------------------------------------------------------ LLM server
 
 export interface FakeUpstream {
   port: number;
@@ -882,8 +870,6 @@ export async function startFakeLlm(): Promise<FakeUpstream> {
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
-
-// ------------------------------------------------------------------ LLM engine (portal-hostd)
 
 export const ENGINE_REPOSITORY = "ghcr.io/gufo-org/toolboxes/gufo-runtime";
 

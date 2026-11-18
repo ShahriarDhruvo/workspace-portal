@@ -7,7 +7,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import WebSocket, { WebSocketServer } from "ws";
 import { hashSessionToken } from "@portal/core";
-import { cookie, json, request, startGateway, type Gateway, type Reply } from "./harness.ts";
+import { cookie, json, NAVIGATE, request, startGateway, type Gateway, type Reply } from "./harness.ts";
 import { previewCookieName } from "../src/proxy/preview-proxy.ts";
 
 interface Seen {
@@ -54,8 +54,6 @@ async function startApp(host: string): Promise<{ port: number; seen: Seen[]; soc
       }),
   };
 }
-
-const NAVIGATE = { "sec-fetch-mode": "navigate", "sec-fetch-dest": "iframe", "sec-fetch-site": "same-site", accept: "text/html" };
 
 function previewNavigate(g: Gateway, token: string | null, userId: number, path: string, extra: Record<string, string> = {}, kind: "private" | "online" = "private"): Promise<Reply> {
   const headers: Record<string, string> = { ...NAVIGATE, ...extra };

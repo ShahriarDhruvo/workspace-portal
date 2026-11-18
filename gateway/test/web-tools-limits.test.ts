@@ -4,12 +4,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import net from "node:net";
 import { withPageCache, type ReaderBackend } from "../src/service/reader.ts";
-import { json, request, startGateway, withGateway } from "./harness.ts";
+import { json, mcp, request, startGateway, withGateway } from "./harness.ts";
 
 const rpc = (method: string, params?: unknown) => ({ jsonrpc: "2.0", id: 1, method, ...(params === undefined ? {} : { params }) });
 const readCall = (url: string) => rpc("tools/call", { name: "read_page", arguments: { url } });
-const mcp = (port: number, body: unknown) =>
-  request(port, { method: "POST", path: "/mcp/search", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 /** Sends an MCP request on a socket of its own and returns the socket, so the test decides whether the answer is ever read. */
 const rawPost = (port: number, body: string, read = true): Promise<net.Socket> =>
   new Promise((resolve) => {
@@ -37,7 +35,7 @@ test("an LLM request full of brackets after a URL does not hold up the gateway",
     clearInterval(beat);
     assert.equal(chat.status, 200);
     assert.ok(longest < 1500, `the event loop stood still for ${Math.round(longest)} ms`);
-    const read = json<{ result: { isError?: boolean } }>(await mcp(gw.ports.service, readCall("https://kept.example/page")));
+    const read = json<{ result: { isError?: boolean } }>(await mcp(gw, readCall("https://kept.example/page")));
     assert.equal(read.result.isError, undefined, "the rest of the message was still read");
   }));
 
@@ -67,7 +65,7 @@ test("hanging up does not free a workspace's read slot while its download goes o
     assert.equal(peak, 2, "never more downloads at once than the workspace's limit");
     assert.equal(started, 2, "the other ten were turned away while the first two were still downloading");
     await wait(450);
-    const after = json<{ result: { isError?: boolean } }>(await mcp(gw.ports.service, readCall("https://slow-site.net/next")));
+    const after = json<{ result: { isError?: boolean } }>(await mcp(gw, readCall("https://slow-site.net/next")));
     assert.equal(after.result.isError, undefined, "the slots come back when the downloads end");
   });
 });
@@ -79,20 +77,20 @@ test("a batch is at most 8 messages, and one address has at most 128 connections
   try {
     gw.caller.userId = gw.ids.alice;
     const call = readCall("https://docs.example/long");
-    const nine = await mcp(gw.ports.service, Array.from({ length: 9 }, () => call));
+    const nine = await mcp(gw, Array.from({ length: 9 }, () => call));
     assert.equal(nine.status, 400);
     assert.match(json<{ error: { message: string } }>(nine).error.message, /at most 8 messages/);
-    assert.equal(json<unknown[]>(await mcp(gw.ports.service, Array.from({ length: 8 }, () => call))).length, 8);
+    assert.equal(json<unknown[]>(await mcp(gw, Array.from({ length: 8 }, () => call))).length, 8);
 
     // A client that sends full batches on many connections and never takes the answers: the
     // answers wait in memory, so the connections of one workspace are counted.
     const batch = JSON.stringify(Array.from({ length: 8 }, () => call));
     for (let index = 0; index < 128; index++) sockets.push(await rawPost(gw.ports.service, batch, false));
     await wait(200);
-    await assert.rejects(mcp(gw.ports.service, rpc("ping")), "connection 129 is closed at once");
+    await assert.rejects(mcp(gw, rpc("ping")), "connection 129 is closed at once");
     for (const socket of sockets) socket.destroy();
     await wait(200);
-    assert.equal((await mcp(gw.ports.service, rpc("ping"))).status, 200, "closing them frees the workspace's connections");
+    assert.equal((await mcp(gw, rpc("ping"))).status, 200, "closing them frees the workspace's connections");
   } finally {
     for (const socket of sockets) socket.destroy();
     await gw.close();

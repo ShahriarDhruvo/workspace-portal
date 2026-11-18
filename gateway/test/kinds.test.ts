@@ -249,8 +249,6 @@ test("erasing a kind's files: refused while that kind runs, audited with the kin
     assert.equal(g.info(alice).status, "running");
   }));
 
-// ---------------------------------------------------------------- the host firewall's fence (fence.ts)
-
 test("Online runs only inside the host firewall: without it, Online is off and refused, Private starts as ever", () =>
   withGateway({ fence: "missing" }, async (g) => {
     const { alice, bob } = g.ids;
@@ -347,8 +345,6 @@ test("without a fence check at all (none passed to the manager), Online never ru
     await assert.rejects(manager.start(alice, { kind: "online" }), { code: "online_disabled" });
   }));
 
-// ---------------------------------------------------------------- one origin's page against the other kind's port
-
 for (const agent of ["qwen", "dsh"] as const) {
   test(`${agent}: a page on another port of the host (the Online origin) gets nothing through to the Private agent, cookie or not`, () =>
     withGateway({ env: { WORKSPACE_AGENTS: "qwen,dsh" } }, async (g) => {
@@ -371,8 +367,6 @@ for (const agent of ["qwen", "dsh"] as const) {
       assert.ok(upstream.requests.length > seen);
     }));
 }
-
-// ---------------------------------------------------------------- erasing files against containers and starts
 
 test("erasing Private files waits for no kind flag: a Private container a failed stop left behind is removed first, or nothing is erased", () =>
   withGateway({}, async (g) => {
@@ -406,8 +400,6 @@ test("erasing a kind's files is refused while Docker has a container of that kin
     assert.deepEqual(refusal(await erase(g, alice, "private")), [409, "workspace_running"]);
     assert.deepEqual(json(await erase(g, alice, "online")), { ok: true }, "the other kind's are its own");
   }));
-
-// ---------------------------------------------------------------- user ids without a workspace port
 
 test("a user id without a workspace port (AGENT_PORT_COUNT) starts no workspace of either kind: 409 no_workspace_port", () =>
   withGateway({}, async (g) => {

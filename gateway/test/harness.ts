@@ -116,6 +116,7 @@ export async function waitFor<T>(probe: () => T | undefined | null | false, what
   }
 }
 
+export const NAVIGATE = { "sec-fetch-mode": "navigate", "sec-fetch-dest": "iframe", "sec-fetch-site": "same-site", accept: "text/html" };
 export const cookie = (token: string): string => `theme=dark; portal_session=${encodeURIComponent(token)}`;
 export const bearerSubprotocol = (token: string): string => `${BEARER_SUBPROTOCOL_PREFIX}${Buffer.from(token).toString("base64url")}`;
 
@@ -187,7 +188,6 @@ export interface Gateway {
   finishedRequests: FinishedLlmRequest[];
   sessionLog: Parts["sessionLog"];
   engineHost: FakeEngineHost | null;
-  engineRegistry: FakeEngineRegistry;
   engine: Parts["engine"];
   live: Parts["live"];
   connections: Parts["connections"];
@@ -211,6 +211,7 @@ export interface Gateway {
   logs: string[];
   log: Logger;
   createAgentServer: () => http.Server;
+  createServiceServer: Parts["createServiceServer"];
 
   agentPort(userId: number, kind?: WorkspaceKind): number;
   agentOrigin(userId: number, kind?: WorkspaceKind): string;
@@ -348,7 +349,7 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
     const [control, service, privateService, onlineService] = await Promise.all([parts.control, ...services].map((server) => listenLocal(server)));
     servers = [parts.control, ...services, ...(await listenAgentPorts(config, createAgentServer, parts.createPreviewServer))];
     const ports = { control: control!, service: service!, services: { private: privateService!, online: onlineService! } };
-    return { config, versions, updater, llmQueue, llmRequests, sessionLog, engine, live, connections, sessionCache, manager, ports, createAgentServer };
+    return { config, versions, updater, llmQueue, llmRequests, sessionLog, engine, live, connections, sessionCache, manager, ports, createAgentServer, createServiceServer: parts.createServiceServer };
   };
   const started = await boot(config);
   // deploy/install.sh built the current version of each agent.
@@ -373,7 +374,6 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
     registry,
     finishedRequests,
     engineHost,
-    engineRegistry,
     fence,
     clock,
     caller,
@@ -401,7 +401,7 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
     },
 
     navigate(token, userId, pathname = "/", headers = {}, kind = "private") {
-      const all: Record<string, string> = { "sec-fetch-mode": "navigate", "sec-fetch-dest": "iframe", "sec-fetch-site": "same-site", accept: "text/html", ...headers };
+      const all: Record<string, string> = { ...NAVIGATE, ...headers };
       if (token) all.cookie = cookie(token);
       return request(agentPort(userId, kind), { path: pathname, headers: all });
     },
@@ -505,6 +505,10 @@ export async function withGateway(options: GatewayOptions, run: (gateway: Gatewa
     await gateway.close();
   }
 }
+
+/** One message, or a batch, to the web tools of the shared service listener. */
+export const mcp = (gateway: Gateway, body: unknown): Promise<Reply> =>
+  request(gateway.ports.service, { method: "POST", path: "/mcp/search", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify(body) });
 
 export const logged = (gateway: Gateway, msg: string): boolean => gateway.logs.some((line) => (JSON.parse(line) as { msg: string }).msg === msg);
 
