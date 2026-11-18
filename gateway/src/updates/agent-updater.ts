@@ -1,23 +1,8 @@
-// Makes a version of an agent harness current from the admin console, newer or older: one job at a time, for all
-// agents (an image build is heavy work for the host).
-//
-//   validate the version
-//   → that version's image is on the server already and no rebuild was asked for: use it as it is
-//     (going back to an earlier version needs neither a build nor the registry)
-//   → otherwise: check the registry has it; then, in the job: clear leftovers of interrupted jobs →
-//     build the image (BuildKit's cache makes a known version a matter of seconds; `rebuild` builds
-//     without the cache)
-//   → check the image really contains that version (`<cli> --version`)
-//   → give a new build the workspace tag; make the version current → audit → remove the build a
-//     rebuild replaced
-//
-// A build goes to a staging tag; only a checked image gets the workspace tag and becomes current.
-// A failed or cancelled job (or one over the time limit) leaves the current version and its image as
-// they were. Running workspaces keep the image they started from; every new start uses the current
-// version (WorkspaceManager asks AgentVersions at start time).
-//
-// The seams (ImageBuilder, NpmRegistry, ReleaseCache, AgentVersions, the clock) are injected, so the
-// flow is tested with fakes.
+// Makes a version of an agent current from the admin console, newer or older: one job at a time, for all agents (an
+// image build is heavy work for the host). A build goes to a staging tag; only an image that reports the version asked
+// for gets the workspace tag and becomes current, so a failed or cancelled job (or one over the time limit) leaves the
+// current version and its image as they were. A version whose image is on the server already is used as it is, without
+// a build or the registry. Running workspaces keep the image they started from.
 import crypto from "node:crypto";
 import { isVersion, type AgentKind, type AgentUpdateJob, type AgentVersionsOverview, type PortalDb, type WorkspaceInfo } from "@portal/core";
 import { describeAgentVersions } from "./agent-overview.ts";
@@ -34,19 +19,13 @@ import { notesByVersion, ReleaseCache } from "./release-cache.ts";
 import { appendLog, finishJob } from "./update-job.ts";
 import { agentUnavailable } from "../workspaces/manager.ts";
 
-/**
- * A generous bound for one job's build and version check: a full rebuild (Debian packages, Chromium,
- * npm) on a small host.
- */
+/** For one job's build and version check: a full rebuild (Debian packages, Chromium, npm) on a small host. */
 const BUILD_TIMEOUT_MS = 30 * 60_000;
-/** Lines of build output a job keeps. */
 const LOG_LINES = 200;
 const CANCELLED = "Cancelled";
-/** The error of a job the gateway's shutdown abandoned. */
 export const GATEWAY_RESTARTED = "The gateway restarted during the update.";
 
 const invalidVersion = (version: string): HttpError => new HttpError(400, "invalid_version", `"${version}" is not a version (like 0.27.4).`);
-/** Another update is running (there is one at a time, for all agents). */
 const updateRunning = (message: string): HttpError => new HttpError(409, "update_running", message);
 
 export interface UpdateRequest {
@@ -74,53 +53,38 @@ export interface AgentUpdaterDeps {
 }
 
 export class AgentUpdater {
-  readonly #config: Config;
-  readonly #versions: AgentVersions;
-  readonly #builder: ImageBuilder;
-  readonly #registry: NpmRegistry;
-  readonly #releases: ReleaseCache<NpmPackage>;
-  readonly #workspaces: () => readonly WorkspaceInfo[];
-  readonly #db: PortalDb;
-  readonly #log: Logger;
+  readonly #deps: AgentUpdaterDeps;
   readonly #now: () => number;
-  readonly #newId: () => string;
-  readonly #buildTimeoutMs: number;
+  readonly #releases: ReleaseCache<NpmPackage>;
   /** The running job, else the last finished one. */
   #job: AgentUpdateJob | null = null;
   /** An update request still being checked (its image on the server, the registry); it counts as running. */
   #pending: AgentKind | null = null;
+  /** Cancels the running job; null once it is past the point where that could still leave everything as it was. */
   #cancel: AbortController | null = null;
-  /** False once the job is past the point where cancelling could still leave everything as it was. */
-  #cancellable = false;
   /** The job's run, until it has settled: past its outcome, a failed job still removes its staging image. */
   #running: Promise<void> | null = null;
 
   constructor(deps: AgentUpdaterDeps) {
-    this.#config = deps.config;
-    this.#versions = deps.versions;
-    this.#builder = deps.builder;
-    this.#registry = deps.registry;
-    this.#releases = new ReleaseCache({ source: (name, etag) => deps.registry.packument(name, etag), notes: notesByVersion, github: deps.github, log: deps.log, now: deps.now });
-    this.#workspaces = deps.workspaces;
-    this.#db = deps.db;
-    this.#log = deps.log;
-    this.#now = deps.now ?? Date.now;
-    this.#newId = deps.newId ?? (() => crypto.randomUUID());
-    this.#buildTimeoutMs = deps.buildTimeoutMs ?? BUILD_TIMEOUT_MS;
+    const { registry, github, log, now } = deps;
+    this.#deps = deps;
+    this.#now = now ?? Date.now;
+    this.#releases = new ReleaseCache({ source: (name, etag) => registry.packument(name, etag), notes: notesByVersion, github, log, now });
   }
 
   /** The enabled agents' versions, releases and images, and the current or last job. */
   async overview(options: { refresh?: boolean } = {}): Promise<AgentVersionsOverview> {
-    const kinds = this.#config.workspace.agents;
+    const { config, versions, builder } = this.#deps;
+    const kinds = config.workspace.agents;
     const packages = kinds.map((kind) => driverFor(kind).release.packageName);
-    const [releases, images] = await Promise.all([this.#releases.snapshot(packages, options), this.#builder.list()]);
-    const workspaces = this.#workspaces();
+    const [releases, images] = await Promise.all([this.#releases.snapshot(packages, options), builder.list()]);
+    const workspaces = this.#deps.workspaces();
     return {
       agents: kinds.map((kind) =>
         describeAgentVersions({
           kind,
-          current: this.#versions.current(kind),
-          defaultVersion: this.#versions.defaultVersion(kind),
+          current: versions.current(kind),
+          defaultVersion: versions.defaultVersion(kind),
           releases: releases.packages.get(driverFor(kind).release.packageName),
           images,
           workspaces,
@@ -138,23 +102,35 @@ export class AgentUpdater {
   }
 
   /**
-   * Starts an update and returns the job as it starts (building, or verifying when it uses the image
-   * already on the server). Rejects before anything starts: `agent_unavailable`, `update_running`,
-   * `invalid_version`, `version_not_found`, `registry_unreachable`.
+   * Starts an update and returns the job as it starts (building, or verifying when it uses the image already on the
+   * server). Rejects before anything starts: `agent_unavailable`, `update_running`, `invalid_version`,
+   * `version_not_found`, `registry_unreachable`.
    */
   async startUpdate(request: UpdateRequest): Promise<AgentUpdateJob> {
-    const { agent } = request;
-    if (!this.#config.workspace.agents.includes(agent)) throw agentUnavailable(agent);
-    if (this.#busy()) throw this.#runningError();
+    const { config, versions, builder, registry, log } = this.#deps;
+    const { agent, rebuild } = request;
+    const { name, release } = driverFor(agent);
+    if (!config.workspace.agents.includes(agent)) throw agentUnavailable(agent);
+    const running = this.#job?.finishedAt === null ? this.#job : null;
+    if (running) throw updateRunning(`${driverFor(running.agent).name} is being updated to ${running.toVersion}. Wait for it to finish, or cancel it.`);
+    // A failed job still removes its staging image, and a retry of the same version would build to that very tag.
+    if (this.#running) throw updateRunning("The last update is still cleaning up; try again in a moment.");
+    if (this.#pending) throw updateRunning("An agent update is already running. Wait for it to finish, or cancel it.");
     this.#pending = agent;
     try {
-      const { version, reuse } = await this.#plan(agent, request.version.trim(), request.rebuild);
+      const version = request.version.trim();
+      if (!isVersion(version)) throw invalidVersion(version);
+      // An image on the server is used as it is, without the registry; any other version must be published.
+      const reuse = !rebuild && (await builder.exists(workspaceImage(agent, version)));
+      if (!reuse && !(await registry.hasVersion(release.packageName, version))) {
+        throw new HttpError(404, "version_not_found", `${name} ${version} is not published (${release.packageName}).`);
+      }
       const job: AgentUpdateJob = {
-        id: this.#newId(),
+        id: this.#deps.newId?.() ?? crypto.randomUUID(),
         agent,
-        fromVersion: this.#versions.current(agent),
+        fromVersion: versions.current(agent),
         toVersion: version,
-        rebuild: request.rebuild,
+        rebuild,
         reuse,
         actorUserId: request.actorUserId,
         startedAt: this.#now(),
@@ -167,12 +143,10 @@ export class AgentUpdater {
       const cancel = new AbortController();
       this.#job = job;
       this.#cancel = cancel;
-      this.#cancellable = true;
-      this.#log.info("agent update started", { agent, from: job.fromVersion, to: version, rebuild: request.rebuild, reuse });
+      log.info("agent update started", { agent, from: job.fromVersion, to: version, rebuild, reuse });
       this.#running = this.#run(job, cancel).finally(() => {
         this.#running = null;
         this.#cancel = null;
-        this.#cancellable = false;
       });
       return this.job()!;
     } finally {
@@ -182,7 +156,7 @@ export class AgentUpdater {
 
   /** Cancels the running job; false when there is none (or it is already making the image current). */
   cancel(): boolean {
-    if (this.#job?.finishedAt !== null || !this.#cancel || !this.#cancellable) return false;
+    if (this.#job?.finishedAt !== null || !this.#cancel) return false;
     this.#cancel.abort();
     return true;
   }
@@ -193,97 +167,65 @@ export class AgentUpdater {
   }
 
   /**
-   * At gateway shutdown: abandons a running job (the engine cancels a build when its connection
-   * closes) and records it as failed at once, since the process exits within a second; its staging
-   * image goes at the next start (sweep). A job already making its image current records its outcome
-   * right away and only then removes the build it replaced, which the next start's sweep finishes if
-   * the process exits first.
+   * At gateway shutdown: records a running job as failed at once (the process exits within a second) and abandons its
+   * build; its staging image goes at the next start (sweep). A job already making its image current finishes.
    */
   shutdown(): void {
     const job = this.#job;
-    if (job?.finishedAt !== null || !this.#cancel || !this.#cancellable) return;
+    if (job?.finishedAt !== null || !this.#cancel) return;
     this.#recordFailure(job, GATEWAY_RESTARTED, false);
     this.#cancel.abort();
   }
 
-  /**
-   * Removes what interrupted jobs left behind (ImageBuilder.sweep): at gateway start, and in each job
-   * that builds, before the build. Failing to is logged, not fatal: it never rejects.
-   */
+  /** Removes what interrupted jobs left behind (ImageBuilder.sweep): at gateway start, and before each build. Never rejects. */
   async sweep(): Promise<void> {
+    const { builder, log } = this.#deps;
     try {
-      const removed = await this.#builder.sweep();
-      if (removed.containers.length + removed.images.length > 0) this.#log.info("removed leftovers of earlier agent updates", { ...removed });
+      const removed = await builder.sweep();
+      if (removed.containers.length + removed.images.length > 0) log.info("removed leftovers of earlier agent updates", { ...removed });
     } catch (error) {
-      this.#log.warn("could not remove leftovers of earlier agent updates", { error });
+      log.warn("could not remove leftovers of earlier agent updates", { error });
     }
   }
 
   /**
-   * Removes one of an agent's images. Rejects with `invalid_version`, `update_running` (a job is
-   * building that agent), `image_current` (new workspaces start from it), and the builder's `not_found` / `image_in_use`.
+   * Removes one of an agent's images. Rejects with `invalid_version`, `update_running` (a job is building that agent),
+   * `image_current` (new workspaces start from it), and the builder's `not_found` / `image_in_use`.
    */
   async removeImage(agent: AgentKind, version: string): Promise<void> {
+    const { versions, builder, log } = this.#deps;
     const { name } = driverFor(agent);
     if (!isVersion(version)) throw invalidVersion(version);
     if (this.#pending === agent || (this.#job?.finishedAt === null && this.#job.agent === agent)) {
       throw updateRunning(`An update of ${name} is running. Wait for it to finish, or cancel it.`);
     }
-    if (this.#versions.current(agent) === version) {
+    if (versions.current(agent) === version) {
       throw new HttpError(409, "image_current", `${name} ${version} is the current version: new workspaces start from this image. Switch to another version first.`);
     }
     const image = workspaceImage(agent, version);
-    await this.#builder.remove(image);
-    this.#log.info("agent image removed", { agent, version, image });
-  }
-
-  /**
-   * Until a job's run has settled, not only while it shows as running: a failed job then removes its
-   * staging image, and a retry of the same version would build to that very tag.
-   */
-  #busy(): boolean {
-    return this.#pending !== null || this.#running !== null;
-  }
-
-  #runningError(): HttpError {
-    const job = this.#job?.finishedAt === null ? this.#job : null;
-    if (job) return updateRunning(`${driverFor(job.agent).name} is being updated to ${job.toVersion}. Wait for it to finish, or cancel it.`);
-    if (this.#running) return updateRunning("The last update is still cleaning up; try again in a moment.");
-    return updateRunning("An agent update is already running. Wait for it to finish, or cancel it.");
-  }
-
-  /**
-   * The version to install and whether to use its image on the server as it is: then nothing is built, and the
-   * registry isn't asked either. Otherwise the version must be published.
-   */
-  async #plan(agent: AgentKind, version: string, rebuild: boolean): Promise<{ version: string; reuse: boolean }> {
-    const { name, release } = driverFor(agent);
-    if (!isVersion(version)) throw invalidVersion(version);
-    if (!rebuild && (await this.#builder.exists(workspaceImage(agent, version)))) return { version, reuse: true };
-    if (!(await this.#registry.hasVersion(release.packageName, version))) {
-      throw new HttpError(404, "version_not_found", `${name} ${version} is not published (${release.packageName}).`);
-    }
-    return { version, reuse: false };
+    await builder.remove(image);
+    log.info("agent image removed", { agent, version, image });
   }
 
   /** A job that reuses an image checks and uses the image on the server instead of building one. */
   async #run(job: AgentUpdateJob, cancel: AbortController): Promise<void> {
+    const { versions, builder, db, log } = this.#deps;
     const { agent, toVersion: version, fromVersion, rebuild, reuse } = job;
     const { name, release } = driverFor(agent);
     const append = (lines: readonly string[]): void => appendLog(job, lines, LOG_LINES);
     const image = workspaceImage(agent, version);
     const staging = stagingImage(agent, version);
-    // Leftovers of interrupted jobs (a staging tag, a version-check container) go before the build: in
-    // the job, not the request, which must answer at once, and before the time limit starts. sweep()
-    // never rejects; a cancel meanwhile takes effect at the build.
+    const timeoutMs = this.#deps.buildTimeoutMs ?? BUILD_TIMEOUT_MS;
+    // In the job, not the request, which must answer at once, and before the time limit starts. A cancel meanwhile
+    // takes effect at the build.
     if (!reuse) await this.sweep();
-    const deadline = AbortSignal.timeout(this.#buildTimeoutMs);
+    const deadline = AbortSignal.timeout(timeoutMs);
     const signal = AbortSignal.any([cancel.signal, deadline]);
     try {
       if (reuse) {
         append([`Using the image already on this server (${image}).`]);
       } else {
-        await this.#builder.build(
+        await builder.build(
           { kind: agent, version, versionKey: release.versionKey, image: staging, noCache: rebuild },
           {
             onStep: (step) => {
@@ -295,23 +237,21 @@ export class AgentUpdater {
         );
         signal.throwIfAborted();
       }
-      // The image is there (just built, or the one already on the server); its version is checked next.
       job.phase = "verifying";
       job.step = `${release.cli} --version`;
-      const reported = await this.#builder.cliVersion(reuse ? image : staging, release.cli, signal);
+      const reported = await builder.cliVersion(reuse ? image : staging, release.cli, signal);
       if (reported !== version) throw new Error(`The ${reuse ? "" : "new "}image reports ${name} ${reported ?? "(no version)"}, not ${version}.`);
       append([`${release.cli} --version: ${reported}`]);
       signal.throwIfAborted();
       // From here on the job finishes: the image becomes current.
-      this.#cancellable = false;
-      const replaced = reuse ? null : await this.#builder.promote(staging, image);
-      this.#versions.set(agent, version);
-      finishJob(this.#db, this.#log, "agent", job, this.#now(), { phase: "succeeded", error: null, step: null }, { agent, from: fromVersion, to: version, rebuild });
-      // Only now the build a rebuild replaced, best effort: removing a large image can outlast the second
-      // a shutting-down gateway has left, and the outcome above must not depend on it. One that a
-      // workspace still uses (or that a shutdown cut short) is removed by a later sweep.
+      this.#cancel = null;
+      const replaced = reuse ? null : await builder.promote(staging, image);
+      versions.set(agent, version);
+      finishJob(db, log, "agent", job, this.#now(), { phase: "succeeded", error: null, step: null }, { agent, from: fromVersion, to: version, rebuild });
+      // Only now, best effort: removing a large image can outlast the second a shutting-down gateway has left, and the
+      // outcome above must not depend on it. A later sweep removes what stays.
       if (replaced !== null) {
-        await this.#builder.removeUntagged(replaced).catch((error: unknown) => this.#log.warn("could not remove the build a rebuild replaced", { image: replaced, error }));
+        await builder.removeUntagged(replaced).catch((error: unknown) => log.warn("could not remove the build a rebuild replaced", { image: replaced, error }));
       }
     } catch (error) {
       // Finished already: shutdown() has recorded it.
@@ -319,15 +259,15 @@ export class AgentUpdater {
         const cancelled = cancel.signal.aborted;
         const message = cancelled
           ? CANCELLED
-          : deadline.aborted && this.#cancellable
-            ? `The update took longer than ${Math.round(this.#buildTimeoutMs / 60_000)} minutes and was stopped.`
+          : deadline.aborted && this.#cancel !== null
+            ? `The update took longer than ${Math.round(timeoutMs / 60_000)} minutes and was stopped.`
             : errorMessage(error);
         this.#recordFailure(job, message, cancelled);
       }
-      // After the record: removing a large image can take a while. The image of a reused version is the
-      // workspace image itself, and it stays.
+      // After the record: removing a large image can take a while. A reused version's image is the workspace image
+      // itself, and it stays.
       if (!reuse) {
-        await this.#builder.discard(staging).catch((discardError: unknown) => this.#log.warn("could not remove a staging image", { image: staging, error: discardError }));
+        await builder.discard(staging).catch((discardError: unknown) => log.warn("could not remove a staging image", { image: staging, error: discardError }));
       }
     }
   }
@@ -335,6 +275,6 @@ export class AgentUpdater {
   /** Ends a job that didn't make it: failed (with `message`) or cancelled, audited and logged. */
   #recordFailure(job: AgentUpdateJob, message: string, cancelled: boolean): void {
     const end = { phase: cancelled ? "cancelled" : "failed", error: message, step: null } as const;
-    finishJob(this.#db, this.#log, "agent", job, this.#now(), end, { agent: job.agent, version: job.toVersion, error: message });
+    finishJob(this.#deps.db, this.#deps.log, "agent", job, this.#now(), end, { agent: job.agent, version: job.toVersion, error: message });
   }
 }

@@ -9,7 +9,7 @@ import { AgentVersions } from "./agent-versions.ts";
 import { loadConfig } from "../config.ts";
 import { stagingImage, workspaceImage } from "../docker/image-names.ts";
 import type { Logger } from "../lib/log.ts";
-import { FakeImageBuilder, FakeRegistry, FakeRuntime, gate } from "../../test/fakes.ts";
+import { FakeImageBuilder, FakeRegistry, FakeRuntime, gate, quiet } from "../../test/fakes.ts";
 
 function setup(options: { agents?: string; buildTimeoutMs?: number } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-updater-"));
@@ -79,7 +79,7 @@ test("an update builds a staging image, checks it, tags it and makes it current"
     assert.ok(t.builder.images.has(workspaceImage("qwen", "0.27.4")));
     assert.equal(t.builder.images.has(stagingImage("qwen", "0.27.4")), false, "no staging tag left");
     assert.equal(t.versions.current("qwen"), "0.27.4");
-    assert.equal(AgentVersions.fromConfig(t.config, { info() {}, warn() {}, error() {} }).current("qwen"), "0.27.4", "saved for the next gateway");
+    assert.equal(AgentVersions.fromConfig(t.config, quiet).current("qwen"), "0.27.4", "saved for the next gateway");
     assert.deepEqual(t.audits(), [{ action: "agent_updated", actorUserId: ADMIN, details: { agent: "qwen", from: "0.27.0", to: "0.27.4", rebuild: false } }]);
     assert.deepEqual(t.logs.at(-1), { level: "info", msg: "agent updated", fields: { agent: "qwen", from: "0.27.0", to: "0.27.4", rebuild: false, seconds: 5 } });
     assert.deepEqual(t.registry.calls, ["version @qwen-code/qwen-code@0.27.4"], "a build needs the version published");
@@ -183,7 +183,7 @@ test("a rebuild records its outcome before it removes the build it replaced, and
     let atRemoval: unknown = null;
     t.builder.removeUntagged = async (id) => {
       // What a gateway that stops now keeps: the outcome, the audit entry and the saved version.
-      const kept = { phase: t.updater.job()!.phase, audits: t.audits().map((a) => a.action), saved: AgentVersions.fromConfig(t.config, { info() {}, warn() {}, error() {} }).current("qwen") };
+      const kept = { phase: t.updater.job()!.phase, audits: t.audits().map((a) => a.action), saved: AgentVersions.fromConfig(t.config, quiet).current("qwen") };
       t.updater.shutdown();
       atRemoval = { ...kept, afterShutdown: t.updater.job()!.phase, tag: t.builder.images.get(image)!.id.startsWith("sha256:built-") };
       return removeUntagged(id);
