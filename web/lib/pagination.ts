@@ -3,6 +3,8 @@
 
 export const PAGE_SIZES: readonly number[] = [10, 20, 30, 50, 100];
 export const DEFAULT_PAGE_SIZE = 30;
+/** Rows per page of Admin > Usage's sessions table. */
+export const SESSION_PAGE_SIZE = 6;
 
 /** How many pages `total` rows fill (at least one, so an empty table is on page 1 of 1). */
 export function pageCount(total: number, pageSize: number): number {

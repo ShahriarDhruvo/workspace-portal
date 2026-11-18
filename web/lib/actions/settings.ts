@@ -5,41 +5,18 @@ import { refresh } from "next/cache";
 import { users, writeAudit } from "@portal/core";
 import { getDb } from "../db";
 import { gateway, toApiError } from "../gateway";
+import { saveProfile, type ProfileState } from "../profile";
 import { requireUser } from "../session";
-import { fieldErrors, formText, harnessSchema, profileSchema, type ActionResult } from "../validation";
+import { harnessSchema, type ActionResult } from "../validation";
 import { restartKind } from "../workspace-stop";
-import type { ProfileState } from "./admin";
 
 // The signed-in user's own settings (/settings). They are about the user's own account and workspace, also for
 // an administrator whose session is viewing someone else's.
 
-const NAME_FIELDS = ["firstName", "middleName", "lastName"] as const;
-
-/**
- * Saves the user's own name (the Account card), checked as the admin's Profile form checks it. Audited as
- * `user_updated` on the user's own account, with the fields that changed; an unchanged name stores nothing.
- */
+/** Saves the user's own name (the Account card). */
 export async function saveName(_previous: ProfileState, formData: FormData): Promise<ProfileState> {
   const { user } = await requireUser();
-  const values = formText(formData, NAME_FIELDS);
-  const parsed = profileSchema.safeParse(values);
-  if (!parsed.success) return { status: "invalid", fieldErrors: fieldErrors(parsed.error), values };
-  const changes: Record<string, { from: string | null; to: string | null }> = {};
-  for (const key of NAME_FIELDS) {
-    if ((user[key] ?? null) !== parsed.data[key]) changes[key] = { from: user[key] ?? null, to: parsed.data[key] };
-  }
-  if (Object.keys(changes).length > 0) {
-    const db = getDb();
-    db.transaction(() => {
-      db.update(users)
-        .set({ ...parsed.data, updatedAt: Date.now() })
-        .where(eq(users.id, user.id))
-        .run();
-      writeAudit(db, { action: "user_updated", actorUserId: user.id, targetUserId: user.id, details: changes });
-    });
-    refresh();
-  }
-  return { status: "saved", at: Date.now() };
+  return saveProfile(user.id, user, formData);
 }
 
 /**

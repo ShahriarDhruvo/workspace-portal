@@ -62,8 +62,6 @@ const TITLES: Record<UserDialogKind, string> = {
   onlineOff: "Turn off Online workspace?",
 };
 
-const IDLE: ActionState = { status: "idle" };
-
 interface UserDialogProps {
   kind: UserDialogKind;
   user: DialogUser;
@@ -325,7 +323,7 @@ interface ActionFormProps {
 /** The confirmation form bound to one admin action: description, fields, error and the Cancel / confirm footer. */
 function ActionForm(props: ActionFormProps) {
   const { user, action, onDone, confirmLabel, pendingLabel, danger, description, fields, blocked, renderPassword } = props;
-  const [state, formAction] = useActionState(action, IDLE);
+  const [state, formAction] = useActionState(action, { status: "idle" });
   const closeAfterSuccess = useEffectEvent(onDone);
   const password = state.status === "done" ? state.temporaryPassword : undefined;
 

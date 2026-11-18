@@ -9,6 +9,7 @@ import { attachWorkspaceInBackground, describeError, endSessionsInBackground, ga
 import { clearLoginFailures } from "../login-throttle";
 import { generateTemporaryPassword } from "../password-generator";
 import { hashPassword } from "../passwords";
+import { saveProfile, type ProfileState } from "../profile";
 import { requireAdmin } from "../session";
 import { deleteSessions } from "../session-store";
 import {
@@ -17,7 +18,6 @@ import {
   formText,
   newUserFormSchema,
   onlineAccessSchema,
-  profileSchema,
   userIdSchema,
   type FieldErrors,
 } from "../validation";
@@ -109,39 +109,11 @@ export async function createUser(_previous: CreateUserState, formData: FormData)
   };
 }
 
-const PROFILE_FIELDS = ["firstName", "middleName", "lastName"] as const;
-type ProfileValues = Record<(typeof PROFILE_FIELDS)[number], string>;
-
-export type ProfileState =
-  | { status: "idle" }
-  | { status: "invalid"; fieldErrors: FieldErrors; values: ProfileValues }
-  | { status: "error"; message: string }
-  | { status: "saved"; at: number };
-
 export async function updateProfile(_previous: ProfileState, formData: FormData): Promise<ProfileState> {
   const session = await requireAdmin();
   const target = loadTarget(formData, session, { allowSelf: true });
   if ("error" in target) return { status: "error", message: target.error };
-  const values = formText(formData, PROFILE_FIELDS);
-  const parsed = profileSchema.safeParse(values);
-  if (!parsed.success) return { status: "invalid", fieldErrors: fieldErrors(parsed.error), values };
-
-  const changes: Record<string, { from: string | null; to: string | null }> = {};
-  for (const key of PROFILE_FIELDS) {
-    if ((target.user[key] ?? null) !== parsed.data[key]) changes[key] = { from: target.user[key] ?? null, to: parsed.data[key] };
-  }
-  if (Object.keys(changes).length > 0) {
-    const db = getDb();
-    db.transaction(() => {
-      db.update(users)
-        .set({ ...parsed.data, updatedAt: Date.now() })
-        .where(eq(users.id, target.user.id))
-        .run();
-      writeAudit(db, { action: "user_updated", actorUserId: session.user.id, targetUserId: target.user.id, details: changes });
-    });
-    refresh();
-  }
-  return { status: "saved", at: Date.now() };
+  return saveProfile(session.user.id, target.user, formData);
 }
 
 export async function resetPassword(_previous: ActionState, formData: FormData): Promise<ActionState> {

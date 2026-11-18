@@ -2,7 +2,7 @@
 
 import type { LiveHistory } from "@/lib/live-format";
 import type { LiveFrame } from "@portal/core/wire";
-import type { SessionPage } from "@/lib/session-types";
+import type { SessionPage } from "@/lib/workspace-sessions";
 import { PageHeading } from "@/components/layout/page-heading";
 import { LlmCard } from "./llm-card";
 import { ServerCard } from "./server-card";

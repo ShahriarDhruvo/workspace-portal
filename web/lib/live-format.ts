@@ -5,8 +5,12 @@ import type { EnergyCurrency, HostSample, LiveFrame, LiveInit, LlmTotalsPoint } 
 /** How much history the charts show. */
 export const HISTORY_MS = 60_000;
 
-const integer = new Intl.NumberFormat("en", { maximumFractionDigits: 0 });
-const oneDecimal = new Intl.NumberFormat("en", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+const fixed = (digits: number) => new Intl.NumberFormat("en", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+const integer = fixed(0);
+const oneDecimal = fixed(1);
+const twoDecimals = fixed(2);
+const threeDecimals = fixed(3);
+const fourDecimals = fixed(4);
 
 /** A rate or reading: one decimal below 10, whole numbers (with thousands separators) above. "—" when unknown. */
 export function formatNumber(value: number | null | undefined): string {
@@ -90,15 +94,11 @@ export function usedPercent(used: number | null | undefined, total: number | nul
   return Math.min(100, Math.max(0, (used / total) * 100));
 }
 
-const kwh3 = new Intl.NumberFormat("en", { minimumFractionDigits: 3, maximumFractionDigits: 3 });
-const kwh2 = new Intl.NumberFormat("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const kwh1 = new Intl.NumberFormat("en", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-
 /** Energy without its unit: three decimals for a day's few kWh ("0.214"), fewer as it grows ("41.75", "1,204.5"). */
 export function formatKwh(kwh: number | null | undefined): string {
   if (kwh === null || kwh === undefined || !Number.isFinite(kwh)) return "—";
   const value = Math.max(0, kwh);
-  return (value < 10 ? kwh3 : value < 100 ? kwh2 : value < 1000 ? kwh1 : integer).format(value);
+  return (value < 10 ? threeDecimals : value < 100 ? twoDecimals : value < 1000 ? oneDecimal : integer).format(value);
 }
 
 const money: Record<EnergyCurrency, Intl.NumberFormat> = {
@@ -107,8 +107,8 @@ const money: Record<EnergyCurrency, Intl.NumberFormat> = {
 };
 // Prices per kWh as their sources publish them: EIA in cents to a hundredth, Eurostat in euros to four places.
 const unitPrice: Record<EnergyCurrency, { unit: string; scale: number; format: Intl.NumberFormat }> = {
-  USD: { unit: "¢/kWh", scale: 100, format: new Intl.NumberFormat("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) },
-  EUR: { unit: "€/kWh", scale: 1, format: new Intl.NumberFormat("en", { minimumFractionDigits: 4, maximumFractionDigits: 4 }) },
+  USD: { unit: "¢/kWh", scale: 100, format: twoDecimals },
+  EUR: { unit: "€/kWh", scale: 1, format: fourDecimals },
 };
 
 /** An amount with its currency: "$1.18", "€0.02"; "<$0.01" for a cost too small to show in cents. "—" when unknown. */
@@ -118,11 +118,6 @@ export function formatMoney(amount: number | null | undefined, currency: EnergyC
   return amount > 0 && amount < 0.005 ? `<${format.format(0.01)}` : format.format(Math.max(0, amount));
 }
 
-const cost2 = new Intl.NumberFormat("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const cost1 = new Intl.NumberFormat("en", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-const euro4 = new Intl.NumberFormat("en", { minimumFractionDigits: 4, maximumFractionDigits: 4 });
-const euro3 = new Intl.NumberFormat("en", { minimumFractionDigits: 3, maximumFractionDigits: 3 });
-
 /**
  * A small cost, such as one session's: dollars under one in cents ("0.47¢", "12.3¢"), euros under one to four or
  * three places ("€0.0047", "€0.047"), like their prices per kWh; from one up, as formatMoney. "—" when unknown.
@@ -131,16 +126,16 @@ export function formatCost(amount: number | null | undefined, currency: EnergyCu
   if (amount === null || amount === undefined || !Number.isFinite(amount) || !currency) return "—";
   const value = Math.max(0, amount);
   if (value >= 1) return formatMoney(value, currency);
-  if (currency === "USD") return `${(value < 0.1 ? cost2 : cost1).format(value * 100)}¢`;
-  return `€${(value < 0.01 ? euro4 : euro3).format(value)}`;
+  if (currency === "USD") return `${(value < 0.1 ? twoDecimals : oneDecimal).format(value * 100)}¢`;
+  return `€${(value < 0.01 ? fourDecimals : threeDecimals).format(value)}`;
 }
 
 /** Energy in watt-hours, with its unit: "0.71 Wh", "31.4 Wh", "882 Wh", then "1.24 kWh". "—" when unknown. */
 export function formatWh(wh: number | null | undefined): string {
   if (wh === null || wh === undefined || !Number.isFinite(wh)) return "—";
   const value = Math.max(0, wh);
-  if (value >= 1000) return `${cost2.format(value / 1000)} kWh`;
-  return `${(value < 10 ? cost2 : value < 100 ? cost1 : integer).format(value)} Wh`;
+  if (value >= 1000) return `${twoDecimals.format(value / 1000)} kWh`;
+  return `${(value < 10 ? twoDecimals : value < 100 ? oneDecimal : integer).format(value)} Wh`;
 }
 
 /** The unit prices are shown in: "¢/kWh" for dollars, "€/kWh" for euros. */

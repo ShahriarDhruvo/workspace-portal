@@ -1,13 +1,11 @@
 "use client";
 
 import { startTransition, useActionState, useOptimistic, useRef, useState } from "react";
-import { setOnlineAccess, type ActionState } from "@/lib/actions/admin";
+import { setOnlineAccess } from "@/lib/actions/admin";
 import { FormError } from "@/components/forms/form-error";
 import { Field, FieldContent, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
 import { UserDialog, type DialogUser } from "./user-dialogs";
-
-const IDLE: ActionState = { status: "idle" };
 
 interface OnlineAccessProps {
   user: DialogUser;
@@ -25,7 +23,7 @@ interface OnlineAccessProps {
  * presses but stays enabled: a disabled one would drop the keyboard focus to the page on every toggle.
  */
 export function OnlineAccess({ user, allowed, onlineRunning, portalOff }: OnlineAccessProps) {
-  const [state, save, saving] = useActionState(setOnlineAccess, IDLE);
+  const [state, save, saving] = useActionState(setOnlineAccess, { status: "idle" });
   // The switch moves at once; the page's next render (the action refreshes it) settles it.
   const [shown, setShown] = useOptimistic(allowed);
   const [confirming, setConfirming] = useState(false);

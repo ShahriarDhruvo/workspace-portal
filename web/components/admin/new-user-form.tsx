@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useActionState, useState } from "react";
-import { createUser, type CreateUserState } from "@/lib/actions/admin";
+import { createUser } from "@/lib/actions/admin";
 import { PASSWORD_MIN_LENGTH } from "@/lib/limits";
 import { generateTemporaryPassword } from "@/lib/password-generator";
 import { SecretValue } from "@/components/common/secret-value";
@@ -14,8 +14,6 @@ import { Field, FieldLabel } from "@/components/ui/field";
 import { CheckIcon, RefreshIcon } from "@/components/ui/icons";
 import { Switch } from "@/components/ui/switch";
 import { NameFields } from "./name-fields";
-
-const IDLE: CreateUserState = { status: "idle" };
 
 /** Create-user form; after success it shows the temporary password once. "Create another" remounts it. */
 export function NewUser() {
@@ -29,7 +27,7 @@ export function NewUser() {
  * the other forms.
  */
 function NewUserForm({ onAnother }: { onAnother: () => void }) {
-  const [state, action] = useActionState(createUser, IDLE);
+  const [state, action] = useActionState(createUser, { status: "idle" });
   const [password, setPassword] = useState("");
 
   if (state.status === "created") {

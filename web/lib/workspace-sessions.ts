@@ -2,12 +2,50 @@
 // running sessions first, newest first, then the ended ones by when they ended. Costs use the chosen place's price
 // on the day each session started (prices are monthly or half-yearly, so a session past midnight costs the same).
 import { count, eq, sql } from "drizzle-orm";
-import { displayName, usageDay, users, workspaceSessions, type PortalDb, type WorkspaceSession } from "@portal/core";
+import { displayName, usageDay, users, workspaceSessions, type EnergyCurrency, type PortalDb, type WorkspaceKind, type WorkspaceSession } from "@portal/core";
 import { loadEnergyLocation, loadPricePeriods, priceOn, type DayPrice } from "./energy.ts";
-import { clampPage } from "./pagination.ts";
-import { SESSION_PAGE_SIZE, type SessionPage, type SessionRow } from "./session-types.ts";
+import { clampPage, SESSION_PAGE_SIZE } from "./pagination.ts";
 
 const JOULES_PER_WH = 3600;
+
+/** One run of a user's workspace, from Start to its stop, and what its LLM requests added up to. */
+export interface SessionRow {
+  id: number;
+  userId: number;
+  userName: string;
+  kind: WorkspaceKind;
+  startedAt: number;
+  /** null while it runs. */
+  endedAt: number | null;
+  requests: number;
+  failed: number;
+  /** Tokens in (cached ones included) and out. */
+  tokensIn: number;
+  cachedTokens: number;
+  tokensOut: number;
+  /** Prompt tokens read and answer tokens written per second of the engine's own time; null without any. */
+  readTps: number | null;
+  writeTps: number | null;
+  /** Its requests' time on the LLM server, added up. */
+  llmMs: number;
+  /** Its share of the LLM server's measured energy; null while none was measured. */
+  energyWh: number | null;
+  /** That share's average draw while its requests ran. */
+  watts: number | null;
+  /** The energy at the price of the day it started; null without a place or a price. */
+  cost: number | null;
+  /** The price stands in for a month not yet published. */
+  costEstimate: boolean;
+}
+
+export interface SessionPage {
+  /** 1-based, within range. */
+  page: number;
+  total: number;
+  rows: SessionRow[];
+  /** The currency of the chosen place's prices; null until a place is picked. */
+  currency: EnergyCurrency | null;
+}
 
 /** A stored session as the table shows it, with its cost at `price` (per kWh). Pure. */
 export function sessionRow(row: WorkspaceSession, userName: string, price: DayPrice | null): SessionRow {

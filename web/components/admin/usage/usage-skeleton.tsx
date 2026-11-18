@@ -1,4 +1,4 @@
-import { SESSION_PAGE_SIZE } from "@/lib/session-types";
+import { SESSION_PAGE_SIZE } from "@/lib/pagination";
 import { cn } from "@/lib/utils";
 import { DataTable, DataTableEmpty, DataTableHead } from "@/components/common/data-table";
 import { Card, CardAction, CardContent, CardFooter, CardHeader } from "@/components/ui/card";

@@ -1,14 +1,12 @@
 "use client";
 
 import { useActionState, type ReactNode } from "react";
-import type { ProfileState } from "@/lib/actions/admin";
+import type { ProfileState } from "@/lib/profile";
 import { FormError } from "@/components/forms/form-error";
 import { SubmitButton } from "@/components/forms/submit-button";
 import { CardContent, CardFooter } from "@/components/ui/card";
 import { CheckIcon } from "@/components/ui/icons";
 import { NameFields } from "./name-fields";
-
-const IDLE: ProfileState = { status: "idle" };
 
 interface ProfileFormProps {
   /** The server action that stores the name: the admin's updateProfile (with userId) or Settings' saveName. */
@@ -27,7 +25,7 @@ interface ProfileFormProps {
  * once stored; the server's errors show under the fields.
  */
 export function ProfileForm({ action: save, userId, firstName, middleName, lastName, children }: ProfileFormProps) {
-  const [state, action] = useActionState(save, IDLE);
+  const [state, action] = useActionState(save, { status: "idle" });
   const errors = state.status === "invalid" ? state.fieldErrors : {};
   const values = state.status === "invalid" ? state.values : { firstName, middleName, lastName };
   return (
