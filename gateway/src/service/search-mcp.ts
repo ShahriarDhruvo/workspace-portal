@@ -1,13 +1,10 @@
-// The web tools workspaces get: a minimal, stateless MCP server (streamable HTTP transport, JSON
-// responses) with `web_search`, answered from the configured SearXNG instance, and, when a page
-// reader is configured, `read_page` (reader.ts).
-//
-// Workspaces have no network access except the gateway. A search only ever sends a query to
-// SEARXNG_URL. A page is fetched by the reader container, never by the gateway or the workspace,
-// and only when the workspace is allowed to open that URL (url-policy.ts).
+// The web tools workspaces get: a minimal, stateless MCP server (streamable HTTP transport, JSON responses) with
+// `web_search`, answered from the configured SearXNG instance, and, when a page reader is configured, `read_page`
+// (reader.ts). Workspaces have no network access except the gateway: a search only ever sends a query to SEARXNG_URL,
+// and a page is fetched by the reader container, only when the workspace may open that URL (url-policy.ts).
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { HttpError, readJsonBody, sendJson } from "../lib/http-util.ts";
-import { formatPage, parseReadArguments, ReadError, readPageTool, type ReaderBackend, type ReadRequest } from "./reader.ts";
+import { askService, formatPage, parseReadArguments, ReadError, readPageTool, type ReaderBackend, type ReadRequest } from "./reader.ts";
 import { canonicalUrl, extractUrls } from "./url-policy.ts";
 
 /** Protocol versions this server speaks; it answers with the client's if listed, else the newest. */
@@ -21,13 +18,11 @@ const MAX_SNIPPET_CHARS = 500;
 const MAX_QUERY_CHARS = 400;
 const TIME_RANGES = ["day", "week", "month", "year"] as const;
 
+const SEARCH = "Search the web through the organization's private SearXNG instance. Returns titles, URLs and short snippets. ";
 const SEARCH_ONLY_DESCRIPTION =
-  "Search the web through the organization's private SearXNG instance. Returns titles, URLs and " +
-  "short snippets. This is the only internet access available: pages cannot be opened or downloaded, " +
+  `${SEARCH}This is the only internet access available: pages cannot be opened or downloaded, ` +
   "so rely on the snippets and refine the query (or ask for page 2) when they are not enough.";
-const SEARCH_AND_READ_DESCRIPTION =
-  "Search the web through the organization's private SearXNG instance. Returns titles, URLs and " +
-  "short snippets. When a snippet is not enough, open the result with read_page, refine the query, or ask for page 2.";
+const SEARCH_AND_READ_DESCRIPTION = `${SEARCH}When a snippet is not enough, open the result with read_page, refine the query, or ask for page 2.`;
 
 const WEB_SEARCH_TOOL = {
   name: "web_search",
@@ -79,8 +74,6 @@ const isId = (value: unknown): value is JsonRpcId => typeof value === "string" |
 const rpcResult = (id: JsonRpcId, result: unknown) => ({ jsonrpc: "2.0", id, result });
 const rpcError = (id: JsonRpcId | null, code: number, message: string) => ({ jsonrpc: "2.0", id, error: { code, message } });
 
-type Limiter = { tryAcquire(): (() => void) | null };
-
 /** The page reader as one workspace may use it. */
 export interface PageReader {
   backend: ReaderBackend;
@@ -89,9 +82,8 @@ export interface PageReader {
   /** Characters of a page returned per call. */
   pageChars: number;
   /**
-   * Whether this workspace may open the URL: a refusal (a message for the model), or the URL to
-   * ask the reader for (the checked spelling, never the model's own) and the sites a redirect from
-   * it may lead to (null: anywhere).
+   * Whether this workspace may open the URL: a refusal (a message for the model), or the URL to ask the reader for
+   * (the checked spelling, never the model's own) and the sites a redirect from it may lead to (null: anywhere).
    */
   access(url: string): { refusal: string } | { url: string; redirectHosts: readonly string[] | null };
   /** Called for every valid read, before it runs (activity, logging). */
@@ -201,12 +193,11 @@ async function callTool(params: unknown, options: SearchMcpOptions, req: Incomin
 }
 
 /**
- * The URLs a search answer shows the model: those of the results, not the ones the model wrote
- * into its own query. The answer repeats the query ('No results for "..."'), and a search engine
- * may repeat it in a spelling correction, so a URL in the query proves nothing about what is on
- * the web.
+ * The URLs a search answer shows the model: those of the results, not the ones the model wrote into its own query.
+ * The answer repeats the query ('No results for "..."'), and a search engine may repeat it in a spelling correction,
+ * so a URL in the query proves nothing about what is on the web.
  */
-export function urlsFound(answer: string, query: string): string[] {
+function urlsFound(answer: string, query: string): string[] {
   const own = new Set(extractUrls(query).map(canonicalUrl));
   const results = answer
     .split("\n")
@@ -223,9 +214,8 @@ async function readPage(args: unknown, options: SearchMcpOptions, reader: PageRe
   if ("refusal" in access) return toolError(access.refusal);
   const release = reader.limiter.tryAcquire();
   if (!release) return toolError("Too many pages are being read at once; wait for one to finish and try again.");
-  // The download is not tied to this connection (another workspace may be waiting for the same
-  // page), so the slot is held until the download itself ends: a workspace that hangs up and asks
-  // again does not get more downloads going than its limit.
+  // The download is not tied to this connection (another workspace may be waiting for the same page), so the slot is
+  // held until the download itself ends: a workspace that hangs up and asks again does not exceed its limit.
   const download = reader.backend.read(access.url, new AbortController().signal, { redirectHosts: access.redirectHosts });
   download.then(release, release);
   try {
@@ -259,8 +249,7 @@ async function untilClosed<T>(req: IncomingMessage, work: (signal: AbortSignal) 
 }
 
 const toolText = (text: string) => ({ content: [{ type: "text", text }] });
-
-const toolError = (text: string) => ({ content: [{ type: "text", text }], isError: true });
+const toolError = (text: string) => ({ ...toolText(text), isError: true });
 
 /** Validates tool arguments; returns an error message for the model on bad input. */
 export function parseSearchArguments(args: unknown): SearchQuery | string {
@@ -281,8 +270,6 @@ export function parseSearchArguments(args: unknown): SearchQuery | string {
   };
 }
 
-// ------------------------------------------------------------------ SearXNG backend
-
 interface SearxngResult {
   title?: unknown;
   url?: unknown;
@@ -302,15 +289,15 @@ interface SearxngResponse {
   unresponsive_engines?: unknown[];
 }
 
-export interface SearxngOptions {
+interface SearxngOptions {
   /** Base URL of the SearXNG instance (its /search endpoint must allow format=json). */
   baseUrl: string;
   /** Optional Authorization header value for instances behind auth. */
   authorization: string;
   timeoutMs: number;
   /**
-   * Engines asked by name, once, when a search comes back with fewer than `fallbackBelow` results.
-   * They can be engines SearXNG has loaded but does not use by default (disabled: true).
+   * Engines asked by name, once, when a search comes back with fewer than `fallbackBelow` results. They can be
+   * engines SearXNG has loaded but does not use by default (disabled: true).
    */
   fallbackEngines?: readonly string[];
   fallbackBelow?: number;
@@ -325,34 +312,19 @@ export interface SearxngOptions {
 const MAX_CACHED_SEARCHES = 256;
 
 export function createSearxngBackend(options: SearxngOptions): SearchBackend {
-  const fetchImpl = options.fetchImpl ?? fetch;
-  const now = options.now ?? Date.now;
-  const fallbackEngines = options.fallbackEngines ?? [];
-  const fallbackBelow = options.fallbackBelow ?? 3;
-  const cacheMs = options.cacheMs ?? 0;
+  const { now = Date.now, fallbackEngines = [], fallbackBelow = 3, cacheMs = 0 } = options;
   const cache = new Map<string, { expires: number; text: string }>();
 
   async function ask(query: SearchQuery, engines: readonly string[] | null, signal: AbortSignal): Promise<SearxngResponse> {
-    const url = new URL("search", options.baseUrl.endsWith("/") ? options.baseUrl : `${options.baseUrl}/`);
-    url.searchParams.set("q", query.query);
-    url.searchParams.set("format", "json");
-    url.searchParams.set("pageno", String(query.page));
-    if (query.timeRange) url.searchParams.set("time_range", query.timeRange);
-    if (query.language) url.searchParams.set("language", query.language);
-    if (engines) url.searchParams.set("engines", engines.join(","));
+    const params = new URLSearchParams({ q: query.query, format: "json", pageno: String(query.page) });
+    if (query.timeRange) params.set("time_range", query.timeRange);
+    if (query.language) params.set("language", query.language);
+    if (engines) params.set("engines", engines.join(","));
     const headers: Record<string, string> = { accept: "application/json", "user-agent": "workspace-portal-search/1.0" };
     if (options.authorization) headers.authorization = options.authorization;
 
-    let response: Response;
-    try {
-      response = await fetchImpl(url, {
-        headers,
-        redirect: "error",
-        signal: AbortSignal.any([signal, AbortSignal.timeout(options.timeoutMs)]),
-      });
-    } catch {
-      throw new SearchError("The search engine did not answer. Try again in a moment.");
-    }
+    const response = await askService(options, `search?${params}`, { headers }, signal);
+    if (response === null) throw new SearchError("The search engine did not answer. Try again in a moment.");
     if (response.status === 403) {
       throw new SearchError("The search engine refused the request (is the JSON format enabled in SearXNG's settings?).");
     }
@@ -458,15 +430,18 @@ export function formatResults(query: SearchQuery, data: SearxngResponse): string
       lines.push("");
     });
   }
-  // SearXNG's "suggestions" are left out: they are the engines' autocompletions of the query
-  // ("... key west fl"), which cost the model tokens and send it nowhere.
+  // SearXNG's "suggestions" (the engines' autocompletions of the query) are left out: they cost the model tokens and send it nowhere.
   const corrections = (data.corrections ?? []).map(text).filter(Boolean).slice(0, 3);
   if (corrections.length > 0) lines.push(`Did you mean: ${corrections.join("; ")}`);
   return lines.join("\n").trim();
 }
 
+export interface Limiter {
+  tryAcquire(): (() => void) | null;
+}
+
 /** At most `max` concurrent holders. */
-export function createLimiter(max: number): { tryAcquire(): (() => void) | null } {
+export function createLimiter(max: number): Limiter {
   let active = 0;
   return {
     tryAcquire() {

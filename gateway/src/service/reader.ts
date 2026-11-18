@@ -1,13 +1,9 @@
-// The read_page tool: the gateway's side of the page reader.
-//
-// The fetching and parsing happen in the reader container (reader/), which is unprivileged and can
-// only reach the public internet. The gateway decides whether a workspace may open a URL
-// (url-policy.ts), asks the reader, keeps the answer for a while so paging through a long page
-// costs one download, and hands the model one slice at a time.
+// The read_page tool: the gateway's side of the page reader. The fetching and parsing happen in the reader container
+// (reader/), which is unprivileged and can only reach the public internet. The gateway decides whether a workspace
+// may open a URL (url-policy.ts), asks the reader, keeps the answer for a while so paging through a long page costs
+// one download, and hands the model one slice at a time.
 import { readBoundedText } from "../lib/bounded-body.ts";
 import { canonicalUrl, MAX_URL_CHARS } from "./url-policy.ts";
-
-export { MAX_URL_CHARS };
 
 /** One page as the reader returns it. */
 export interface Page {
@@ -21,17 +17,12 @@ export interface Page {
   note: string;
 }
 
-export interface ReadOptions {
-  /**
-   * The only sites a redirect may lead to, besides staying on its own host; null: anywhere public.
-   * Set for a URL the model may have put together itself (see url-policy.ts).
-   */
-  redirectHosts: readonly string[] | null;
-}
-
 export interface ReaderBackend {
-  /** Reads one page; throws ReadError with a message meant for the model. */
-  read(url: string, signal: AbortSignal, options?: ReadOptions): Promise<Page>;
+  /**
+   * Reads one page; throws ReadError with a message meant for the model. `redirectHosts`: the only sites a redirect
+   * may lead to, besides staying on its own host (for a URL the model may have put together itself); null: anywhere public.
+   */
+  read(url: string, signal: AbortSignal, options?: { redirectHosts: readonly string[] | null }): Promise<Page>;
 }
 
 export class ReadError extends Error {
@@ -45,11 +36,13 @@ export class ReadError extends Error {
   }
 }
 
-export interface ReaderOptions {
-  /** Base URL of the reader container. */
-  baseUrl: string;
-  timeoutMs: number;
-  fetchImpl?: typeof fetch;
+/**
+ * One request to a service that works for the workspaces (SearXNG, the reader), under its base URL and never
+ * following a redirect. Null when it did not answer in time, or `signal` aborted first.
+ */
+export function askService(service: { baseUrl: string; timeoutMs: number; fetchImpl?: typeof fetch }, path: string, init: RequestInit, signal: AbortSignal): Promise<Response | null> {
+  const url = new URL(path, service.baseUrl.endsWith("/") ? service.baseUrl : `${service.baseUrl}/`);
+  return (service.fetchImpl ?? fetch)(url, { ...init, redirect: "error", signal: AbortSignal.any([signal, AbortSignal.timeout(service.timeoutMs)]) }).catch(() => null);
 }
 
 /** The reader cuts a page at 400,000 characters; an answer far beyond that is not one of its own. */
@@ -58,24 +51,14 @@ const MAX_ANSWER_BYTES = 4 * 1024 * 1024;
 /** Reader answers that will not change by asking again soon. */
 const LASTING_CODES = new Set(["bad_url", "blocked", "dns", "http", "tls", "unsupported", "empty", "too_large"]);
 
-export function createReaderBackend(options: ReaderOptions): ReaderBackend {
-  const fetchImpl = options.fetchImpl ?? fetch;
-  const endpoint = new URL("read", options.baseUrl.endsWith("/") ? options.baseUrl : `${options.baseUrl}/`);
+export function createReaderBackend(options: { baseUrl: string; timeoutMs: number; fetchImpl?: typeof fetch }): ReaderBackend {
   return {
     async read(url, signal, readOptions) {
       const fence = readOptions?.redirectHosts ?? null;
-      let response: Response;
-      try {
-        response = await fetchImpl(endpoint, {
-          method: "POST",
-          headers: { "content-type": "application/json", accept: "application/json" },
-          body: JSON.stringify(fence === null ? { url } : { url, redirect_hosts: fence }),
-          redirect: "error",
-          signal: AbortSignal.any([signal, AbortSignal.timeout(options.timeoutMs)]),
-        });
-      } catch {
-        throw new ReadError("The page reader did not answer. Try again in a moment.");
-      }
+      const headers = { "content-type": "application/json", accept: "application/json" };
+      const body = JSON.stringify(fence === null ? { url } : { url, redirect_hosts: fence });
+      const response = await askService(options, "read", { method: "POST", headers, body }, signal);
+      if (response === null) throw new ReadError("The page reader did not answer. Try again in a moment.");
       let data: unknown;
       try {
         data = JSON.parse((await readBoundedText(response, MAX_ANSWER_BYTES)) ?? "");
@@ -102,31 +85,21 @@ export function createReaderBackend(options: ReaderOptions): ReaderBackend {
   };
 }
 
-export interface PageCacheOptions {
-  /** How long a page is kept; 0 turns the cache off. */
-  ttlMs: number;
-  /** How long a lasting refusal is kept, so an agent retrying a dead link does not hammer the site. */
-  refusalTtlMs?: number;
-  maxEntries?: number;
-  /** Total characters of page text kept. */
-  maxChars?: number;
-  now?: () => number;
-}
+/** Total characters of page text the cache keeps. */
+const MAX_CACHED_CHARS = 8_000_000;
 
 type CacheEntry = { expires: number; page: Page } | { expires: number; refusal: string };
 
 /**
- * Wraps a reader with a small cache; concurrent reads of one URL share a download. A page read
- * with a redirect fence and the same page read without one are kept apart, so a fenced read is
- * never answered with what an unfenced one was redirected to. The caller's signal is not passed
- * on: a download that others may be waiting for is not cancelled by one of them leaving.
+ * Wraps a reader with a small cache (`ttlMs`; 0 turns it off); concurrent reads of one URL share a download. A
+ * lasting refusal is kept for `refusalTtlMs`, so an agent retrying a dead link does not hammer the site. A page read
+ * with a redirect fence and the same page read without one are kept apart, so a fenced read is never answered with
+ * what an unfenced one was redirected to. The caller's signal is not passed on: a download that others may be waiting
+ * for is not cancelled by one of them leaving.
  */
-export function withPageCache(backend: ReaderBackend, options: PageCacheOptions): ReaderBackend {
+export function withPageCache(backend: ReaderBackend, options: { ttlMs: number; refusalTtlMs?: number; maxEntries?: number; now?: () => number }): ReaderBackend {
   if (options.ttlMs <= 0) return backend;
-  const now = options.now ?? Date.now;
-  const maxEntries = options.maxEntries ?? 64;
-  const maxChars = options.maxChars ?? 8_000_000;
-  const refusalTtlMs = options.refusalTtlMs ?? 120_000;
+  const { ttlMs, refusalTtlMs = 120_000, maxEntries = 64, now = Date.now } = options;
   const entries = new Map<string, CacheEntry>();
   const pending = new Map<string, Promise<Page>>();
   let chars = 0;
@@ -142,9 +115,8 @@ export function withPageCache(backend: ReaderBackend, options: PageCacheOptions)
     entries.set(key, entry);
     if ("page" in entry) chars += entry.page.text.length;
     for (const oldest of entries.keys()) {
-      if (entries.size <= maxEntries && chars <= maxChars) break;
-      if (oldest !== key) drop(oldest);
-      else break;
+      if ((entries.size <= maxEntries && chars <= MAX_CACHED_CHARS) || oldest === key) break;
+      drop(oldest);
     }
   };
 
@@ -161,26 +133,25 @@ export function withPageCache(backend: ReaderBackend, options: PageCacheOptions)
       }
       let download = pending.get(key);
       if (!download) {
-        download = backend.read(url, new AbortController().signal, readOptions).then(
-          (page) => {
-            store(key, { expires: now() + options.ttlMs, page });
-            return page;
-          },
-          (error: unknown) => {
-            if (error instanceof ReadError && error.lasting) store(key, { expires: now() + refusalTtlMs, refusal: error.message });
-            throw error;
-          },
-        );
+        download = backend
+          .read(url, new AbortController().signal, readOptions)
+          .then(
+            (page) => {
+              store(key, { expires: now() + ttlMs, page });
+              return page;
+            },
+            (error: unknown) => {
+              if (error instanceof ReadError && error.lasting) store(key, { expires: now() + refusalTtlMs, refusal: error.message });
+              throw error;
+            },
+          )
+          .finally(() => pending.delete(key));
         pending.set(key, download);
-        const forget = (): void => void pending.delete(key);
-        download.then(forget, forget);
       }
       return await download;
     },
   };
 }
-
-// ------------------------------------------------------------------ the tool
 
 export function readPageTool(pageChars: number) {
   return {
