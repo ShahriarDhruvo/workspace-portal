@@ -3,7 +3,7 @@
 // serves the LLM and web search to them (one service listener per kind, on that kind's network).
 // See docs/ARCHITECTURE.md.
 import type http from "node:http";
-import { getDatabase, WORKSPACE_KINDS, type WorkspaceKind } from "@portal/core";
+import { openDatabase, WORKSPACE_KINDS, type WorkspaceKind } from "@portal/core";
 import { AgentVersions } from "./updates/agent-versions.ts";
 import { AgentConfigError, driverFor } from "./agents/index.ts";
 import { compose } from "./compose.ts";
@@ -31,7 +31,7 @@ async function main(log: Logger): Promise<void> {
       log.error(`${driver.name} settings are invalid; its workspaces cannot start until they are fixed`, { error: error.message });
     }
   }
-  const db = getDatabase(config.dbFile);
+  const db = openDatabase(config.dbFile);
   // The version (and image) new workspaces of each agent start with: the admin's choice, else .env.
   const versions = AgentVersions.fromConfig(config, log);
   log.info("agent versions", {
