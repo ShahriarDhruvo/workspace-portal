@@ -8,7 +8,6 @@ import type { Config } from "../config.ts";
 import {
   ensureUserDirs,
   eraseKindFiles,
-  moveLegacyFiles,
   removeUserData,
   renderGroup,
   renderPasswd,
@@ -22,17 +21,12 @@ export function kindOwner(config: Config, userId: number, kind: WorkspaceKind): 
   return workspaceOwner(config.workspace.kinds[kind].uidBase, userId);
 }
 
-/**
- * Everything a workspace container of `kind` mounts, ready before it is created. The caller makes sure the user has
- * no container: the Private files of the layout from before kinds are moved into place first. Throws
- * AgentConfigError for unusable settings.
- */
+/** Everything a workspace container of `kind` mounts, ready before it is created. Throws AgentConfigError for unusable settings. */
 export async function prepareWorkspaceFiles(config: Config, userId: number, kind: WorkspaceKind, agent: AgentKind): Promise<void> {
   const paths = userPaths(config.dataDir, userId, kind);
   const owner = kindOwner(config, userId, kind);
   // Rendered first: invalid settings fail the start before anything is written.
   const files = driverFor(agent).renderSettings(config, kind);
-  await moveLegacyFiles(config.dataDir, userId);
   await ensureUserDirs(paths, owner, agent);
   for (const [name, content] of Object.entries(files)) writeFileAtomic(path.join(paths.agentSettings(agent), name), content);
   writeFileAtomic(paths.passwd, renderPasswd(owner));

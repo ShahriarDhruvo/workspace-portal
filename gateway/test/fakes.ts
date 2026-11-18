@@ -427,8 +427,6 @@ export class FakeRuntime implements ContainerRuntime {
   failStops: Error | null = null;
   /** While set, stops wait for it: catches the gateway in the middle of a stop. */
   stopGate: Promise<void> | null = null;
-  /** When set, list() waits for it. */
-  listGate: Promise<void> | null = null;
   #seq = 0;
   readonly #dataDir: string;
 
@@ -567,7 +565,6 @@ export class FakeRuntime implements ContainerRuntime {
   }
 
   async list(): Promise<ContainerSummary[]> {
-    await this.listGate;
     return [...this.containers.values()].map((c) => ({
       id: c.id,
       userId: c.userId,

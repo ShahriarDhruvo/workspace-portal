@@ -12,9 +12,6 @@
 // uid is the kind's UID base + user id (WORKSPACE_UID_BASE for Private, ONLINE_UID_BASE for Online), so no two
 // workspaces share an owner, not even one user's two kinds, and a workspace never owns anything outside its own
 // home and workspace.
-//
-// Before kinds existed the Private files were users/<id>/{home,workspace,system}; moveLegacyFiles puts them in
-// private/ (renames: nothing is copied, owners and SELinux labels stay) while that user has no container.
 import fs from "node:fs";
 import path from "node:path";
 import type { AgentKind, WorkspaceKind } from "@portal/core";
@@ -80,49 +77,10 @@ export async function ensureUserDirs(paths: UserPaths, owner: FileOwner, agent: 
   }
 }
 
-/** The folders of the layout from before kinds, all of them the Private workspace's. */
-const LEGACY_DIRS = ["home", "workspace"] as const;
-
-/** users/<id> still holds the Private files where they were before kinds (home/, workspace/ or system/ at its top). */
-export function hasLegacyFiles(dataDir: string, userId: number): boolean {
-  const root = userRoot(dataDir, userId);
-  return [...LEGACY_DIRS, "system"].some((name) => fs.existsSync(path.join(root, name)));
-}
-
-/**
- * Moves the Private files from before kinds into users/<id>/private/: home/ and workspace/ by rename (same
- * filesystem: the owner, the mode and the SELinux label stay), and removes the old system/ (re-rendered per kind at
- * every start). Each step can be repeated, so an interrupted move finishes the next time. Only while the user has no
- * container: a running one mounts the old paths. Throws when private/ already has a non-empty folder of that name
- * (nothing is overwritten; the admin has to look).
- */
-export async function moveLegacyFiles(dataDir: string, userId: number): Promise<boolean> {
-  const root = userRoot(dataDir, userId);
-  if (!hasLegacyFiles(dataDir, userId)) return false;
-  const target = userPaths(dataDir, userId, "private");
-  ensureDir(target.root, 0o711, { uid: 0, gid: 0 });
-  for (const name of LEGACY_DIRS) {
-    const from = path.join(root, name);
-    if (!fs.existsSync(from)) continue;
-    const to = target[name];
-    if (fs.existsSync(to)) {
-      if (fs.readdirSync(to).length > 0) throw new Error(`both ${from} and ${to} exist: move what ${from} holds into ${to} by hand, then remove ${from}`);
-      fs.rmdirSync(to);
-    }
-    fs.renameSync(from, to);
-  }
-  await fs.promises.rm(path.join(root, "system"), { recursive: true, force: true });
-  return true;
-}
-
-/**
- * Empties one kind's home and workspace (Admin's "Erase files"): both are removed, then created again empty for
- * `owner`. Private also loses the files of the layout from before kinds, should they still be there.
- */
+/** Empties one kind's home and workspace (Admin's "Erase files"): both are removed, then created again empty for `owner`. */
 export async function eraseKindFiles(dataDir: string, userId: number, kind: WorkspaceKind, owner: FileOwner): Promise<void> {
   const paths = userPaths(dataDir, userId, kind);
-  const legacy = kind === "private" ? [...LEGACY_DIRS, "system"].map((name) => path.join(userRoot(dataDir, userId), name)) : [];
-  for (const dir of [paths.home, paths.workspace, ...legacy]) await removeTree(dir);
+  for (const dir of [paths.home, paths.workspace]) await removeTree(dir);
   if (!fs.existsSync(paths.root)) return;
   for (const dir of [paths.home, paths.workspace]) ensureDir(dir, 0o700, owner);
 }

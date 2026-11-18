@@ -6,9 +6,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { llmUsage, users, workspaces, type WorkspaceInfo, type WorkspaceKind } from "@portal/core";
+import { llmUsage, users, type WorkspaceInfo, type WorkspaceKind } from "@portal/core";
 import { eq } from "drizzle-orm";
-import { userPaths, userRoot } from "../src/workspaces/paths.ts";
+import { userPaths } from "../src/workspaces/paths.ts";
 import { WorkspaceManager } from "../src/workspaces/manager.ts";
 import { bearerSubprotocol, cookie, json, logged, request, waitFor, withGateway, type Gateway, type Reply } from "./harness.ts";
 
@@ -249,38 +249,6 @@ test("erasing a kind's files: refused while that kind runs, audited with the kin
     assert.equal(g.info(alice).status, "running");
   }));
 
-test("the files from before kinds become the Private ones at gateway start, or at the next start while a container ran", () =>
-  withGateway({ env: { MAX_RUNNING_WORKSPACES: "3" } }, async (g) => {
-    const { alice, bob } = g.ids;
-    const legacy = (userId: number): string => {
-      const root = userRoot(g.dataDir, userId);
-      fs.mkdirSync(path.join(root, "workspace", "project"), { recursive: true });
-      fs.writeFileSync(path.join(root, "workspace", "project", "notes.md"), `user ${userId}`);
-      fs.mkdirSync(path.join(root, "home", ".qwen"), { recursive: true });
-      fs.mkdirSync(path.join(root, "system", "qwen"), { recursive: true });
-      return root;
-    };
-    // Alice's container from before the update still runs (on her old folders); bob has none.
-    await g.startReady(alice);
-    fs.rmSync(userPaths(g.dataDir, alice, "private").root, { recursive: true });
-    const aliceRoot = legacy(alice);
-    const bobRoot = legacy(bob);
-
-    const manager = await g.restart();
-    assert.deepEqual(fs.readdirSync(bobRoot), ["private"], "bob's files moved when the gateway started");
-    assert.equal(fs.readFileSync(path.join(userPaths(g.dataDir, bob, "private").workspace, "project", "notes.md"), "utf8"), `user ${bob}`);
-    assert.ok(logged(g, "moved a user's files into the Private workspace's folder"));
-    assert.deepEqual(fs.readdirSync(aliceRoot).sort(), ["home", "system", "workspace"], "a running container's folders stay where it mounts them");
-
-    await waitFor(() => manager.info(alice).ready, "alice's workspace to be adopted");
-    await manager.stop(alice, "user");
-    await g.startReady(alice);
-    assert.deepEqual(fs.readdirSync(aliceRoot), ["private"], "moved at her next start");
-    assert.equal(fs.readFileSync(path.join(userPaths(g.dataDir, alice, "private").workspace, "project", "notes.md"), "utf8"), `user ${alice}`);
-    assert.ok(fs.existsSync(userPaths(g.dataDir, alice, "private").passwd), "and system/ rendered in its new place");
-    assert.equal(g.db.select().from(workspaces).where(eq(workspaces.userId, alice)).get()?.kind, "private");
-  }));
-
 // ---------------------------------------------------------------- the host firewall's fence (fence.ts)
 
 test("Online runs only inside the host firewall: without it, Online is off and refused, Private starts as ever", () =>
@@ -437,35 +405,6 @@ test("erasing a kind's files is refused while Docker has a container of that kin
     await g.runtime.startWorkspace(alice, { kind: "private", agent: "qwen", credential: "x", image: g.versions.selection("qwen").image });
     assert.deepEqual(refusal(await erase(g, alice, "private")), [409, "workspace_running"]);
     assert.deepEqual(json(await erase(g, alice, "online")), { ok: true }, "the other kind's are its own");
-  }));
-
-test("an Online start during 'Erase Private files' waits for it: the files from before kinds don't slip into private/", () =>
-  withGateway({}, async (g) => {
-    const { alice, admin } = g.ids;
-    // Private files from before kinds, never moved (the container from before ran at the update).
-    const legacyHome = path.join(userRoot(g.dataDir, alice), "home");
-    fs.mkdirSync(path.join(legacyHome, "notes"), { recursive: true });
-    fs.writeFileSync(path.join(legacyHome, "notes", "secret.txt"), "private");
-    // The erase is held up before it deletes anything (it asks Docker first).
-    let release!: () => void;
-    g.runtime.listGate = new Promise((resolve) => (release = resolve));
-    const erasing = g.manager.eraseFiles(alice, "private", admin);
-    const attempt = g.manager.requestStart(alice, { kind: "online" });
-    assert.ok(attempt.ok, "the other kind may start meanwhile");
-    for (let i = 0; i < 20; i++) await new Promise((resolve) => setImmediate(resolve));
-    // Otherwise the start would move the old home into private/ now, where an erase already past private/home
-    // would never look again.
-    assert.deepEqual(g.runtime.starts, [], "the start waits for the erase");
-    assert.ok(fs.existsSync(path.join(legacyHome, "notes", "secret.txt")), "and has not moved the old files");
-    release();
-    g.runtime.listGate = null;
-    await erasing;
-    await attempt.done;
-    await g.waitReady(alice);
-    const privateHome = userPaths(g.dataDir, alice, "private").home;
-    assert.deepEqual(fs.existsSync(privateHome) ? fs.readdirSync(privateHome) : [], []);
-    assert.equal(fs.existsSync(legacyHome), false);
-    assert.equal(g.info(alice).kind, "online");
   }));
 
 // ---------------------------------------------------------------- user ids without a workspace port

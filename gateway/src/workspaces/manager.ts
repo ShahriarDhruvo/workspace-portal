@@ -14,8 +14,6 @@
 //
 // When a workspace stops: never while its agent is working. Otherwise when nobody has used it for
 // IDLE_TIMEOUT_MINUTES, or soon after the last session using it has ended (sign-out, expiry).
-import fs from "node:fs";
-import path from "node:path";
 import { eq } from "drizzle-orm";
 import {
   countSessionsUsingWorkspace,
@@ -58,7 +56,6 @@ import {
 import { READY_TIMEOUT_MS, waitForReady, type ReadyResult } from "./readiness.ts";
 import { WorkspaceImageMissingError, type ContainerRuntime, type ContainerState, type ContainerSummary } from "../docker/runtime.ts";
 import { eraseWorkspaceFiles, prepareWorkspaceFiles, removeWorkspaceFiles } from "./files.ts";
-import { hasLegacyFiles, moveLegacyFiles } from "./paths.ts";
 
 /** The workspace's data (or, `erasing`, that kind's files) is being deleted: it can't be started meanwhile. */
 const beingDeleted = (erasing: WorkspaceKind | null = null): HttpError =>
@@ -287,28 +284,6 @@ export class WorkspaceManager {
     }
     await this.reconcile();
     for (const entry of stale) if (entry.status === "stopped") this.#persist(entry);
-    await this.#moveLegacyFiles();
-  }
-
-  /**
-   * Puts the Private files of every user without a container where they belong since kinds exist
-   * (users/<id>/private/). A user whose container still runs (adopted from before the update) is moved at their
-   * next start instead.
-   */
-  async #moveLegacyFiles(): Promise<void> {
-    const dir = path.join(this.#config.dataDir, "users");
-    const ids = fs.existsSync(dir) ? fs.readdirSync(dir).filter((name) => /^[1-9]\d*$/.test(name)).map(Number) : [];
-    for (const userId of ids) {
-      const entry = this.#entries.get(userId);
-      if (entry && (isActive(entry) || entry.starting || entry.stopping || entry.leftoverContainerId)) continue;
-      if (!hasLegacyFiles(this.#config.dataDir, userId)) continue;
-      try {
-        await moveLegacyFiles(this.#config.dataDir, userId);
-        this.#log.info("moved a user's files into the Private workspace's folder", { userId });
-      } catch (error) {
-        this.#log.error("could not move a user's files into the Private workspace's folder; their next start tries again", { userId, error });
-      }
-    }
   }
 
   startBackgroundTasks(): void {
@@ -664,13 +639,8 @@ export class WorkspaceManager {
         // A stop that arrived meanwhile: nothing to start.
         if (entry.status !== "starting") return this.info(userId);
       }
-      // A container a failed stop left behind (of either kind) goes first: the files from before kinds may only be
-      // moved, and the new container may only run, once the user has no other.
+      // A container a failed stop left behind (of either kind) goes first.
       await this.#removeLeftover(entry);
-      // An erasure of the other kind's files (this kind's refuses the start) finishes first: Private's takes the
-      // files from before kinds too, which prepareWorkspaceFiles would otherwise move into private/ behind its back.
-      // From the last check on, nothing here awaits before moveLegacyFiles has renamed them (it does that at once).
-      while (entry.erasing) await entry.erasing.done.catch(() => undefined);
       if (entry.status !== "starting") return this.info(userId);
       await prepareWorkspaceFiles(this.#config, userId, kind, agent);
       const credential = driver.generateCredential();
@@ -850,8 +820,8 @@ export class WorkspaceManager {
    * Empties one kind's home and workspace folders (Admin's "Erase files"), audited `workspace_files_erased` with the
    * kind. Refused (`workspace_running`) while that kind is starting, running or stopping, or while Docker still has a
    * container of that kind for the user (one a failed stop left behind and that can't be removed), and (`deleting`)
-   * while the user's data is being deleted; starts of that kind are refused until it is done, and a start of the other
-   * kind waits for it before it prepares its files. The other kind's files are untouched, and it may run meanwhile.
+   * while the user's data is being deleted; starts of that kind are refused until it is done. The other kind's files
+   * are untouched, and it may run meanwhile.
    */
   async eraseFiles(userId: number, kind: WorkspaceKind, actorUserId: number | null = null): Promise<void> {
     const existing = this.#entries.get(userId);
