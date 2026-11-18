@@ -61,7 +61,10 @@ test("GET /control/live streams an init event, then frames with the servers and 
     await waitFor(() => lastFrame().llm.engine === "ready", "the engine check");
     assert.equal(lastFrame().llm.sessionsReported, false);
     assert.equal(g.live.viewers, 1);
-    live.close();
+    const others = await Promise.all(Array.from({ length: 7 }, () => openLive(g)));
+    const ninth = await g.control("GET", "/control/live");
+    assert.deepEqual([ninth.status, json(ninth)], [429, { error: "too_many_viewers", message: "At most 8 live views can be open at once." }]);
+    for (const view of [live, ...others]) view.close();
     await waitFor(() => g.live.viewers === 0, "the viewer to leave");
   }));
 
