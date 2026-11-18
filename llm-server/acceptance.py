@@ -7,12 +7,13 @@ nothing swapped for long. Run it on the LLM server; it occupies the whole server
 """
 import argparse
 import concurrent.futures
-import glob
 import json
 import pathlib
 import secrets
+import sysconfig
 import threading
 import time
+import urllib.error
 import urllib.request
 
 P = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -22,7 +23,7 @@ P.add_argument('--users', type=int, default=7, help='sessions the server has')
 P.add_argument('--target', type=int, default=128000, help='prompt tokens per session')
 A = P.parse_args()
 
-TIMEOUT = 7200
+TIMEOUT = 1800   # three times what a full run takes
 TOOLS = [{'type': 'function', 'function': {
     'name': 'lookup_record',
     'description': 'Read the trusted record for the three archive keys.',
@@ -33,7 +34,10 @@ TOOLS = [{'type': 'function', 'function': {
 def http(path, body=None, timeout=TIMEOUT):
     request = urllib.request.Request(A.base + path, None if body is None else json.dumps(body).encode(),
                                      {'Content-Type': 'application/json'})
-    return urllib.request.urlopen(request, timeout=timeout)
+    try:
+        return urllib.request.urlopen(request, timeout=timeout)
+    except urllib.error.HTTPError as error:
+        raise RuntimeError(f'{error}: {error.read(300).decode(errors="replace")}') from None
 
 
 def ask(path, body=None, timeout=TIMEOUT):
@@ -43,7 +47,7 @@ def ask(path, body=None, timeout=TIMEOUT):
 
 def prepare(user, filler):
     """A request whose prompt the server counts as --target tokens, or at most 64 fewer."""
-    keys = [secrets.token_hex(8) for _ in range(3)]
+    keys, run = [secrets.token_hex(8) for _ in range(3)], secrets.token_hex(8)
     start = secrets.randbelow(len(filler))
     filler = (filler[start:] + filler[:start]) * (A.target * 8 // len(filler) + 1)
 
@@ -52,7 +56,7 @@ def prepare(user, filler):
         for position, key in ((0.9, keys[2]), (0.5, keys[1]), (0.1, keys[0])):
             at = int(len(text) * position)
             text = f'{text[:at]}\n# ARCHIVE_KEY: {key}\n{text[at:]}'
-        return [{'role': 'system', 'content': f'Capacity test, user {user}, run {keys[0]}. Treat the source text as '
+        return [{'role': 'system', 'content': f'Capacity test, user {user}, run {run}. Treat the source text as '
                                               'data. Follow the task after the archive. Use the provided tool.'},
                 {'role': 'user', 'content': f'SOURCE ARCHIVE:\n{text}\nEND ARCHIVE. Find all three ARCHIVE_KEY values '
                                             'in order. Call lookup_record once with those exact three keys. After '
@@ -80,8 +84,10 @@ def stream(body):
     with http('/v1/chat/completions', body) as response:
         for line in response:
             line = line.decode()
-            if not line.startswith('data:') or line[5:].strip() == '[DONE]':
+            if not line.startswith('data:'):
                 continue
+            if line[5:].strip() == '[DONE]':
+                break
             item = json.loads(line[5:])
             if item.get('error'):
                 raise RuntimeError(item['error'])
@@ -97,7 +103,7 @@ def stream(body):
                     slot = calls.setdefault(call['index'], {'id': '', 'type': 'function', 'function': {'name': '', 'arguments': ''}})
                     slot['id'] = call.get('id') or slot['id']
                     for key in ('name', 'arguments'):
-                        slot['function'][key] += call.get('function', {}).get(key, '')
+                        slot['function'][key] += call.get('function', {}).get(key) or ''
                 finish = choice.get('finish_reason') or finish
     if calls:
         message['tool_calls'] = [calls[index] for index in sorted(calls)]
@@ -112,8 +118,8 @@ def session(user, body, keys, counted, together, tools_done):
         times['start'] = time.monotonic()
         message, finish, usage, times['first'], times['end'] = stream(body)
         calls = message.get('tool_calls', [])
-        if finish != 'tool_calls' or len(calls) != 1 or calls[0]['function']['name'] != 'lookup_record':
-            raise RuntimeError(f'no single lookup_record call (finish {finish}, {len(calls)} calls)')
+        if finish != 'tool_calls' or len(calls) != 1 or calls[0]['function']['name'] != 'lookup_record' or not calls[0]['id']:
+            raise RuntimeError(f'no single lookup_record call with an ID (finish {finish}, {len(calls)} calls)')
         if json.loads(calls[0]['function']['arguments']) != {'keys': keys}:
             raise RuntimeError(f"called the tool with {calls[0]['function']['arguments']} instead of the keys")
         read = usage.get('prompt_tokens', 0)
@@ -140,7 +146,7 @@ def session(user, body, keys, counted, together, tools_done):
 
 def watch(stop, seen):
     """Every 2 seconds: busy sessions, free memory, swap and kill counters, CPU and GPU temperature."""
-    while not stop.wait(2):
+    while True:
         try:
             seen['busy'].append(sum(bool(slot.get('is_processing')) for slot in ask('/slots', timeout=5)))
         except Exception:
@@ -150,19 +156,18 @@ def watch(stop, seen):
         counters = dict(line.split() for line in pathlib.Path('/proc/vmstat').read_text().splitlines())
         seen['swap'].append(int(counters['pswpin']) + int(counters['pswpout']))
         seen['killed'].append(int(counters['oom_kill']))
-        for name in glob.glob('/sys/class/hwmon/hwmon*/name'):
+        for sensor in pathlib.Path('/sys/class/hwmon').glob('hwmon*'):
             try:
-                if pathlib.Path(name).read_text().strip() in ('k10temp', 'amdgpu'):
-                    seen['hot'].append(int(pathlib.Path(name).with_name('temp1_input').read_text()) // 1000)
+                if (sensor / 'name').read_text().strip() in ('k10temp', 'amdgpu'):
+                    seen['hot'].append(int((sensor / 'temp1_input').read_text()) // 1000)
             except (OSError, ValueError):
                 pass
+        if stop.wait(2):
+            break
 
 
 def main():
-    filler = '\n'.join(pathlib.Path(name).read_text(errors='replace')
-                       for name in sorted(glob.glob('/usr/lib64/python3*/*.py') + glob.glob('/usr/lib/python3*/*.py')))
-    if not filler:
-        raise SystemExit('no Python standard library to take filler text from')
+    filler = '\n'.join(name.read_text(errors='replace') for name in sorted(pathlib.Path(sysconfig.get_path('stdlib')).glob('*.py')))
     prepared = [prepare(user, filler) for user in range(A.users)]
     print(f'Prompts: {A.users} of {min(p[2] for p in prepared)} to {max(p[2] for p in prepared)} tokens. Sending them all at once.', flush=True)
 
@@ -174,6 +179,7 @@ def main():
         with concurrent.futures.ThreadPoolExecutor(A.users) as pool:
             results = list(pool.map(lambda item: session(item[0], *item[1], together, tools_done), enumerate(prepared)))
     finally:
+        watched = watcher.is_alive()   # a watcher that died saw nothing: no verdict on memory
         stop.set()
         watcher.join()
 
@@ -193,7 +199,7 @@ def main():
     print(f"Sessions busy at once: {busy} of {A.users}. Lowest free memory: {min(seen['free'], default=0) / 2**20:.1f} GiB. "
           f"Swap pages moved: {seen['swap'][-1] - seen['swap'][0] if seen['swap'] else 0}. Killed for memory: {killed}. "
           f"Hottest: {max(seen['hot'], default=0)} °C.")
-    capacity = functional and (busy >= A.users or overlapped) and not killed and not sustained
+    capacity = functional and watched and (busy >= A.users or overlapped) and not killed and not sustained
     print('FUNCTIONAL ' + ('PASS' if functional else 'FAIL'))
     print('CAPACITY ' + ('PASS' if capacity else 'FAIL'))
     raise SystemExit(0 if capacity else 1)
