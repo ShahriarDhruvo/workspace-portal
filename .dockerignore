@@ -1,4 +1,4 @@
-# Build context for web/Dockerfile and gateway/Dockerfile (both build from the repo root).
+# Kept out of web/Dockerfile's build context, the repository root. (The gateway's has a list of its own.)
 **/node_modules
 **/.next
 **/dist
