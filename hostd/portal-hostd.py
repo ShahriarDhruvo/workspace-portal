@@ -1,11 +1,7 @@
 #!/usr/bin/python3
 """portal-hostd: this host's live hardware readings for the workspace portal's gateway and, in the llm role,
 updates of the LLM engine (a rootless Podman quadlet) through the engine user's systemd manager.
-Standard library only. README.md has the configuration, the API and the data sources.
-
-Nothing is sampled while nobody watches: only the meter thread wakes, every METER_PERIOD. While a stream is
-open, one sampler thread reads every source once per interval through file descriptors that stay open.
-"""
+Standard library only. README.md has the configuration, the API and the data sources."""
 
 import glob
 import hmac
@@ -53,8 +49,6 @@ def log(msg):
 def now_ms():
     return int(time.time() * 1000)
 
-
-# --------------------------------------------------------------------------------------------- files
 
 class Fs:
     """Paths under an optional ROOT prefix, so tests can point the daemon at fixture trees."""
@@ -130,8 +124,6 @@ class Src:
                 pass
             self.fd = None
 
-
-# ---------------------------------------------------------------------------------------------- perf
 
 class PerfUnavailable(Exception):
     pass
@@ -278,8 +270,6 @@ def perf_rates(group, prev, cur, dt):
     return [max(0, c - p) * corr * f / dt for p, c, f in zip(prev[2], cur[2], group.factors)]
 
 
-# ---------------------------------------------------------------------------------------- gpu_metrics
-
 GM_V3_SIZE = 264
 
 
@@ -304,11 +294,9 @@ def decode_gpu_metrics(b):
     }
 
 
-# ------------------------------------------------------------------------------------------- devices
-
 def pci_name(fs, vendor, device):
-    """Device name from pci.ids (vendor/device as 4-digit lowercase hex), or None. Read line by line: the file
-    is over a megabyte, and memory once allocated for it would stay in the RSS."""
+    """Device name from pci.ids (vendor/device as 4-digit lowercase hex), or None. Read line by line:
+    memory once allocated for the whole file would stay in the RSS."""
     try:
         f = open(fs.p('/usr/share/hwdata/pci.ids'), encoding='utf-8', errors='replace')
     except OSError:
@@ -397,8 +385,6 @@ class EcFans:
     def empty(self):
         return [{'label': label, 'rpm': None, 'duty': None} for label, _, _ in self.fans]
 
-
-# ---------------------------------------------------------------------------------- network and disks
 
 def counter_rates(prev, cur, dt, unit=1):
     """Per-second increase of two counters summed over the names in both readings ({name: (a, b)}), times unit;
@@ -525,8 +511,6 @@ class FsSpace:
                 self.mounts = mounts
                 self.running = False
 
-
-# ---------------------------------------------------------------------------------------------- host
 
 def r1(x):
     return None if x is None else round(x, 1)
@@ -826,8 +810,6 @@ class Host:
         }
 
 
-# ------------------------------------------------------------------------------------------- sampler
-
 class Sampler:
     """One shared sampling thread; runs only while a stream is open or for a few seconds after /v1/sample."""
 
@@ -955,8 +937,6 @@ class Sampler:
                     self.cond.wait(left)
 
 
-# --------------------------------------------------------------------------------------------- meter
-
 class Meter:
     """Running totals since this hostd started, for GET /v1/meter, kept whether or not anyone watches: the
     energy behind the samples' power.watts and the bytes on the physical interfaces. Energy is the APU's socket
@@ -1040,8 +1020,6 @@ class Meter:
                     'energyJ': None if self.energy is None else round(self.energy, 3),
                     'rxBytes': self.rx, 'txBytes': self.tx}
 
-
-# -------------------------------------------------------------------------------------------- engine
 
 # The three that check a request, with fullmatch: "$" would let a line break at the end through.
 IMAGE_RE = re.compile(r'(?P<repo>[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+)?'
@@ -1518,8 +1496,6 @@ class Engine:
         return {'ok': True}
 
 
-# ---------------------------------------------------------------------------------------------- http
-
 class _DeadlineReader:
     """Stands in for rfile (http.server only calls these two) so that the request line, the headers and the
     body must arrive within HEADER_TIMEOUT in total."""
@@ -1729,8 +1705,6 @@ class App:
             raise ApiError(404, 'no_engine', 'this host has no engine control')
         return self.engine
 
-
-# ---------------------------------------------------------------------------------------------- main
 
 def load_token():
     cred = os.environ.get('CREDENTIALS_DIRECTORY')

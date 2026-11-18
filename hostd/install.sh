@@ -123,7 +123,6 @@ done
 [[ -f $SRC_DIR/portal-hostd.py && -f $SRC_DIR/portal-hostd.service ]] || die "run this from the repo (hostd/ files missing)"
 command -v python3 >/dev/null || die "python3 is required"
 
-# ---- what the role adds to the conf and the unit
 bind=127.0.0.1 identity="DynamicUser=yes" protect_home="ProtectHome=yes" after="" role_conf=()
 if [[ $role == llm ]]; then
     bind=0.0.0.0
@@ -163,7 +162,6 @@ old_ip=$(conf_get FIREWALL_SOURCE)
 old_port=$(conf_get PORT)
 interval=$(conf_get INTERVAL_MS)
 
-# ---- token, conf, daemon, unit
 if [[ $token_stdin == 1 ]]; then
     IFS=$' \t\r' read -r token || [[ -n $token ]] || die "--token-stdin: no token on stdin"   # \r: a line that ends CR LF
     [[ ${#token} -ge 32 && ! $token =~ [[:space:]] ]] || die "--token-stdin: the token must be at least 32 characters without whitespace"
@@ -188,11 +186,10 @@ unit=${unit//@PROTECT_HOME@/$protect_home}
 put 0644 "$UNIT_FILE" <<<"$unit"
 if command -v restorecon >/dev/null; then restorecon -R "$LIB_DIR" "$CONF_DIR" "$UNIT_FILE" || true; fi
 
-# ---- firewall: only the llm role is reached from another host
+# Only the llm role is reached from another host.
 [[ $role == llm && $old_ip == "$portal" && $old_port == "$port" ]] || fw_remove "$old_ip" "$old_port"
 [[ $role != llm ]] || fw_add "$portal" "$port"
 
-# ---- start
 systemctl daemon-reload
 systemctl enable "$UNIT" >/dev/null 2>&1
 if [[ $(state_hash) != "$before" ]] || ! systemctl is-active --quiet "$UNIT"; then

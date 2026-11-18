@@ -29,8 +29,6 @@ D_BAD = 'sha256:' + 'cc' * 32
 D_THIRD = 'sha256:' + 'dd' * 32
 
 
-# ------------------------------------------------------------------------------------------ fixtures
-
 def write(root, path, data, mode='w'):
     full = root + path
     os.makedirs(os.path.dirname(full), exist_ok=True)
@@ -232,8 +230,6 @@ class FakeGroup:
     def read(self):
         return (1, 1, list(self.counts)) if self.fds and self.counts is not None else None
 
-
-# ------------------------------------------------------------------------------------ hardware tests
 
 class TestDecode(unittest.TestCase):
     def test_gpu_metrics_v3(self):
@@ -611,8 +607,6 @@ class TestGpuName(TmpRoot):
             self.assertEqual(H.gpu_display_name(fs, '/dev0', kind, model), want)
 
 
-# -------------------------------------------------------------------------------------- sampler tests
-
 class TestSampler(TmpRoot):
     def setUp(self):
         super().setUp()
@@ -666,8 +660,6 @@ class TestSampler(TmpRoot):
         time.sleep(0.2)
         self.assertEqual(self.sampler.seq, n)
 
-
-# ----------------------------------------------------------------------------------------- engine fakes
 
 QUADLET = f"""[Unit]
 Description=Test engine
@@ -919,7 +911,7 @@ class TestEngine(EngineCase):
                          [(D_NEW, True, False), (D_OLD, False, True), (D_THIRD, False, False)])
         self.assertEqual(st['job']['id'], j['id'])
 
-        # Switching back is an apply like any other (the gateway's Package images "Switch…"), not a rollback.
+        # Switching back is an apply like any other.
         self.engine.start_apply(f'{REPO}@{D_OLD}', '0.31.0')
         j = self.wait_job()
         self.assertEqual((j['kind'], j['phase'], j['image'], j['version']), ('apply', 'succeeded', f'{REPO}@{D_OLD}', '0.31.0'))
@@ -1028,8 +1020,6 @@ class TestEngine(EngineCase):
             else:
                 self.assertEqual(argv[:2], ['systemctl', '--user'])
 
-
-# ------------------------------------------------------------------------------------------ http tests
 
 class HttpCase(TmpRoot):
     max_connections = 16
@@ -1218,8 +1208,6 @@ class TestHttpEngine(HttpCase):
         self.assertEqual((st, body), (200, {'cancelled': False}))
 
 
-# --------------------------------------------------------------------------------------- config tests
-
 class TestConfig(TmpRoot):
     def test_defaults_and_limits(self):
         c = H.config({'ROLE': 'llm', 'ENGINE_UNIT': 'gufo'})
@@ -1252,7 +1240,6 @@ class TestConfig(TmpRoot):
             os.environ.update(env)
 
 
-# ------------------------------------------------------------------------------------------ installer
 STUBS = {
     # systemctl: log every call; restart marks the unit active
     'systemctl': r"""#!/bin/bash
