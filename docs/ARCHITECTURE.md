@@ -60,7 +60,7 @@ browser --(cookie portal_session)--> web app   WEB_BIND:WEB_PORT
 | `reader/`, `searxng/` | the page reader (Python, Defuddle in Node); SearXNG with its `settings.yml` built in |
 | `hostd/`, `qwen-config/` | portal-hostd; the model settings a fresh install starts with |
 | `llm-server/` | the reference LLM server: engine service file, model download, load test, fan control for one board |
-| `deploy/` | installer, firewall, isolation check, image update, model settings, uninstall; `lib.sh` is shared |
+| `deploy/` | installer, firewall, isolation check, image update, model settings, HTTPS, uninstall; `lib.sh` is shared |
 
 The web app keeps sessions, renders the pages and calls the control API. Pages: `/login`, `/change-password`,
 `/` (Home), `/workspace`, `/settings`, and for the admin `/admin` (Usage), `/admin/energy`, `/admin/users`
@@ -88,6 +88,11 @@ same reason: an app's page is not the agent's origin. User ids 1 to `AGENT_PORT_
 other id gets 409 `no_workspace_port`. The offset is fixed because the Web Shell trim and `deploy/lib.sh` hold
 the same number; `config.test.ts` compares the three. Online's ports listen even with `ONLINE_WORKSPACES=off`.
 A service listener waits up to 60 s for its bridge address; the gateway exits if it never appears.
+
+Neither process speaks TLS. For HTTPS, `deploy/tailscale-https.sh` has Tailscale Serve end TLS on the web
+port and on every agent and preview port and pass the bytes to the same port on 127.0.0.1, where it binds
+them. `Host` and `Origin` arrive as the browser sent them, the URLs the web app builds take the page's scheme,
+and the checks below hold unchanged. The manifest (`web/app/manifest.ts`) makes the web app installable.
 
 ## Data directory
 
