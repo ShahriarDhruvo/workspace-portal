@@ -1,11 +1,10 @@
-// Service API for workspace containers, one server per workspace kind on the host's address on that kind's
-// network (Private: WORKSPACE_GATEWAY_IP:SERVICE_PORT, the only address a Private workspace can reach; Online:
-// ONLINE_GATEWAY_IP:SERVICE_PORT): the LLM proxy (to LLM_UPSTREAM_URL, with the real API key added) and the
-// web MCP server (web_search queries SEARXNG_URL; read_page asks the reader container at
-// READER_URL). Callers are identified by their source address, among the running containers of this server's kind
-// only, so an address of the other kind is unknown here; containers run without capabilities on networks without
-// inter-container traffic, so they cannot spoof it. Each server keeps its own per-workspace state (the URLs a
-// workspace was shown, its search and read slots): nothing one kind did carries over to the other.
+// Service API for workspace containers, one server per workspace kind on the host's address on that kind's network
+// (Private: WORKSPACE_GATEWAY_IP:SERVICE_PORT, the only address a Private workspace can reach; Online:
+// ONLINE_GATEWAY_IP:SERVICE_PORT): the LLM proxy (to LLM_UPSTREAM_URL, with the real API key added) and the web MCP
+// server (web_search queries SEARXNG_URL; read_page asks the reader container at READER_URL). Callers are identified
+// by their source address, among the running containers of this server's kind only; containers run without
+// capabilities on networks without inter-container traffic, so they cannot spoof it. Each server keeps its own
+// per-workspace state (the URLs a workspace was shown, its search and read slots): none carries over to the other kind.
 import type http from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { PortalDb, WorkspaceKind } from "@portal/core";
@@ -17,7 +16,7 @@ import type { LlmQueue, ReleaseSlot } from "./llm-queue.ts";
 import type { LlmRequestHandle, LlmRequests } from "../monitor/llm-requests.ts";
 import type { Logger } from "../lib/log.ts";
 import type { ReaderBackend } from "./reader.ts";
-import { createLimiter, handleSearchMcp, type PageReader, type SearchBackend } from "./search-mcp.ts";
+import { createLimiter, handleSearchMcp, type Limiter, type PageReader, type SearchBackend } from "./search-mcp.ts";
 import { canonicalUrl, hostTrusted, ShownUrls, urlHost, urlsShownInLlmRequest } from "./url-policy.ts";
 import { recordUsage, usageParserFor, usageTap, type UsageParser } from "../monitor/usage.ts";
 import type { WorkspaceManager } from "../workspaces/manager.ts";
@@ -44,9 +43,9 @@ const LLM_PREFIX = "/llm/v1/";
 const MCP_PATH = "/mcp/search";
 
 /**
- * The only LLM endpoints a workspace may use, by path under /v1/. The proxy adds the real API key,
- * so with a hosted provider anything else (files, batches, fine-tuning, deletions) would be every
- * workspace's to use. A model id may contain slashes (`models/Qwen/Qwen3-8B`).
+ * The only LLM endpoints a workspace may use, by path under /v1/. The proxy adds the real API key, so with a hosted
+ * provider anything else (files, batches, fine-tuning, deletions) would be every workspace's to use. A model id may
+ * contain slashes (`models/Qwen/Qwen3-8B`).
  */
 const LLM_ROUTES: ReadonlyArray<{ path: RegExp; method: "GET" | "POST" }> = [
   { path: /^chat\/completions$/, method: "POST" },
@@ -56,15 +55,10 @@ const LLM_ROUTES: ReadonlyArray<{ path: RegExp; method: "GET" | "POST" }> = [
   { path: /^models\/[^/]+(?:\/[^/]+)*$/, method: "GET" },
 ];
 
-type Limiter = ReturnType<typeof createLimiter>;
-
 /** LLM request bodies larger than this are not searched for URLs (a conversation full of images). */
 const URL_SCAN_LIMIT_BYTES = 8 * 1024 * 1024;
 
-/**
- * Connections one workspace may have open to this API. An agent with many subagents holds one per
- * waiting LLM request; a workspace that opens connections and never reads the answers is stopped here.
- */
+/** Connections one workspace may have open to this API: one that opens them and never reads the answers stops here. */
 const MAX_CONNECTIONS_PER_WORKSPACE = 128;
 
 const NOT_SHOWN =
@@ -93,8 +87,7 @@ function createWebTools(deps: ServiceDeps): WebTools {
   };
   const { reader: settings } = deps.config;
   const backend = deps.reader ?? null;
-  // Kept for more workspaces than can run at once; one that was dropped is shown its conversation
-  // again by its next LLM request.
+  // Kept for more workspaces than can run at once; one that was dropped is shown its conversation again by its next LLM request.
   const shown = new ShownUrls({ users: Math.max(16, deps.config.maxRunning * 4) });
   const readLimiter = perUser(settings.maxConcurrentPerUser);
   const tracksShown = backend !== null && settings.policy === "shown";
@@ -134,14 +127,7 @@ function createWebTools(deps: ServiceDeps): WebTools {
 export function createServiceServer(deps: ServiceDeps): http.Server {
   const resolveCaller = deps.resolveCaller ?? ((address: string) => deps.manager.userIdForIp(deps.kind, address));
   const web = createWebTools(deps);
-  // LLM streams run as long as generation does.
-  const server = createStreamingServer((req, res) => {
-    handle(deps, resolveCaller, web, req, res).catch((error: unknown) => {
-      deps.log.error("service request failed", { error });
-      if (!res.headersSent) sendError(res, 500, "internal", "Internal error.");
-      else res.destroy();
-    });
-  });
+  const server = createStreamingServer(deps.log, "service", (req, res) => handle(deps, resolveCaller, web, req, res));
   const open = new Map<string, number>();
   server.on("connection", (socket) => {
     const address = socket.remoteAddress ?? "";
@@ -205,10 +191,7 @@ function isPlainPath(pathname: string): boolean {
   return !/%2e|%2f|%5c|\\/i.test(pathname) && new URL(pathname, "http://localhost").pathname === pathname;
 }
 
-/**
- * Collects a request body as it streams by and, once it has all arrived, hands over the URLs in it
- * that the model is being shown.
- */
+/** Collects a request body as it streams by and, once it has all arrived, hands over the URLs in it that the model is being shown. */
 function shownUrlCollector(onUrls: (urls: string[]) => void): { observe: (chunk: Buffer) => void; finish: () => void } {
   let chunks: Buffer[] | null = [];
   let size = 0;
@@ -263,8 +246,8 @@ async function proxyLlm(
     progress?.forwarded();
   }
 
-  // What the model is shown in this request (the user's messages, tool output) it may then open with
-  // read_page. The body has arrived in full before the model can answer, let alone call a tool.
+  // What the model is shown in this request (the user's messages, tool output) it may then open with read_page. The
+  // body has arrived in full before the model can answer, let alone call a tool.
   const collector = generation && web.tracksShown ? shownUrlCollector((urls) => web.shown.add(userId, urls)) : null;
   if (collector) {
     req.once("end", () => {

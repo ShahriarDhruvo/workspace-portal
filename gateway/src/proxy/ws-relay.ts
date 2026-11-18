@@ -1,34 +1,31 @@
-// WebSocket relay for the agents' sockets (the driver's socketPaths). Both sides are terminated:
-// the gateway connects to the workspace first and accepts the browser only once the workspace has
-// accepted, so its answer (401/403/…) can be passed back as a plain HTTP status.
-// The driver puts the container's credential on the upstream handshake. For a token agent the
-// browser must present its session-bound token: browsers can't set headers on WebSockets, so the
-// UI offers it as a `qwen-bearer.<base64url>` subprotocol, which is checked and not passed on.
+// WebSocket relay for the agents' sockets (the driver's socketPaths). Both sides are terminated: the gateway connects
+// to the workspace first and accepts the browser only once the workspace has accepted, so its answer (401/403/…) can
+// be passed back as a plain HTTP status. The driver puts the container's credential on the upstream handshake. For a
+// token agent the browser must present its session-bound token: browsers can't set headers on WebSockets, so the UI
+// offers it as a `qwen-bearer.<base64url>` subprotocol, which is checked and not passed on.
 import { STATUS_CODES, type IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import WebSocket, { WebSocketServer, type RawData } from "ws";
 import { tokensEqual, type SessionContext } from "@portal/core";
-import { checkAgentAccess, INVALID_TOKEN, otherKindError, unavailableError, type AgentDeps } from "./agent-access.ts";
+import { checkAgentAccess, INVALID_TOKEN, unavailable, type AgentDeps } from "./agent-access.ts";
 import { driverFor } from "../agents/index.ts";
 import { MIB } from "../config.ts";
-import { connectionRole } from "./connections.ts";
+import { connectionOf } from "./connections.ts";
 import { bearerToken, splitBearerSubprotocol } from "./headers.ts";
 import { splitTarget } from "../lib/http-util.ts";
 import type { Upstream } from "../workspaces/manager.ts";
 
-const HANDSHAKE_TIMEOUT_MS = 15_000;
+export const HANDSHAKE_TIMEOUT_MS = 15_000;
 const PING_INTERVAL_MS = 20_000;
 const MAX_MISSED_PONGS = 2;
 /** Pause the sending side while more than this is waiting to be written to the other side. */
 const HIGH_WATER_BYTES = 4 * MIB;
 const LOW_WATER_BYTES = MIB;
 
-type UpgradeHandler = (req: IncomingMessage, socket: Duplex, head: Buffer) => void;
-
 /** The subprotocol the workspace selected, per handshake, for the browser side's answer. */
 const selectedProtocol = new WeakMap<IncomingMessage, string>();
 
-export function createWsRelay(deps: AgentDeps): UpgradeHandler {
+export function createWsRelay(deps: AgentDeps): (req: IncomingMessage, socket: Duplex, head: Buffer) => void {
   const server = new WebSocketServer({
     noServer: true,
     perMessageDeflate: false,
@@ -49,16 +46,11 @@ export function createWsRelay(deps: AgentDeps): UpgradeHandler {
     // Only this port's kind: while the user's other kind runs, no socket here reaches it.
     const upstream = deps.manager.upstream(access.userId, access.kind);
     if (!upstream) {
-      // Like the HTTP side: never starts the workspace, so a reconnect loop can't wake it.
-      const info = deps.manager.info(access.userId);
-      const other = otherKindError(info, access.kind);
-      if (other) return rejectUpgrade(socket, 409, other.code, other.message);
-      const { code, message, headers } = unavailableError(info.kind === access.kind ? info.status : "stopped");
-      return rejectUpgrade(socket, 503, code, message, headers);
+      const no = unavailable(deps.manager.info(access.userId), access.kind);
+      return rejectUpgrade(socket, no.status, no.code, no.message, no.headers);
     }
     const driver = driverFor(upstream.agent);
     if (!driver.socketPaths.has(splitTarget(req.url ?? "").pathname)) return rejectUpgrade(socket, 404, "not_found");
-    // A token agent's sockets need the token.
     if (driver.browserAuth === "token" && presented === null) return rejectUpgrade(socket, 401, INVALID_TOKEN.code, INVALID_TOKEN.message);
     connect(deps, server, req, socket, head, upstream, access.context, access.userId, protocols);
   };
@@ -123,12 +115,7 @@ function bridge(deps: AgentDeps, browser: WebSocket, workspace: WebSocket, fromW
   // Typing in the terminal (or any message the browser sends) is someone using the workspace.
   relayMessages(browser, () => deps.manager.touch(userId)).attach(workspace);
 
-  const unregister = deps.connections.add({
-    userId,
-    sessionId: context.session.id,
-    role: connectionRole(context),
-    close: (code, reason) => browser.close(code, reason),
-  });
+  const unregister = deps.connections.add(connectionOf(userId, context, (code, reason) => browser.close(code, reason)));
 
   // The gateway keeps the browser side honest with pings of its own.
   let missedPongs = 0;
@@ -144,10 +131,7 @@ function bridge(deps: AgentDeps, browser: WebSocket, workspace: WebSocket, fromW
     missedPongs = 0;
   });
 
-  let closed = false;
   const cleanup = (): void => {
-    if (closed) return;
-    closed = true;
     clearInterval(heartbeat);
     unregister();
   };
@@ -167,8 +151,8 @@ interface MessageRelay {
 }
 
 /**
- * Forwards data messages from `source`, keeping text and binary frames as they are. Messages
- * arriving before a target is attached are held. Applies backpressure by pausing `source`.
+ * Forwards data messages from `source`, keeping text and binary frames as they are. Messages arriving before a
+ * target is attached are held. Applies backpressure by pausing `source`.
  */
 function relayMessages(source: WebSocket, onMessage: (() => void) | null): MessageRelay {
   let target: WebSocket | null = null;
@@ -230,7 +214,7 @@ function isWebSocketHandshake(req: IncomingMessage): boolean {
 }
 
 /** Answers a refused handshake with the gateway's usual JSON error. */
-function rejectUpgrade(socket: Duplex, status: number, code: string, message?: string, headers: Record<string, string> = {}): void {
+export function rejectUpgrade(socket: Duplex, status: number, code: string, message?: string, headers: Record<string, string> = {}): void {
   if (!socket.writable) {
     socket.destroy();
     return;

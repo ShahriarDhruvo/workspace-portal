@@ -1,25 +1,10 @@
-// Checks every agent-port request (HTTP and WebSocket) passes before anything else happens.
-//
-// Each user's workspace has its own port per kind (Private: AGENT_PORT_BASE + user id, Online:
-// ONLINE_AGENT_PORT_BASE + user id), so the port, not the session, decides which workspace a request is for:
-// the user and the kind. A request gets through only with:
-//   * a sane Host and an Origin that is exactly this workspace's origin (or none),
-//   * a valid portal session whose current workspace is this one (an admin must have opened it
-//     from the admin console; everyone else only ever has their own),
-// and, for anything the Web Shell authenticates, the session-bound workspace token of this kind (checked by the
-// proxy, which swaps it for the container's real token). Whether the port's kind is the one running is the
-// proxy's next question (otherKindError). The preview ports (preview-proxy.ts, the agent port + PREVIEW_PORT_OFFSET)
-// pass the same checks, where a same-site page load may also open the preview in a tab of its own.
+// The checks every request to a workspace's ports (HTTP and WebSocket) passes before anything else. The port, not the
+// session, says which workspace a request is for (the user and the kind). It gets through only with a sane Host, an
+// Origin that is exactly this port's (or none) and a portal session whose current workspace is this one (an admin must
+// have opened it from the admin console). The preview ports (the agent port + PREVIEW_PORT_OFFSET) pass the same
+// checks, where a same-site page load may also open the preview in a tab of its own.
 import type { IncomingMessage } from "node:http";
-import {
-  agentBrowserToken,
-  userIdForAgentPort,
-  WORKSPACE_KIND_NAMES,
-  WORKSPACE_KINDS,
-  type SessionContext,
-  type WorkspaceKind,
-  type WorkspaceStatus,
-} from "@portal/core";
+import { agentBrowserToken, userIdForAgentPort, WORKSPACE_KIND_NAMES, WORKSPACE_KINDS, type SessionContext, type WorkspaceKind, type WorkspaceStatus } from "@portal/core";
 import { PREVIEW_PORT_OFFSET, type Config } from "../config.ts";
 import type { ConnectionRegistry } from "./connections.ts";
 import { originMatchesHost, parseHostHeader, rejectsCrossSite, rejectsSameSite, type HostParts } from "./headers.ts";
@@ -40,66 +25,39 @@ export type AgentAccess =
       ok: true;
       host: HostParts;
       context: SessionContext;
-      /** Whose workspace this port serves. */
+      /** Whose workspace this port serves, and which of that user's two. */
       userId: number;
-      /** Which of that user's two workspaces this port serves. */
       kind: WorkspaceKind;
-      /** The token this session's browser must present for this workspace (this kind's). */
+      /** The token this session's browser must present for this workspace and kind. */
       browserToken: string;
     }
-  | {
-      ok: false;
-      status: 400 | 401 | 403 | 404;
-      code: string;
-      message: string;
-      host: HostParts | null;
-    };
+  | { ok: false; status: 400 | 401 | 403 | 404; code: string; message: string; host: HostParts | null };
 
 /** 401 for a request whose workspace token is not this session's token for this workspace. */
 export const INVALID_TOKEN = { code: "invalid_token", message: "Reload the portal page to reconnect to your workspace." } as const;
 
 /**
- * The 503 for an API request or WebSocket that reaches a workspace that isn't ready. It never
- * starts the workspace: an open tab's reconnect loop must not wake a stopped one.
+ * Why a request can't reach this kind's container: 409 while the user's other kind is starting, running or stopping
+ * (only one runs at a time), else 503. Nothing here starts the workspace: an open tab's reconnect loop must not wake it.
  */
-export function unavailableError(status: WorkspaceStatus): { code: string; message: string; headers: Record<string, string> } {
-  if (status === "starting" || status === "running") {
-    return { code: "workspace_starting", message: "The workspace is starting.", headers: { "retry-after": "2" } };
-  }
-  if (status === "error") return { code: "workspace_error", message: "The workspace failed to start.", headers: {} };
-  return { code: "workspace_stopped", message: "The workspace is not running.", headers: {} };
-}
-
-/**
- * The 409 for a request to one kind's port while the user's other kind is starting, running or stopping (only one
- * runs at a time): it never reaches that container. Null when it is this kind, or nothing, that runs.
- */
-export function otherKindError(
-  running: { status: WorkspaceStatus; kind: WorkspaceKind },
+export function unavailable(
+  info: { status: WorkspaceStatus; kind: WorkspaceKind },
   kind: WorkspaceKind,
-): { code: string; message: string; running: WorkspaceKind } | null {
-  if (running.kind === kind || !["starting", "running", "stopping"].includes(running.status)) return null;
-  const message = `Your ${WORKSPACE_KIND_NAMES[running.kind]} workspace is running, not this one (${WORKSPACE_KIND_NAMES[kind]}).`;
-  return { code: "kind_mismatch", message, running: running.kind };
+): { status: 409 | 503; code: string; message: string; headers: Record<string, string> } {
+  const names = WORKSPACE_KIND_NAMES;
+  if (info.kind !== kind && ["starting", "running", "stopping"].includes(info.status)) {
+    return { status: 409, code: "kind_mismatch", message: `Your ${names[info.kind]} workspace is running, not this one (${names[kind]}).`, headers: {} };
+  }
+  const status = info.kind === kind ? info.status : "stopped";
+  if (status === "starting" || status === "running") {
+    return { status: 503, code: "workspace_starting", message: "The workspace is starting.", headers: { "retry-after": "2" } };
+  }
+  if (status === "error") return { status: 503, code: "workspace_error", message: "The workspace failed to start.", headers: {} };
+  return { status: 503, code: "workspace_stopped", message: "The workspace is not running.", headers: {} };
 }
 
 /** Which of a workspace's ports a server answers on: its agent's, or its web apps' (preview-proxy.ts). */
 export type WorkspaceSurface = "agent" | "preview";
-
-/** The workspace (user id and kind) a connection reached, from the local port it arrived on. */
-export function workspaceForPort(
-  config: Config,
-  localPort: number | undefined,
-  surface: WorkspaceSurface = "agent",
-): { userId: number; kind: WorkspaceKind } | null {
-  if (localPort === undefined) return null;
-  const agentPort = surface === "preview" ? localPort - PREVIEW_PORT_OFFSET : localPort;
-  for (const kind of WORKSPACE_KINDS) {
-    const userId = userIdForAgentPort(config.workspace.kinds[kind].agentPortBase, config.agentPortCount, agentPort);
-    if (userId !== null) return { userId, kind };
-  }
-  return null;
-}
 
 export function checkAgentAccess(
   req: IncomingMessage,
@@ -107,25 +65,26 @@ export function checkAgentAccess(
   upgrade: boolean,
   surface: WorkspaceSurface = "agent",
 ): AgentAccess {
+  const { config } = deps;
+  const method = req.method ?? "GET";
   const host = parseHostHeader(req.headers.host);
-  if (!host) return { ok: false, status: 400, code: "bad_request", message: "Missing or invalid Host header.", host };
-  const workspace = workspaceForPort(deps.config, req.socket.localPort, surface);
-  if (workspace === null) return { ok: false, status: 404, code: "not_found", message: "No workspace here.", host };
+  const no = (status: 400 | 401 | 403 | 404, code: string, message: string): AgentAccess => ({ ok: false, status, code, message, host });
+  if (!host) return no(400, "bad_request", "Missing or invalid Host header.");
+  const agentPort = (req.socket.localPort ?? NaN) - (surface === "preview" ? PREVIEW_PORT_OFFSET : 0);
+  const [workspace] = WORKSPACE_KINDS.flatMap((kind) => {
+    const userId = userIdForAgentPort(config.workspace.kinds[kind].agentPortBase, config.agentPortCount, agentPort);
+    return userId === null ? [] : [{ userId, kind }];
+  });
+  if (!workspace) return no(404, "not_found", "No workspace here.");
   const { userId, kind } = workspace;
   const { origin } = req.headers;
-  if (origin !== undefined && !originMatchesHost(origin, host)) {
-    return { ok: false, status: 403, code: "forbidden_origin", message: "Cross-origin requests are not allowed.", host };
-  }
-  if (rejectsCrossSite(req.method ?? "GET", req.headers, upgrade)) {
-    return { ok: false, status: 403, code: "forbidden_cross_site", message: "Cross-site requests are not allowed.", host };
-  }
-  if (rejectsSameSite(req.method ?? "GET", req.headers, upgrade, surface === "preview")) {
-    return { ok: false, status: 403, code: "forbidden_same_site", message: "Requests from another port of this host are not allowed.", host };
+  if (origin !== undefined && !originMatchesHost(origin, host)) return no(403, "forbidden_origin", "Cross-origin requests are not allowed.");
+  if (rejectsCrossSite(method, req.headers, upgrade)) return no(403, "forbidden_cross_site", "Cross-site requests are not allowed.");
+  if (rejectsSameSite(method, req.headers, upgrade, surface === "preview")) {
+    return no(403, "forbidden_same_site", "Requests from another port of this host are not allowed.");
   }
   const context = deps.sessions.fromCookieHeader(req.headers.cookie);
-  if (!context) return { ok: false, status: 401, code: "unauthenticated", message: "You are signed out.", host };
-  if (context.target.id !== userId) {
-    return { ok: false, status: 403, code: "other_workspace", message: "This session is not using this workspace.", host };
-  }
-  return { ok: true, host, context, userId, kind, browserToken: agentBrowserToken(deps.config.controlSecret, context.session.id, userId, kind) };
+  if (!context) return no(401, "unauthenticated", "You are signed out.");
+  if (context.target.id !== userId) return no(403, "other_workspace", "This session is not using this workspace.");
+  return { ok: true, host, context, userId, kind, browserToken: agentBrowserToken(config.controlSecret, context.session.id, userId, kind) };
 }
