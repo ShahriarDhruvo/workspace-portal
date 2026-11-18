@@ -42,6 +42,7 @@ const LOG_LINES = 400;
 export const CANCELLED = "Cancelled.";
 export const GATEWAY_STOPPED = "The gateway stopped during the update; check the engine's version.";
 
+export const invalidVersion = (): HttpError => new HttpError(400, "invalid_version", "version must be a release version, like 0.34.0.");
 const unavailable = (message: string): HttpError => new HttpError(503, "engine_unavailable", message);
 const jobRunning = (): HttpError => new HttpError(409, "engine_job_running", "An engine update is running. Wait for it to finish, or cancel it.");
 
@@ -129,7 +130,7 @@ export class EngineUpdater {
    */
   async startUpdate(request: { version: string; actorUserId: number | null }): Promise<EngineUpdateJob> {
     const { version, actorUserId } = request;
-    if (!isStableVersion(version)) throw new HttpError(400, "invalid_version", "version must be a release version, like 0.34.0.");
+    if (!isStableVersion(version)) throw invalidVersion();
     const { engine, host } = await this.#ready();
     if (engine.version === version) throw new HttpError(409, "already_current", `The engine already runs ${version}.`);
     const local = engine.images.find((image) => image.version === version && image.digest !== null)?.digest ?? null;
@@ -183,7 +184,12 @@ export class EngineUpdater {
     if (this.running) throw jobRunning();
     const host = this.#options.host;
     if (host === null) throw unavailable("The LLM server's portal-hostd is not set up.");
-    await host.removeImage(digest);
+    await host.removeImage(digest).catch((error: unknown) => {
+      if (!(error instanceof HostdError)) throw error;
+      // hostd's own refusals (the running image, a job it runs) are the admin's to see; the rest is a fault.
+      if (error.status === 409 || error.status === 404) throw new HttpError(error.status, error.code, error.message);
+      throw new HttpError(502, "hostd_failed", `portal-hostd on the LLM server: ${error.message}`);
+    });
   }
 
   /** At gateway shutdown: a running job is recorded as failed (hostd carries on with what it was doing). */

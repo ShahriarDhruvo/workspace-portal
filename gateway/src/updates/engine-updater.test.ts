@@ -9,6 +9,7 @@ import { waitFor } from "../../test/harness.ts";
 import { loadConfig } from "../config.ts";
 import { EngineReleases } from "./engine-releases.ts";
 import { CANCELLED, EngineUpdater, GATEWAY_STOPPED } from "./engine-updater.ts";
+import { HostdError } from "../monitor/hostd.ts";
 import { LlmQueue } from "../service/llm-queue.ts";
 
 function setup(options: { host?: FakeEngineHost | null; drainMinutes?: number } = {}) {
@@ -205,6 +206,8 @@ test("removing an engine image: not while a job runs, not the running one", asyn
   await updater.removeImage(engineDigest("0.30.0"));
   assert.equal(host.local.has("0.30.0"), false);
   await assert.rejects(updater.removeImage("0.30.0"), { status: 400, code: "invalid_digest" });
-  await assert.rejects(updater.removeImage(engineDigest("0.31.0")), /runs this image/);
+  await assert.rejects(updater.removeImage(engineDigest("0.31.0")), { status: 409, code: "image_current", message: "The engine runs this image." });
+  host.removeImage = () => Promise.reject(new HostdError(null, "unreachable", "http://llm:9180: connect ECONNREFUSED"));
+  await assert.rejects(updater.removeImage(engineDigest("0.31.0")), { status: 502, code: "hostd_failed", message: "portal-hostd on the LLM server: http://llm:9180: connect ECONNREFUSED" });
   cleanup();
 });

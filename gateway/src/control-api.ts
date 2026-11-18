@@ -3,27 +3,14 @@
 import crypto from "node:crypto";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import { eq } from "drizzle-orm";
-import {
-  AGENT_KINDS,
-  isAgentKind,
-  isWorkspaceKind,
-  STOP_REASONS,
-  users,
-  WORKSPACE_KINDS,
-  type AgentInfo,
-  type AgentKind,
-  type PortalDb,
-  type StopReason,
-  type WorkspaceKind,
-} from "@portal/core";
+import { AGENT_KINDS, STOP_REASONS, users, WORKSPACE_KINDS, type AgentInfo, type AgentKind, type PortalDb, type StopReason, type WorkspaceKind } from "@portal/core";
 import type { AgentUpdater, UpdateRequest } from "./updates/agent-updater.ts";
 import type { AgentVersions } from "./updates/agent-versions.ts";
 import { driverFor } from "./agents/index.ts";
 import type { Config } from "./config.ts";
 import { SESSION_DISCONNECTED, type ConnectionRegistry } from "./proxy/connections.ts";
-import type { EngineUpdater } from "./updates/engine-updater.ts";
+import { invalidVersion, type EngineUpdater } from "./updates/engine-updater.ts";
 import { readHostStats } from "./monitor/host-stats.ts";
-import { HostdError } from "./monitor/hostd.ts";
 import { HttpError, readJsonBody, sendError, sendJson, splitTarget } from "./lib/http-util.ts";
 import type { LiveHub } from "./monitor/live.ts";
 import type { EnergyPrices } from "./monitor/energy-prices.ts";
@@ -32,7 +19,7 @@ import type { Logger } from "./lib/log.ts";
 import type { SessionCache } from "./proxy/session-cache.ts";
 import type { WorkspaceManager } from "./workspaces/manager.ts";
 
-export interface ControlDeps {
+interface ControlDeps {
   config: Config;
   db: PortalDb;
   manager: WorkspaceManager;
@@ -72,9 +59,8 @@ const ROUTES: Route[] = [
     },
   },
   { method: "GET", pattern: /^\/control\/agents$/, handler: (deps) => ({ agents: agentList(deps.config, deps.versions) }) },
-  // Admin > Energy's electricity prices (energy-prices.ts): the downloads' state, and a download now when the admin
-  // picks a place (a source downloaded in the last 10 minutes is not asked again). Answers once both are done.
   { method: "GET", pattern: /^\/control\/energy-prices$/, handler: (deps) => deps.prices.status() },
+  // Answers once both sources are done (one downloaded in the last 10 minutes is not asked again).
   { method: "POST", pattern: /^\/control\/energy-prices\/refresh$/, handler: (deps) => deps.prices.refresh() },
   {
     // For deploy/install.sh and update-image.sh: answers at once (no registry or hostd call).
@@ -82,26 +68,17 @@ const ROUTES: Route[] = [
     pattern: /^\/control\/updates\/running$/,
     handler: (deps) => {
       const agent = deps.updater.job()?.finishedAt === null;
-      const engine = deps.engine.snapshot()?.finishedAt === null;
+      const engine = deps.engine.running;
       return { running: agent || engine, agent, engine };
     },
   },
-  {
-    method: "GET",
-    pattern: /^\/control\/agents\/versions$/,
-    handler: (deps, req) => deps.updater.overview({ refresh: new URLSearchParams(splitTarget(req.url ?? "").search).get("refresh") === "1" }),
-  },
-  {
-    method: "POST",
-    pattern: /^\/control\/agents\/update\/cancel$/,
-    handler: (deps) => ({ cancelled: deps.updater.cancel() }),
-  },
+  { method: "GET", pattern: /^\/control\/agents\/versions$/, handler: (deps, req) => deps.updater.overview({ refresh: query(req).get("refresh") === "1" }) },
+  { method: "POST", pattern: /^\/control\/agents\/update\/cancel$/, handler: (deps) => ({ cancelled: deps.updater.cancel() }) },
   {
     method: "POST",
     pattern: /^\/control\/agents\/([^/]+)\/update$/,
     handler: async (deps, req, [agent]) => {
-      const kind = agentParam(agent);
-      const body = updateBody(kind, await readJsonBody(req, MAX_BODY_BYTES));
+      const body = updateBody(agentOf(decodeParam(agent)), await jsonBody(req));
       if (body.actorUserId !== null) requireUser(deps.db, body.actorUserId, "actorUserId");
       return deps.updater.startUpdate(body);
     },
@@ -110,24 +87,20 @@ const ROUTES: Route[] = [
     method: "DELETE",
     pattern: /^\/control\/agents\/([^/]+)\/images\/([^/]+)$/,
     handler: async (deps, _req, [agent, version]) => {
-      await deps.updater.removeImage(agentParam(agent), decodeParam(version));
+      await deps.updater.removeImage(agentOf(decodeParam(agent)), decodeParam(version));
       return { ok: true };
     },
   },
-  {
-    method: "GET",
-    pattern: /^\/control\/engine$/,
-    handler: (deps, req) => deps.engine.overview({ refresh: new URLSearchParams(splitTarget(req.url ?? "").search).get("refresh") === "1" }),
-  },
+  { method: "GET", pattern: /^\/control\/engine$/, handler: (deps, req) => deps.engine.overview({ refresh: query(req).get("refresh") === "1" }) },
   {
     method: "POST",
     pattern: /^\/control\/engine\/update$/,
     handler: async (deps, req) => {
-      const { version, actorUserId } = objectBody(await readJsonBody(req, MAX_BODY_BYTES));
-      if (typeof version !== "string" || version.length > 64) throw new HttpError(400, "invalid_version", "version must be a release version, like 0.34.0.");
+      const { version, actorUserId } = await jsonBody(req);
+      if (typeof version !== "string" || version.length > 64) throw invalidVersion();
       const actor = actorParam(actorUserId);
       if (actor !== null) requireUser(deps.db, actor, "actorUserId");
-      return engineCall(() => deps.engine.startUpdate({ version, actorUserId: actor }));
+      return deps.engine.startUpdate({ version, actorUserId: actor });
     },
   },
   { method: "POST", pattern: /^\/control\/engine\/cancel$/, handler: async (deps) => ({ cancelled: await deps.engine.cancel() }) },
@@ -136,7 +109,7 @@ const ROUTES: Route[] = [
     method: "DELETE",
     pattern: /^\/control\/engine\/images\/([^/]+)$/,
     handler: async (deps, _req, [digest]) => {
-      await engineCall(() => deps.engine.removeImage(decodeParam(digest)));
+      await deps.engine.removeImage(decodeParam(digest));
       return { ok: true };
     },
   },
@@ -147,7 +120,10 @@ const ROUTES: Route[] = [
     pattern: /^\/control\/workspaces\/([^/]+)\/start$/,
     handler: async (deps, req, [id]) => {
       const userId = userIdParam(id);
-      const options = startBody(await readJsonBody(req, MAX_BODY_BYTES));
+      const { agent, kind } = await jsonBody(req);
+      // Without an agent the user's own (Settings) starts; without a kind the start attaches to whichever kind runs,
+      // else starts Private (WorkspaceManager.requestStart). null counts as absent.
+      const options = { agent: agent == null ? undefined : agentOf(agent), kind: kind == null ? undefined : kindOf(kind) };
       requireUser(deps.db, userId, "userId");
       return deps.manager.start(userId, options);
     },
@@ -157,17 +133,15 @@ const ROUTES: Route[] = [
     pattern: /^\/control\/workspaces\/([^/]+)\/stop$/,
     handler: async (deps, req, [id]) => {
       const userId = userIdParam(id);
-      const { reason, actorUserId } = stopBody(await readJsonBody(req, MAX_BODY_BYTES));
-      if (actorUserId !== null) requireUser(deps.db, actorUserId, "actorUserId");
+      const { reason, actorUserId } = await jsonBody(req);
+      const why: StopReason = reason === undefined ? "admin" : oneOf("reason", "invalid_reason", STOP_REASONS, reason);
+      const actor = actorParam(actorUserId);
+      if (actor !== null) requireUser(deps.db, actor, "actorUserId");
       deps.sessions.invalidateUser(userId);
-      return deps.manager.stop(userId, reason, actorUserId);
+      return deps.manager.stop(userId, why, actor);
     },
   },
-  {
-    method: "POST",
-    pattern: /^\/control\/workspaces\/([^/]+)\/attach$/,
-    handler: (deps, _req, [id]) => deps.manager.attach(userIdParam(id)),
-  },
+  { method: "POST", pattern: /^\/control\/workspaces\/([^/]+)\/attach$/, handler: (deps, _req, [id]) => deps.manager.attach(userIdParam(id)) },
   {
     method: "POST",
     pattern: /^\/control\/workspaces\/([^/]+)\/release$/,
@@ -183,8 +157,8 @@ const ROUTES: Route[] = [
     pattern: /^\/control\/workspaces\/([^/]+)\/files$/,
     handler: async (deps, req, [id]) => {
       const userId = userIdParam(id);
-      const kind = kindParam(new URLSearchParams(splitTarget(req.url ?? "").search).get("kind") ?? undefined);
-      const actor = actorParam(objectBody(await readJsonBody(req, MAX_BODY_BYTES)).actorUserId);
+      const kind = kindOf(query(req).get("kind"));
+      const actor = actorParam((await jsonBody(req)).actorUserId);
       requireUser(deps.db, userId, "userId");
       if (actor !== null) requireUser(deps.db, actor, "actorUserId");
       await deps.manager.eraseFiles(userId, kind, actor);
@@ -243,6 +217,8 @@ function digest(value: string): Buffer {
   return crypto.createHash("sha256").update(value).digest();
 }
 
+const query = (req: IncomingMessage): URLSearchParams => new URLSearchParams(splitTarget(req.url ?? "").search);
+
 function decodeParam(value: string | undefined): string {
   try {
     return decodeURIComponent(value ?? "");
@@ -275,20 +251,24 @@ function agentList(config: Config, versions: AgentVersions): AgentInfo[] {
   });
 }
 
-function unknownAgent(): HttpError {
-  return new HttpError(400, "unknown_agent", `agent must be one of ${AGENT_KINDS.map((kind) => `"${kind}"`).join(", ")}.`);
+/** `value` when it is one of `values`; else a 400 with `code`. */
+function oneOf<T extends string>(field: string, code: string, values: readonly T[], value: unknown): T {
+  if (!values.includes(value as T)) throw new HttpError(400, code, `${field} must be one of ${values.map((known) => `"${known}"`).join(", ")}.`);
+  return value as T;
 }
+const agentOf = (value: unknown): AgentKind => oneOf("agent", "unknown_agent", AGENT_KINDS, value);
+const kindOf = (value: unknown): WorkspaceKind => oneOf("kind", "unknown_kind", WORKSPACE_KINDS, value);
 
-/** An agent kind in the path. */
-function agentParam(value: string | undefined): AgentKind {
-  const agent = decodeParam(value);
-  if (!isAgentKind(agent)) throw unknownAgent();
-  return agent;
+/** The request's JSON object; no body is an empty one. */
+async function jsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
+  const body = await readJsonBody(req, MAX_BODY_BYTES);
+  if (body === undefined) return {};
+  if (typeof body !== "object" || body === null || Array.isArray(body)) throw new HttpError(400, "bad_request", "The body must be a JSON object.");
+  return body as Record<string, unknown>;
 }
 
 /** An AgentUpdateRequest, checked. */
-function updateBody(agent: AgentKind, body: unknown): UpdateRequest {
-  const { version, rebuild, actorUserId } = objectBody(body);
+function updateBody(agent: AgentKind, { version, rebuild, actorUserId }: Record<string, unknown>): UpdateRequest {
   if (typeof version !== "string" || version.trim() === "" || version.length > 128) {
     throw new HttpError(400, "bad_request", "version must be a version, like 0.27.4.");
   }
@@ -301,60 +281,4 @@ function actorParam(actorUserId: unknown): number | null {
   if (actorUserId === undefined || actorUserId === null) return null;
   if (!(Number.isSafeInteger(actorUserId) && (actorUserId as number) > 0)) throw new HttpError(400, "invalid_actor", "actorUserId must be a positive integer.");
   return actorUserId as number;
-}
-
-/** Runs an engine action, turning portal-hostd's errors into API errors. */
-async function engineCall<T>(action: () => Promise<T>): Promise<T> {
-  try {
-    return await action();
-  } catch (error) {
-    if (error instanceof HostdError) {
-      // hostd's own refusals (the running image, a job it runs) are the admin's to see; the rest is a fault.
-      if (error.status === 409 || error.status === 404) throw new HttpError(error.status, error.code, error.message);
-      throw new HttpError(502, "hostd_failed", `portal-hostd on the LLM server: ${error.message}`);
-    }
-    throw error;
-  }
-}
-
-/** A JSON object body, or none (an empty object). */
-function objectBody(body: unknown): Record<string, unknown> {
-  if (body === undefined) return {};
-  if (typeof body !== "object" || body === null || Array.isArray(body)) {
-    throw new HttpError(400, "bad_request", "The body must be a JSON object.");
-  }
-  return body as Record<string, unknown>;
-}
-
-function unknownKind(): HttpError {
-  return new HttpError(400, "unknown_kind", `kind must be one of ${WORKSPACE_KINDS.map((kind) => `"${kind}"`).join(", ")}.`);
-}
-
-/** A workspace kind (the `kind` query parameter); required. */
-function kindParam(value: string | undefined): WorkspaceKind {
-  if (!isWorkspaceKind(value)) throw unknownKind();
-  return value;
-}
-
-/**
- * `{ agent?: AgentKind, kind?: WorkspaceKind }`. Without an agent the user's own (Settings) starts; without a kind the
- * start attaches to whichever kind runs, else starts Private (see WorkspaceManager.requestStart).
- */
-function startBody(body: unknown): { agent?: AgentKind; kind?: WorkspaceKind } {
-  const { agent, kind } = objectBody(body);
-  if (agent !== undefined && agent !== null && !isAgentKind(agent)) throw unknownAgent();
-  if (kind !== undefined && kind !== null && !isWorkspaceKind(kind)) throw unknownKind();
-  return {
-    ...(agent === undefined || agent === null ? {} : { agent }),
-    ...(kind === undefined || kind === null ? {} : { kind }),
-  };
-}
-
-/** `{ reason?: StopReason, actorUserId?: number }`; the reason defaults to "admin". */
-function stopBody(body: unknown): { reason: StopReason; actorUserId: number | null } {
-  const { reason, actorUserId } = objectBody(body);
-  if (reason !== undefined && !STOP_REASONS.includes(reason as StopReason)) {
-    throw new HttpError(400, "invalid_reason", `reason must be one of ${STOP_REASONS.map((r) => `"${r}"`).join(", ")}.`);
-  }
-  return { reason: (reason as StopReason | undefined) ?? "admin", actorUserId: actorParam(actorUserId) };
 }
