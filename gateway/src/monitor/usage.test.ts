@@ -1,11 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { Readable } from "node:stream";
 import { text } from "node:stream/consumers";
-import { llmUsage, openDatabase, users } from "@portal/core";
+import { llmUsage, users } from "@portal/core";
+import { tempDb } from "../../test/fakes.ts";
 import {
   extractTimings,
   extractUsage,
@@ -114,7 +112,7 @@ test("usageTap passes the stream through unchanged", async () => {
 });
 
 test("recordUsage upserts one row per user and day", () => {
-  const db = openDatabase(path.join(fs.mkdtempSync(path.join(os.tmpdir(), "gateway-usage-")), "db.sqlite"));
+  const db = tempDb();
   const now = Date.now();
   const user = db
     .insert(users)

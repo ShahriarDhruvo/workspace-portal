@@ -1,15 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { openDatabase, users, workspaceSessions, type PortalDb } from "@portal/core";
+import { users, workspaceSessions } from "@portal/core";
 import type { FinishedLlmRequest } from "./llm-requests.ts";
-import { quiet } from "../../test/fakes.ts";
+import { quiet, tempDb } from "../../test/fakes.ts";
 import { SessionLog, type WorkspaceRunState } from "./session-log.ts";
 
 function setup() {
-  const db: PortalDb = openDatabase(path.join(fs.mkdtempSync(path.join(os.tmpdir(), "session-log-")), "portal.sqlite"));
+  const db = tempDb();
   const userId = db
     .insert(users)
     .values({ username: "ana", firstName: "Ana", lastName: "L", passwordHash: "x", createdAt: 1, updatedAt: 1 })

@@ -1,11 +1,14 @@
 // In-process stand-ins for Docker (containers and images), the agents' web servers (Qwen Code's
 // `qwen serve`, DeepSeek Harness's `dsh web`), the LLM server and the npm registry.
+import assert from "node:assert/strict";
 import { createHash, createHmac } from "node:crypto";
 import fs from "node:fs";
 import http, { type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
+import os from "node:os";
 import path from "node:path";
 import { WebSocketServer } from "ws";
+import { openDatabase, type PortalDb } from "@portal/core";
 import type { AgentKind, EngineJob, EngineStatus, ReleaseNotes, WorkspaceKind } from "@portal/core";
 import { driverFor } from "../src/agents/index.ts";
 import type { SettingsObject } from "../src/agents/qwen-settings.ts";
@@ -23,7 +26,7 @@ import {
 } from "../src/docker/image-builder.ts";
 import type { NotesClient, RegistryClient } from "../src/updates/engine-releases.ts";
 import type { EngineHost } from "../src/updates/engine-updater.ts";
-import { HostdError } from "../src/monitor/hostd.ts";
+import { HostdError, type MeterReading } from "../src/monitor/hostd.ts";
 import { parseWorkspaceImage, STAGING_REPOSITORY, workspaceImage } from "../src/docker/image-names.ts";
 import { registryError, type NpmPackage, type NpmRegistry } from "../src/updates/npm-registry.ts";
 import { userPaths } from "../src/workspaces/paths.ts";
@@ -48,6 +51,34 @@ export async function closeServer(server: http.Server): Promise<void> {
   if (!server.listening) return;
   server.closeAllConnections();
   await new Promise<void>((resolve) => server.close(() => resolve()));
+}
+
+/** An empty portal database in a directory of its own. */
+export function tempDb(): PortalDb {
+  return openDatabase(path.join(fs.mkdtempSync(path.join(os.tmpdir(), "portal-test-")), "portal.sqlite"));
+}
+
+/** A portal-hostd's meter (GET /v1/meter): answers `reading`, or throws `error`. */
+export class FakeMeter {
+  readonly url = "http://fake-hostd:9180";
+  reading: MeterReading;
+  error: Error | null = null;
+  calls = 0;
+
+  constructor(instance = "a", startedAt = 0) {
+    this.reading = { instance, startedAt, t: startedAt, energyJ: 0, rxBytes: 0, txBytes: 0 };
+  }
+
+  set(values: Partial<MeterReading>): void {
+    this.reading = { ...this.reading, ...values };
+  }
+
+  async get<T>(requested: string): Promise<T> {
+    assert.equal(requested, "/v1/meter");
+    this.calls++;
+    if (this.error) throw this.error;
+    return { ...this.reading } as T;
+  }
 }
 
 export interface RecordedRequest {

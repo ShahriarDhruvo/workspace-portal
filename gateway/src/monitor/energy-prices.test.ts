@@ -3,12 +3,12 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { asc } from "drizzle-orm";
-import { energyPrices, openDatabase } from "@portal/core";
+import { energyPrices } from "@portal/core";
 import { EIA_URL, EnergyPrices, EUROSTAT_URL, fetchText, parseEiaTable, parseEurostat, PriceFormatError, type PriceRow } from "./energy-prices.ts";
-import type { Logger, LogFields } from "../lib/log.ts";
+import { quiet, tempDb } from "../../test/fakes.ts";
+import { createLogger } from "../lib/log.ts";
 
 const FIXTURES = path.join(import.meta.dirname, "..", "..", "test", "fixtures");
 // Fetched on 2026-11-16: EIA's Table 5.6.A for August 2026 and 2025, Eurostat's last six half years.
@@ -99,23 +99,10 @@ test("Eurostat: the answer must be for the query's band, unit, taxes and currenc
   assert.deepEqual(parseEurostat(JSON.stringify(list)), parseEurostat(EUROSTAT));
 });
 
-function recorder(): Logger & { lines: Array<[string, string, LogFields | undefined]> } {
-  const lines: Array<[string, string, LogFields | undefined]> = [];
-  return {
-    lines,
-    info: (message, fields) => lines.push(["info", message, fields]),
-    warn: (message, fields) => lines.push(["warn", message, fields]),
-    error: (message, fields) => lines.push(["error", message, fields]),
-  };
-}
-
-function tempDb() {
-  return openDatabase(path.join(fs.mkdtempSync(path.join(os.tmpdir(), "portal-prices-")), "test.sqlite"));
-}
-
 test("EnergyPrices: stores both sources, keeps what it has when one fails, replaces revised figures", async () => {
   const db = tempDb();
-  const log = recorder();
+  const lines: Array<Record<string, unknown>> = [];
+  const log = createLogger((line) => lines.push(JSON.parse(line)));
   const clock = { now: 1_000 };
   let answers: Record<string, string | Error> = { [EIA_URL]: EIA, [EUROSTAT_URL]: EUROSTAT };
   const asked: string[] = [];
@@ -166,14 +153,14 @@ test("EnergyPrices: stores both sources, keeps what it has when one fails, repla
     ],
   );
   assert.equal(db.select().from(energyPrices).all().filter((row) => row.source === "eurostat").length, before);
-  assert.ok(log.lines.some(([level, message, fields]) => level === "warn" && /download failed/.test(message) && fields?.source === "eurostat"));
+  assert.ok(lines.some((line) => line.level === "warn" && /download failed/.test(String(line.msg)) && line.source === "eurostat"));
 
   // A changed layout is logged as an error and changes nothing.
   answers = { [EIA_URL]: "<html>new design</html>", [EUROSTAT_URL]: EUROSTAT };
   const third = await prices.refresh({ force: true });
   assert.match(third.eia.error ?? "", /Table 5\.6\.A/);
   assert.equal(florida()[1]?.price, 0.1502);
-  assert.ok(log.lines.some(([level, , fields]) => level === "error" && fields?.source === "eia"));
+  assert.ok(lines.some((line) => line.level === "error" && line.source === "eia"));
 });
 
 test("EnergyPrices: concurrent refreshes share one download", async () => {
@@ -182,7 +169,7 @@ test("EnergyPrices: concurrent refreshes share one download", async () => {
   const gate = new Promise<void>((resolve) => (release = resolve));
   const prices = new EnergyPrices({
     db: tempDb(),
-    log: recorder(),
+    log: quiet,
     fetchText: async (url) => {
       calls++;
       await gate;
