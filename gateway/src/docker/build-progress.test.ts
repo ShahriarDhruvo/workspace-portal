@@ -84,11 +84,10 @@ test("output is split into lines per step: partial lines wait, carriage returns 
   assert.deepEqual(push({ vertexes: [{ digest: "c", name: "[base 2/5] RUN apt-get", cached: true, completed: 5 }] }), ["#3 [base 2/5] RUN apt-get", "#3 CACHED"]);
 });
 
-test("engine errors and classic builder messages are understood; anything else is ignored", () => {
+test("engine errors are understood; anything else is ignored, the classic builder's messages included", () => {
   const progress = new BuildProgress();
-  assert.deepEqual(progress.push({ stream: "Step 1/2 : FROM x\n ---> abc\n" }), ["Step 1/2 : FROM x", " ---> abc"]);
   const results = [{ id: "moby.image.id", aux: { ID: "sha256:1" } }, { aux: { ID: "sha256:1" } }];
-  for (const junk of [null, 42, "text", [], { id: "moby.buildkit.trace" }, { status: "Downloading" }, ...results]) assert.deepEqual(progress.push(junk), []);
+  for (const junk of [null, 42, "text", [], { id: "moby.buildkit.trace" }, { status: "Downloading" }, { stream: "Step 1/2 : FROM x\n" }, ...results]) assert.deepEqual(progress.push(junk), []);
   assert.deepEqual(progress.push({ error: "short", errorDetail: { message: "the engine's message" } }), ["ERROR: the engine's message"]);
   assert.equal(progress.error, "the engine's message");
 

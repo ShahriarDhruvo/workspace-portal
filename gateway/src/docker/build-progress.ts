@@ -6,8 +6,8 @@
 // The stream is JSON lines. BuildKit builds (`version: "2"`) send
 //   {"id":"moby.buildkit.trace","aux":"<base64 StatusResponse>"}  progress (buildkit-status.ts)
 //   {"error":"…","errorDetail":{"message":"…"}}                    a failure
-// and the classic builder `{"stream":"…"}`, read too for completeness. Anything else adds nothing, the
-// result's image id (`moby.image.id`) included: the builder inspects the image it tagged instead.
+// Anything else adds nothing, the result's image id (`moby.image.id`) included: the builder inspects the image
+// it tagged instead.
 import { decodeStatusResponse, type StatusUpdate } from "./buildkit-status.ts";
 import { ProtobufError } from "./protobuf.ts";
 
@@ -94,7 +94,6 @@ export class BuildProgress {
       }
       return this.#apply(update);
     }
-    if (typeof record.stream === "string") return splitOutput(record.stream).map(clean);
     return [];
   }
 
