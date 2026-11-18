@@ -15,11 +15,10 @@
 //     Code's unanswered approvals they must not keep a workspace nobody uses running. dsh reports no
 //     time of last activity, so the gateway times the end of the work itself.
 import crypto from "node:crypto";
-import http from "node:http";
 import WebSocket from "ws";
 import { AGENT_NAMES } from "@portal/core";
 import { workspaceRequestHeaders } from "../proxy/headers.ts";
-import { serviceBaseUrl, type AgentDriver, type AgentEndpoint, type AgentStatus } from "./driver.ts";
+import { agentJson, serviceBaseUrl, type AgentDriver, type AgentEndpoint, type AgentStatus } from "./driver.ts";
 import { DSH_PATCH_FILE, fitDshModels, renderDshPatch } from "./dsh-settings.ts";
 import { portalModels } from "./models.ts";
 import { loadAdminQwenConfig, renderQwenSettings } from "./qwen-settings.ts";
@@ -194,46 +193,14 @@ export function pendingInput(value: unknown): string[] {
 /** One dsh RPC: the response body, or null on any failure (refused, not JSON, too large, too slow). */
 function rpc(endpoint: AgentEndpoint, method: string, args: Record<string, unknown>): Promise<unknown> {
   const body = JSON.stringify({ type: "client-request", rpcId: `portal-${crypto.randomUUID()}`, method, payload: { args } });
-  return new Promise((resolve) => {
-    const request = http.request(
-      {
-        host: endpoint.host,
-        port: endpoint.port,
-        method: "POST",
-        path: `/api/${method}`,
-        headers: {
-          host: DSH_AUTHORITY,
-          cookie: mintDshCookie(endpoint.credential),
-          "content-type": "application/json",
-          "content-length": Buffer.byteLength(body),
-          accept: "application/json",
-        },
-        agent: false,
-        timeout: API_TIMEOUT_MS,
-      },
-      (response) => {
-        const chunks: Buffer[] = [];
-        let size = 0;
-        response.on("data", (chunk: Buffer) => {
-          size += chunk.length;
-          if (size > MAX_API_BYTES) request.destroy();
-          else chunks.push(chunk);
-        });
-        response.on("end", () => {
-          if (response.statusCode !== 200) return resolve(null);
-          try {
-            resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")));
-          } catch {
-            resolve(null);
-          }
-        });
-        response.on("error", () => resolve(null));
-      },
-    );
-    request.on("timeout", () => request.destroy());
-    request.on("error", () => resolve(null));
-    request.end(body);
-  });
+  const headers = {
+    host: DSH_AUTHORITY,
+    cookie: mintDshCookie(endpoint.credential),
+    "content-type": "application/json",
+    "content-length": Buffer.byteLength(body),
+    accept: "application/json",
+  };
+  return agentJson({ host: endpoint.host, port: endpoint.port, method: "POST", path: `/api/${method}`, headers, timeout: API_TIMEOUT_MS }, MAX_API_BYTES, body);
 }
 
 // ------------------------------------------------------------------ background jobs

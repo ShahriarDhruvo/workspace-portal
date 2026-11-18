@@ -6,11 +6,9 @@
 //   * Settings: settings.json and system-defaults.json, mounted where the image's
 //     QWEN_CODE_SYSTEM_SETTINGS_PATH / QWEN_CODE_SYSTEM_DEFAULTS_PATH point.
 import crypto from "node:crypto";
-import http from "node:http";
 import { AGENT_NAMES } from "@portal/core";
 import { workspaceRequestHeaders } from "../proxy/headers.ts";
-import type { AgentDriver, AgentEndpoint } from "./driver.ts";
-import { serviceBaseUrl } from "./driver.ts";
+import { agentJson, serviceBaseUrl, type AgentDriver, type AgentEndpoint } from "./driver.ts";
 import { loadAdminQwenConfig, renderQwenSettings } from "./qwen-settings.ts";
 
 const HEALTH_TIMEOUT_MS = 3_000;
@@ -49,38 +47,8 @@ export function parseQwenHealth(body: unknown): QwenHealth | null {
 
 /** The JSON a workspace's daemon answers a GET with; null when it does not answer with 200 and JSON of at most `maxBytes`. */
 function getJson({ host, port, credential }: AgentEndpoint, path: string, maxBytes: number): Promise<unknown> {
-  return new Promise((resolve) => {
-    const request = http.get(
-      {
-        host,
-        port,
-        path,
-        headers: { authorization: `Bearer ${credential}`, accept: "application/json" },
-        agent: false,
-        timeout: HEALTH_TIMEOUT_MS,
-      },
-      (response) => {
-        const chunks: Buffer[] = [];
-        let size = 0;
-        response.on("data", (chunk: Buffer) => {
-          size += chunk.length;
-          if (size > maxBytes) request.destroy();
-          else chunks.push(chunk);
-        });
-        response.on("end", () => {
-          if (response.statusCode !== 200) return resolve(null);
-          try {
-            resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")) ?? null);
-          } catch {
-            resolve(null);
-          }
-        });
-        response.on("error", () => resolve(null));
-      },
-    );
-    request.on("timeout", () => request.destroy());
-    request.on("error", () => resolve(null));
-  });
+  const headers = { authorization: `Bearer ${credential}`, accept: "application/json" };
+  return agentJson({ host, port, path, headers, timeout: HEALTH_TIMEOUT_MS }, maxBytes);
 }
 
 /** Reads `/health?deep=1` from a workspace; null when it does not answer or answers oddly. */

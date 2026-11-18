@@ -6,7 +6,7 @@
 //   * how the gateway authenticates to the agent's web server, and which paths and sockets it has;
 //   * how the gateway learns that the agent is up and whether it is working;
 //   * where its releases come from, so the admin can update it (release).
-import type { IncomingHttpHeaders } from "node:http";
+import http, { type IncomingHttpHeaders } from "node:http";
 import type { AgentKind, WorkspaceKind } from "@portal/core";
 import type { Config } from "../config.ts";
 import type { HeaderMap } from "../proxy/headers.ts";
@@ -112,4 +112,34 @@ export interface AgentStatus {
   working: boolean;
   /** How long ago the agent last started or finished something, when it reports that; else null. */
   idleSinceMs: number | null;
+}
+
+/**
+ * JSON from a workspace's agent over HTTP: the body of a 200, or null on any failure (refused, not JSON, longer than
+ * `maxBytes`, no answer within `options.timeout`). `body` is what a POST sends.
+ */
+export function agentJson(options: http.RequestOptions, maxBytes: number, body?: string): Promise<unknown> {
+  return new Promise((resolve) => {
+    const request = http.request({ ...options, agent: false }, (response) => {
+      const chunks: Buffer[] = [];
+      let size = 0;
+      response.on("data", (chunk: Buffer) => {
+        size += chunk.length;
+        if (size > maxBytes) request.destroy();
+        else chunks.push(chunk);
+      });
+      response.on("end", () => {
+        if (response.statusCode !== 200) return resolve(null);
+        try {
+          resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        } catch {
+          resolve(null);
+        }
+      });
+      response.on("error", () => resolve(null));
+    });
+    request.on("timeout", () => request.destroy());
+    request.on("error", () => resolve(null));
+    request.end(body);
+  });
 }
