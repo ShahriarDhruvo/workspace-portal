@@ -56,18 +56,20 @@ declare -A AGENT_NAME=([qwen]="Qwen Code" [dsh]="DeepSeek Harness")
 declare -A AGENT_VERSION_KEY=([qwen]=QWEN_CODE_VERSION [dsh]=DSH_VERSION)
 known_agent() { [[ -n ${AGENT_NAME[${1:-?}]-} ]] || die "unknown agent \"$1\" (one of: ${AGENTS[*]})"; }
 
-# Sets ENABLED_AGENTS from WORKSPACE_AGENTS. Dies on an unknown agent, so call it outside $(...).
+# Sets ENABLED_AGENTS from WORKSPACE_AGENTS, read as the gateway does: in any case, empty items left out. Dies on
+# an unknown agent, so call it outside $(...).
 load_enabled_agents() {
   local agent
-  IFS=', ' read -r -a ENABLED_AGENTS <<<"$(env_get WORKSPACE_AGENTS)"
+  read -r -a ENABLED_AGENTS <<<"$(env_get WORKSPACE_AGENTS | tr ',[:upper:]' ' [:lower:]')"
   [[ ${#ENABLED_AGENTS[@]} -gt 0 ]] || die "WORKSPACE_AGENTS is empty: list one or more of ${AGENTS[*]}"
   for agent in "${ENABLED_AGENTS[@]}"; do known_agent "$agent"; done
 }
 
-# A version as the gateway accepts one (isVersion in gateway/src/lib/versions.ts). C locale: ASCII ranges only.
+# A version as the gateway accepts one (isVersion in packages/core/src/wire/versions.ts). C locale: ASCII ranges only.
+VERSION_PATTERN='[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?'
 valid_version() { # version
   local LC_ALL=C
-  [[ ${#1} -le 100 && $1 =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$ ]]
+  [[ ${#1} -le 100 && $1 =~ ^$VERSION_PATTERN$ ]]
 }
 
 # The versions in use: KEY=VALUE lines with the .env keys, written by the admin console and update-image.sh and
@@ -101,7 +103,7 @@ check_workspace_image() { # agent version
   local image reported
   image=$(workspace_image "$1" "$2")
   reported=$(docker run --rm --network none --entrypoint "$1" "$image" --version 2>/dev/null |
-    grep -oE '[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?' | head -n 1) || true
+    grep -oE "$VERSION_PATTERN" | head -n 1) || true
   [[ $reported == "$2" ]] || die "$image reports ${AGENT_NAME[$1]} \"$reported\", expected $2"
 }
 
