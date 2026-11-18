@@ -5,10 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { openDatabase, users, workspaceSessions, type PortalDb } from "@portal/core";
 import type { FinishedLlmRequest } from "./llm-requests.ts";
-import type { Logger } from "../lib/log.ts";
+import { quiet } from "../../test/fakes.ts";
 import { SessionLog, type WorkspaceRunState } from "./session-log.ts";
-
-const quiet: Logger = { debug() {}, info() {}, warn() {}, error() {} } as unknown as Logger;
 
 function setup() {
   const db: PortalDb = openDatabase(path.join(fs.mkdtempSync(path.join(os.tmpdir(), "session-log-")), "portal.sqlite"));

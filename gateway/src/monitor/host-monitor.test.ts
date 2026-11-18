@@ -1,15 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
-import { closeServer, listenLocal } from "../../test/fakes.ts";
+import { closeServer, listenLocal, quiet } from "../../test/fakes.ts";
 import { waitFor } from "../../test/harness.ts";
 import { HostMonitor } from "./host-monitor.ts";
 import type { HostSample } from "@portal/core";
 import { HostdClient, HostdError, SseParser } from "./hostd.ts";
-import type { Logger } from "../lib/log.ts";
 
 const TOKEN = "h".repeat(64);
-const quiet: Logger = { info: () => undefined, warn: () => undefined, error: () => undefined };
 
 function sample(t: number): HostSample {
   return {

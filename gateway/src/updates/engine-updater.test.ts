@@ -4,15 +4,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { auditLog, openDatabase } from "@portal/core";
-import { ENGINE_REPOSITORY, engineDigest, FakeEngineHost, FakeEngineRegistry, FakeNotes } from "../../test/fakes.ts";
+import { ENGINE_REPOSITORY, engineDigest, FakeEngineHost, FakeEngineRegistry, FakeNotes, quiet } from "../../test/fakes.ts";
 import { waitFor } from "../../test/harness.ts";
 import { loadConfig } from "../config.ts";
 import { EngineReleases } from "./engine-releases.ts";
 import { CANCELLED, EngineUpdater, GATEWAY_STOPPED } from "./engine-updater.ts";
 import { LlmQueue } from "../service/llm-queue.ts";
-import type { Logger } from "../lib/log.ts";
-
-const quiet: Logger = { info: () => undefined, warn: () => undefined, error: () => undefined };
 
 function setup(options: { host?: FakeEngineHost | null; drainMinutes?: number } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-updater-"));

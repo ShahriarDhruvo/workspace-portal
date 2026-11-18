@@ -28,6 +28,9 @@ import { parseWorkspaceImage, STAGING_REPOSITORY, workspaceImage } from "../src/
 import { registryError, type NpmPackage, type NpmRegistry } from "../src/updates/npm-registry.ts";
 import { userPaths } from "../src/workspaces/paths.ts";
 import type { ContainerRuntime, ContainerSample, ContainerState, ContainerSummary, StartedContainer } from "../src/docker/runtime.ts";
+import type { Logger } from "../src/lib/log.ts";
+
+export const quiet: Logger = { info() {}, warn() {}, error() {} };
 
 export async function listenLocal(server: http.Server, port = 0, host = "127.0.0.1"): Promise<number> {
   await new Promise<void>((resolve, reject) => {

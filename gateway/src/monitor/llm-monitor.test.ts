@@ -3,9 +3,7 @@ import assert from "node:assert/strict";
 import { LlmMonitor, pairSessions, parseSlots, readRate, updateTracks, windowRate, type SessionTrack } from "./llm-monitor.ts";
 import { LlmQueue } from "../service/llm-queue.ts";
 import { LlmRequests, type ActiveLlmRequest } from "./llm-requests.ts";
-import type { Logger } from "../lib/log.ts";
-
-const quiet: Logger = { info: () => undefined, warn: () => undefined, error: () => undefined };
+import { quiet } from "../../test/fakes.ts";
 
 /** One /slots entry as gufo (llama.cpp's server) reports it, prompt text left out. */
 function slot(id: number, fields: { task?: number; processing?: boolean; prompt?: number; cache?: number; processed?: number; decoded?: number } = {}): object {

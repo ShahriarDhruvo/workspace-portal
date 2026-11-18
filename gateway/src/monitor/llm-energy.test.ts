@@ -3,10 +3,8 @@ import assert from "node:assert/strict";
 import type { MeterSource } from "./energy-meter.ts";
 import type { MeterReading } from "./hostd.ts";
 import { LlmEnergy } from "./llm-energy.ts";
-import type { Logger } from "../lib/log.ts";
+import { quiet } from "../../test/fakes.ts";
 import type { EnergyShare } from "./session-log.ts";
-
-const quiet: Logger = { debug() {}, info() {}, warn() {}, error() {} } as unknown as Logger;
 
 class FakeMeter implements MeterSource {
   readonly url = "http://llm:9180";

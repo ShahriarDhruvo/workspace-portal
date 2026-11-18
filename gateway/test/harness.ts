@@ -29,7 +29,7 @@ import { loadConfig, PREVIEW_PORT_OFFSET, type Config } from "../src/config.ts";
 import type { FenceState } from "../src/workspaces/fence.ts";
 import { BEARER_SUBPROTOCOL_PREFIX } from "../src/proxy/headers.ts";
 import type { FinishedLlmRequest } from "../src/monitor/llm-requests.ts";
-import type { Logger } from "../src/lib/log.ts";
+import { createLogger, type Logger } from "../src/lib/log.ts";
 import type { ReaderBackend } from "../src/service/reader.ts";
 import type { SearchBackend, SearchQuery } from "../src/service/search-mcp.ts";
 import type { FetchText } from "../src/monitor/energy-prices.ts";
@@ -291,11 +291,7 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
   if (Math.max(...Object.values(ids)) >= PORT_COUNT) throw new Error("more users than workspace ports");
 
   const logs: string[] = [];
-  const log: Logger = {
-    info: (msg, fields) => logs.push(JSON.stringify({ level: "info", msg, ...fields })),
-    warn: (msg, fields) => logs.push(JSON.stringify({ level: "warn", msg, ...fields })),
-    error: (msg, fields) => logs.push(JSON.stringify({ level: "error", msg, ...fields })),
-  };
+  const log = createLogger((line) => logs.push(line));
   const caller: Gateway["caller"] = { userId: null };
   const searches: SearchQuery[] = [];
   const search: SearchBackend = {
