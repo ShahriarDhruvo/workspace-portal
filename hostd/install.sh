@@ -71,7 +71,7 @@ state_hash() {  # of what a running daemon depends on; a file not there yet adds
     { cat "$LIB_DIR/portal-hostd.py" "$UNIT_FILE" "$CONF" "$TOKEN_FILE" 2>/dev/null || true; } | sha256sum | cut -d' ' -f1
 }
 
-wait_health() {  # wait_health PORT: up to 10 s for GET /v1/health
+wait_health() {  # wait_health PORT: 20 tries of GET /v1/health, half a second apart
     local port=$1
     for _ in $(seq 1 20); do
         if python3 -I -c "import sys,urllib.request as u; r=u.build_opener(u.ProxyHandler({})).open('http://127.0.0.1:$port/v1/health', timeout=2); sys.exit(0 if r.status == 200 else 1)" 2>/dev/null; then
@@ -81,7 +81,7 @@ wait_health() {  # wait_health PORT: up to 10 s for GET /v1/health
     done
     systemctl --no-pager status "$UNIT" >&2 || true
     journalctl --no-pager -u "$UNIT" -n 30 >&2 || true
-    die "portal-hostd did not answer http://127.0.0.1:$port/v1/health within 10 s"
+    die "portal-hostd did not answer http://127.0.0.1:$port/v1/health in 20 tries"
 }
 
 uninstall() {

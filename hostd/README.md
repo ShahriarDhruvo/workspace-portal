@@ -32,7 +32,7 @@ sudo bash hostd/install.sh uninstall
 
 What the installer does:
 
-- Writes `/etc/portal-hostd/hostd.conf` and `/etc/portal-hostd/token` (0600), installs the daemon to `/usr/local/lib/portal-hostd/` and the unit `portal-hostd.service`, enables it, and waits up to 10 s for `GET /v1/health`.
+- Writes `/etc/portal-hostd/hostd.conf` and `/etc/portal-hostd/token` (0600), installs the daemon to `/usr/local/lib/portal-hostd/` and the unit `portal-hostd.service`, enables it, and tries `GET /v1/health` up to 20 times, half a second apart.
 - Restarts the service only if the daemon, the unit, the conf or the token changed, or if it is not running.
 - `llm`: adds the permanent firewalld rich rule `source address="<portal>/32" port <port>/tcp accept` to the zone of the interface that routes to the portal, and removes the rule of an earlier address or port. Without a running firewalld it only warns.
 - `llm`: ends by printing `HOSTD_LLM_URL=...` and `HOSTD_LLM_TOKEN=...` for the portal's `.env`. A token that came in on stdin is not printed.
@@ -62,7 +62,7 @@ Logs: `journalctl -u portal-hostd`.
 
 ## What it reads
 
-Each source is opened once, kept open and read with `pread`; no sample starts a process.
+The files a sample reads are opened once, kept open and read with `pread`; no sample starts a process. Not kept open: the sampler's perf counters, closed 30 s after the last viewer, and `/proc/self/mounts`, read again for each measurement of disk space. An interface or disk seen for the first time is looked up in sysfs.
 
 | Reading | AMD APU (amdgpu) | Intel (i915) |
 |---|---|---|
@@ -92,7 +92,7 @@ A source that is missing gives `null` in the sample; `sources` in `/v1/info` nam
 
 ## API
 
-HTTP/1.1. Every request but `GET /v1/health` needs `Authorization: Bearer <token>`. Errors are `{"error": "<code>", "message": "..."}`.
+HTTP/1.1. Every request but `GET /v1/health` needs `Authorization: Bearer <token>`. Errors are `{"error": "<code>", "message": "..."}`, except what Python's `http.server` refuses itself, which gets its HTML error page: a method other than GET, POST and DELETE (501) and a malformed request (400, 414, 431, 505).
 
 | Method and path | Answer |
 |---|---|
@@ -131,7 +131,7 @@ An apply, which is also how to go back to an older image, runs these steps; each
 5. Wait up to 10 minutes for the engine's `/ready` to answer 200.
 6. With a version: check that `build_info` in the engine's `/props` starts with it.
 
-If step 3 or a later one fails, the old quadlet is written back and the unit restarted; the job ends `failed` with `rolledBack: true`.
+If step 3 or a later one fails, the old quadlet is written back and the unit restarted; the job ends `failed`, with `rolledBack: true` once the old engine answers `/ready` again. If that fails too, `rolledBack` stays `false` and `error` names both failures.
 
 ## Run it locally
 
