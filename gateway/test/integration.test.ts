@@ -17,7 +17,7 @@ import type { SettingsObject } from "../src/agents/qwen-settings.ts";
 import { WorkspaceImageMissingError } from "../src/docker/runtime.ts";
 import { formatResults, type SearchQuery } from "../src/service/search-mcp.ts";
 import { createServiceServer } from "../src/service/service-api.ts";
-import { DeletingError, WorkspaceManager } from "../src/workspaces/manager.ts";
+import { WorkspaceManager } from "../src/workspaces/manager.ts";
 import { closeServer, listenLocal } from "./fakes.ts";
 import {
   bearerSubprotocol,
@@ -1390,7 +1390,7 @@ test("while a user's data is being deleted no start gets through; a failed stop 
     gw.runtime.stopGate = null;
     finishStop();
     await stopping;
-    await assert.rejects(queued, DeletingError, "the start queued behind the stop");
+    await assert.rejects(queued, { code: "deleting" }, "the start queued behind the stop");
     await deleting;
     assert.equal(fs.existsSync(root), false);
     assert.equal(gw.workspaceRow(alice), undefined);

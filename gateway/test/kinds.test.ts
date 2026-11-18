@@ -95,7 +95,7 @@ test("one kind at a time: the other kind is refused with kind_mismatch, a start 
     const attempt = g.manager.requestStart(bob);
     assert.ok(attempt.ok);
     const during = g.manager.requestStart(bob, { kind: "online" });
-    assert.equal(!during.ok && during.error.name, "KindMismatchError");
+    assert.equal(!during.ok && during.error.code, "kind_mismatch");
     await attempt.done;
     assert.equal(g.info(bob).kind, "private");
 
@@ -361,7 +361,7 @@ test("a start checks the fence once more right before the container: gone by the
     const attempt = g.manager.requestStart(alice, { kind: "online" });
     assert.ok(attempt.ok, "accepted: the last check found the fence");
     g.fence.state = "missing";
-    await assert.rejects(attempt.done, { name: "OnlineDisabledError" });
+    await assert.rejects(attempt.done, { code: "online_disabled" });
     assert.deepEqual(g.runtime.starts, []);
     assert.deepEqual([g.info(alice).status, g.info(alice).stopReason, g.info(alice).lastError], ["stopped", "online_disabled", null]);
 
@@ -397,7 +397,7 @@ test("without a fence check at all (none passed to the manager), Online never ru
     g.useManager(manager);
     assert.deepEqual([manager.info(alice).status, manager.info(alice).stopReason, manager.info(alice).online], ["stopped", "online_disabled", "off"]);
     assert.deepEqual(g.runtime.runningUsers(), []);
-    await assert.rejects(manager.start(alice, { kind: "online" }), { name: "OnlineDisabledError" });
+    await assert.rejects(manager.start(alice, { kind: "online" }), { code: "online_disabled" });
   }));
 
 // ---------------------------------------------------------------- one origin's page against the other kind's port

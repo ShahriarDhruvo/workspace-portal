@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { createNpmRegistry, githubRepository, packagePath, readPackument, RegistryError } from "./npm-registry.ts";
+import { createNpmRegistry, githubRepository, packagePath, readPackument } from "./npm-registry.ts";
 
 type Answer = { status: number; body?: string; headers?: Record<string, string> } | Error | "hang";
 
@@ -105,11 +105,11 @@ test("hasVersion: 200 is published, 404 is not, anything else is a registry erro
   const registry = createNpmRegistry({ fetch });
   assert.equal(await registry.hasVersion("@deepseek-ai/dsh", "0.2.2-rc.3"), true);
   assert.equal(await registry.hasVersion("@deepseek-ai/dsh", "9.9.9"), false);
-  await assert.rejects(registry.hasVersion("@deepseek-ai/dsh", "1.0.0"), RegistryError);
+  await assert.rejects(registry.hasVersion("@deepseek-ai/dsh", "1.0.0"), { status: 502, code: "registry_unreachable" });
   assert.equal(requests.length, 3);
 });
 
-test("an unreachable, slow or odd registry is a RegistryError", async () => {
+test("an unreachable, slow or odd registry is registry_unreachable", async () => {
   const cases: Array<[string, Answer, RegExp]> = [
     ["down", new TypeError("fetch failed"), /unreachable \(fetch failed\)/],
     ["hangs", "hang", /unreachable \(no answer within 0\.05 s\)/],
@@ -121,11 +121,11 @@ test("an unreachable, slow or odd registry is a RegistryError", async () => {
   ];
   for (const [what, answer, message] of cases) {
     const registry = createNpmRegistry({ fetch: stubFetch({ [DSH]: answer }).fetch, timeoutMs: 50, maxPackumentBytes: 1024 });
-    await assert.rejects(registry.packument("@deepseek-ai/dsh"), (error: unknown) => error instanceof RegistryError && message.test(error.message), what);
+    await assert.rejects(registry.packument("@deepseek-ai/dsh"), { code: "registry_unreachable", message }, what);
   }
 });
 
-test("a registry that sends its headers and then stalls is a RegistryError too (not an internal error)", async () => {
+test("a registry that sends its headers and then stalls is registry_unreachable too (not an internal error)", async () => {
   const server = http.createServer((_req, res) => {
     res.writeHead(200, { "content-type": "application/json" });
     res.write('{"dist-tags":');
@@ -133,7 +133,7 @@ test("a registry that sends its headers and then stalls is a RegistryError too (
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   try {
     const registry = createNpmRegistry({ baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, timeoutMs: 200 });
-    await assert.rejects(registry.packument("@deepseek-ai/dsh"), (error: unknown) => error instanceof RegistryError && /unreachable \(no answer within 0\.2 s\)/.test(error.message));
+    await assert.rejects(registry.packument("@deepseek-ai/dsh"), { code: "registry_unreachable", message: /unreachable \(no answer within 0\.2 s\)/ });
   } finally {
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));

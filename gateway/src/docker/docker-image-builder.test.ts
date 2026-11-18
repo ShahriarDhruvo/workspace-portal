@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import type Docker from "dockerode";
 import type DockerModem from "docker-modem";
 import { buildOptions, DockerImageBuilder, openDockerodeSession, verifyContainerOptions } from "./docker-image-builder.ts";
-import { BuildError, ImageInUseError, ImageNotFoundError, type BuildSpec } from "./image-builder.ts";
+import { BuildError, type BuildSpec } from "./image-builder.ts";
 import { stagingImage, workspaceImage } from "./image-names.ts";
 
 const FIXTURES = new URL("../../test/fixtures/", import.meta.url);
@@ -442,6 +442,6 @@ test("list reads workspace image tags; remove maps Docker's 404 and 409", async 
     { image: "workspace-portal/workspace:dsh-0.2.2-rc.1", kind: "dsh", version: "0.2.2-rc.1", id: "sha256:b", sizeBytes: 1_900_000_000, createdAt: 1_794_000_000_000 },
   ]);
   await builder(fake).remove("workspace-portal/workspace:qwen-0.27.4");
-  await assert.rejects(builder(fake).remove("workspace-portal/workspace:qwen-0.27.4"), ImageNotFoundError);
-  await assert.rejects(builder(fake).remove("workspace-portal/workspace:qwen-0.26.0"), ImageInUseError);
+  await assert.rejects(builder(fake).remove("workspace-portal/workspace:qwen-0.27.4"), { status: 404, code: "not_found" });
+  await assert.rejects(builder(fake).remove("workspace-portal/workspace:qwen-0.26.0"), { status: 409, code: "image_in_use" });
 });

@@ -8,7 +8,7 @@ import { ENGINE_REPOSITORY, engineDigest, FakeEngineHost, FakeEngineRegistry, Fa
 import { waitFor } from "../../test/harness.ts";
 import { loadConfig } from "../config.ts";
 import { EngineReleases } from "./engine-releases.ts";
-import { CANCELLED, EngineJobRunningError, EngineRequestError, EngineUnavailableError, EngineUpdater, GATEWAY_STOPPED } from "./engine-updater.ts";
+import { CANCELLED, EngineUpdater, GATEWAY_STOPPED } from "./engine-updater.ts";
 import { LlmQueue } from "../service/llm-queue.ts";
 import type { Logger } from "../lib/log.ts";
 
@@ -65,7 +65,7 @@ test("overview: the engine as hostd reports it, with the releases and their note
 test("overview: not set up, unreachable, or no engine", async () => {
   const off = setup({ host: null });
   assert.deepEqual((({ state, engine, releases }) => ({ state, engine, releases }))(await off.updater.overview()), { state: "off", engine: null, releases: null });
-  await assert.rejects(off.updater.startUpdate({ version: "0.34.0", actorUserId: null }), EngineUnavailableError);
+  await assert.rejects(off.updater.startUpdate({ version: "0.34.0", actorUserId: null }), { status: 503, code: "engine_unavailable" });
   off.cleanup();
 
   const down = setup();
@@ -73,7 +73,10 @@ test("overview: not set up, unreachable, or no engine", async () => {
   const overview = await down.updater.overview();
   assert.equal(overview.state, "offline");
   assert.match(overview.error!, /ECONNREFUSED/);
-  await assert.rejects(down.updater.startUpdate({ version: "0.34.0", actorUserId: null }), (error) => error instanceof EngineUnavailableError && error.state === "offline");
+  await assert.rejects(down.updater.startUpdate({ version: "0.34.0", actorUserId: null }), {
+    code: "engine_unavailable",
+    message: "The LLM server's portal-hostd can't be reached: http://llm:9180: connect ECONNREFUSED",
+  });
   down.cleanup();
 });
 
@@ -82,7 +85,7 @@ test("an update downloads, drains the queue, restarts, then opens the queue agai
   const running = await queue.acquire(7);
   const job = await updater.startUpdate({ version: "0.34.0", actorUserId: null });
   assert.deepEqual([job.reuse, job.fromVersion, job.toVersion, job.image, job.cancellable], [false, "0.31.0", "0.34.0", `${ENGINE_REPOSITORY}@${engineDigest("0.34.0")}`, true]);
-  await assert.rejects(updater.startUpdate({ version: "0.33.0", actorUserId: null }), EngineJobRunningError);
+  await assert.rejects(updater.startUpdate({ version: "0.33.0", actorUserId: null }), { status: 409, code: "engine_job_running" });
 
   // Draining: new requests wait, the running one may finish.
   const draining = await waitFor(() => (updater.snapshot()?.phase === "draining" ? updater.snapshot() : null), "the drain");
@@ -113,9 +116,9 @@ test("an update downloads, drains the queue, restarts, then opens the queue agai
 
 test("a failed restart reports hostd's rollback; an image on the LLM server is used without download or registry; refusals", async () => {
   const { updater, host, registry, queue, audits, done, cleanup } = setup();
-  await assert.rejects(updater.startUpdate({ version: "0.31.0", actorUserId: null }), (e) => e instanceof EngineRequestError && e.code === "already_current");
-  await assert.rejects(updater.startUpdate({ version: "latest", actorUserId: null }), (e) => e instanceof EngineRequestError && e.code === "invalid_version");
-  await assert.rejects(updater.startUpdate({ version: "0.99.0", actorUserId: null }), (e) => e instanceof EngineRequestError && e.code === "version_not_found");
+  await assert.rejects(updater.startUpdate({ version: "0.31.0", actorUserId: null }), { status: 409, code: "already_current" });
+  await assert.rejects(updater.startUpdate({ version: "latest", actorUserId: null }), { status: 400, code: "invalid_version" });
+  await assert.rejects(updater.startUpdate({ version: "0.99.0", actorUserId: null }), { status: 404, code: "version_not_found" });
 
   host.failApply = "the engine reports 0.31.0, not 0.33.0";
   await updater.startUpdate({ version: "0.33.0", actorUserId: null });
@@ -204,7 +207,7 @@ test("removing an engine image: not while a job runs, not the running one", asyn
   host.local.add("0.30.0");
   await updater.removeImage(engineDigest("0.30.0"));
   assert.equal(host.local.has("0.30.0"), false);
-  await assert.rejects(updater.removeImage("0.30.0"), (e) => e instanceof EngineRequestError && e.code === "invalid_digest");
+  await assert.rejects(updater.removeImage("0.30.0"), { status: 400, code: "invalid_digest" });
   await assert.rejects(updater.removeImage(engineDigest("0.31.0")), /runs this image/);
   cleanup();
 });

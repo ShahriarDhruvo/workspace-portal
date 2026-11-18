@@ -4,15 +4,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { auditLog, openDatabase, users, type WorkspaceInfo } from "@portal/core";
-import { AgentUpdater, GATEWAY_RESTARTED, ImageCurrentError, InvalidVersionError, UpdateRunningError, VersionNotFoundError } from "./agent-updater.ts";
+import { AgentUpdater, GATEWAY_RESTARTED } from "./agent-updater.ts";
 import { AgentVersions } from "./agent-versions.ts";
 import { loadConfig } from "../config.ts";
-import { ImageInUseError, ImageNotFoundError } from "../docker/image-builder.ts";
 import { stagingImage, workspaceImage } from "../docker/image-names.ts";
 import type { Logger } from "../lib/log.ts";
-import { RegistryError } from "./npm-registry.ts";
 import { ReleaseCache } from "./release-cache.ts";
-import { AgentUnavailableError } from "../workspaces/manager.ts";
 import { FakeImageBuilder, FakeRegistry, FakeRuntime, gate } from "../../test/fakes.ts";
 
 function setup(options: { agents?: string; buildTimeoutMs?: number } = {}) {
@@ -154,7 +151,7 @@ test("a job that builds clears leftovers first, in the job: the request doesn't 
     const answered = await Promise.race([starting, new Promise<null>((resolve) => setImmediate(() => resolve(null)))]);
     const meanwhile = {
       builds: t.builder.builds.length,
-      refused: await t.updater.startUpdate({ ...update, agent: "dsh", version: "0.2.2-rc.3" }).then(() => false, (error: unknown) => error instanceof UpdateRunningError),
+      refused: await t.updater.startUpdate({ ...update, agent: "dsh", version: "0.2.2-rc.3" }).then(() => false, (error: { code?: string }) => error.code === "update_running"),
     };
     sweeping.open();
     await starting;
@@ -224,7 +221,7 @@ test("a failed job counts as running until its staging image is gone, and is aud
     assert.ok(t.builder.images.has(stagingImage("qwen", "0.27.4")));
     // The admin retries at once: refused, or the late removal would take the new job's staging image.
     await assert.rejects(t.updater.startUpdate({ ...update, agent: "qwen", version: "0.27.4" }), {
-      name: "UpdateRunningError",
+      code: "update_running",
       message: "The last update is still cleaning up; try again in a moment.",
     });
     t.builder.discardGate = null;
@@ -304,13 +301,13 @@ test("requests that can't be met are refused before anything starts", async () =
   const t = setup({ agents: "qwen" });
   try {
     const refuse = (version: string, agent: "qwen" | "dsh" = "qwen") => t.updater.startUpdate({ ...update, agent, version });
-    await assert.rejects(refuse("0.2.2", "dsh"), AgentUnavailableError);
-    await assert.rejects(refuse("9.9.9"), VersionNotFoundError);
+    await assert.rejects(refuse("0.2.2", "dsh"), { status: 400, code: "agent_unavailable" });
+    await assert.rejects(refuse("9.9.9"), { status: 404, code: "version_not_found" });
     await assert.rejects(refuse("9.9.9"), { message: "Qwen Code 9.9.9 is not published (@qwen-code/qwen-code)." });
-    await assert.rejects(refuse("0.27.4; rm -rf /"), InvalidVersionError);
-    await assert.rejects(refuse("latest"), { name: "InvalidVersionError", message: '"latest" is not a version (like 0.27.4).' }, "no release channels: the page sends the version it shows");
+    await assert.rejects(refuse("0.27.4; rm -rf /"), { status: 400, code: "invalid_version" });
+    await assert.rejects(refuse("latest"), { code: "invalid_version", message: '"latest" is not a version (like 0.27.4).' }, "no release channels: the page sends the version it shows");
     t.registry.down = true;
-    await assert.rejects(refuse("0.27.4"), RegistryError);
+    await assert.rejects(refuse("0.27.4"), { status: 502, code: "registry_unreachable" });
     assert.equal(t.builder.builds.length, 0);
     assert.equal(t.updater.job(), null);
     assert.deepEqual(t.audits(), [], "nothing happened, nothing to audit");
@@ -325,14 +322,14 @@ test("one job at a time, for all agents, including while a request is still bein
     const slow = gate();
     t.registry.gate = slow.promise;
     const first = t.updater.startUpdate({ ...update, agent: "qwen", version: "0.27.4" });
-    await assert.rejects(t.updater.startUpdate({ ...update, agent: "dsh", version: "0.2.2-rc.3" }), UpdateRunningError);
+    await assert.rejects(t.updater.startUpdate({ ...update, agent: "dsh", version: "0.2.2-rc.3" }), { status: 409, code: "update_running" });
     const building = gate();
     t.builder.buildGate = building.promise;
     slow.open();
     t.registry.gate = null;
     await first;
     await assert.rejects(t.updater.startUpdate({ ...update, agent: "dsh", version: "0.2.2-rc.3" }), {
-      name: "UpdateRunningError",
+      code: "update_running",
       message: "Qwen Code is being updated to 0.27.4. Wait for it to finish, or cancel it.",
     });
     building.open();
@@ -448,16 +445,16 @@ test("image removal: never the current one, not while that agent updates, not wh
   try {
     t.builder.install("qwen", "0.26.0");
     t.builder.install("qwen", "0.25.0");
-    await assert.rejects(t.updater.removeImage("qwen", "latest"), InvalidVersionError);
-    await assert.rejects(t.updater.removeImage("qwen", "0.27.0"), ImageCurrentError);
-    await assert.rejects(t.updater.removeImage("qwen", "0.1.0"), ImageNotFoundError);
+    await assert.rejects(t.updater.removeImage("qwen", "latest"), { status: 400, code: "invalid_version" });
+    await assert.rejects(t.updater.removeImage("qwen", "0.27.0"), { status: 409, code: "image_current" });
+    await assert.rejects(t.updater.removeImage("qwen", "0.1.0"), { status: 404, code: "not_found" });
     // A container (any state) created from that image: Docker refuses to remove it.
     t.runtime.containers.get(t.runtime.addOrphan(98))!.image = workspaceImage("qwen", "0.26.0");
-    await assert.rejects(t.updater.removeImage("qwen", "0.26.0"), ImageInUseError);
+    await assert.rejects(t.updater.removeImage("qwen", "0.26.0"), { status: 409, code: "image_in_use" });
 
     t.builder.buildGate = gate().promise;
     await t.updater.startUpdate({ ...update, agent: "qwen", version: "0.27.4" });
-    await assert.rejects(t.updater.removeImage("qwen", "0.25.0"), UpdateRunningError);
+    await assert.rejects(t.updater.removeImage("qwen", "0.25.0"), { status: 409, code: "update_running" });
     t.builder.install("dsh", "0.2.1");
     await t.updater.removeImage("dsh", "0.2.1");
     assert.equal(t.builder.images.has(workspaceImage("dsh", "0.2.1")), false, "another agent's images may go meanwhile");

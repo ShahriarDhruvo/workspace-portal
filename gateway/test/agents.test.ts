@@ -87,7 +87,7 @@ test("one agent at a time: asking for the other one while it runs is refused, th
     assert.ok(attempt.ok);
     const during = g.manager.requestStart(bob, { agent: "dsh" });
     assert.equal(during.ok, false);
-    assert.equal(!during.ok && during.error.name, "AgentMismatchError");
+    assert.equal(!during.ok && during.error.code, "agent_mismatch");
     await attempt.done;
   }));
 
