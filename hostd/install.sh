@@ -164,7 +164,7 @@ interval=$(conf_get INTERVAL_MS)
 
 # ---- token, conf, daemon, unit
 if [[ $token_stdin == 1 ]]; then
-    read -r token || [[ -n $token ]] || die "--token-stdin: no token on stdin"
+    IFS=$' \t\r' read -r token || [[ -n $token ]] || die "--token-stdin: no token on stdin"   # \r: a line that ends CR LF
     [[ ${#token} -ge 32 && ! $token =~ [[:space:]] ]] || die "--token-stdin: the token must be at least 32 characters without whitespace"
 elif [[ -s $TOKEN_FILE ]]; then
     token=$(<"$TOKEN_FILE")

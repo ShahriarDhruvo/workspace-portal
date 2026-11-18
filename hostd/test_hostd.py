@@ -1363,8 +1363,8 @@ class TestInstaller(TmpRoot):
         self.assertEqual(self.restarts(), 1)
         self.assertTrue(os.path.exists(os.path.join(self.prefix, 'usr/local/lib/portal-hostd/portal-hostd.py')))
 
-        # same token again: nothing changes, no restart
-        r = self.run_install('portal', '--token-stdin', '--port', str(self.port), stdin=tok + '\n')
+        # same token again, as a line that ends CR LF: nothing changes, no restart
+        r = self.run_install('portal', '--token-stdin', '--port', str(self.port), stdin=tok + '\r\n')
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn('unchanged and running', r.stdout)
         self.assertEqual(self.restarts(), 1)
