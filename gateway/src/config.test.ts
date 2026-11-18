@@ -168,11 +168,6 @@ test("WORKSPACE_AGENTS selects the agents; the version variables set their defau
   assert.deepEqual(problems({ ...secrets, DSH_VERSION: "latest; rm -rf" }), ['DSH_VERSION must be a version such as 0.27.0 (got "latest; rm -rf")']);
 });
 
-test("WORKSPACE_IMAGE_CONTEXT moves the build context; it must be absolute", () => {
-  assert.equal(loadConfig({ ...secrets, WORKSPACE_IMAGE_CONTEXT: "/opt/portal/workspace-image/" }).imageContextDir, "/opt/portal/workspace-image");
-  assert.deepEqual(problems({ ...secrets, WORKSPACE_IMAGE_CONTEXT: "workspace-image" }), ['WORKSPACE_IMAGE_CONTEXT must be an absolute path (got "workspace-image")']);
-});
-
 test("SEARXNG_AUTHORIZATION must be one header value", () => {
   assert.deepEqual(problems({ ...secrets, SEARXNG_AUTHORIZATION: "Basic abc\r\nX-Injected: 1" }), [
     "SEARXNG_AUTHORIZATION must be a single header value",

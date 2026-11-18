@@ -274,7 +274,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     qwenConfigDir: path.join(dataDir, "config", "qwen"),
     agentVersionsFile: path.join(dataDir, "config", "agent-versions.env"),
     // workspace-image/ beside the gateway's code: mounted at /app/workspace-image in the container, the repository's in development.
-    imageContextDir: absolutePath("WORKSPACE_IMAGE_CONTEXT", fileURLToPath(new URL("../../workspace-image", import.meta.url))),
+    imageContextDir: fileURLToPath(new URL("../../workspace-image", import.meta.url)),
     webPort: port("WEB_PORT", 3000),
     agentBind: checked("AGENT_BIND", "0.0.0.0", (value) => net.isIP(value) !== 0, "be an IP address"),
     agentPortCount,
