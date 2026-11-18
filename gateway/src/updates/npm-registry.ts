@@ -8,6 +8,7 @@
 // registry answers a request that sends the last answer's ETag with 304 and no body while nothing was published, so
 // the release cache (release-cache.ts) downloads it again only after a release.
 import { readBoundedText } from "../lib/bounded-body.ts";
+import { HttpError } from "../lib/http-util.ts";
 import { isGitHubRepo } from "./github-releases.ts";
 import { isVersion } from "@portal/core";
 
@@ -39,9 +40,9 @@ export interface NpmRegistry {
   hasVersion(packageName: string, version: string): Promise<boolean>;
 }
 
-export class RegistryError extends Error {
+export class RegistryError extends HttpError {
   constructor(message: string) {
-    super(message);
+    super(502, "registry_unreachable", message);
     this.name = "RegistryError";
   }
 }

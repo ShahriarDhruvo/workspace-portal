@@ -3,6 +3,7 @@
 // list and remove workspace images, and clear away what interrupted updates leave behind.
 // DockerImageBuilder implements it with the Docker Engine API; the tests use a fake.
 import type { AgentKind } from "@portal/core";
+import { HttpError } from "../lib/http-util.ts";
 
 export interface BuildSpec {
   kind: AgentKind;
@@ -56,17 +57,17 @@ export class VerifyError extends Error {
   }
 }
 
-export class ImageNotFoundError extends Error {
+export class ImageNotFoundError extends HttpError {
   constructor(image: string) {
-    super(`There is no image ${image}.`);
+    super(404, "not_found", `There is no image ${image}.`);
     this.name = "ImageNotFoundError";
   }
 }
 
 /** A container (running or not) uses the image, so Docker keeps it. */
-export class ImageInUseError extends Error {
+export class ImageInUseError extends HttpError {
   constructor(image: string) {
-    super(`${image} is in use by a workspace container. It can be removed once that workspace has stopped.`);
+    super(409, "image_in_use", `${image} is in use by a workspace container. It can be removed once that workspace has stopped.`);
     this.name = "ImageInUseError";
   }
 }

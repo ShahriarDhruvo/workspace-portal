@@ -30,7 +30,7 @@ import {
   unreachablePage,
 } from "./pages.ts";
 import { createWsRelay } from "./ws-relay.ts";
-import { CapacityError, KindMismatchError, OnlineDisabledError, OnlineNotAllowedError, type StartRefusal } from "../workspaces/manager.ts";
+import type { StartRefusal } from "../workspaces/manager.ts";
 
 /**
  * The path as a lenient router might see it: percent-decoded, backslashes and repeated slashes
@@ -211,24 +211,25 @@ export function handlePortalPath(
   // permission included.
   deps.manager.touch(userId);
   const attempt = deps.manager.requestStart(userId, { kind });
-  if (!attempt.ok) return sendPage(res, refusalStatus(attempt.error), refusalPage(deps, attempt.error, kind, host), framing(deps, host));
+  if (!attempt.ok) return sendPage(res, refusalStatus(attempt.error), refusalPage(deps, attempt.error, userId, kind, host), framing(deps, host));
   // Failures are recorded on the workspace; the starting page's next reload shows them.
   attempt.done.catch(() => undefined);
   res.writeHead(303, { location: "/", "cache-control": "no-store", "content-length": 0 });
   res.end();
 }
 
+/** A refused start's page. These three answer as on the control API; any other refusal is a 503 here (there, 4xx). */
+const SAME_STATUS = ["kind_mismatch", "online_disabled", "online_not_allowed"];
+
 function refusalStatus(error: StartRefusal): number {
-  if (error instanceof KindMismatchError) return 409;
-  if (error instanceof OnlineNotAllowedError) return 403;
-  return error instanceof OnlineDisabledError ? 409 : 503;
+  return SAME_STATUS.includes(error.code) ? error.status : 503;
 }
 
-function refusalPage(deps: AgentDeps, error: StartRefusal, kind: WorkspaceKind, host: HostParts): string {
+function refusalPage(deps: AgentDeps, error: StartRefusal, userId: number, kind: WorkspaceKind, host: HostParts): string {
   const portal = `//${host.hostname}:${deps.config.webPort}/`;
-  if (error instanceof CapacityError) return capacityPage(deps.config.maxRunning);
-  if (error instanceof KindMismatchError) return otherKindPage(error.running, kind, portal);
-  if (error instanceof OnlineDisabledError || error instanceof OnlineNotAllowedError) return refusedPage(error.message, portal);
+  if (error.code === "capacity") return capacityPage(deps.config.maxRunning);
+  if (error.code === "kind_mismatch") return otherKindPage(deps.manager.info(userId).kind, kind, portal);
+  if (error.code === "online_disabled" || error.code === "online_not_allowed") return refusedPage(error.message, portal);
   return errorPage(error.message, null);
 }
 

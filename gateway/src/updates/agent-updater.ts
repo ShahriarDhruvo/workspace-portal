@@ -26,6 +26,7 @@ import { driverFor } from "../agents/index.ts";
 import type { Config } from "../config.ts";
 import type { ImageBuilder } from "../docker/image-builder.ts";
 import { stagingImage, workspaceImage } from "../docker/image-names.ts";
+import { HttpError } from "../lib/http-util.ts";
 import { errorMessage, type Logger } from "../lib/log.ts";
 import type { NpmRegistry } from "./npm-registry.ts";
 import type { ReleaseCache } from "./release-cache.ts";
@@ -44,25 +45,25 @@ const CANCELLED = "Cancelled";
 export const GATEWAY_RESTARTED = "The gateway restarted during the update.";
 
 /** Another update is running (there is one at a time, for all agents). */
-export class UpdateRunningError extends Error {
+export class UpdateRunningError extends HttpError {
   constructor(message = "An agent update is already running. Wait for it to finish, or cancel it.") {
-    super(message);
+    super(409, "update_running", message);
     this.name = "UpdateRunningError";
   }
 }
 
 /** Not a version (like 0.27.4). */
-export class InvalidVersionError extends Error {
+export class InvalidVersionError extends HttpError {
   constructor(message: string) {
-    super(message);
+    super(400, "invalid_version", message);
     this.name = "InvalidVersionError";
   }
 }
 
 /** The registry has no such version of the agent's package. */
-export class VersionNotFoundError extends Error {
+export class VersionNotFoundError extends HttpError {
   constructor(name: string, packageName: string, version: string) {
-    super(`${name} ${version} is not published (${packageName}).`);
+    super(404, "version_not_found", `${name} ${version} is not published (${packageName}).`);
     this.name = "VersionNotFoundError";
   }
 }
@@ -76,9 +77,9 @@ class VersionMismatchError extends Error {
 }
 
 /** New workspaces start from this image, so it can't go. */
-export class ImageCurrentError extends Error {
+export class ImageCurrentError extends HttpError {
   constructor(name: string, version: string) {
-    super(`${name} ${version} is the current version: new workspaces start from this image. Switch to another version first.`);
+    super(409, "image_current", `${name} ${version} is the current version: new workspaces start from this image. Switch to another version first.`);
     this.name = "ImageCurrentError";
   }
 }

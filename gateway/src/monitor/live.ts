@@ -13,6 +13,7 @@ import { displayName, users, type HostLive, type HostRole, type LiveFrame, type 
 import type { EnergyMeter } from "./energy-meter.ts";
 import type { HostMonitor } from "./host-monitor.ts";
 import type { LlmMonitor } from "./llm-monitor.ts";
+import { HttpError } from "../lib/http-util.ts";
 import type { Logger } from "../lib/log.ts";
 import type { SessionLog } from "./session-log.ts";
 
@@ -35,9 +36,9 @@ export interface LiveDeps {
 
 type Send = (event: "init" | "frame", data: unknown) => void;
 
-export class TooManyViewersError extends Error {
+export class TooManyViewersError extends HttpError {
   constructor() {
-    super(`At most ${MAX_VIEWERS} live views can be open at once.`);
+    super(429, "too_many_viewers", `At most ${MAX_VIEWERS} live views can be open at once.`);
     this.name = "TooManyViewersError";
   }
 }

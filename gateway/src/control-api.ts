@@ -16,48 +16,21 @@ import {
   type StopReason,
   type WorkspaceKind,
 } from "@portal/core";
-import {
-  ImageCurrentError,
-  InvalidVersionError,
-  UpdateRunningError,
-  VersionNotFoundError,
-  type AgentUpdater,
-  type UpdateRequest,
-} from "./updates/agent-updater.ts";
+import type { AgentUpdater, UpdateRequest } from "./updates/agent-updater.ts";
 import type { AgentVersions } from "./updates/agent-versions.ts";
 import { driverFor } from "./agents/index.ts";
 import type { Config } from "./config.ts";
 import { SESSION_DISCONNECTED, type ConnectionRegistry } from "./proxy/connections.ts";
-import {
-  EngineJobRunningError,
-  EngineRequestError,
-  EngineUnavailableError,
-  type EngineUpdater,
-} from "./updates/engine-updater.ts";
+import type { EngineUpdater } from "./updates/engine-updater.ts";
 import { readHostStats } from "./monitor/host-stats.ts";
 import { HostdError } from "./monitor/hostd.ts";
 import { HttpError, readJsonBody, sendError, sendJson, splitTarget } from "./lib/http-util.ts";
-import { ImageInUseError, ImageNotFoundError } from "./docker/image-builder.ts";
-import { TooManyViewersError, type LiveHub } from "./monitor/live.ts";
+import type { LiveHub } from "./monitor/live.ts";
 import type { EnergyPrices } from "./monitor/energy-prices.ts";
 import type { LlmQueue } from "./service/llm-queue.ts";
 import type { Logger } from "./lib/log.ts";
-import { RegistryError } from "./updates/npm-registry.ts";
 import type { SessionCache } from "./proxy/session-cache.ts";
-import {
-  AgentMismatchError,
-  AgentUnavailableError,
-  CapacityError,
-  DeletingError,
-  KindMismatchError,
-  NoWorkspacePortError,
-  OnlineDisabledError,
-  OnlineNotAllowedError,
-  StartError,
-  StopError,
-  WorkspaceRunningError,
-  type WorkspaceManager,
-} from "./workspaces/manager.ts";
+import type { WorkspaceManager } from "./workspaces/manager.ts";
 
 export interface ControlDeps {
   config: Config;
@@ -94,12 +67,7 @@ const ROUTES: Route[] = [
     method: "GET",
     pattern: /^\/control\/live$/,
     handler: (deps, _req, _params, res) => {
-      try {
-        deps.live.serve(res);
-      } catch (error) {
-        if (error instanceof TooManyViewersError) throw new HttpError(429, "too_many_viewers", error.message);
-        throw error;
-      }
+      deps.live.serve(res);
       return RESPONDED;
     },
   },
@@ -135,33 +103,14 @@ const ROUTES: Route[] = [
       const kind = agentParam(agent);
       const body = updateBody(kind, await readJsonBody(req, MAX_BODY_BYTES));
       if (body.actorUserId !== null) requireUser(deps.db, body.actorUserId, "actorUserId");
-      try {
-        return await deps.updater.startUpdate(body);
-      } catch (error) {
-        if (error instanceof AgentUnavailableError) throw new HttpError(400, "agent_unavailable", error.message);
-        if (error instanceof InvalidVersionError) throw new HttpError(400, "invalid_version", error.message);
-        if (error instanceof VersionNotFoundError) throw new HttpError(404, "version_not_found", error.message);
-        if (error instanceof UpdateRunningError) throw new HttpError(409, "update_running", error.message);
-        if (error instanceof RegistryError) throw new HttpError(502, "registry_unreachable", error.message);
-        throw error;
-      }
+      return deps.updater.startUpdate(body);
     },
   },
   {
     method: "DELETE",
     pattern: /^\/control\/agents\/([^/]+)\/images\/([^/]+)$/,
     handler: async (deps, _req, [agent, version]) => {
-      const kind = agentParam(agent);
-      try {
-        await deps.updater.removeImage(kind, decodeParam(version));
-      } catch (error) {
-        if (error instanceof InvalidVersionError) throw new HttpError(400, "invalid_version", error.message);
-        if (error instanceof ImageNotFoundError) throw new HttpError(404, "not_found", error.message);
-        if (error instanceof ImageCurrentError) throw new HttpError(409, "image_current", error.message);
-        if (error instanceof ImageInUseError) throw new HttpError(409, "image_in_use", error.message);
-        if (error instanceof UpdateRunningError) throw new HttpError(409, "update_running", error.message);
-        throw error;
-      }
+      await deps.updater.removeImage(agentParam(agent), decodeParam(version));
       return { ok: true };
     },
   },
@@ -200,20 +149,7 @@ const ROUTES: Route[] = [
       const userId = userIdParam(id);
       const options = startBody(await readJsonBody(req, MAX_BODY_BYTES));
       requireUser(deps.db, userId, "userId");
-      try {
-        return await deps.manager.start(userId, options);
-      } catch (error) {
-        if (error instanceof AgentUnavailableError) throw new HttpError(400, "agent_unavailable", error.message);
-        if (error instanceof AgentMismatchError) throw new HttpError(409, "agent_mismatch", error.message);
-        if (error instanceof KindMismatchError) throw new HttpError(409, "kind_mismatch", error.message);
-        if (error instanceof NoWorkspacePortError) throw new HttpError(409, "no_workspace_port", error.message);
-        if (error instanceof OnlineDisabledError) throw new HttpError(409, "online_disabled", error.message);
-        if (error instanceof OnlineNotAllowedError) throw new HttpError(403, "online_not_allowed", error.message);
-        if (error instanceof CapacityError) throw new HttpError(409, "capacity", error.message);
-        if (error instanceof DeletingError) throw new HttpError(409, "deleting", error.message);
-        if (error instanceof StartError) throw new HttpError(500, "start_failed", error.message);
-        throw error;
-      }
+      return deps.manager.start(userId, options);
     },
   },
   {
@@ -251,13 +187,7 @@ const ROUTES: Route[] = [
       const actor = actorParam(objectBody(await readJsonBody(req, MAX_BODY_BYTES)).actorUserId);
       requireUser(deps.db, userId, "userId");
       if (actor !== null) requireUser(deps.db, actor, "actorUserId");
-      try {
-        await deps.manager.eraseFiles(userId, kind, actor);
-      } catch (error) {
-        if (error instanceof WorkspaceRunningError) throw new HttpError(409, "workspace_running", error.message);
-        if (error instanceof DeletingError) throw new HttpError(409, "deleting", error.message);
-        throw error;
-      }
+      await deps.manager.eraseFiles(userId, kind, actor);
       return { ok: true };
     },
   },
@@ -267,12 +197,7 @@ const ROUTES: Route[] = [
     handler: async (deps, _req, [id]) => {
       const userId = userIdParam(id);
       deps.sessions.invalidateUser(userId);
-      try {
-        await deps.manager.deleteData(userId);
-      } catch (error) {
-        if (error instanceof StopError) throw new HttpError(500, "stop_failed", error.message);
-        throw error;
-      }
+      await deps.manager.deleteData(userId);
       return { ok: true };
     },
   },
@@ -378,17 +303,11 @@ function actorParam(actorUserId: unknown): number | null {
   return actorUserId as number;
 }
 
-/** Runs an engine action, turning its refusals into API errors. */
+/** Runs an engine action, turning portal-hostd's errors into API errors. */
 async function engineCall<T>(action: () => Promise<T>): Promise<T> {
   try {
     return await action();
   } catch (error) {
-    if (error instanceof EngineUnavailableError) throw new HttpError(503, "engine_unavailable", error.message);
-    if (error instanceof EngineJobRunningError) throw new HttpError(409, "engine_job_running", error.message);
-    if (error instanceof EngineRequestError) {
-      const status = { invalid_version: 400, invalid_digest: 400, version_not_found: 404 }[error.code] ?? 409;
-      throw new HttpError(status, error.code, error.message);
-    }
     if (error instanceof HostdError) {
       // hostd's own refusals (the running image, a job it runs) are the admin's to see; the rest is a fault.
       if (error.status === 409 || error.status === 404) throw new HttpError(error.status, error.code, error.message);

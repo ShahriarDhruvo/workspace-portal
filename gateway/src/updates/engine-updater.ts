@@ -27,6 +27,7 @@ import type { Config } from "../config.ts";
 import { EngineReleaseError, EngineReleases } from "./engine-releases.ts";
 import { HostdClient, HostdError } from "../monitor/hostd.ts";
 import type { LlmQueue } from "../service/llm-queue.ts";
+import { HttpError } from "../lib/http-util.ts";
 import { errorMessage, type Logger } from "../lib/log.ts";
 import { appendLog, finishJob } from "./update-job.ts";
 
@@ -42,28 +43,26 @@ const LOG_LINES = 400;
 export const CANCELLED = "Cancelled.";
 export const GATEWAY_STOPPED = "The gateway stopped during the update; check the engine's version.";
 
-export class EngineUnavailableError extends Error {
+export class EngineUnavailableError extends HttpError {
   readonly state: EngineHostState;
   constructor(state: EngineHostState, message: string) {
-    super(message);
+    super(503, "engine_unavailable", message);
     this.name = "EngineUnavailableError";
     this.state = state;
   }
 }
 
-export class EngineJobRunningError extends Error {
+export class EngineJobRunningError extends HttpError {
   constructor(message = "An engine update is running. Wait for it to finish, or cancel it.") {
-    super(message);
+    super(409, "engine_job_running", message);
     this.name = "EngineJobRunningError";
   }
 }
 
-export class EngineRequestError extends Error {
-  readonly code: string;
+export class EngineRequestError extends HttpError {
   constructor(code: string, message: string) {
-    super(message);
+    super({ invalid_version: 400, invalid_digest: 400, version_not_found: 404 }[code] ?? 409, code, message);
     this.name = "EngineRequestError";
-    this.code = code;
   }
 }
 

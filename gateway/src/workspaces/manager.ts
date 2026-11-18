@@ -41,6 +41,7 @@ import { containerName } from "../docker/container-spec.ts";
 import type { FenceState } from "./fence.ts";
 import { parseWorkspaceImage } from "../docker/image-names.ts";
 import type { LlmQueue } from "../service/llm-queue.ts";
+import { HttpError } from "../lib/http-util.ts";
 import { errorMessage, type Logger } from "../lib/log.ts";
 import type { SessionLog } from "../monitor/session-log.ts";
 import {
@@ -58,45 +59,45 @@ import { WorkspaceImageMissingError, type ContainerRuntime, type ContainerState,
 import { eraseWorkspaceFiles, prepareWorkspaceFiles, removeWorkspaceFiles } from "./files.ts";
 import { hasLegacyFiles, moveLegacyFiles } from "./paths.ts";
 
-export class CapacityError extends Error {
+export class CapacityError extends HttpError {
   constructor(maxRunning: number) {
-    super(`All ${maxRunning} workspace slots are in use and none has been idle long enough to make room.`);
+    super(409, "capacity", `All ${maxRunning} workspace slots are in use and none has been idle long enough to make room.`);
     this.name = "CapacityError";
   }
 }
 
 /** The workspace's data (or, `erasing`, that kind's files) is being deleted: it can't be started meanwhile. */
-export class DeletingError extends Error {
+export class DeletingError extends HttpError {
   constructor(erasing: WorkspaceKind | null = null) {
-    super(erasing === null ? "This workspace is being deleted." : `The ${WORKSPACE_KIND_NAMES[erasing]} workspace's files are being erased.`);
+    super(409, "deleting", erasing === null ? "This workspace is being deleted." : `The ${WORKSPACE_KIND_NAMES[erasing]} workspace's files are being erased.`);
     this.name = "DeletingError";
   }
 }
 
-export class StartError extends Error {
+export class StartError extends HttpError {
   constructor(message: string) {
-    super(message);
+    super(500, "start_failed", message);
     this.name = "StartError";
   }
 }
 
 /** The workspace runs another agent than the one asked for; it has to stop before switching. */
-export class AgentMismatchError extends Error {
+export class AgentMismatchError extends HttpError {
   readonly running: AgentKind;
 
   constructor(running: AgentKind) {
-    super(`${driverFor(running).name} is already running in this workspace. Stop it to switch.`);
+    super(409, "agent_mismatch", `${driverFor(running).name} is already running in this workspace. Stop it to switch.`);
     this.name = "AgentMismatchError";
     this.running = running;
   }
 }
 
 /** The user's other kind is starting or running; it has to stop first (one kind at a time). */
-export class KindMismatchError extends Error {
+export class KindMismatchError extends HttpError {
   readonly running: WorkspaceKind;
 
   constructor(running: WorkspaceKind, requested: WorkspaceKind) {
-    super(`Your ${WORKSPACE_KIND_NAMES[running]} workspace is running. Stop it to start the ${WORKSPACE_KIND_NAMES[requested]} one.`);
+    super(409, "kind_mismatch", `Your ${WORKSPACE_KIND_NAMES[running]} workspace is running. Stop it to start the ${WORKSPACE_KIND_NAMES[requested]} one.`);
     this.name = "KindMismatchError";
     this.running = running;
   }
@@ -106,11 +107,13 @@ export class KindMismatchError extends Error {
  * No Online workspace runs on this portal now: ONLINE_WORKSPACES is off, or (`firewall`) the host firewall that keeps
  * the Online network off the LAN and the servers is not loaded (fence.ts).
  */
-export class OnlineDisabledError extends Error {
+export class OnlineDisabledError extends HttpError {
   readonly firewall: boolean;
 
   constructor(firewall = false) {
     super(
+      409,
+      "online_disabled",
       firewall
         ? "Online workspaces are off: the host firewall that keeps them off the local network is not loaded. Ask your administrator."
         : "Online workspaces are turned off on this portal.",
@@ -121,17 +124,17 @@ export class OnlineDisabledError extends Error {
 }
 
 /** The admin hasn't allowed this user an Online workspace (users.online_allowed). */
-export class OnlineNotAllowedError extends Error {
+export class OnlineNotAllowedError extends HttpError {
   constructor() {
-    super("Your administrator hasn't allowed you an Online workspace.");
+    super(403, "online_not_allowed", "Your administrator hasn't allowed you an Online workspace.");
     this.name = "OnlineNotAllowedError";
   }
 }
 
 /** That kind is starting, running or stopping: its files can't be erased now. */
-export class WorkspaceRunningError extends Error {
+export class WorkspaceRunningError extends HttpError {
   constructor(kind: WorkspaceKind) {
-    super(`The ${WORKSPACE_KIND_NAMES[kind]} workspace is running. Stop it before erasing its files.`);
+    super(409, "workspace_running", `The ${WORKSPACE_KIND_NAMES[kind]} workspace is running. Stop it before erasing its files.`);
     this.name = "WorkspaceRunningError";
   }
 }
@@ -140,17 +143,17 @@ export class WorkspaceRunningError extends Error {
  * The user's id has no workspace port (ids 1 … AGENT_PORT_COUNT - 1 have one): no workspace of theirs starts. Past
  * that range, their UIDs would also run into the other kind's (the UID bases are only AGENT_PORT_COUNT apart).
  */
-export class NoWorkspacePortError extends Error {
+export class NoWorkspacePortError extends HttpError {
   constructor(userId: number, agentPortCount: number) {
-    super(`User ${userId} has no workspace port: this portal serves workspaces for user ids 1 to ${agentPortCount - 1} (AGENT_PORT_COUNT).`);
+    super(409, "no_workspace_port", `User ${userId} has no workspace port: this portal serves workspaces for user ids 1 to ${agentPortCount - 1} (AGENT_PORT_COUNT).`);
     this.name = "NoWorkspacePortError";
   }
 }
 
 /** The agent asked for is not enabled on this install (WORKSPACE_AGENTS). */
-export class AgentUnavailableError extends Error {
+export class AgentUnavailableError extends HttpError {
   constructor(agent: AgentKind) {
-    super(`${driverFor(agent).name} is not available on this portal.`);
+    super(400, "agent_unavailable", `${driverFor(agent).name} is not available on this portal.`);
     this.name = "AgentUnavailableError";
   }
 }
@@ -173,9 +176,9 @@ export interface StartOptions {
 }
 
 /** The container could not be stopped, so nothing was deleted. */
-export class StopError extends Error {
+export class StopError extends HttpError {
   constructor(message: string) {
-    super(message);
+    super(500, "stop_failed", message);
     this.name = "StopError";
   }
 }
@@ -1401,7 +1404,7 @@ function endpointOf(entry: Entry): AgentEndpoint | null {
 
 /** The stopReason of an Online workspace stopped because it may no longer run. */
 function onlineStopReason(refusal: OnlineDisabledError | OnlineNotAllowedError): string {
-  return refusal instanceof OnlineDisabledError ? "online_disabled" : "online_not_allowed";
+  return refusal.code;
 }
 
 function describeStartupFailure(driver: AgentDriver, result: Exclude<ReadyResult, { ok: true }>): string {
