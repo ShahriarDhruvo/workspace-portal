@@ -72,11 +72,14 @@ export function UpdatesConsole({ initialAgents, initialEngine }: UpdatesConsoleP
   );
 }
 
-/** Check for updates asks the npm registry, the image registry and GitHub again. */
+/**
+ * Check for updates asks the npm registry, the image registry and GitHub again. On a phone the button stays beside
+ * the title and the time goes under them.
+ */
 function RegistryCheck({ checkedAt, checking, onCheck }: { checkedAt: number | null; checking: boolean; onCheck: () => void }) {
   return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-      <span className="text-12 text-muted-foreground">
+    <>
+      <span className="text-12 text-muted-foreground max-sm:order-last max-sm:basis-full sm:mr-1">
         {checkedAt ? (
           <>
             Checked <LocalTime at={checkedAt} relative />
@@ -99,6 +102,6 @@ function RegistryCheck({ checkedAt, checking, onCheck }: { checkedAt: number | n
         {checking ? <Spinner aria-hidden="true" /> : <RefreshIcon />}
         Check for updates
       </Button>
-    </div>
+    </>
   );
 }

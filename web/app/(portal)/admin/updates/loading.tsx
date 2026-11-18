@@ -14,12 +14,12 @@ const CARDS = [
 export default function UpdatesLoading() {
   return (
     <PageMain width="lg">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <HeadingSkeleton className="w-24" />
-        <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <HeadingSkeleton className="mr-auto w-24" />
+        <div className="max-sm:order-last max-sm:basis-full sm:mr-1">
           <Skeleton className="h-4 w-28" />
-          <ButtonSkeleton className="h-7 w-36" />
         </div>
+        <ButtonSkeleton className="h-7 w-36" />
       </div>
       <div className="flex flex-col gap-4" aria-busy="true" aria-label="Loading updates">
         {CARDS.map((card, index) => (

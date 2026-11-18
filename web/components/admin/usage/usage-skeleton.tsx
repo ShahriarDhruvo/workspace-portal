@@ -11,9 +11,11 @@ import { TableBody, TableCell, TableHeader, TableRow } from "@/components/ui/tab
 /**
  * The cards' layout (UsageLive and its skeleton): the sessions over the two servers, which sit side by side from
  * xl; on a wide desktop (3xl) all three in a row, the sessions a little wider for their table. Cards in a row are
- * as tall as the tallest: each gives the extra height to its charts.
+ * as tall as the tallest: each gives the extra height to its charts. The row after the servers' takes what a server
+ * card's open Details adds (the card spans both), so the other cards keep their height.
  */
-export const USAGE_GRID = "grid gap-4 xl:grid-cols-2 3xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1fr)]";
+export const USAGE_GRID =
+  "grid gap-4 xl:auto-rows-[auto_auto_1fr] xl:grid-cols-2 3xl:auto-rows-[auto_1fr] 3xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1fr)]";
 
 /** The sessions table's height with a full page (its heading row, the rows and the pager), kept whatever it shows. */
 export const SESSIONS_TABLE_HEIGHT = 36 + SESSION_PAGE_SIZE * 37 + 53;

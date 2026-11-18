@@ -44,7 +44,7 @@ export function ServerCard({ host, history, now }: { host: HostLive; history: re
   const sample = host.state === "online" ? host.sample : null;
   const info = host.info;
   return (
-    <Card className="gap-0 py-0">
+    <Card className="gap-0 py-0 xl:has-data-[state=open]:row-span-2">
       <CardHeader className="border-b px-4 py-3">
         <CardTitle className="flex items-center gap-2">
           <h2 className="text-16">{TITLES[host.role]}</h2>
