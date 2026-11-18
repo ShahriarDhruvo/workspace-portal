@@ -3,7 +3,7 @@ import { gateway } from "@/lib/gateway";
 import { loaded } from "@/lib/overview";
 import { requireAdmin } from "@/lib/session";
 import { PageMain } from "@/components/layout/page-main";
-import { UpdatesConsole } from "@/components/admin/agents/updates-console";
+import { UpdatesConsole } from "@/components/admin/updates/updates-console";
 
 export const metadata: Metadata = { title: "Updates" };
 

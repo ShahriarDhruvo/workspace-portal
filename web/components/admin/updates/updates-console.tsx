@@ -3,7 +3,6 @@
 import { AGENT_NAMES, type AgentVersionsOverview, type EngineOverview } from "@portal/core/wire";
 import type { ActionContext } from "@/lib/agent-versions";
 import type { Loaded } from "@/lib/update-jobs";
-import { EngineCard } from "@/components/admin/engine/engine-card";
 import { PageHeading } from "@/components/layout/page-heading";
 import { LocalTime } from "@/components/local-time";
 import { Button } from "@/components/ui/button";
@@ -11,6 +10,7 @@ import { RefreshIcon } from "@/components/ui/icons";
 import { Spinner } from "@/components/ui/spinner";
 import { AgentCard } from "./agent-card";
 import { JobAnnouncer } from "./agent-job";
+import { EngineCard } from "./engine-card";
 import { usePolled } from "./use-polled";
 import { UnreachableAlert, VersionCard } from "./version-card";
 

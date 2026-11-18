@@ -16,14 +16,14 @@ import { formatBytes } from "@/lib/format";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { CopyButton } from "@/components/common/secret-value";
 import { GuardedButton } from "@/components/common/guarded-button";
-import { PackageImages, type PackageImageRow } from "@/components/admin/agents/package-images";
-import { useShownJob } from "@/components/admin/agents/use-dismissed-job";
-import { UnreachableAlert, VersionCard } from "@/components/admin/agents/version-card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { WarningIcon } from "@/components/ui/icons";
 import { EngineJob } from "./engine-job";
+import { PackageImages, type PackageImageRow } from "./package-images";
+import { useShownJob } from "./use-shown-job";
+import { UnreachableAlert, VersionCard } from "./version-card";
 
 const SETUP_COMMAND = "sudo bash ~/workspace-portal/hostd/install.sh llm --portal <portal IP>";
 

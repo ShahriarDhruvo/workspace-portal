@@ -4,9 +4,9 @@ import { cancelEngineUpdate } from "@/lib/actions/updates";
 import type { EngineUpdateJob } from "@portal/core/wire";
 import { engineJobOutcome, engineJobStep, engineJobTitle, enginePhaseLabel } from "@/lib/engine-updates";
 import { isJobActive } from "@/lib/update-jobs";
-import { JobButtons, JobOutcome, JobPanel } from "@/components/admin/agents/version-card";
 import { LocalTime } from "@/components/local-time";
 import { Button } from "@/components/ui/button";
+import { JobButtons, JobOutcome, JobPanel } from "./version-card";
 
 interface EngineJobProps {
   job: EngineUpdateJob;

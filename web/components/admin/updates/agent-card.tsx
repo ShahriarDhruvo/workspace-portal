@@ -16,10 +16,10 @@ import { GuardedButton } from "@/components/common/guarded-button";
 import { LocalTime } from "@/components/local-time";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { WarningIcon } from "@/components/ui/icons";
+import { AgentDialogs, type AgentDialog, type UpdatePlan } from "./agent-dialogs";
 import { AgentJob } from "./agent-job";
 import { PackageImages, type PackageImageRow } from "./package-images";
-import { AgentDialogs, type AgentDialog, type UpdatePlan } from "./update-dialogs";
-import { useShownJob } from "./use-dismissed-job";
+import { useShownJob } from "./use-shown-job";
 import { VersionCard } from "./version-card";
 
 const ACTION_LABELS: Record<AgentPackageRow["action"], string> = { use: "Use…", build: "Build…", rebuild: "Rebuild…" };

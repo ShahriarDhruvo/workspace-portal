@@ -6,11 +6,11 @@ import { formatBytes } from "@/lib/format";
 import type { ReleaseNotes } from "@portal/core/wire";
 import { DataTable, DataTableEmpty, DataTableHead, DataTablePagination, usePagination } from "@/components/common/data-table";
 import { GuardedButton } from "@/components/common/guarded-button";
-import { ReleaseNotesDialog, type ReleaseNotesTarget } from "@/components/admin/engine/release-notes";
 import { LocalTime } from "@/components/local-time";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { TableBody, TableCell, TableHeader, TableRow } from "@/components/ui/table";
+import { ReleaseNotesDialog, type ReleaseNotesTarget } from "./release-notes";
 import { VersionSection } from "./version-card";
 
 /** A row's button: what it says, why it can't run now (null: it can), and what it opens. */
