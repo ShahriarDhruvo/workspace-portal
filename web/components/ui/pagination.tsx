@@ -1,10 +1,9 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { ChevronLeftIcon, ChevronRightIcon, MoreHorizontalIcon } from "lucide-react";
+import { MoreHorizontalIcon } from "lucide-react";
 
-// shadcn/ui Pagination, radix-nova style, as the registry has it (only `cn`'s import path differs: the registry
-// item names a package "cn" where the project has lib/utils).
+// shadcn/ui Pagination, radix-nova style: the parts the portal uses.
 
 function Pagination({ className, ...props }: React.ComponentProps<"nav">) {
   return (
@@ -39,32 +38,6 @@ function PaginationLink({ className, isActive, size = "icon", ...props }: Pagina
   );
 }
 
-function PaginationPrevious({
-  className,
-  text = "Previous",
-  ...props
-}: React.ComponentProps<typeof PaginationLink> & { text?: string }) {
-  return (
-    <PaginationLink aria-label="Go to previous page" size="default" className={cn("pl-1.5!", className)} {...props}>
-      <ChevronLeftIcon data-icon="inline-start" />
-      <span className="hidden sm:block">{text}</span>
-    </PaginationLink>
-  );
-}
-
-function PaginationNext({
-  className,
-  text = "Next",
-  ...props
-}: React.ComponentProps<typeof PaginationLink> & { text?: string }) {
-  return (
-    <PaginationLink aria-label="Go to next page" size="default" className={cn("pr-1.5!", className)} {...props}>
-      <span className="hidden sm:block">{text}</span>
-      <ChevronRightIcon data-icon="inline-end" />
-    </PaginationLink>
-  );
-}
-
 function PaginationEllipsis({ className, ...props }: React.ComponentProps<"span">) {
   return (
     <span
@@ -85,6 +58,4 @@ export {
   PaginationEllipsis,
   PaginationItem,
   PaginationLink,
-  PaginationNext,
-  PaginationPrevious,
 };

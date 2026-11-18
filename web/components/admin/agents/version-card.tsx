@@ -129,7 +129,7 @@ function subscribeSeconds(onTick: () => void): () => void {
 }
 
 /** The time in whole seconds, ticking; null on the server (its clock is not the viewer's). */
-export function useSeconds(): number | null {
+function useSeconds(): number | null {
   return useSyncExternalStore(
     subscribeSeconds,
     () => Math.floor(Date.now() / 1000),

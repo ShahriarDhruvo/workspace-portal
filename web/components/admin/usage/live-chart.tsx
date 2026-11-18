@@ -5,7 +5,7 @@ import { HISTORY_MS } from "@/lib/live-format";
 import { cn } from "@/lib/utils";
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart";
 
-export interface LivePoint {
+interface LivePoint {
   t: number;
   value: number | null;
 }

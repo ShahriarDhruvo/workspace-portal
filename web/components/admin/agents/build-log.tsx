@@ -11,7 +11,7 @@ const FOLLOW_SLACK_PX = 12;
  * stays put once the admin scrolls up to read. Not a live region: screen readers hear the phases (the job panel
  * announces them), not every line. The keyboard can focus and scroll it.
  */
-export function BuildLog({ lines, id }: { lines: readonly string[]; id?: string }) {
+export function BuildLog({ lines }: { lines: readonly string[] }) {
   const viewport = useRef<HTMLDivElement>(null);
   const following = useRef(true);
 
@@ -27,7 +27,6 @@ export function BuildLog({ lines, id }: { lines: readonly string[]; id?: string 
 
   return (
     <ScrollArea
-      id={id}
       className="h-56 w-full rounded-md border bg-muted/50"
       viewportProps={{ ref: viewport, onScroll: trackScroll, tabIndex: 0, role: "region", "aria-label": "Build log" }}
     >

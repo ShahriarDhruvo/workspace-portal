@@ -13,7 +13,7 @@ const RETRY_MAX_MS = 30_000;
 const STALE_MS = 5_000;
 
 /** connecting: the first frame is on its way; live; paused: the tab is hidden; retrying: the stream broke. */
-export type LiveStatus = "connecting" | "live" | "paused" | "retrying";
+type LiveStatus = "connecting" | "live" | "paused" | "retrying";
 
 export interface LiveFeed {
   status: LiveStatus;

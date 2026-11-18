@@ -12,7 +12,6 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  ChevronUp,
   CircleAlert,
   CircleCheck,
   CircleSlash,
@@ -47,7 +46,7 @@ import {
   type LucideProps,
 } from "lucide-react";
 
-export type IconProps = LucideProps;
+type IconProps = LucideProps;
 
 function icon(Glyph: LucideIcon, name: string) {
   function Icon({ size = 16, strokeWidth = 1.5, ...props }: IconProps) {
@@ -66,7 +65,6 @@ export const MenuIcon = icon(Menu, "MenuIcon");
 export const CloseIcon = icon(X, "CloseIcon");
 export const CheckIcon = icon(Check, "CheckIcon");
 export const ChevronDownIcon = icon(ChevronDown, "ChevronDownIcon");
-export const ChevronUpIcon = icon(ChevronUp, "ChevronUpIcon");
 export const ChevronRightIcon = icon(ChevronRight, "ChevronRightIcon");
 export const CopyIcon = icon(Copy, "CopyIcon");
 export const EditIcon = icon(SquarePen, "EditIcon");

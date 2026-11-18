@@ -32,20 +32,9 @@
     @slot;
   }
 }
-@custom-variant data-selected {
-  &:where([data-selected="true"]) {
-    @slot;
-  }
-}
 @custom-variant data-disabled {
   &:where([data-disabled="true"]),
   &:where([data-disabled]:not([data-disabled="false"])) {
-    @slot;
-  }
-}
-@custom-variant data-active {
-  &:where([data-state="active"]),
-  &:where([data-active]:not([data-active="false"])) {
     @slot;
   }
 }
@@ -82,13 +71,10 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
-  --radius-2xl: 1rem;
   --radius-4xl: 2rem;
 
   /* The portal's own sizes besides Tailwind's (text-xs 12, text-sm 14, text-base 16): size / line-height.
      lib/utils.ts tells tailwind-merge about them. */
-  --text-11: 11px;
-  --text-11--line-height: 16px;
   --text-12: 12px;
   --text-12--line-height: 16px;
   --text-13: 13px;
@@ -127,24 +113,12 @@
   --color-ring: var(--ring);
 
   --color-subtle-foreground: var(--subtle-foreground);
-  --color-border-soft: var(--border-soft);
-  --color-border-faint: var(--border-faint);
-  --color-border-solid: var(--border-solid);
-  --color-brand: var(--brand);
-  --color-brand-soft: var(--brand-soft);
-  --color-brand-2: var(--brand-2);
   --color-success: var(--success);
   --color-warning: var(--warning);
   --color-danger: var(--danger);
   --color-attention: var(--attention);
   --color-info: var(--info);
   --color-idle: var(--idle);
-  --color-chart-1: var(--chart-1);
-  --color-chart-2: var(--chart-2);
-  --color-chart-3: var(--chart-3);
-  --color-chart-4: var(--chart-4);
-  --color-chart-5: var(--chart-5);
-  --color-canvas: var(--canvas);
 }
 
 @layer base {

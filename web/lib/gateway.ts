@@ -211,7 +211,7 @@ export function describeError(error: unknown): string {
 }
 
 /** Runs gateway calls after the response has been sent. Failures are logged, never thrown. */
-export function afterResponse(label: string, task: () => Promise<unknown>): void {
+function afterResponse(label: string, task: () => Promise<unknown>): void {
   after(async () => {
     try {
       await task();
