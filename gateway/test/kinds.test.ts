@@ -9,7 +9,6 @@ import path from "node:path";
 import { llmUsage, users, type WorkspaceInfo, type WorkspaceKind } from "@portal/core";
 import { eq } from "drizzle-orm";
 import { userPaths } from "../src/workspaces/paths.ts";
-import { WorkspaceManager } from "../src/workspaces/manager.ts";
 import { bearerSubprotocol, cookie, json, logged, request, waitFor, withGateway, type Gateway, type Reply } from "./harness.ts";
 
 const start = (g: Gateway, userId: number, body?: unknown): Promise<Reply> => g.control("POST", `/control/workspaces/${userId}/start`, body);
@@ -331,18 +330,6 @@ test("a gateway started without the fence stops the Online containers it finds; 
     assert.deepEqual([manager.info(alice).status, manager.info(alice).stopReason], ["stopped", "online_disabled"]);
     assert.deepEqual(g.runtime.runningUsers(), [bob]);
     await waitFor(() => manager.info(bob).ready, "bob's workspace to be adopted");
-  }));
-
-test("without a fence check at all (none passed to the manager), Online never runs", () =>
-  withGateway({}, async (g) => {
-    const { alice } = g.ids;
-    await g.startReady(alice, undefined, "online");
-    g.manager.shutdown();
-    const manager = new WorkspaceManager({ config: g.config, db: g.db, runtime: g.runtime, versions: g.versions, llm: g.llmQueue, connections: g.connections, log: g.log, now: () => g.clock.now });
-    await manager.init();
-    assert.deepEqual([manager.info(alice).status, manager.info(alice).stopReason, manager.info(alice).online], ["stopped", "online_disabled", "off"]);
-    assert.deepEqual(g.runtime.runningUsers(), []);
-    await assert.rejects(manager.start(alice, { kind: "online" }), { code: "online_disabled" });
   }));
 
 for (const agent of ["qwen", "dsh"] as const) {

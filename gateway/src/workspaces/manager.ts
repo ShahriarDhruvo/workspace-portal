@@ -87,10 +87,10 @@ interface WorkspaceManagerOptions {
   llm: LlmQueue;
   connections: ConnectionRegistry;
   log: Logger;
-  /** Whether the host firewall's fence is loaded (fence.ts: fenceCheck). Online workspaces run only while it says "loaded"; without it, never. */
-  fence?: () => Promise<FenceState>;
+  /** Whether the host firewall's fence is loaded (fence.ts: fenceCheck). Online workspaces run only while it says "loaded". */
+  fence: () => Promise<FenceState>;
   /** Told each state saved, so each run of a workspace is a session (session-log.ts). */
-  sessions?: Pick<SessionLog, "sync">;
+  sessions: Pick<SessionLog, "sync">;
   now?: () => number;
 }
 
@@ -224,7 +224,7 @@ export class WorkspaceManager {
   readonly #fenceCheck: () => Promise<FenceState>;
   /** The last fence check's answer; "unknown" until there is one (Online runs only on "loaded"). */
   #fence: FenceState = "unknown";
-  readonly #sessions: Pick<SessionLog, "sync"> | null;
+  readonly #sessions: Pick<SessionLog, "sync">;
   #fenceChecks = 0;
   #fenceApplied = 0;
   #fenceLogged: FenceState | null = null;
@@ -237,8 +237,8 @@ export class WorkspaceManager {
     this.#llm = options.llm;
     this.#connections = options.connections;
     this.#log = options.log;
-    this.#fenceCheck = options.fence ?? (() => Promise.resolve("unknown"));
-    this.#sessions = options.sessions ?? null;
+    this.#fenceCheck = options.fence;
+    this.#sessions = options.sessions;
     this.#now = options.now ?? Date.now;
   }
 
@@ -1055,7 +1055,7 @@ export class WorkspaceManager {
     } catch (error) {
       this.#log.error("could not save workspace state", { userId: entry.userId, error });
     }
-    this.#sessions?.sync(entry);
+    this.#sessions.sync(entry);
   }
 
   #audit(action: AuditAction, userId: number, details?: unknown, actorUserId: number | null = null): void {

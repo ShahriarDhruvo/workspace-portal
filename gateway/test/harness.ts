@@ -29,7 +29,7 @@ import { loadConfig, PREVIEW_PORT_OFFSET, type Config } from "../src/config.ts";
 import type { FenceState } from "../src/workspaces/fence.ts";
 import { BEARER_SUBPROTOCOL_PREFIX } from "../src/proxy/headers.ts";
 import type { FinishedLlmRequest } from "../src/monitor/llm-requests.ts";
-import { createLogger, type Logger } from "../src/lib/log.ts";
+import { createLogger } from "../src/lib/log.ts";
 import type { ReaderBackend } from "../src/service/reader.ts";
 import type { SearchBackend, SearchQuery } from "../src/service/search-mcp.ts";
 import type { FetchText } from "../src/monitor/energy-prices.ts";
@@ -209,7 +209,6 @@ export interface Gateway {
   ports: { control: number; service: number; services: Record<WorkspaceKind, number> };
   llm: FakeUpstream;
   logs: string[];
-  log: Logger;
   createAgentServer: () => http.Server;
   createServiceServer: Parts["createServiceServer"];
 
@@ -382,7 +381,6 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
     tokens,
     llm,
     logs,
-    log,
     agentPort,
     agentOrigin,
     previewPort,
