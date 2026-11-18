@@ -699,6 +699,7 @@ export class WorkspaceManager {
   async #deleteEntry(entry: Entry, created: boolean): Promise<void> {
     const { userId } = entry;
     try {
+      await entry.erasing?.done.catch(() => undefined); // two removals of the same folders fail each other (ENOTEMPTY)
       await this.#stopEntry(entry, "deleted");
       // Also a container an earlier stop failed to remove: its mounts are the data about to go.
       await this.#removeLeftover(entry).catch((error: unknown) => {
@@ -750,8 +751,8 @@ export class WorkspaceManager {
       await done;
     } finally {
       if (entry.erasing?.done === done) entry.erasing = null;
-      // An entry made only to hold `erasing` goes again, unless a start has used it meanwhile.
-      if (existing === undefined && entry.startedAt === null && !entry.starting && this.#entries.get(userId) === entry) this.#entries.delete(userId);
+      // An entry made only to hold `erasing` goes again, unless a start or a deletion has used it meanwhile.
+      if (existing === undefined && entry.startedAt === null && !entry.starting && !entry.deleting && this.#entries.get(userId) === entry) this.#entries.delete(userId);
     }
     this.#audit("workspace_files_erased", userId, { kind }, actorUserId);
     this.#log.info("workspace files erased", { userId, kind, actorUserId });

@@ -401,6 +401,27 @@ test("erasing a kind's files is refused while Docker has a container of that kin
     assert.deepEqual(json(await erase(g, alice, "online")), { ok: true }, "the other kind's are its own");
   }));
 
+test("deleting a user's data waits for an erase of their files that is under way; no start gets through meanwhile", () =>
+  withGateway({}, async (g) => {
+    const { alice, admin } = g.ids;
+    const { root, home } = userPaths(g.dataDir, alice, "private");
+    fs.mkdirSync(home, { recursive: true });
+    // The erase is held where it asks Docker for the user's containers.
+    let finishList!: () => void;
+    const held = new Promise<void>((resolve) => (finishList = resolve));
+    const list = g.runtime.list.bind(g.runtime);
+    g.runtime.list = () => held.then(list);
+    const erasing = g.manager.eraseFiles(alice, "private", admin);
+    const deleting = g.manager.deleteData(alice);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.ok(fs.existsSync(root), "nothing is deleted while the erase is under way");
+    finishList();
+    await erasing;
+    await assert.rejects(g.manager.start(alice), { code: "deleting" }, "the erase is done, the deletion is not");
+    await deleting;
+    assert.equal(fs.existsSync(root), false);
+  }));
+
 test("a user id without a workspace port (AGENT_PORT_COUNT) starts no workspace of either kind: 409 no_workspace_port", () =>
   withGateway({}, async (g) => {
     const now = Date.now();
