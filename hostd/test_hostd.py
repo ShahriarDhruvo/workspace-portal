@@ -873,7 +873,7 @@ class TestEngine(EngineCase):
         json.dumps(st, allow_nan=False)
 
     def test_validation(self):
-        for bad in [None, 'x', f'{REPO}:latest', f'{REPO}@sha256:abc', f'{REPO}@sha256:' + 'A' * 64]:
+        for bad in [None, 'x', f'{REPO}:latest', f'{REPO}@sha256:abc', f'{REPO}@sha256:' + 'A' * 64, f'{REPO}@{D_NEW}\n']:
             with self.assertRaises(H.ApiError) as c:
                 self.engine.start_pull(bad)
             self.assertEqual(c.exception.code, 'invalid_image')
@@ -883,9 +883,10 @@ class TestEngine(EngineCase):
         with self.assertRaises(H.ApiError) as c:
             self.engine.start_apply(f'{REPO}@{D_NEW}', None)
         self.assertEqual(c.exception.code, 'not_pulled')
-        with self.assertRaises(H.ApiError) as c:
-            self.engine.start_apply(f'{REPO}@{D_OLD}', 'v1')
-        self.assertEqual(c.exception.code, 'invalid_version')
+        for bad in ['v1', '0.31.0\n', '０.３１.０']:      # the version is written into the quadlet's Documentation=
+            with self.assertRaises(H.ApiError) as c:
+                self.engine.start_apply(f'{REPO}@{D_OLD}', bad)
+            self.assertEqual(c.exception.code, 'invalid_version')
 
     def test_pull_then_apply(self):
         job = self.engine.start_pull(f'{REPO}@{D_NEW}')
@@ -994,9 +995,10 @@ class TestEngine(EngineCase):
         with self.assertRaises(H.ApiError) as c:
             self.engine.delete_image(D_NEW)
         self.assertEqual(c.exception.code, 'not_found')
-        with self.assertRaises(H.ApiError) as c:
-            self.engine.delete_image('sha256:xyz')
-        self.assertEqual(c.exception.code, 'invalid_image')
+        for bad in ['sha256:xyz', D_THIRD + '\n']:
+            with self.assertRaises(H.ApiError) as c:
+                self.engine.delete_image(bad)
+            self.assertEqual(c.exception.code, 'invalid_image')
         self.assertEqual(self.engine.delete_image(D_THIRD), {'ok': True})
         self.assertNotIn(f'{REPO}@{D_THIRD}', self.state.local)
         rmi = [c for c in self.state.calls if 'rmi' in c]

@@ -1045,10 +1045,11 @@ class Meter:
 
 # -------------------------------------------------------------------------------------------- engine
 
-IMAGE_RE = re.compile(r'^(?P<repo>[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+)?'
-                      r'(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)+)@(?P<digest>sha256:[0-9a-f]{64})$')
-DIGEST_RE = re.compile(r'^sha256:[0-9a-f]{64}$')
-VERSION_RE = re.compile(r'^\d+\.\d+\.\d+$')
+# The three that check a request, with fullmatch: "$" would let a line break at the end through.
+IMAGE_RE = re.compile(r'(?P<repo>[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+)?'
+                      r'(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)+)@(?P<digest>sha256:[0-9a-f]{64})')
+DIGEST_RE = re.compile(r'sha256:[0-9a-f]{64}')
+VERSION_RE = re.compile(r'[0-9]+\.[0-9]+\.[0-9]+')
 IMAGE_LINE_RE = re.compile(r'^(\s*Image\s*=\s*)(.*?)(\s*)$')
 DOC_LINE_RE = re.compile(r'^\s*Documentation\s*=')
 DOC_VERSION_RE = re.compile(r'/v(\d+\.\d+\.\d+)/')
@@ -1353,10 +1354,10 @@ class Engine:
                 'job': job_json}
 
     def _validate(self, image):
-        if not isinstance(image, str) or not IMAGE_RE.match(image):
+        if not isinstance(image, str) or not IMAGE_RE.fullmatch(image):
             raise ApiError(400, 'invalid_image', 'image must be <repository>@sha256:<64 hex>')
         repo = repository_of(self._image())
-        if IMAGE_RE.match(image).group('repo') != repo:
+        if IMAGE_RE.fullmatch(image).group('repo') != repo:
             raise ApiError(400, 'wrong_repository', f'repository must be {repo}')
 
     def _busy(self):
@@ -1424,7 +1425,7 @@ class Engine:
 
     def start_apply(self, image, version):
         self._validate(image)
-        if version is not None and (not isinstance(version, str) or not VERSION_RE.match(version)):
+        if version is not None and (not isinstance(version, str) or not VERSION_RE.fullmatch(version)):
             raise ApiError(400, 'invalid_version', 'version must be X.Y.Z or null')
         self._busy()
         if not self.image_exists(image):
@@ -1499,7 +1500,7 @@ class Engine:
         job.set_step('Done')
 
     def delete_image(self, digest):
-        if not isinstance(digest, str) or not DIGEST_RE.match(digest):
+        if not isinstance(digest, str) or not DIGEST_RE.fullmatch(digest):
             raise ApiError(400, 'invalid_image', 'digest must be sha256:<64 hex>')
         self._busy()
         current = self._image()
