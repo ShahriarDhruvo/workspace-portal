@@ -23,7 +23,6 @@ x-internet-only: &internet-only
   read_only: true
   # Not the host's search domains: a failed lookup would send the LAN's name to the public resolvers.
   dns_search: ["."]
-  memswap_limit: 512m
   cpus: 1.0
 
 services:

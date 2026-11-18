@@ -192,7 +192,6 @@ test("the version check runs the CLI without network, privileges or a writable r
       CapDrop: ["ALL"],
       SecurityOpt: ["no-new-privileges:true"],
       Memory: 512 * 1024 * 1024,
-      MemorySwap: 512 * 1024 * 1024,
       PidsLimit: 128,
       NanoCpus: 1e9,
       RestartPolicy: { Name: "no" },

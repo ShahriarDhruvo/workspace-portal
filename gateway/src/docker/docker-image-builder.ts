@@ -304,7 +304,6 @@ export function verifyContainerOptions(image: string, cli: string): Docker.Conta
       CapDrop: ["ALL"],
       SecurityOpt: ["no-new-privileges:true"],
       Memory: 512 * MIB,
-      MemorySwap: 512 * MIB,
       PidsLimit: 128,
       NanoCpus: 1e9,
       RestartPolicy: { Name: "no" },
