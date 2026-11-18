@@ -58,7 +58,10 @@ const LLM_ROUTES: ReadonlyArray<{ path: RegExp; method: "GET" | "POST" }> = [
 /** LLM request bodies larger than this are not searched for URLs (a conversation full of images). */
 const URL_SCAN_LIMIT_BYTES = 8 * 1024 * 1024;
 
-/** Connections one workspace may have open to this API: one that opens them and never reads the answers stops here. */
+/**
+ * Connections one workspace may have open to this API. An agent with many subagents holds one per waiting LLM
+ * request; a workspace that opens them and never reads the answers stops here.
+ */
 const MAX_CONNECTIONS_PER_WORKSPACE = 128;
 
 const NOT_SHOWN =

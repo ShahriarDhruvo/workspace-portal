@@ -1,7 +1,8 @@
 // The web tools workspaces get: a minimal, stateless MCP server (streamable HTTP transport, JSON responses) with
 // `web_search`, answered from the configured SearXNG instance, and, when a page reader is configured, `read_page`
 // (reader.ts). Workspaces have no network access except the gateway: a search only ever sends a query to SEARXNG_URL,
-// and a page is fetched by the reader container, only when the workspace may open that URL (url-policy.ts).
+// and a page is fetched by the reader container, never by the gateway or the workspace, and only when the workspace
+// may open that URL (url-policy.ts).
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { HttpError, readJsonBody, sendJson } from "../lib/http-util.ts";
 import { askService, formatPage, parseReadArguments, ReadError, readPageTool, type ReaderBackend, type ReadRequest } from "./reader.ts";

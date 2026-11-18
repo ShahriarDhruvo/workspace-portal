@@ -76,18 +76,18 @@ test("rejectsCrossSite blocks cross-site writes and WebSockets only", () => {
 
 test("rejectsSameSite lets another port of this host only navigate an iframe", () => {
   const frame = { "sec-fetch-site": "same-site", "sec-fetch-mode": "navigate", "sec-fetch-dest": "iframe" };
-  assert.equal(rejectsSameSite("GET", frame, false), false, "the portal's frame of the workspace");
-  assert.equal(rejectsSameSite("HEAD", frame, false), false);
-  assert.equal(rejectsSameSite("POST", frame, false), true, "a form posted into a frame");
-  assert.equal(rejectsSameSite("GET", frame, true), true, "a WebSocket");
+  assert.equal(rejectsSameSite("GET", frame, false, false), false, "the portal's frame of the workspace");
+  assert.equal(rejectsSameSite("HEAD", frame, false, false), false);
+  assert.equal(rejectsSameSite("POST", frame, false, false), true, "a form posted into a frame");
+  assert.equal(rejectsSameSite("GET", frame, true, false), true, "a WebSocket");
   // What a page on another port can make the browser send with the session cookie, without reading the answer.
   for (const [mode, dest] of [["no-cors", "image"], ["no-cors", "script"], ["cors", "empty"], ["no-cors", "empty"], ["navigate", "document"], ["navigate", "frame"]]) {
-    assert.equal(rejectsSameSite("GET", { "sec-fetch-site": "same-site", "sec-fetch-mode": mode!, "sec-fetch-dest": dest! }, false), true, `${mode} ${dest}`);
+    assert.equal(rejectsSameSite("GET", { "sec-fetch-site": "same-site", "sec-fetch-mode": mode!, "sec-fetch-dest": dest! }, false, false), true, `${mode} ${dest}`);
   }
-  assert.equal(rejectsSameSite("GET", { "sec-fetch-site": "same-site" }, false), true, "no mode or destination");
+  assert.equal(rejectsSameSite("GET", { "sec-fetch-site": "same-site" }, false, false), true, "no mode or destination");
   // Not same-site: other rules (or none) apply.
-  for (const site of ["same-origin", "none", "cross-site"]) assert.equal(rejectsSameSite("POST", { "sec-fetch-site": site }, true), false, site);
-  assert.equal(rejectsSameSite("POST", {}, true), false, "a browser without Fetch Metadata");
+  for (const site of ["same-origin", "none", "cross-site"]) assert.equal(rejectsSameSite("POST", { "sec-fetch-site": site }, true, false), false, site);
+  assert.equal(rejectsSameSite("POST", {}, true, false), false, "a browser without Fetch Metadata");
 });
 
 test("mergeFrameAncestors", () => {
