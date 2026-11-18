@@ -7,7 +7,7 @@
 // Code's, with a nightly build a day, is about 1.9 MB of JSON, 230 kB gzipped on the wire (fetch asks for gzip). The
 // registry answers a request that sends the last answer's ETag with 304 and no body while nothing was published, so
 // the release cache (release-cache.ts) downloads it again only after a release.
-import { readBoundedText } from "../lib/bounded-body.ts";
+import { failureReason, fetchBounded, FETCH_TIMEOUT_MS } from "../lib/bounded-body.ts";
 import { HttpError } from "../lib/http-util.ts";
 import { isGitHubRepo } from "./github-releases.ts";
 import { isVersion } from "@portal/core";
@@ -44,7 +44,6 @@ export interface NpmRegistry {
 export const registryError = (message: string): HttpError => new HttpError(502, "registry_unreachable", message);
 
 const NPM_REGISTRY_URL = "https://registry.npmjs.org";
-const TIMEOUT_MS = 10_000;
 /** Qwen Code's document is about 1.9 MB and grows by some 2.6 kB a version. */
 const MAX_PACKUMENT_BYTES = 32 * 1024 * 1024;
 
@@ -101,40 +100,20 @@ export function readPackument(body: unknown): NpmPackage | null {
 export function createNpmRegistry(options: NpmRegistryOptions = {}): NpmRegistry {
   const fetchFn = options.fetch ?? fetch;
   const baseUrl = (options.baseUrl ?? NPM_REGISTRY_URL).replace(/\/+$/, "");
-  const timeoutMs = options.timeoutMs ?? TIMEOUT_MS;
+  const timeoutMs = options.timeoutMs ?? FETCH_TIMEOUT_MS;
   const maxPackumentBytes = options.maxPackumentBytes ?? MAX_PACKUMENT_BYTES;
 
-  const unreachable = (error: unknown): HttpError => {
-    const reason = (error as Error).name === "TimeoutError" ? `no answer within ${timeoutMs / 1000} s` : (error as Error).message;
-    return registryError(`The npm registry is unreachable (${reason}).`);
-  };
-  // One signal for the request and its body: a registry that sends headers and then stalls is unreachable as well.
-  const get = async (url: string, headers: Record<string, string> = {}): Promise<Response> => {
-    try {
-      const signal = AbortSignal.timeout(timeoutMs);
-      return await fetchFn(url, { headers: { accept: "application/json", ...headers }, signal, redirect: "follow" });
-    } catch (error) {
-      throw unreachable(error);
-    }
-  };
+  /** The answer to a GET; its body is read (up to `maxBytes`) only when asked for. A stalled body is unreachable as well. */
+  const get = (url: string, maxBytes?: number, headers: Record<string, string> = {}) =>
+    fetchBounded(fetchFn, url, { headers: { accept: "application/json", ...headers }, redirect: "follow", timeoutMs, maxBytes }).catch((error: unknown) => {
+      throw registryError(`The npm registry is unreachable (${failureReason(error, timeoutMs)}).`);
+    });
 
   return {
     async packument(packageName, etag) {
-      const response = await get(`${baseUrl}/${packagePath(packageName)}`, etag ? { "if-none-match": etag } : {});
-      if (response.status === 304 && etag) {
-        await response.body?.cancel().catch(() => undefined);
-        return null;
-      }
-      if (!response.ok) {
-        await response.body?.cancel().catch(() => undefined);
-        throw registryError(`The npm registry answered ${response.status} for ${packageName}.`);
-      }
-      let text: string | null;
-      try {
-        text = await readBoundedText(response, maxPackumentBytes);
-      } catch (error) {
-        throw unreachable(error);
-      }
+      const { ok, status, headers, text } = await get(`${baseUrl}/${packagePath(packageName)}`, maxPackumentBytes, etag ? { "if-none-match": etag } : {});
+      if (status === 304 && etag) return null;
+      if (!ok) throw registryError(`The npm registry answered ${status} for ${packageName}.`);
       if (text === null) throw registryError(`The npm registry's answer for ${packageName} is too large.`);
       let body: unknown;
       try {
@@ -144,15 +123,14 @@ export function createNpmRegistry(options: NpmRegistryOptions = {}): NpmRegistry
       }
       const pkg = readPackument(body);
       if (pkg === null) throw registryError(`The npm registry's answer for ${packageName} is not a package.`);
-      return { etag: response.headers.get("etag"), package: pkg };
+      return { etag: headers.get("etag"), package: pkg };
     },
 
     async hasVersion(packageName, version) {
-      const response = await get(`${baseUrl}/${packagePath(packageName)}/${encodeURIComponent(version)}`);
-      await response.body?.cancel().catch(() => undefined);
-      if (response.ok) return true;
-      if (response.status === 404) return false;
-      throw registryError(`The npm registry answered ${response.status} for ${packageName}@${version}.`);
+      const { ok, status } = await get(`${baseUrl}/${packagePath(packageName)}/${encodeURIComponent(version)}`);
+      if (ok) return true;
+      if (status === 404) return false;
+      throw registryError(`The npm registry answered ${status} for ${packageName}@${version}.`);
     },
   };
 }

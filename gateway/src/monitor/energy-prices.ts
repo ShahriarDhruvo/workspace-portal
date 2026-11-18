@@ -9,7 +9,7 @@
 //     kWh, for the last six half years.
 import { sql } from "drizzle-orm";
 import { ENERGY_LOCATIONS, ENERGY_PRICE_SOURCES, energyPrices, type EnergyCurrency, type EnergyPriceSource, type EnergyPriceStatus, type PortalDb } from "@portal/core";
-import { readBoundedText } from "../lib/bounded-body.ts";
+import { fetchBounded } from "../lib/bounded-body.ts";
 import type { Logger } from "../lib/log.ts";
 
 export const EIA_URL = "https://www.eia.gov/electricity/monthly/epm_table_grapher.php?t=epmt_5_6_a";
@@ -183,15 +183,9 @@ const PARSERS: Readonly<Record<EnergyPriceSource, (body: string) => PriceRow[]>>
 export type FetchText = (url: string) => Promise<string>;
 
 export async function fetchText(url: string): Promise<string> {
-  const response = await fetch(url, {
-    headers: { accept: "text/html, application/json", "user-agent": "workspace-portal (energy prices)" },
-    signal: AbortSignal.timeout(TIMEOUT_MS),
-  });
-  if (!response.ok) {
-    await response.body?.cancel().catch(() => undefined);
-    throw new Error(`HTTP ${response.status}`);
-  }
-  const text = await readBoundedText(response, MAX_BYTES);
+  const headers = { accept: "text/html, application/json", "user-agent": "workspace-portal (energy prices)" };
+  const { ok, status, text } = await fetchBounded(fetch, url, { headers, timeoutMs: TIMEOUT_MS, maxBytes: MAX_BYTES });
+  if (!ok) throw new Error(`HTTP ${status}`);
   if (text === null) throw new Error(`the answer is larger than ${MAX_BYTES / 1024 / 1024} MiB`);
   return text;
 }

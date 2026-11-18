@@ -5,10 +5,9 @@
 //
 // Whether notes announce breaking changes is read from the conventions changelogs use, never guessed from a word
 // alone: Qwen Code's notes always have a "Breaking Changes" heading, mostly followed by "No known breaking changes."
-import { readBoundedText } from "../lib/bounded-body.ts";
+import { failureReason, fetchBounded } from "../lib/bounded-body.ts";
 import { isVersion, type ReleaseNotes } from "@portal/core";
 
-const TIMEOUT_MS = 10_000;
 /**
  * Releases asked for, newest first: GitHub's maximum for one request. Qwen Code also publishes nightlies, previews
  * and other products (a desktop app, an SDK) there, so its newest 30 covered only 12 days (8 stable releases) in
@@ -50,21 +49,16 @@ export function createGitHubReleases(fetchImpl: typeof fetch = fetch): GitHubRel
       if (!isGitHubRepo(repo)) throw new GitHubError(`${repo} is not a GitHub repository (owner/name)`);
       let releases: unknown;
       try {
-        const response = await fetchImpl(`https://api.github.com/repos/${repo}/releases?per_page=${PER_PAGE}`, {
+        const { ok, status, text } = await fetchBounded(fetchImpl, `https://api.github.com/repos/${repo}/releases?per_page=${PER_PAGE}`, {
           headers: { accept: "application/vnd.github+json", "user-agent": "workspace-portal", "x-github-api-version": "2022-11-28" },
-          signal: AbortSignal.timeout(TIMEOUT_MS),
+          maxBytes: MAX_BYTES,
         });
-        if (!response.ok) {
-          await response.body?.cancel().catch(() => undefined);
-          throw new GitHubError(`GitHub answered ${response.status} for ${repo}'s releases`);
-        }
-        const text = await readBoundedText(response, MAX_BYTES);
+        if (!ok) throw new GitHubError(`GitHub answered ${status} for ${repo}'s releases`);
         if (text === null) throw new GitHubError(`GitHub's list of ${repo}'s releases is too large`);
         releases = JSON.parse(text);
       } catch (error) {
         if (error instanceof GitHubError) throw error;
-        const reason = (error as Error).name === "TimeoutError" ? `no answer within ${TIMEOUT_MS / 1000} s` : (error as Error).message;
-        throw new GitHubError(`GitHub is unreachable (${reason})`);
+        throw new GitHubError(`GitHub is unreachable (${failureReason(error)})`);
       }
       if (!Array.isArray(releases)) return [];
       const list: GitHubRelease[] = [];

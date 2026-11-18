@@ -4,13 +4,12 @@
 // minutes like the agents' releases (release-cache.ts): the console polls, and GitHub allows 60
 // anonymous requests an hour.
 import { byNewestVersion, compareVersions, isStableVersion, type EngineRelease, type EngineReleaseList, type ReleaseNotes } from "@portal/core";
-import { readBoundedText } from "../lib/bounded-body.ts";
+import { fetchBounded } from "../lib/bounded-body.ts";
 import { createGitHubReleases, type GitHubReleases } from "./github-releases.ts";
 import { errorMessage, type Logger } from "../lib/log.ts";
 
 const TTL_MS = 10 * 60_000;
 const RETRY_MS = 60_000;
-const TIMEOUT_MS = 10_000;
 /** The tag list (n=1000) and a token answer are small; anything larger than this is refused while it streams in. */
 const MAX_BYTES = 4 * 1024 * 1024;
 /** Versions offered to install, newest first, as for the agents (agent-overview.ts RELEASES_OFFERED). */
@@ -63,42 +62,37 @@ export interface NotesClient {
 export function createRegistryClient(fetchImpl: typeof fetch = fetch): RegistryClient {
   const tokens = new Map<string, string>();
 
-  async function get(repository: string, pathAndQuery: string, init: { method?: string; accept?: string } = {}): Promise<Response> {
+  async function get(repository: string, pathAndQuery: string, init: { method?: string; accept?: string } = {}) {
     const { registry, path } = splitRepository(repository);
-    const url = `https://${registry}/v2/${path}/${pathAndQuery}`;
-    const headers = (): Record<string, string> => {
+    const ask = () => {
       const token = tokens.get(repository);
-      return { ...(init.accept ? { accept: init.accept } : {}), ...(token ? { authorization: `Bearer ${token}` } : {}) };
+      const headers = { ...(init.accept ? { accept: init.accept } : {}), ...(token ? { authorization: `Bearer ${token}` } : {}) };
+      return fetchBounded(fetchImpl, `https://${registry}/v2/${path}/${pathAndQuery}`, { method: init.method ?? "GET", headers, maxBytes: MAX_BYTES });
     };
-    let response = await fetchImpl(url, { method: init.method ?? "GET", headers: headers(), signal: AbortSignal.timeout(TIMEOUT_MS) });
-    if (response.status === 401) {
-      await response.body?.cancel();
-      tokens.set(repository, await anonymousToken(fetchImpl, response.headers.get("www-authenticate") ?? ""));
-      response = await fetchImpl(url, { method: init.method ?? "GET", headers: headers(), signal: AbortSignal.timeout(TIMEOUT_MS) });
+    let answer = await ask();
+    if (answer.status === 401) {
+      tokens.set(repository, await anonymousToken(fetchImpl, answer.headers.get("www-authenticate") ?? ""));
+      answer = await ask();
     }
-    if (!response.ok) {
-      await response.body?.cancel();
-      throw new EngineReleaseError(`${registry} answered ${response.status} for ${path}`);
-    }
-    return response;
+    if (!answer.ok) throw new EngineReleaseError(`${registry} answered ${answer.status} for ${path}`);
+    return answer;
   }
 
   return {
     async tags(repository) {
-      const body = (await boundedJson(await get(repository, "tags/list?n=1000"), "tag list")) as { tags?: unknown };
+      const body = boundedJson((await get(repository, "tags/list?n=1000")).text, "tag list") as { tags?: unknown };
       return Array.isArray(body.tags) ? body.tags.filter((tag): tag is string => typeof tag === "string") : [];
     },
     async digest(repository, tag) {
-      const response = await get(repository, `manifests/${encodeURIComponent(tag)}`, { method: "HEAD", accept: MANIFEST_TYPES });
-      const digest = response.headers.get("docker-content-digest");
+      const { headers } = await get(repository, `manifests/${encodeURIComponent(tag)}`, { method: "HEAD", accept: MANIFEST_TYPES });
+      const digest = headers.get("docker-content-digest");
       return digest !== null && /^sha256:[0-9a-f]{64}$/.test(digest) ? digest : null;
     },
   };
 }
 
-/** A registry answer's JSON, refused when larger than MAX_BYTES or not JSON. */
-async function boundedJson(response: Response, what: string): Promise<unknown> {
-  const text = await readBoundedText(response, MAX_BYTES);
+/** A registry answer's JSON, refused when larger than MAX_BYTES (`text` is then null) or not JSON. */
+function boundedJson(text: string | null, what: string): unknown {
   if (text === null) throw new EngineReleaseError(`the registry's ${what} is larger than ${MAX_BYTES / 1024 / 1024} MiB`);
   try {
     return JSON.parse(text) as unknown;
@@ -118,12 +112,9 @@ async function anonymousToken(fetchImpl: typeof fetch, challenge: string): Promi
     const value = params.get(key);
     if (value) url.searchParams.set(key, value);
   }
-  const response = await fetchImpl(url, { signal: AbortSignal.timeout(TIMEOUT_MS) });
-  if (!response.ok) {
-    await response.body?.cancel();
-    throw new EngineReleaseError(`the registry's token service answered ${response.status}`);
-  }
-  const body = (await boundedJson(response, "token answer")) as { token?: unknown; access_token?: unknown };
+  const { ok, status, text } = await fetchBounded(fetchImpl, url, { maxBytes: MAX_BYTES });
+  if (!ok) throw new EngineReleaseError(`the registry's token service answered ${status}`);
+  const body = boundedJson(text, "token answer") as { token?: unknown; access_token?: unknown };
   const token = typeof body.token === "string" ? body.token : body.access_token;
   if (typeof token !== "string" || token === "") throw new EngineReleaseError("the registry's token service sent no token");
   return token;
