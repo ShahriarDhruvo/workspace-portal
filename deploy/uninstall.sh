@@ -17,7 +17,7 @@ for label in com.docker.compose.project=workspace-portal workspace-portal.worksp
   docker ps -aq --filter "label=$label" | xargs -r docker rm -f >/dev/null
 done
 for label in com.docker.compose.project=workspace-portal workspace-portal.network; do
-  docker network ls -q --filter "label=$label" | xargs -r docker network rm >/dev/null
+  docker network ls -q --filter "label=$label" | xargs -r docker network rm >/dev/null || warn "could not remove every network; see: docker network ls"
 done
 
 log "removing the firewall"

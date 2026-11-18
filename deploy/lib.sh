@@ -257,12 +257,13 @@ portal_sources() {
 # Adds or removes the firewalld rich rules that open the portal's ports to portal_sources. Both kinds' ranges,
 # also with Online off: the gateway answers there that the workspace is stopped.
 firewalld_rules() { # add | remove
-  local source port rule
+  local source port rule refused=die
+  [[ $1 == add ]] || refused=warn
   for source in $(portal_sources); do
     for port in "$(env_get WEB_PORT)" $(port_ranges); do
       rule="rule family=\"ipv4\" source address=\"$source\" port port=\"$port\" protocol=\"tcp\" accept"
-      # A rule already there (or already gone) is a warning and exit status 0.
-      firewall-cmd --permanent "--$1-rich-rule=$rule" >/dev/null 2>&1 || warn "firewalld: could not $1: $rule"
+      # A rule already there (or already gone) is exit status 0; a rule firewalld refuses to add leaves the port closed.
+      firewall-cmd --permanent "--$1-rich-rule=$rule" >/dev/null 2>&1 || "$refused" "firewalld: could not $1: $rule"
     done
   done
   firewall-cmd --reload >/dev/null
