@@ -1,7 +1,6 @@
-// A whole gateway in one process for the integration tests: a real database, the real agent,
-// control and service servers (one agent server per workspace port of each kind), a FakeRuntime whose
-// "containers" are fake agent servers (`qwen serve`, `dsh web`), the real agent updater with a fake
-// image builder and npm registry, a fake LLM server, a stub search backend and an injectable clock.
+// A whole gateway in one process for the integration tests: main.ts's own parts (compose.ts) over a real
+// database, with a FakeRuntime whose "containers" are fake agent servers (`qwen serve`, `dsh web`), a fake
+// image builder, npm registry, engine host and LLM server, a stub search backend and an injectable clock.
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -14,7 +13,6 @@ import {
   auditLog,
   generateSessionToken,
   hashSessionToken,
-  loadSessionContext,
   openDatabase,
   sessions,
   users,
@@ -25,32 +23,16 @@ import {
   type WorkspaceInfo,
   type WorkspaceKind,
 } from "@portal/core";
-import type { AgentDeps } from "../src/proxy/agent-access.ts";
-import { createAgentServerFactory } from "../src/proxy/agent-proxy.ts";
-import { createPreviewServerFactory } from "../src/proxy/preview-proxy.ts";
-import { AgentUpdater } from "../src/updates/agent-updater.ts";
+import { compose, type Seams } from "../src/compose.ts";
 import { AgentVersions } from "../src/updates/agent-versions.ts";
 import { loadConfig, PREVIEW_PORT_OFFSET, type Config } from "../src/config.ts";
-import { ConnectionRegistry } from "../src/proxy/connections.ts";
-import { createControlServer, type ControlDeps } from "../src/control-api.ts";
 import type { FenceState } from "../src/workspaces/fence.ts";
 import { BEARER_SUBPROTOCOL_PREFIX } from "../src/proxy/headers.ts";
-import { LlmQueue } from "../src/service/llm-queue.ts";
-import { LlmRequests, type FinishedLlmRequest } from "../src/monitor/llm-requests.ts";
-import { SessionLog } from "../src/monitor/session-log.ts";
+import type { FinishedLlmRequest } from "../src/monitor/llm-requests.ts";
 import type { Logger } from "../src/lib/log.ts";
 import type { ReaderBackend } from "../src/service/reader.ts";
-import { ReleaseCache } from "../src/updates/release-cache.ts";
 import type { SearchBackend, SearchQuery } from "../src/service/search-mcp.ts";
-import { createServiceServer, type ServiceDeps } from "../src/service/service-api.ts";
-import { SessionCache } from "../src/proxy/session-cache.ts";
-import { WorkspaceManager } from "../src/workspaces/manager.ts";
-import { EngineReleases } from "../src/updates/engine-releases.ts";
-import { EnergyPrices, type FetchText } from "../src/monitor/energy-prices.ts";
-import { EngineUpdater } from "../src/updates/engine-updater.ts";
-import { HostMonitor } from "../src/monitor/host-monitor.ts";
-import { LiveHub, userNames } from "../src/monitor/live.ts";
-import { LlmMonitor } from "../src/monitor/llm-monitor.ts";
+import type { FetchText } from "../src/monitor/energy-prices.ts";
 import {
   closeServer,
   FakeEngineHost,
@@ -177,8 +159,6 @@ export interface GatewayOptions {
   readyAfterMs?: number;
   /** Written to PORTAL_DATA_DIR/config/agent-versions.env before the gateway starts. */
   agentVersionsFile?: string;
-  /** The agent updater's time limit for one job. */
-  buildTimeoutMs?: number;
   /** A page reader for the read_page tool (none by default, as without READER_URL). */
   reader?: ReaderBackend;
   /** The search backend; by default a stub that answers "results for <query>". */
@@ -189,6 +169,8 @@ export interface GatewayOptions {
   priceSource?: FetchText;
 }
 
+type Parts = ReturnType<typeof compose>;
+
 export interface Gateway {
   dataDir: string;
   config: Config;
@@ -198,20 +180,19 @@ export interface Gateway {
   versions: AgentVersions;
   builder: FakeImageBuilder;
   registry: FakeRegistry;
-  updater: AgentUpdater;
-  llmQueue: LlmQueue;
-  llmRequests: LlmRequests;
+  updater: Parts["updater"];
+  llmQueue: Parts["llm"];
+  llmRequests: Parts["requests"];
   /** The requests that reached the LLM server and ended, newest first. */
   finishedRequests: FinishedLlmRequest[];
-  sessionLog: SessionLog;
+  sessionLog: Parts["sessionLog"];
   engineHost: FakeEngineHost | null;
   engineRegistry: FakeEngineRegistry;
-  engine: EngineUpdater;
-  live: LiveHub;
-  connections: ConnectionRegistry;
-  sessionCache: SessionCache;
-  manager: WorkspaceManager;
-  /** Pass `fence.check` to a manager a test makes itself. */
+  engine: Parts["engine"];
+  live: Parts["live"];
+  connections: Parts["connections"];
+  sessionCache: Parts["sessions"];
+  manager: Parts["manager"];
   fence: FakeFence;
   clock: { now: number };
   /** The user `ports.service` attributes requests to (stands in for the source-address lookup). */
@@ -240,8 +221,8 @@ export interface Gateway {
   addSession(userId: number, actingAsUserId?: number | null): string;
   /** Points an admin session at another user's workspace (null: back to their own). */
   actAs(sessionToken: string, userId: number | null): void;
-  /** Makes the agent, control and service servers use another manager (a "restarted" gateway). */
-  useManager(manager: WorkspaceManager): void;
+  /** A restarted gateway over the same database and containers (with `config`, when it changed): its manager. */
+  restart(config?: Config): Promise<Parts["manager"]>;
 
   navigate(token: string | null, userId: number, pathname?: string, headers?: Record<string, string>, kind?: WorkspaceKind): Promise<Reply>;
   /**
@@ -329,26 +310,9 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
     fs.mkdirSync(path.dirname(config.agentVersionsFile), { recursive: true });
     fs.writeFileSync(config.agentVersionsFile, options.agentVersionsFile);
   }
-  const versions = AgentVersions.fromConfig(config, log);
   const builder = new FakeImageBuilder(runtime);
-  // deploy/install.sh built the current version of each agent.
-  for (const kind of AGENT_KINDS) builder.install(kind, versions.current(kind));
   const registry = new FakeRegistry();
-  const llmQueue = new LlmQueue(config.llm.maxConcurrency, config.llm.maxConcurrencyPerUser);
-  const sessionLog = new SessionLog({ db, log, now: () => clock.now });
   const finishedRequests: FinishedLlmRequest[] = [];
-  const llmRequests = new LlmRequests({
-    now: () => clock.now,
-    listener: {
-      forwarded: (request) => void sessionLog.forwarded(request.id, request.userId),
-      finished: (request) => {
-        finishedRequests.unshift(request);
-        sessionLog.finished(request);
-      },
-    },
-  });
-  const connections = new ConnectionRegistry(() => clock.now);
-  const sessionCache = new SessionCache((hash) => loadSessionContext(db, hash));
   const fence: FakeFence = {
     state: options.fence ?? "loaded",
     checks: 0,
@@ -357,69 +321,42 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
       return Promise.resolve(fence.state);
     },
   };
-  let manager = new WorkspaceManager({ config, db, runtime, versions, llm: llmQueue, connections, log, fence: fence.check, sessions: sessionLog, now: () => clock.now });
-  await manager.init();
-  sessionLog.reconcile(manager.list());
-  const updater = new AgentUpdater({
-    config,
-    versions,
-    builder,
-    registry,
-    releases: new ReleaseCache({ registry, now: () => clock.now }),
-    workspaces: () => manager.list(),
-    db,
-    log,
-    now: () => clock.now,
-    buildTimeoutMs: options.buildTimeoutMs,
-  });
-
   const engineHost = options.engineHost === undefined ? new FakeEngineHost() : options.engineHost;
   const engineRegistry = new FakeEngineRegistry();
-  const engine = new EngineUpdater({
-    config,
-    host: engineHost,
-    releases: new EngineReleases({ registry: engineRegistry, notes: new FakeNotes(), notesRepo: config.engine.releaseNotesRepo, now: () => clock.now }),
-    queue: llmQueue,
-    db,
-    log,
+  const seams: Seams = {
     now: () => clock.now,
-    pollMs: 5,
-  });
-  const live = new LiveHub({
-    llm: new LlmMonitor({
-      upstreamUrl: config.llm.upstreamUrl,
-      apiKey: config.llm.apiKey,
-      queue: llmQueue,
-      requests: llmRequests,
-      names: (ids) => userNames(db, ids),
-      log,
-      now: () => clock.now,
-    }),
-    hosts: {
-      portal: new HostMonitor({ role: "portal", config: config.hostd.portal, log }),
-      llm: new HostMonitor({ role: "llm", config: config.hostd.llm, log }),
-    },
-    sessions: sessionLog,
-    log,
-    now: () => clock.now,
-  });
-
-  const agentDeps: AgentDeps = { config, manager, sessions: sessionCache, connections, log };
-  // Never started: the tests that need prices give `priceSource` (offline otherwise).
-  const prices = new EnergyPrices({ db, log, fetchText: options.priceSource ?? (() => Promise.reject(new Error("offline"))) });
-  const controlDeps: ControlDeps = { config, db, manager, versions, updater, engine, llm: llmQueue, live, prices, sessions: sessionCache, connections, log };
-  const serviceBase = { config, db, manager, llm: llmQueue, requests: llmRequests, log, search, reader: options.reader };
-  const serviceDeps: ServiceDeps[] = [
-    { ...serviceBase, kind: "private", resolveCaller: () => caller.userId },
-    ...WORKSPACE_KINDS.map((kind): ServiceDeps => ({ ...serviceBase, kind })),
-  ];
-  const createAgentServer = createAgentServerFactory(agentDeps);
-  const createPreviewServer = createPreviewServerFactory(agentDeps);
-  const control = createControlServer(controlDeps);
-  const services = serviceDeps.map(createServiceServer);
-  const servers: http.Server[] = [control, ...services];
-  const [controlPort, servicePort, privateServicePort, onlineServicePort] = await Promise.all([control, ...services].map((server) => listenLocal(server)));
-  servers.push(...(await listenAgentPorts(config, createAgentServer, createPreviewServer)));
+    fence: fence.check,
+    builder,
+    registry,
+    engineHost,
+    engineRegistry,
+    engineNotes: new FakeNotes(),
+    enginePollMs: 5,
+    search,
+    reader: options.reader,
+    // The tests that need prices give `priceSource` (offline otherwise).
+    fetchText: options.priceSource ?? (() => Promise.reject(new Error("offline"))),
+    onLlmFinished: (request) => finishedRequests.unshift(request),
+  };
+  let servers: http.Server[] = [];
+  /** Starts a gateway as main.ts does, minus what it runs in the background; returns what a restart replaces in `Gateway`. */
+  const boot = async (config: Config) => {
+    const versions = AgentVersions.fromConfig(config, log);
+    const { llm: llmQueue, requests: llmRequests, sessions: sessionCache, manager, sessionLog, updater, engine, live, connections, createAgentServer, ...parts } = compose(
+      { config, db, runtime, versions, log },
+      seams,
+    );
+    await manager.init();
+    sessionLog.reconcile(manager.list());
+    const services = [parts.createServiceServer({ kind: "private", resolveCaller: () => caller.userId }), ...WORKSPACE_KINDS.map((kind) => parts.createServiceServer({ kind }))];
+    const [control, service, privateService, onlineService] = await Promise.all([parts.control, ...services].map((server) => listenLocal(server)));
+    servers = [parts.control, ...services, ...(await listenAgentPorts(config, createAgentServer, parts.createPreviewServer))];
+    const ports = { control: control!, service: service!, services: { private: privateService!, online: onlineService! } };
+    return { config, versions, updater, llmQueue, llmRequests, sessionLog, engine, live, connections, sessionCache, manager, ports, createAgentServer };
+  };
+  const started = await boot(config);
+  // deploy/install.sh built the current version of each agent.
+  for (const kind of AGENT_KINDS) builder.install(kind, started.versions.current(kind));
 
   const sockets: WebSocket[] = [];
   const agentPort = (userId: number, kind: WorkspaceKind = "private"): number => config.workspace.kinds[kind].agentPortBase + userId;
@@ -427,43 +364,29 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
   const previewPort = (userId: number, kind: WorkspaceKind = "private"): number => agentPort(userId, kind) + PREVIEW_PORT_OFFSET;
   const browserToken = (sessionToken: string, userId: number, kind: WorkspaceKind = "private"): string =>
     agentBrowserToken(CONTROL_SECRET, hashSessionToken(sessionToken), userId, kind);
-  const info = (userId: number): WorkspaceInfo => manager.info(userId);
+  const info = (userId: number): WorkspaceInfo => g.manager.info(userId);
   const waitReady = (userId: number): Promise<WorkspaceInfo> =>
     waitFor(() => (info(userId).status === "running" && info(userId).ready ? info(userId) : null), `workspace ${userId} ready`);
 
   const g: Gateway = {
+    ...started,
     dataDir,
-    config,
     db,
     runtime,
-    versions,
     builder,
     registry,
-    updater,
-    llmQueue,
-    llmRequests,
     finishedRequests,
-    sessionLog,
     engineHost,
     engineRegistry,
-    engine,
-    live,
-    connections,
-    sessionCache,
-    get manager() {
-      return manager;
-    },
     fence,
     clock,
     caller,
     searches,
     ids,
     tokens,
-    ports: { control: controlPort!, service: servicePort!, services: { private: privateServicePort!, online: onlineServicePort! } },
     llm,
     logs,
     log,
-    createAgentServer,
     agentPort,
     agentOrigin,
     previewPort,
@@ -472,13 +395,13 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
     actAs(sessionToken, userId) {
       const id = hashSessionToken(sessionToken);
       db.update(sessions).set({ actingAsUserId: userId }).where(eq(sessions.id, id)).run();
-      sessionCache.invalidateSession(id);
+      g.sessionCache.invalidateSession(id);
     },
-    useManager(next) {
-      manager = next;
-      agentDeps.manager = next;
-      controlDeps.manager = next;
-      for (const deps of serviceDeps) deps.manager = next;
+    async restart(config = g.config) {
+      g.manager.shutdown();
+      await Promise.all(servers.map(closeServer));
+      Object.assign(g, await boot(config));
+      return g.manager;
     },
 
     navigate(token, userId, pathname = "/", headers = {}, kind = "private") {
@@ -534,13 +457,13 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
       const payload = body === undefined ? undefined : JSON.stringify(body);
       // Node's client frames no body of a DELETE by itself; the web app's fetch sends the length.
       if (payload !== undefined) Object.assign(headers, { "content-type": "application/json", "content-length": String(Buffer.byteLength(payload)) });
-      return request(controlPort!, { method, path: pathname, headers, body: payload });
+      return request(g.ports.control, { method, path: pathname, headers, body: payload });
     },
 
     info,
     waitReady,
     async startReady(userId, agent, kind) {
-      await manager.start(userId, { ...(agent ? { agent } : {}), ...(kind ? { kind } : {}) });
+      await g.manager.start(userId, { ...(agent ? { agent } : {}), ...(kind ? { kind } : {}) });
       return waitReady(userId);
     },
     auditActions(userId) {
@@ -559,12 +482,12 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
     },
     async close() {
       for (const socket of sockets) socket.terminate();
-      updater.shutdown();
-      await updater.settled();
-      engine.shutdown();
-      live.close();
-      manager.shutdown();
-      await Promise.all(Object.values(ids).map((userId) => manager.stop(userId, "test_end")));
+      g.updater.shutdown();
+      await g.updater.settled();
+      g.engine.shutdown();
+      g.live.close();
+      g.manager.shutdown();
+      await Promise.all(Object.values(ids).map((userId) => g.manager.stop(userId, "test_end")));
       for (const id of [...runtime.containers.keys()]) await runtime.removeContainer(id);
       await Promise.all([...servers.map(closeServer), llm.close()]);
       db.$client.close();

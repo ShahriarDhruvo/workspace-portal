@@ -7,7 +7,6 @@ import { users, workspaces, type WorkspaceInfo } from "@portal/core";
 import { eq } from "drizzle-orm";
 import { cookie, json, MIN, request, startGateway, type Gateway, type GatewayOptions } from "./harness.ts";
 import { driverFor } from "../src/agents/index.ts";
-import { WorkspaceManager } from "../src/workspaces/manager.ts";
 
 const BOTH = { env: { WORKSPACE_AGENTS: "qwen,dsh" } } satisfies GatewayOptions;
 
@@ -117,10 +116,7 @@ test("a saved choice that is no longer enabled falls back to the first enabled a
     const { alice } = g.ids;
     g.db.update(users).set({ agent: "dsh" }).where(eq(users.id, alice)).run();
     g.db.insert(workspaces).values({ userId: alice, status: "stopped", agent: "dsh", updatedAt: Date.now() }).run();
-    g.manager.shutdown();
-    const restarted = new WorkspaceManager({ config: g.config, db: g.db, runtime: g.runtime, versions: g.versions, llm: g.llmQueue, connections: g.connections, log: g.log, fence: g.fence.check, now: () => g.clock.now });
-    await restarted.init();
-    g.useManager(restarted);
+    await g.restart();
 
     assert.equal(g.info(alice).agent, "dsh", "the last run is still reported");
     assert.equal(json<WorkspaceInfo>(await start(g, alice)).agent, "qwen");
@@ -305,10 +301,7 @@ test("after a gateway restart a running dsh container is adopted with its secret
     const { alice } = g.ids;
     await g.startReady(alice, "dsh");
     const secret = g.runtime.dshFor(alice).secret;
-    g.manager.shutdown();
-    const restarted = new WorkspaceManager({ config: g.config, db: g.db, runtime: g.runtime, versions: g.versions, llm: g.llmQueue, connections: g.connections, log: g.log, fence: g.fence.check, now: () => g.clock.now });
-    await restarted.init();
-    g.useManager(restarted);
+    const restarted = await g.restart();
     await g.waitReady(alice);
     assert.equal(g.runtime.startsFor(alice).length, 1, "adopted, not restarted");
     assert.equal(restarted.upstream(alice, "private")?.agent, "dsh");

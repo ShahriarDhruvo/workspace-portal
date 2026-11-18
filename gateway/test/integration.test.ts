@@ -17,7 +17,6 @@ import type { SettingsObject } from "../src/agents/qwen-settings.ts";
 import { WorkspaceImageMissingError } from "../src/docker/runtime.ts";
 import { formatResults, type SearchQuery } from "../src/service/search-mcp.ts";
 import { createServiceServer } from "../src/service/service-api.ts";
-import { WorkspaceManager } from "../src/workspaces/manager.ts";
 import { closeServer, listenLocal } from "./fakes.ts";
 import {
   bearerSubprotocol,
@@ -1350,10 +1349,7 @@ test("a container whose stop failed is never taken over again; reconcile removes
     assert.ok(gw.runtime.containers.has(container));
     assert.ok(logged(gw, "could not remove a workspace container left behind by a failed stop"));
 
-    gw.manager.shutdown();
-    const fresh = new WorkspaceManager({ config: gw.config, db: gw.db, runtime: gw.runtime, versions: gw.versions, llm: gw.llmQueue, connections: gw.connections, log: gw.log, fence: gw.fence.check, now: () => gw.clock.now });
-    await fresh.init();
-    gw.useManager(fresh);
+    const fresh = await gw.restart();
     assert.equal(fresh.info(alice).status, "error", "a restarted gateway does not adopt it either");
     assert.ok(gw.runtime.containers.has(container));
 
@@ -1653,20 +1649,7 @@ test("after a gateway restart, a Qwen workspace nobody is using is adopted, not 
     // next session. The gateway used to wait 90 s for that process and then remove the workspace.
     gw.runtime.qwenFor(alice).health.channelAlive = false;
 
-    gw.manager.shutdown();
-    const fresh = new WorkspaceManager({
-      config: gw.config,
-      db: gw.db,
-      runtime: gw.runtime,
-      versions: gw.versions,
-      llm: gw.llmQueue,
-      connections: gw.connections,
-      log: gw.log,
-      fence: gw.fence.check,
-      now: () => gw.clock.now,
-    });
-    await fresh.init();
-    gw.useManager(fresh);
+    const fresh = await gw.restart();
     await gw.waitReady(alice);
 
     assert.equal(fresh.info(alice).status, "running");
@@ -1692,20 +1675,7 @@ test("after a gateway restart, running containers are adopted with their token a
     const unlabelled = gw.runtime.addOrphan(null);
     const starts = gw.runtime.starts.length;
 
-    gw.manager.shutdown();
-    const fresh = new WorkspaceManager({
-      config: gw.config,
-      db: gw.db,
-      runtime: gw.runtime,
-      versions: gw.versions,
-      llm: gw.llmQueue,
-      connections: gw.connections,
-      log: gw.log,
-      fence: gw.fence.check,
-      now: () => gw.clock.now,
-    });
-    await fresh.init();
-    gw.useManager(fresh);
+    const fresh = await gw.restart();
 
     assert.equal(gw.runtime.containers.has(orphan), false);
     assert.equal(gw.runtime.containers.has(unlabelled), false);

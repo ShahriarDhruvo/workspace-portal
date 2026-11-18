@@ -3,40 +3,14 @@
 // serves the LLM and web search to them (one service listener per kind, on that kind's network).
 // See docs/ARCHITECTURE.md.
 import type http from "node:http";
-import { getDatabase, loadSessionContext, WORKSPACE_KINDS, type WorkspaceKind } from "@portal/core";
-import { createAgentServerFactory } from "./proxy/agent-proxy.ts";
-import { createPreviewServerFactory } from "./proxy/preview-proxy.ts";
-import { AgentUpdater } from "./updates/agent-updater.ts";
+import { getDatabase, WORKSPACE_KINDS, type WorkspaceKind } from "@portal/core";
 import { AgentVersions } from "./updates/agent-versions.ts";
 import { AgentConfigError, driverFor } from "./agents/index.ts";
+import { compose } from "./compose.ts";
 import { ConfigError, loadConfig, PREVIEW_PORT_OFFSET, type Config } from "./config.ts";
-import { ConnectionRegistry } from "./proxy/connections.ts";
-import { createControlServer } from "./control-api.ts";
-import { DockerImageBuilder } from "./docker/docker-image-builder.ts";
 import { DockerRuntime, isSupportedDockerVersion, MIN_DOCKER_VERSION_TEXT } from "./docker/docker-runtime.ts";
-import { EnergyMeter } from "./monitor/energy-meter.ts";
-import { EnergyPrices } from "./monitor/energy-prices.ts";
-import { fenceCheck } from "./workspaces/fence.ts";
-import { createNotesClient, createRegistryClient, EngineReleases } from "./updates/engine-releases.ts";
-import { createEngineHost, EngineUpdater } from "./updates/engine-updater.ts";
-import { createGitHubReleases } from "./updates/github-releases.ts";
-import { HostMonitor } from "./monitor/host-monitor.ts";
-import { HostdClient } from "./monitor/hostd.ts";
 import { listen } from "./lib/listen.ts";
-import { LiveHub, userNames } from "./monitor/live.ts";
-import { LlmMonitor } from "./monitor/llm-monitor.ts";
-import { LlmQueue } from "./service/llm-queue.ts";
-import { LlmEnergy } from "./monitor/llm-energy.ts";
-import { LlmRequests } from "./monitor/llm-requests.ts";
 import { createLogger, type Logger } from "./lib/log.ts";
-import { createNpmRegistry } from "./updates/npm-registry.ts";
-import { createReaderBackend, withPageCache } from "./service/reader.ts";
-import { ReleaseCache } from "./updates/release-cache.ts";
-import { createSearxngBackend } from "./service/search-mcp.ts";
-import { createServiceServer } from "./service/service-api.ts";
-import { SessionCache } from "./proxy/session-cache.ts";
-import { SessionLog } from "./monitor/session-log.ts";
-import { WorkspaceManager } from "./workspaces/manager.ts";
 
 /** How long the service listeners wait for the workspace bridge address to appear. */
 const BRIDGE_WAIT_MS = 60_000;
@@ -91,105 +65,21 @@ async function main(log: Logger): Promise<void> {
     }
   }
 
-  const llm = new LlmQueue(config.llm.maxConcurrency, config.llm.maxConcurrencyPerUser);
-  // Each run of a workspace and what its LLM requests added up to, energy included (Admin > Usage).
-  const sessionLog = new SessionLog({ db, log });
-  const llmEnergy = new LlmEnergy({
-    source: config.hostd.llm.token === "" ? null : new HostdClient(config.hostd.llm),
-    onShares: (shares) => sessionLog.addEnergy(shares),
-    log,
-  });
-  const requests = new LlmRequests({
-    listener: {
-      forwarded: (request) => {
-        const sessionId = sessionLog.forwarded(request.id, request.userId);
-        if (sessionId !== null) llmEnergy.started(request.id, sessionId, request.forwardedAt);
-      },
-      finished: (request) => {
-        llmEnergy.ended(request.id, request.finishedAt);
-        sessionLog.finished(request);
-      },
-    },
-  });
-  const connections = new ConnectionRegistry();
-  const sessions = new SessionCache((tokenHash) => loadSessionContext(db, tokenHash));
-  // Online workspaces run only while the host firewall that fences them in answers (deploy/firewall.sh, fence.ts).
-  const fence = fenceCheck(config.servicePort);
-  const manager = new WorkspaceManager({ config, db, runtime, versions, llm, connections, log, fence, sessions: sessionLog });
+  const { manager, sessionLog, updater, hosts, energy, prices, live, engine, llmEnergy, connections, control, createAgentServer, createPreviewServer, createServiceServer } =
+    compose({ config, db, runtime, versions, log });
   await manager.init();
   sessionLog.reconcile(manager.list());
   manager.startBackgroundTasks();
-  const registry = createNpmRegistry();
-  const updater = new AgentUpdater({
-    config,
-    versions,
-    builder: new DockerImageBuilder({ contextDir: config.imageContextDir }),
-    registry,
-    releases: new ReleaseCache({ registry, github: createGitHubReleases(), log }),
-    workspaces: () => manager.list(),
-    db,
-    log,
-  });
   // Before the control API listens, so no job can start meanwhile: a gateway that stopped mid-update
   // leaves its staging image (and maybe a version-check container) behind.
   await updater.sweep();
-
-  // The admin's live view and engine updates, through each server's portal-hostd.
-  const hosts = {
-    portal: new HostMonitor({ role: "portal", config: config.hostd.portal, log }),
-    llm: new HostMonitor({ role: "llm", config: config.hostd.llm, log }),
-  };
-  const llmMonitor = new LlmMonitor({
-    upstreamUrl: config.llm.upstreamUrl,
-    apiKey: config.llm.apiKey,
-    queue: llm,
-    requests,
-    names: (ids) => userNames(db, ids),
-    log,
-  });
-  // Each server's energy and traffic per day (Admin > Energy): read all the time, not only while someone watches.
-  const energy = new EnergyMeter({
-    db,
-    sources: {
-      portal: config.hostd.portal.token === "" ? undefined : new HostdClient(config.hostd.portal),
-      llm: config.hostd.llm.token === "" ? undefined : new HostdClient(config.hostd.llm),
-    },
-    log,
-  });
   energy.start();
-  // The published electricity prices Admin > Energy prices those days at (every place's, for the one the admin picks).
-  const prices = new EnergyPrices({ db, log });
   prices.start();
-  const live = new LiveHub({ llm: llmMonitor, hosts, energy, sessions: sessionLog, log });
-  const engine = new EngineUpdater({
-    config,
-    host: config.hostd.llm.token === "" ? null : createEngineHost(new HostdClient(config.hostd.llm)),
-    releases: new EngineReleases({ registry: createRegistryClient(), notes: createNotesClient(), notesRepo: config.engine.releaseNotesRepo, log }),
-    queue: llm,
-    db,
-    log,
-  });
   log.info("server readings", {
     portal: config.hostd.portal.url || "not set up (HOSTD_PORTAL_TOKEN)",
     llm: config.hostd.llm.url || "not set up (HOSTD_LLM_URL, HOSTD_LLM_TOKEN)",
   });
 
-  const search = createSearxngBackend({
-    baseUrl: config.search.url,
-    authorization: config.search.authorization,
-    timeoutMs: config.search.timeoutMs,
-    fallbackEngines: config.search.fallbackEngines,
-    fallbackBelow: config.search.fallbackBelow,
-    cacheMs: config.search.cacheMs,
-    onFallback: (use) => log.info("web search: fallback engines asked", { engines: config.search.fallbackEngines.join(","), ...use }),
-  });
-  const reader =
-    config.reader.url === ""
-      ? null
-      : withPageCache(createReaderBackend({ baseUrl: config.reader.url, timeoutMs: config.reader.timeoutMs }), { ttlMs: config.reader.cacheMs });
-  const control = createControlServer({ config, db, manager, versions, updater, engine, llm, live, prices, sessions, connections, log });
-  const createAgentServer = createAgentServerFactory({ config, manager, sessions, connections, log });
-  const createPreviewServer = createPreviewServerFactory({ config, manager, sessions, connections, log });
   const servers: http.Server[] = [control];
 
   await listen(control, { host: "127.0.0.1", port: config.controlPort });
@@ -224,7 +114,7 @@ async function main(log: Logger): Promise<void> {
   // A service listener per kind, on the host's address on that kind's network, answering only that kind's
   // containers. The address exists once Docker has brought the bridge up.
   for (const kind of kinds) {
-    const service = createServiceServer({ kind, config, db, manager, llm, requests, log, search, reader });
+    const service = createServiceServer({ kind });
     servers.push(service);
     const bridge = config.workspace.kinds[kind].gatewayIp;
     const onRetry = (): void => log.warn(`${kind} workspace bridge address not up yet; retrying`, { address: bridge });

@@ -39,15 +39,6 @@ function tryAgain(g: Gateway, token: string, userId: number, kind: WorkspaceKind
   });
 }
 
-/** A "restarted" gateway: a new manager over the same database and containers, with this config. */
-async function restart(g: Gateway, config = g.config): Promise<WorkspaceManager> {
-  g.manager.shutdown();
-  const manager = new WorkspaceManager({ config, db: g.db, runtime: g.runtime, versions: g.versions, llm: g.llmQueue, connections: g.connections, log: g.log, fence: g.fence.check, now: () => g.clock.now });
-  await manager.init();
-  g.useManager(manager);
-  return manager;
-}
-
 const logged = (g: Gateway, msg: string): boolean => g.logs.some((line) => (JSON.parse(line) as { msg: string }).msg === msg);
 
 test("an Online start: its own files, UID, settings with the Online service address, and the kind everywhere", () =>
@@ -157,7 +148,7 @@ test("a gateway started with ONLINE_WORKSPACES=off stops the Online containers i
     await g.startReady(alice, undefined, "online");
     await g.startReady(bob);
     const off = { ...g.config, workspace: { ...g.config.workspace, onlineEnabled: false } };
-    const manager = await restart(g, off);
+    const manager = await g.restart(off);
     assert.deepEqual([manager.info(alice).status, manager.info(alice).stopReason], ["stopped", "online_disabled"]);
     assert.deepEqual(g.runtime.runningUsers(), [bob], "the Online container is gone; the Private one runs on");
     assert.deepEqual(g.auditActions(alice).at(-1)?.details, { reason: "online_disabled", kind: "online" });
@@ -170,7 +161,7 @@ test("after a restart an Online container is adopted as Online, on its own port 
   withGateway({}, async (g) => {
     const { alice } = g.ids;
     await g.startReady(alice, undefined, "online");
-    const manager = await restart(g);
+    const manager = await g.restart();
     await waitFor(() => manager.info(alice).ready, "the adopted workspace to be ready");
     assert.equal(manager.info(alice).kind, "online");
     assert.equal((await g.xhr(g.tokens.alice, alice, { path: "/api/sessions", kind: "online" })).status, 200);
@@ -286,7 +277,7 @@ test("the files from before kinds become the Private ones at gateway start, or a
     const aliceRoot = legacy(alice);
     const bobRoot = legacy(bob);
 
-    const manager = await restart(g);
+    const manager = await g.restart();
     assert.deepEqual(fs.readdirSync(bobRoot), ["private"], "bob's files moved when the gateway started");
     assert.equal(fs.readFileSync(path.join(userPaths(g.dataDir, bob, "private").workspace, "project", "notes.md"), "utf8"), `user ${bob}`);
     assert.ok(logged(g, "moved a user's files into the Private workspace's folder"));
@@ -381,7 +372,7 @@ test("a gateway started without the fence stops the Online containers it finds; 
     await g.startReady(alice, undefined, "online");
     await g.startReady(bob);
     g.fence.state = "missing";
-    const manager = await restart(g);
+    const manager = await g.restart();
     assert.deepEqual([manager.info(alice).status, manager.info(alice).stopReason], ["stopped", "online_disabled"]);
     assert.deepEqual(g.runtime.runningUsers(), [bob]);
     await waitFor(() => manager.info(bob).ready, "bob's workspace to be adopted");
@@ -394,7 +385,6 @@ test("without a fence check at all (none passed to the manager), Online never ru
     g.manager.shutdown();
     const manager = new WorkspaceManager({ config: g.config, db: g.db, runtime: g.runtime, versions: g.versions, llm: g.llmQueue, connections: g.connections, log: g.log, now: () => g.clock.now });
     await manager.init();
-    g.useManager(manager);
     assert.deepEqual([manager.info(alice).status, manager.info(alice).stopReason, manager.info(alice).online], ["stopped", "online_disabled", "off"]);
     assert.deepEqual(g.runtime.runningUsers(), []);
     await assert.rejects(manager.start(alice, { kind: "online" }), { code: "online_disabled" });
@@ -512,7 +502,7 @@ test("after AGENT_PORT_COUNT went down, a running container of a user beyond it 
     const { alice, dave } = g.ids;
     await g.startReady(alice);
     await g.startReady(dave);
-    const manager = await restart(g, { ...g.config, agentPortCount: dave });
+    const manager = await g.restart({ ...g.config, agentPortCount: dave });
     assert.deepEqual(g.runtime.runningUsers(), [alice]);
     assert.ok(logged(g, "not adopting a workspace container of a user without a workspace port (AGENT_PORT_COUNT)"));
     await waitFor(() => manager.info(alice).ready, "alice's workspace to be adopted");

@@ -7,7 +7,6 @@ import fs from "node:fs";
 import { auditLog, type AgentUpdateJob, type AgentVersionsOverview } from "@portal/core";
 import { json, startGateway, type Gateway, type GatewayOptions, type Reply } from "./harness.ts";
 import { workspaceImage } from "../src/docker/image-names.ts";
-import { WorkspaceManager } from "../src/workspaces/manager.ts";
 import { gate } from "./fakes.ts";
 
 const BOTH = { env: { WORKSPACE_AGENTS: "qwen,dsh" } } satisfies GatewayOptions;
@@ -259,20 +258,7 @@ test("the admin's choice survives a restart; adopted containers report the versi
     bobContainer.image = "sha256:0123abcd";
     bobContainer.version = null;
 
-    g.manager.shutdown();
-    const fresh = new WorkspaceManager({
-      config: g.config,
-      db: g.db,
-      runtime: g.runtime,
-      versions: g.versions,
-      llm: g.llmQueue,
-      connections: g.connections,
-      log: g.log,
-      fence: g.fence.check,
-      now: () => g.clock.now,
-    });
-    await fresh.init();
-    g.useManager(fresh);
+    await g.restart();
     assert.equal((await g.waitReady(alice)).agentVersion, "0.26.0", "from the adopted container's version label");
     assert.equal((await g.waitReady(bob)).agentVersion, null);
     assert.deepEqual((await overview(g)).agents[1]!.running, [{ version: null, count: 1 }]);
