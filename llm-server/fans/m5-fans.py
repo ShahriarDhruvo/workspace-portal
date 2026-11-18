@@ -1,8 +1,8 @@
 #!/usr/bin/python3
 """Fan curve for the Bosgame M5: both main fans follow the hotter of CPU and GPU.
 
-Needs the ec_su_axb35 module with the m5duty3 patch. The module loads on the tested board and BIOS only, checks
-every write, and hands the fans back to the firmware when no duty arrives for 10 seconds.
+Needs the ec_su_axb35 module next to this file. It loads on the tested board and BIOS only, checks every write,
+and hands a fan back to the firmware when no duty arrives for 10 seconds.
 """
 import signal
 import sys
@@ -70,7 +70,7 @@ def main():
             try:
                 (EC / fan / 'duty').write_text('0\n')
             except OSError as exc:
-                print(f'{fan}: not released ({exc}); the module releases it within 10 seconds', file=sys.stderr)
+                print(f'{fan}: not released ({exc})', file=sys.stderr)
 
 
 if __name__ == '__main__':
