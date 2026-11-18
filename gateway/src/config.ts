@@ -215,8 +215,9 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     if (!ok(value)) problems.push(`${name} must ${must} (got "${value}")`);
     return value;
   };
+  /** `?? fallback`: a computed default that `ok` refuses stays that number, for the problems that follow. */
   const number = (name: string, fallback: number, ok: (value: number) => boolean, must: string): number =>
-    read(name, String(fallback), (value) => (ok(Number(value)) ? Number(value) : undefined), must);
+    read(name, String(fallback), (value) => (ok(Number(value)) ? Number(value) : undefined), must) ?? fallback;
   const int = (name: string, fallback: number, min: number): number =>
     number(name, fallback, (value) => Number.isSafeInteger(value) && value >= min, `be an integer >= ${min}`);
   const port = (name: string, fallback: number): number => {

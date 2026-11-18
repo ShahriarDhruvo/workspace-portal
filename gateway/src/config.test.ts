@@ -229,6 +229,7 @@ test("the workspace port ranges must fit and must not overlap each other or the 
   assert.equal(loadConfig({ ...secrets, ONLINE_AGENT_PORT_BASE: "3299" }).workspace.kinds.online.agentPortBase, 3299, "the ranges may touch");
   assert.equal(loadConfig({ ...secrets, ONLINE_AGENT_PORT_BASE: "2700" }).workspace.kinds.online.agentPortBase, 2700, "Online's may lie below Private's");
   assert.equal(loadConfig({ ...secrets, AGENT_PORT_COUNT: "50" }).workspace.kinds.online.agentPortBase, 3150, "by default right after Private's");
+  assert.equal(problems({ ...secrets, AGENT_PORT_COUNT: "9007199254740991" })[1], "ONLINE_AGENT_PORT_BASE must be a TCP port (got 9007199254744092)", "a default it refuses is named too");
 });
 
 test("the gateway and the Web Shell's Web preview agree on where the preview ports are", () => {
