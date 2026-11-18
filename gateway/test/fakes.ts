@@ -109,25 +109,32 @@ const json = (res: http.ServerResponse, status: number, body: unknown): void => 
 
 export async function startFakeQwen(token: string, options: { readyAfterMs: number; pingIntervalMs: number; host: string }): Promise<FakeQwen> {
   const readyAt = Date.now() + options.readyAfterMs;
-  const state = {
-    health: { activePrompts: 0, pendingPermissions: 0, activeWork: false, connectedClients: 0, idleSinceMs: null, channelAlive: true } as FakeHealth,
+  const fake: FakeQwen = {
+    host: options.host,
+    port: 0,
+    token,
+    health: { activePrompts: 0, pendingPermissions: 0, activeWork: false, connectedClients: 0, idleSinceMs: null, channelAlive: true },
     healthChecks: 0,
     healthFails: false,
-    onHealth: null as (() => void) | null,
+    onHealth: null,
+    requests: [],
+    uploads: [],
+    sockets: [],
+    async close() {
+      for (const client of wss.clients) client.terminate();
+      await closeServer(server);
+    },
   };
-  const requests: FakeQwen["requests"] = [];
-  const uploads: FakeQwen["uploads"] = [];
-  const sockets: RecordedRequest[] = [];
 
   const server = http.createServer((req, res) => {
     const method = req.method ?? "GET";
     const url = req.url ?? "/";
     const status = refuse(req, token);
     if (url === "/health?deep=1" && status === null) {
-      state.healthChecks++;
-      state.onHealth?.();
-      if (state.healthFails) return json(res, 503, { error: "Service Unavailable" });
-      const { health } = state;
+      fake.healthChecks++;
+      fake.onHealth?.();
+      if (fake.healthFails) return json(res, 503, { error: "Service Unavailable" });
+      const { health } = fake;
       return json(res, 200, {
         status: "ok",
         workspaceCount: 1,
@@ -148,7 +155,7 @@ export async function startFakeQwen(token: string, options: { readyAfterMs: numb
       return json(res, 200, { v: 1, status: "ok", daemon: { startup: { preheat: { status: Date.now() >= readyAt ? "succeeded" : "running" } } } });
     }
     const record = { method, url, headers: req.headers, status: status ?? 200 };
-    requests.push(record);
+    fake.requests.push(record);
     if (status !== null) {
       if (status === 401) return json(res, 401, { error: "Unauthorized" });
       return json(res, status, { error: "Forbidden" });
@@ -176,7 +183,7 @@ export async function startFakeQwen(token: string, options: { readyAfterMs: numb
       req.pipe(res);
     } else if (method === "POST" && pathname === "/api/upload") {
       const upload = { bytes: 0, complete: false };
-      uploads.push(upload);
+      fake.uploads.push(upload);
       req.on("data", (chunk: Buffer) => (upload.bytes += chunk.length));
       req.on("end", () => {
         upload.complete = true;
@@ -203,7 +210,7 @@ export async function startFakeQwen(token: string, options: { readyAfterMs: numb
       return;
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
-      sockets.push({ method: req.method ?? "", url: req.url ?? "", headers: req.headers });
+      fake.sockets.push({ method: req.method ?? "", url: req.url ?? "", headers: req.headers });
       ws.send(`hello from qwen ${pathname}`);
       ws.on("message", (data, isBinary) => ws.send(data, { binary: isBinary }));
       const ping = setInterval(() => ws.ping(), options.pingIntervalMs);
@@ -211,40 +218,8 @@ export async function startFakeQwen(token: string, options: { readyAfterMs: numb
     });
   });
 
-  const port = await listenLocal(server, 0, options.host);
-  return {
-    host: options.host,
-    port,
-    token,
-    get health() {
-      return state.health;
-    },
-    set health(value: FakeHealth) {
-      state.health = value;
-    },
-    get healthChecks() {
-      return state.healthChecks;
-    },
-    get healthFails() {
-      return state.healthFails;
-    },
-    set healthFails(value: boolean) {
-      state.healthFails = value;
-    },
-    get onHealth() {
-      return state.onHealth;
-    },
-    set onHealth(value: (() => void) | null) {
-      state.onHealth = value;
-    },
-    requests,
-    uploads,
-    sockets,
-    async close() {
-      for (const client of wss.clients) client.terminate();
-      await closeServer(server);
-    },
-  };
+  fake.port = await listenLocal(server, 0, options.host);
+  return fake;
 }
 
 // ------------------------------------------------------------------ dsh web
@@ -297,9 +272,22 @@ function refuseDsh(req: IncomingMessage, secret: string): number | null {
 
 export async function startFakeDsh(secret: string, options: { readyAfterMs: number; pingIntervalMs: number; host: string }): Promise<FakeDsh> {
   const readyAt = Date.now() + options.readyAfterMs;
-  const state = { sessions: [] as FakeDsh["sessions"], jobs: [] as FakeDsh["jobs"], listCalls: 0, jobCalls: 0, apiFails: false };
-  const requests: FakeDsh["requests"] = [];
-  const sockets: FakeDsh["sockets"] = [];
+  const fake: FakeDsh = {
+    host: options.host,
+    port: 0,
+    secret,
+    sessions: [],
+    jobs: [],
+    listCalls: 0,
+    jobCalls: 0,
+    apiFails: false,
+    requests: [],
+    sockets: [],
+    async close() {
+      for (const client of wss.clients) client.terminate();
+      await closeServer(server);
+    },
+  };
 
   const server = http.createServer(async (req, res) => {
     const method = req.method ?? "GET";
@@ -313,20 +301,20 @@ export async function startFakeDsh(secret: string, options: { readyAfterMs: numb
       for await (const chunk of req) chunks.push(chunk as Buffer);
       type Args = { _request?: unknown; request?: { sessionId?: string } };
       const call = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}") as { rpcId?: string; method?: string; payload?: { args?: Args } };
-      if (state.apiFails) return json(res, 503, { error: "unavailable" });
+      if (fake.apiFails) return json(res, 503, { error: "unavailable" });
       const answer = (value: unknown) => json(res, 200, { type: "server-response", rpcId: call.rpcId, result: value === undefined ? { ok: false, error: { code: "gateway/input-invalid" } } : { ok: true, value } });
       const args = call.payload?.args;
       if (call.method !== pathname.slice("/api/".length)) return answer(undefined);
       if (call.method === "session/state") {
-        const session = state.sessions.find((s) => s.id === args?.request?.sessionId);
+        const session = fake.sessions.find((s) => s.id === args?.request?.sessionId);
         return answer(session && { running: session.running, active: true, pendingInput: session.pendingInput ?? [], queue: [] });
       }
       if (typeof args?._request !== "object") return answer(undefined);
-      state.listCalls++;
-      return answer({ items: state.sessions.map((s, index) => ({ sessionId: s.id, running: s.running, updatedAt: 1_000 + index, title: s.id })) });
+      fake.listCalls++;
+      return answer({ items: fake.sessions.map((s, index) => ({ sessionId: s.id, running: s.running, updatedAt: 1_000 + index, title: s.id })) });
     }
     const record = { method, url, headers: req.headers, status: status ?? 200 };
-    requests.push(record);
+    fake.requests.push(record);
     if (status !== null) return json(res, status, { error: http.STATUS_CODES[status] });
     if (method === "GET" && pathname === "/") {
       res.writeHead(200, { "content-type": "text/html", "set-cookie": `${dshCookieName}=refreshed; HttpOnly` }).end("<!doctype html><title>DeepSeek Harness</title>");
@@ -351,7 +339,7 @@ export async function startFakeDsh(secret: string, options: { readyAfterMs: numb
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
       const probe = req.headers.origin === undefined;
-      sockets.push({ method: req.method ?? "", url: req.url ?? "", headers: req.headers, probe });
+      fake.sockets.push({ method: req.method ?? "", url: req.url ?? "", headers: req.headers, probe });
       if (!probe) ws.send("hello from dsh");
       // The mux protocol for job/list (one `open` per stream, rows as the first item); anything else is echoed.
       ws.on("message", (data, isBinary) => {
@@ -365,11 +353,11 @@ export async function startFakeDsh(secret: string, options: { readyAfterMs: numb
         if (frame?.type === "cancel") return;
         if (frame?.type !== "open" || frame.endpoint !== "job/list") return void ws.send(data, { binary: isBinary });
         const sessionId = frame.payload?.args?.request?.sessionId;
-        if (state.apiFails || typeof sessionId !== "string") {
+        if (fake.apiFails || typeof sessionId !== "string") {
           return void ws.send(JSON.stringify({ type: "error", streamId: frame.streamId, error: { code: "gateway/input-invalid" } }));
         }
-        state.jobCalls++;
-        const jobs = state.jobs.filter((job) => job.owner === sessionId).map((job, index) => ({ id: `bash-${index}`, kind: "bash", owner: job.owner, status: job.status }));
+        fake.jobCalls++;
+        const jobs = fake.jobs.filter((job) => job.owner === sessionId).map((job, index) => ({ id: `bash-${index}`, kind: "bash", owner: job.owner, status: job.status }));
         ws.send(JSON.stringify({ type: "item", streamId: frame.streamId, value: { type: "rows", jobs } }));
       });
       const ping = setInterval(() => ws.ping(), options.pingIntervalMs);
@@ -377,42 +365,8 @@ export async function startFakeDsh(secret: string, options: { readyAfterMs: numb
     });
   });
 
-  const port = await listenLocal(server, 0, options.host);
-  return {
-    host: options.host,
-    port,
-    secret,
-    get sessions() {
-      return state.sessions;
-    },
-    set sessions(value) {
-      state.sessions = value;
-    },
-    get jobs() {
-      return state.jobs;
-    },
-    set jobs(value) {
-      state.jobs = value;
-    },
-    get listCalls() {
-      return state.listCalls;
-    },
-    get jobCalls() {
-      return state.jobCalls;
-    },
-    get apiFails() {
-      return state.apiFails;
-    },
-    set apiFails(value: boolean) {
-      state.apiFails = value;
-    },
-    requests,
-    sockets,
-    async close() {
-      for (const client of wss.clients) client.terminate();
-      await closeServer(server);
-    },
-  };
+  fake.port = await listenLocal(server, 0, options.host);
+  return fake;
 }
 
 // ------------------------------------------------------------------ container runtime
@@ -856,9 +810,9 @@ export const LLM_KEY = "test-llm-key";
 
 /** OpenAI-compatible server: JSON and SSE chat completions with usage, and a model list. */
 export async function startFakeLlm(): Promise<FakeUpstream> {
-  const state = { requests: [] as RecordedRequest[], abandoned: 0 };
+  const fake: FakeUpstream = { port: 0, requests: [], abandoned: 0, close: () => closeServer(server) };
   const server = http.createServer(async (req, res) => {
-    state.requests.push({ method: req.method ?? "", url: req.url ?? "", headers: req.headers });
+    fake.requests.push({ method: req.method ?? "", url: req.url ?? "", headers: req.headers });
     if (req.headers.authorization !== `Bearer ${LLM_KEY}`) {
       res.writeHead(401, { "content-type": "application/json" }).end('{"error":{"message":"bad key"}}');
       return;
@@ -871,7 +825,7 @@ export async function startFakeLlm(): Promise<FakeUpstream> {
     for await (const chunk of req) chunks.push(chunk as Buffer);
     const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}") as { stream?: boolean; hold?: boolean };
     res.on("close", () => {
-      if (!res.writableFinished) state.abandoned++;
+      if (!res.writableFinished) fake.abandoned++;
     });
     if (!body.stream) {
       res.writeHead(200, { "content-type": "application/json" });
@@ -893,17 +847,8 @@ export async function startFakeLlm(): Promise<FakeUpstream> {
     );
     res.end();
   });
-  const port = await listenLocal(server);
-  return {
-    port,
-    get requests() {
-      return state.requests;
-    },
-    get abandoned() {
-      return state.abandoned;
-    },
-    close: () => closeServer(server),
-  };
+  fake.port = await listenLocal(server);
+  return fake;
 }
 
 function delay(ms: number): Promise<void> {
