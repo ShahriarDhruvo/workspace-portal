@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { fakeFetch } from "../../test/fakes.ts";
 import { createGitHubReleases, GitHubError, hasBreakingChanges, tagVersion } from "./github-releases.ts";
 
 test("hasBreakingChanges: a breaking-changes section with something in it, a BREAKING CHANGE line, a type!: entry", () => {
@@ -40,25 +41,16 @@ test("tagVersion: v1.2.3 and 1.2.3, or the package's own prefixed tags; another 
   assert.equal(tagVersion("nightly", "@deepseek-ai/dsh"), null);
 });
 
-/** A fetch that answers one URL, recording the requests' headers. */
-function fakeFetch(url: string, answer: () => Response) {
-  const requests: Headers[] = [];
-  const fetchStub = (async (input: string | URL | Request, init?: RequestInit) => {
-    requests.push(new Headers(init?.headers));
-    return String(input) === url ? answer() : new Response("not found", { status: 404 });
-  }) as typeof fetch;
-  return { fetch: fetchStub, requests };
-}
-
 test("list: anonymous, drafts left out, notes cut when long, only github.com links", async () => {
-  const { fetch, requests } = fakeFetch("https://api.github.com/repos/deepseek-ai/deepseek-harness/releases?per_page=100", () =>
-    Response.json([
-      { tag_name: "dsh-v0.2.2-rc.3", name: "", html_url: "javascript:alert(1)", published_at: "2026-11-13T07:56:55Z", body: "x".repeat(20_000), prerelease: true },
-      { tag_name: "dsh-v0.2.2-rc.2", draft: true, body: "draft" },
-      { tag_name: "dsh-v0.2.2-rc.1", name: "dsh v0.2.2-rc.1", html_url: "https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.1", published_at: null, body: "- Breaking change: x", prerelease: true },
-      { name: "no tag" },
-    ]),
-  );
+  const { fetch, calls } = fakeFetch({
+    "https://api.github.com/repos/deepseek-ai/deepseek-harness/releases?per_page=100": () =>
+      Response.json([
+        { tag_name: "dsh-v0.2.2-rc.3", name: "", html_url: "javascript:alert(1)", published_at: "2026-11-13T07:56:55Z", body: "x".repeat(20_000), prerelease: true },
+        { tag_name: "dsh-v0.2.2-rc.2", draft: true, body: "draft" },
+        { tag_name: "dsh-v0.2.2-rc.1", name: "dsh v0.2.2-rc.1", html_url: "https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.1", published_at: null, body: "- Breaking change: x", prerelease: true },
+        { name: "no tag" },
+      ]),
+  });
   const releases = await createGitHubReleases(fetch).list("deepseek-ai/deepseek-harness");
   assert.deepEqual(
     releases.map((release) => release.tag),
@@ -76,13 +68,13 @@ test("list: anonymous, drafts left out, notes cut when long, only github.com lin
     body: "- Breaking change: x",
     breaking: true,
   });
-  assert.equal(requests[0]!.get("authorization"), null, "anonymous");
+  assert.equal(calls[0]!.auth, null, "anonymous");
 });
 
 test("list: GitHub's refusals and odd repositories are a GitHubError", async () => {
   const fails = (repo: string, answer: () => Response, message: string | RegExp): Promise<void> =>
     assert.rejects(
-      createGitHubReleases(fakeFetch(`https://api.github.com/repos/${repo}/releases?per_page=100`, answer).fetch).list(repo),
+      createGitHubReleases(fakeFetch({ [`https://api.github.com/repos/${repo}/releases?per_page=100`]: answer }).fetch).list(repo),
       (error: unknown) => error instanceof GitHubError && (typeof message === "string" ? error.message === message : message.test(error.message)),
     );
   const thrown = (error: Error) => (): Response => {

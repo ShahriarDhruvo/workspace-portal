@@ -8,6 +8,7 @@ import { PassThrough, Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import type Docker from "dockerode";
 import type DockerModem from "docker-modem";
+import { logFrame } from "../../test/fakes.ts";
 import { buildOptions, DockerImageBuilder, openDockerodeSession, verifyContainerOptions } from "./docker-image-builder.ts";
 import { BuildError, type BuildSpec } from "./image-builder.ts";
 import { stagingImage, workspaceImage } from "./image-names.ts";
@@ -15,14 +16,6 @@ import { stagingImage, workspaceImage } from "./image-names.ts";
 const FIXTURES = new URL("../../test/fixtures/", import.meta.url);
 const CONTEXT = fileURLToPath(new URL("../../../workspace-image", import.meta.url));
 const SPEC: BuildSpec = { kind: "qwen", version: "0.27.4", versionKey: "QWEN_CODE_VERSION", image: stagingImage("qwen", "0.27.4"), noCache: false };
-
-function frame(stream: 1 | 2, text: string): Buffer {
-  const payload = Buffer.from(text);
-  const header = Buffer.alloc(8);
-  header.writeUInt8(stream, 0);
-  header.writeUInt32BE(payload.length, 4);
-  return Buffer.concat([header, payload]);
-}
 
 const dockerError = (statusCode: number, message: string): Error => Object.assign(new Error(`(HTTP code ${statusCode}) ${message}`), { statusCode, json: { message } });
 
@@ -145,7 +138,7 @@ function fakeDocker(setup: FakeSetup = {}) {
           return { StatusCode: setup.exitCode ?? 0 };
         },
         async logs(options: { stdout: boolean; stderr: boolean }) {
-          return Buffer.concat([...(options.stdout ? [frame(1, setup.stdout ?? "0.27.4\n")] : []), ...(options.stderr ? [frame(2, setup.stderr ?? "")] : [])]);
+          return Buffer.concat([...(options.stdout ? [logFrame(1, setup.stdout ?? "0.27.4\n")] : []), ...(options.stderr ? [logFrame(2, setup.stderr ?? "")] : [])]);
         },
         async remove(options: { force: boolean }) {
           removed.push(`verify-1 force=${options.force}`);

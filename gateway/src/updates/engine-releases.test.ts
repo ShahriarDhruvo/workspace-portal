@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { FakeEngineRegistry, FakeNotes } from "../../test/fakes.ts";
+import { fakeFetch, FakeEngineRegistry, FakeNotes } from "../../test/fakes.ts";
 import { createRegistryClient, EngineReleases, splitRepository, stableNotes, withLocalVersions } from "./engine-releases.ts";
 import { createGitHubReleases } from "./github-releases.ts";
 import type { Logger } from "../lib/log.ts";
@@ -12,21 +12,6 @@ test("splitRepository finds the registry host, Docker Hub by default", () => {
   assert.deepEqual(splitRepository("vllm/vllm-openai"), { registry: "registry-1.docker.io", path: "vllm/vllm-openai" });
   assert.deepEqual(splitRepository("ollama"), { registry: "registry-1.docker.io", path: "library/ollama" });
 });
-
-/** A fetch that answers from a table of URL → handler, recording the calls. */
-function fakeFetch(routes: Record<string, (init: RequestInit) => Response>): { fetch: typeof fetch; calls: Array<{ url: string; auth: string | null; method: string }> } {
-  const calls: Array<{ url: string; auth: string | null; method: string }> = [];
-  return {
-    calls,
-    fetch: (async (input: string | URL | Request, init: RequestInit = {}) => {
-      const url = String(input);
-      const headers = new Headers(init.headers);
-      calls.push({ url, auth: headers.get("authorization"), method: init.method ?? "GET" });
-      const route = routes[url];
-      return route ? route(init) : new Response("not found", { status: 404 });
-    }) as typeof fetch,
-  };
-}
 
 test("the registry client follows the anonymous token challenge and reads digests from HEAD", async () => {
   const base = "https://ghcr.io/v2/gufo-org/toolboxes/gufo-runtime";

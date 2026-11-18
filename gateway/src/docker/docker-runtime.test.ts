@@ -6,33 +6,26 @@ import os from "node:os";
 import path from "node:path";
 import Docker from "dockerode";
 import type { WorkspaceKind } from "@portal/core";
+import { logFrame } from "../../test/fakes.ts";
 import { loadConfig } from "../config.ts";
 import { workspaceNetworkOptions } from "./container-spec.ts";
 import { cpuSeconds, demuxDockerLogs, DOCKER_API_TIMEOUT_MS, DockerRuntime, isSupportedDockerVersion, memoryUsage, networkMismatches } from "./docker-runtime.ts";
 
 const config = loadConfig({ GATEWAY_CONTROL_SECRET: "c".repeat(32) });
 
-function frame(stream: 1 | 2, text: string): Buffer {
-  const payload = Buffer.from(text);
-  const header = Buffer.alloc(8);
-  header.writeUInt8(stream, 0);
-  header.writeUInt32BE(payload.length, 4);
-  return Buffer.concat([header, payload]);
-}
-
 function stats(partial: object): Docker.ContainerStats {
   return partial as Docker.ContainerStats;
 }
 
 test("demuxDockerLogs joins stdout and stderr frames", () => {
-  const logs = Buffer.concat([frame(1, "starting qwen serve\n"), frame(2, "warn: x\n"), frame(1, "listening\n")]);
+  const logs = Buffer.concat([logFrame(1, "starting qwen serve\n"), logFrame(2, "warn: x\n"), logFrame(1, "listening\n")]);
   assert.equal(demuxDockerLogs(logs), "starting qwen serve\nwarn: x\nlistening\n");
   assert.equal(demuxDockerLogs(Buffer.alloc(0)), "");
 });
 
 test("demuxDockerLogs passes TTY output through", () => {
   assert.equal(demuxDockerLogs(Buffer.from("plain tty output\n")), "plain tty output\n");
-  const truncated = frame(1, "hello").subarray(0, 10);
+  const truncated = logFrame(1, "hello").subarray(0, 10);
   assert.equal(demuxDockerLogs(truncated), truncated.toString("utf8"));
 });
 

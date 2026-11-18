@@ -54,6 +54,30 @@ export async function closeServer(server: http.Server): Promise<void> {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
+/** A fetch that answers from a table of URL → handler, recording the calls. */
+export function fakeFetch(routes: Record<string, (init: RequestInit) => Response>): { fetch: typeof fetch; calls: Array<{ url: string; auth: string | null; method: string }> } {
+  const calls: Array<{ url: string; auth: string | null; method: string }> = [];
+  return {
+    calls,
+    fetch: (async (input: string | URL | Request, init: RequestInit = {}) => {
+      const url = String(input);
+      const headers = new Headers(init.headers);
+      calls.push({ url, auth: headers.get("authorization"), method: init.method ?? "GET" });
+      const route = routes[url];
+      return route ? route(init) : new Response("not found", { status: 404 });
+    }) as typeof fetch,
+  };
+}
+
+/** One frame of a container's log as Docker sends it without a TTY: stdout (1) or stderr (2). */
+export function logFrame(stream: 1 | 2, text: string): Buffer {
+  const payload = Buffer.from(text);
+  const header = Buffer.alloc(8);
+  header.writeUInt8(stream, 0);
+  header.writeUInt32BE(payload.length, 4);
+  return Buffer.concat([header, payload]);
+}
+
 /** An empty portal database in a directory of its own. */
 export function tempDb(): PortalDb {
   return openDatabase(path.join(fs.mkdtempSync(path.join(os.tmpdir(), "portal-test-")), "portal.sqlite"));
