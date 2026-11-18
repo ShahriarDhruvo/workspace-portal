@@ -23,6 +23,8 @@ export const RELEASES_OFFERED = 5;
 /** What is known of a package's releases; `notes` by version. */
 export type PackageReleases = Pick<NpmPackage, "distTags" | "versions"> & { notes: ReadonlyMap<string, ReleaseNotes> };
 
+const latestOf = (releases: PackageReleases | undefined): string | null => (isVersion(releases?.distTags.latest) ? releases.distTags.latest : null);
+
 export interface AgentVersionInputs {
   kind: AgentKind;
   current: string;
@@ -35,17 +37,14 @@ export interface AgentVersionInputs {
 }
 
 /**
- * The versions an agent's Package images table lists, newest first: the RELEASES_OFFERED newest stable releases,
- * plus every version in `keep` (the current one, those with an image on this server) whatever it is. Stable means a
- * release that is no prerelease and not deprecated, and no newer than dist-tags.latest: a release published but not
- * (yet) made latest is no stable one. Latest itself counts even when it is a prerelease, since that is what the
- * publisher calls its stable version (DeepSeek Harness's latest is 0.2.2-rc.1). Such a publisher (DeepSeek Harness
- * publishes release candidates only) has fewer stable releases than that, so its list is filled up with the newest
- * prerelease of latest's kind ("rc") of each earlier version line (0.2.1-rc.5, 0.2.0-rc.2, ...), and its card offers
- * earlier versions like the others. Without registry answers, only `keep`.
+ * The versions an agent's Package images table lists, newest first: the RELEASES_OFFERED newest stable releases, plus
+ * every version in `keep` (the current one, those with an image on this server). Stable: no prerelease, not deprecated,
+ * and no newer than dist-tags.latest; latest itself counts even as a prerelease, being what its publisher calls stable
+ * (DeepSeek Harness publishes release candidates only). Such a list is filled up with the newest prerelease of latest's
+ * kind ("rc") of each earlier version line (0.2.1-rc.5, 0.2.0-rc.2, ...).
  */
 export function offeredReleases(releases: PackageReleases | undefined, keep: readonly string[]): AgentRelease[] {
-  const latest = isVersion(releases?.distTags.latest) ? releases.distTags.latest : null;
+  const latest = latestOf(releases);
   const published = new Map((releases?.versions ?? []).map((entry) => [entry.version, entry]));
   const notNewer = (version: string) => latest === null || (compareVersions(version, latest) ?? 1) <= 0;
   const stable = [...published.values()]
@@ -59,7 +58,7 @@ export function offeredReleases(releases: PackageReleases | undefined, keep: rea
   if (channel !== null && stable.length < RELEASES_OFFERED) {
     const lines = new Set(stable.map(versionLine));
     const earlier = [...published.values()]
-      .filter(({ version, deprecated }) => !deprecated && prereleaseChannel(version) === channel && notNewer(version) && !lines.has(versionLine(version)))
+      .filter(({ version, deprecated }) => !deprecated && prereleaseChannel(version) === channel && notNewer(version))
       .map((entry) => entry.version)
       .sort(byNewestVersion);
     for (const version of earlier) {
@@ -90,7 +89,7 @@ function versionLine(version: string): string {
 export function describeAgentVersions(input: AgentVersionInputs): AgentVersionInfo {
   const { kind, current } = input;
   const driver = driverFor(kind);
-  const latest = isVersion(input.releases?.distTags.latest) ? input.releases.distTags.latest : null;
+  const latest = latestOf(input.releases);
 
   const versionsInUse = input.workspaces
     .filter((workspace) => workspace.agent === kind && (workspace.status === "starting" || workspace.status === "running"))

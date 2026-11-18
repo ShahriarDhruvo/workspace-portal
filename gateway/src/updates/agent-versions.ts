@@ -1,18 +1,12 @@
-// The current version of each agent: what new workspaces of that agent start with, and with it their
-// image. This module is the gateway's only source of both.
+// The current version of each agent: what new workspaces of that agent start with, and with it their image. The
+// gateway's only source of both. The .env versions (Config.workspace.defaultVersions) are the defaults; the admin's
+// choice is kept in PORTAL_DATA_DIR/config/agent-versions.env, KEY=VALUE lines with the .env keys
+// (QWEN_CODE_VERSION=0.27.4) and # comments, where a missing file or key means the default.
 //
-// The .env versions (Config.workspace.defaultVersions) are the defaults, what a fresh install builds.
-// The admin's choice is kept in PORTAL_DATA_DIR/config/agent-versions.env, KEY=VALUE lines with the
-// .env keys (QWEN_CODE_VERSION=0.27.4) and # comments; a missing file or key means the default. The
-// gateway reads it at boot and writes it after an update in the admin console; deploy/update-image.sh
-// writes it too (lib.sh agent_version_set) and then restarts the gateway, and deploy/lib.sh
-// agent_version reads it first, so install.sh and verify-isolation.sh act on the current versions as
-// well.
-//
-// Both writers change only their own agent's line of the file as it is on disk at that moment (the
-// gateway reads it again before writing), so neither undoes a version the other has just written.
-// Writes are atomic (a temp file in the same directory, then rename), mode 0600 in a 0700 directory:
-// the gateway runs as root, so both are root's, like the rest of config/.
+// deploy/update-image.sh writes that file too (lib.sh agent_version_set) and then restarts the gateway, and
+// deploy/lib.sh agent_version reads it. So each writer changes only its own agent's line of the file as it is on disk
+// at that moment, and neither undoes a version the other has just written. Mode 0600 in a 0700 directory, root's like
+// the rest of config/.
 import fs from "node:fs";
 import path from "node:path";
 import { AGENT_KINDS, isVersion, type AgentKind } from "@portal/core";
@@ -27,10 +21,7 @@ const HEADER = [
   "# this file). A missing key means the default from .env.",
 ];
 
-/**
- * KEY=VALUE lines, read the way deploy/lib.sh env_value reads them: the last line of a key wins,
- * quotes are removed, and an unquoted value ends at " #".
- */
+/** KEY=VALUE lines, read the way deploy/lib.sh env_value reads them: the last line of a key wins, quotes are removed, and an unquoted value ends at " #". */
 export function parseVersionsFile(text: string): Map<string, string> {
   const entries = new Map<string, string>();
   for (const raw of text.split("\n")) {
@@ -47,9 +38,8 @@ export function parseVersionsFile(text: string): Map<string, string> {
 }
 
 /**
- * The file's text with KEY set to VALUE, as deploy/lib.sh agent_version_set sets it: the key's lines
- * go and one new line is appended; every other line (other keys, comments, anything unknown) stays as
- * it is. No file yet (null): a header and the line.
+ * The file's text with KEY set to VALUE, as deploy/lib.sh agent_version_set sets it: the key's lines go and one new
+ * line is appended; every other line stays as it is. No file yet (null): a header and the line.
  */
 export function withVersion(text: string | null, key: string, value: string): string {
   const lines = text === null ? [...HEADER] : text.split("\n");
@@ -72,7 +62,12 @@ export class AgentVersions {
   constructor(options: AgentVersionsOptions) {
     this.#file = options.file;
     this.#defaults = options.defaults;
-    const entries = readEntries(options.file, options.log);
+    let entries = new Map<string, string>();
+    try {
+      entries = parseVersionsFile(readText(options.file) ?? "");
+    } catch (error) {
+      options.log.error("cannot read the agent versions; using the defaults", { file: options.file, error });
+    }
     for (const kind of AGENT_KINDS) {
       const key = driverFor(kind).release.versionKey;
       const chosen = entries.get(key);
@@ -101,11 +96,7 @@ export class AgentVersions {
     return this.#defaults[kind];
   }
 
-  /**
-   * Makes `version` current: saved first, so a failed write (or an unreadable file) changes nothing.
-   * Only this agent's line changes, in the file as it is now: deploy/update-image.sh may have written
-   * another agent's version since the gateway read it (it restarts the gateway afterwards).
-   */
+  /** Makes `version` current: saved first, so a failed write (or an unreadable file) changes nothing. */
   set(kind: AgentKind, version: string): void {
     if (!isVersion(version)) throw new Error(`not a version: ${JSON.stringify(version)}`);
     const dir = path.dirname(this.#file);
@@ -122,14 +113,5 @@ function readText(file: string): string | null {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
-  }
-}
-
-function readEntries(file: string, log: Logger): Map<string, string> {
-  try {
-    return parseVersionsFile(readText(file) ?? "");
-  } catch (error) {
-    log.error("cannot read the agent versions; using the defaults", { file, error });
-    return new Map();
   }
 }

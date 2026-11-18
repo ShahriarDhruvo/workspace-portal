@@ -1,12 +1,10 @@
-// The npm registry, asked which agent versions exist: a package's document (its dist-tags, every version with
-// its publish time, and its repository, for the release notes) and whether one exact version is published. The
-// gateway runs on the host network, so it reaches the registry the same way the image builds do. fetch is injected so
-// tests need no network; every call has a timeout, because a hanging registry must not hold up the admin console.
+// The npm registry, asked which agent versions exist: a package's document (its dist-tags, every version with its
+// publish time, and its repository, for the release notes) and whether one exact version is published. Every call has
+// a timeout: a hanging registry must not hold up the admin console.
 //
 // Publish times are only in the full document ("packument"; the abbreviated one npm install uses has none). Qwen
-// Code's, with a nightly build a day, is about 1.9 MB of JSON, 230 kB gzipped on the wire (fetch asks for gzip). The
-// registry answers a request that sends the last answer's ETag with 304 and no body while nothing was published, so
-// the release cache (release-cache.ts) downloads it again only after a release.
+// Code's is about 1.9 MB of JSON, 230 kB gzipped on the wire. A request that sends the last answer's ETag is answered
+// 304 without a body while nothing was published, so the release cache downloads it again only after a release.
 import { failureReason, fetchBounded, FETCH_TIMEOUT_MS } from "../lib/bounded-body.ts";
 import { HttpError } from "../lib/http-util.ts";
 import { isGitHubRepo } from "./github-releases.ts";

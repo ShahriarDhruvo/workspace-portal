@@ -1,10 +1,6 @@
-// Release notes from GitHub, for Admin > Updates: the LLM engine's (engine-releases.ts) and the agents'
-// (release-cache.ts). One anonymous request lists a repository's newest releases with their notes. GitHub allows 60
-// anonymous requests an hour per address, so both callers cache the answer, and they only ask while an admin has the
-// Updates page open (its polls are what asks).
-//
-// Whether notes announce breaking changes is read from the conventions changelogs use, never guessed from a word
-// alone: Qwen Code's notes always have a "Breaking Changes" heading, mostly followed by "No known breaking changes."
+// Release notes from GitHub, for Admin > Updates: one anonymous request lists a repository's newest releases with their
+// notes. GitHub allows 60 anonymous requests an hour per address, so the answers are cached (release-cache.ts) and
+// asked for only while an admin has the Updates page open (its polls are what asks).
 import { failureReason, fetchBounded } from "../lib/bounded-body.ts";
 import { isVersion, type ReleaseNotes } from "@portal/core";
 
@@ -15,7 +11,7 @@ import { isVersion, type ReleaseNotes } from "@portal/core";
  */
 const PER_PAGE = 100;
 /** Notes longer than this are cut (the page links to the full notes). */
-export const NOTES_CHARS = 12_000;
+const NOTES_CHARS = 12_000;
 /** 100 releases with long notes come to about 3 MB of JSON (Qwen Code's). */
 const MAX_BYTES = 8 * 1024 * 1024;
 
@@ -88,10 +84,10 @@ export function createGitHubReleases(fetchImpl: typeof fetch = fetch): GitHubRel
 const NONE = /^(?:no|none|n\/a|nothing)\b/i;
 
 /**
- * Whether release notes announce a breaking change, by the conventions changelogs follow: a heading that names
- * breaking changes (release-please's "⚠ BREAKING CHANGES", Qwen Code's "Breaking Changes") with an entry under it
- * that isn't "none"; a line that starts "BREAKING CHANGE:" (a Conventional Commits footer) or "Breaking change:"; an
- * entry marked breaking the Conventional Commits way, "fix(deps)!: …".
+ * Whether release notes announce a breaking change, by the conventions changelogs follow, never guessed from a word
+ * alone: a heading that names breaking changes (release-please's "⚠ BREAKING CHANGES", Qwen Code's "Breaking Changes")
+ * with an entry under it that isn't "none"; a line that starts "BREAKING CHANGE:" (a Conventional Commits footer) or
+ * "Breaking change:"; an entry marked breaking the Conventional Commits way, "fix(deps)!: …".
  */
 export function hasBreakingChanges(markdown: string): boolean {
   let inBreakingSection = false;
