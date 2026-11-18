@@ -1,0 +1,14 @@
+[Unit]
+Description=Bosgame M5 fan curve
+After=systemd-modules-load.service
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+ExecStart=/usr/local/sbin/m5-fans.py
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

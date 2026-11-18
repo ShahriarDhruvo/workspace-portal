@@ -1,0 +1,343 @@
+--- a/src/ec_su_axb35.c
++++ b/src/ec_su_axb35.c
+@@ -3,6 +3,8 @@
+ #include <linux/acpi.h>
+ #include <linux/delay.h>
+ #include <linux/device.h>
++#include <linux/dmi.h>
++#include <linux/jiffies.h>
+ #include <linux/fs.h>
+ #include <linux/init.h>
+ #include <linux/io.h>
+@@ -23,6 +25,11 @@
+     u8             speed_reg_high;
+     u8             speed_reg_low;
+     u8             mode_reg;
++    u8             duty_reg;
++    u8             duty; /* requested hold; consult duty_error for EC failures */
++    int            duty_error;
++    bool           release_pending;
++    unsigned long  duty_deadline;
+     u8             rampup_curve[6];
+     u8             rampdown_curve[6];
+     enum fan_mode  mode;
+@@ -44,18 +51,21 @@
+ };
+ 
+ static struct class *ec_class;
++static DEFINE_MUTEX(duty_lock);
+ 
+ static struct ec_fan ec_fans[] = {
+     { .name           = "fan1",
+       .speed_reg_high = 0x35,
+       .speed_reg_low  = 0x36,
+       .mode_reg       = 0x21,
++      .duty_reg       = 0x33,
+       .rampup_curve   = { 0, 60, 70, 83, 95, 97 },
+       .rampdown_curve = { 0, 40, 50, 80, 94, 96 } },
+     { .name           = "fan2",
+       .speed_reg_high = 0x37,
+       .speed_reg_low  = 0x38,
+       .mode_reg       = 0x23,
++      .duty_reg       = 0x34,
+       .rampup_curve   = { 0, 60, 70, 83, 95, 97 },
+       .rampdown_curve = { 0, 40, 50, 80, 94, 96 } },
+     { .name           = "fan3",
+@@ -80,12 +90,10 @@
+                             char *buf)
+ {
+     struct ec_fan *fan = dev_get_drvdata(dev);
+-    u8             hi;
+-    // TODO: handle error
+-    ec_read(fan->speed_reg_high, &hi);
+-    u8 lo;
+-    // TODO: handle error
+-    ec_read(fan->speed_reg_low, &lo);
++    u8 hi, lo;
++    if (ec_read(fan->speed_reg_high, &hi) ||
++        ec_read(fan->speed_reg_low, &lo))
++        return -EIO;
+     u16 rpm = (hi << 8) | lo;
+     // wired fan3 behavior, displaying 8000 before turning to 0
+     if (strcmp(fan->name, "fan3") == 0 && rpm == 8000)
+@@ -99,8 +107,8 @@
+ static void update_fan_mode(struct ec_fan *fan)
+ {
+     u8 val;
+-    // TODO: handle error
+-    ec_read(fan->mode_reg, &val);
++    if (ec_read(fan->mode_reg, &val))
++        return;
+ 
+     switch (val) {
+     case 0x10:
+@@ -408,13 +416,100 @@
+ static struct device_attribute dev_attr_fan_rampdown_curve = __ATTR(
+     rampdown_curve, 0644, fan_rampdown_curve_show, fan_rampdown_curve_store);
+ 
++/* AXB35 duty registers: 0x80|percent requests manual duty, 0 releases it.
++ * Match the write/read-back protocol in crmaris/FanControl.AXB35.
++ * A ten-second lease prevents a dead userspace controller holding a low duty.
++ * Only the two APU fans are touched. The original level/curve API is separate;
++ * use firmware auto mode and do not run another controller alongside this one.
++ */
++static int write_duty_verified(struct ec_fan *fan, u8 duty)
++{
++    u8 want = duty ? 0x80 | duty : 0, got;
++    int i;
++    for (i = 0; i < 3; i++) {
++        if (!ec_write(fan->duty_reg, want) &&
++            !ec_read(fan->duty_reg, &got) && got == want)
++            return 0;
++        msleep(5);
++    }
++    return -EIO;
++}
++
++static ssize_t fan_duty_show(struct device *dev, struct device_attribute *attr,
++                            char *buf)
++{
++    struct ec_fan *fan = dev_get_drvdata(dev);
++    unsigned int duty;
++    mutex_lock(&duty_lock);
++    duty = fan->duty;
++    mutex_unlock(&duty_lock);
++    return sysfs_emit(buf, "%u\n", duty);
++}
++
++static ssize_t fan_duty_error_show(struct device *dev,
++                                  struct device_attribute *attr, char *buf)
++{
++    struct ec_fan *fan = dev_get_drvdata(dev);
++    int error;
++    mutex_lock(&duty_lock);
++    error = fan->duty_error;
++    mutex_unlock(&duty_lock);
++    return sysfs_emit(buf, "%d\n", error);
++}
++
++static ssize_t fan_duty_raw_show(struct device *dev,
++                                struct device_attribute *attr, char *buf)
++{
++    struct ec_fan *fan = dev_get_drvdata(dev);
++    u8 value;
++    int ret;
++    mutex_lock(&duty_lock);
++    ret = ec_read(fan->duty_reg, &value);
++    mutex_unlock(&duty_lock);
++    return ret ? -EIO : sysfs_emit(buf, "%u\n", value);
++}
++
++static ssize_t fan_duty_store(struct device *dev, struct device_attribute *attr,
++                             const char *buf, size_t count)
++{
++    struct ec_fan *fan = dev_get_drvdata(dev);
++    unsigned int duty;
++    int ret;
++    if (!fan->duty_reg)
++        return -EOPNOTSUPP;
++    if (kstrtouint(buf, 10, &duty) || (duty && (duty < 40 || duty > 95)))
++        return -EINVAL;
++    mutex_lock(&duty_lock);
++    ret = write_duty_verified(fan, duty);
++    fan->duty_error = ret;
++    if (!ret) {
++        fan->duty = duty;
++        fan->release_pending = false;
++        fan->duty_deadline = jiffies + msecs_to_jiffies(10000);
++    } else {
++        fan->duty = 0;
++        fan->release_pending = true;
++        if (!write_duty_verified(fan, 0))
++            fan->release_pending = false;
++    }
++    mutex_unlock(&duty_lock);
++    return ret ? ret : count;
++}
++
++static struct device_attribute dev_attr_fan_duty =
++    __ATTR(duty, 0644, fan_duty_show, fan_duty_store);
++static struct device_attribute dev_attr_fan_duty_error =
++    __ATTR(duty_error, 0444, fan_duty_error_show, NULL);
++static struct device_attribute dev_attr_fan_duty_raw =
++    __ATTR(duty_raw, 0444, fan_duty_raw_show, NULL);
++
+ static ssize_t temp_current_show(struct device           *dev,
+                                  struct device_attribute *attr, char *buf)
+ {
+     struct ec_temp *temp = dev_get_drvdata(dev);
+     u8              val;
+-    // TODO: handle error
+-    ec_read(temp->reg, &val);
++    if (ec_read(temp->reg, &val))
++        return -EIO;
+     return sprintf(buf, "%u\n", val);
+ }
+ 
+@@ -446,8 +541,8 @@
+ {
+     struct ec_apu *apu = dev_get_drvdata(dev);
+     u8             val;
+-    // TODO: handle error
+-    ec_read(apu->power_mode_reg, &val);
++    if (ec_read(apu->power_mode_reg, &val))
++        return -EIO;
+ 
+     const char *mode = "unknown";
+     switch (val) {
+@@ -483,7 +578,8 @@
+         return -EINVAL;
+     }
+ 
+-    ec_write(apu->power_mode_reg, val);
++    if (ec_write(apu->power_mode_reg, val))
++        return -EIO;
+     return count;
+ }
+ 
+@@ -494,23 +590,42 @@
+ 
+ static void ec_update_worker(struct work_struct *work)
+ {
+-    u8 temp;
+-    // TODO: handle error
+-    ec_read(ec_temp.reg, &temp);
++    u8 temp = 0;
++    int temp_ret = ec_read(ec_temp.reg, &temp);
+     int i;
++    mutex_lock(&duty_lock);
+ 
+     // Update min/max
+-    if (ec_temp.temp_min == 0 || temp < ec_temp.temp_min)
++    if (!temp_ret && (ec_temp.temp_min == 0 || temp < ec_temp.temp_min))
+         ec_temp.temp_min = temp;
+ 
+-    if (temp > ec_temp.temp_max)
++    if (!temp_ret && temp > ec_temp.temp_max)
+         ec_temp.temp_max = temp;
+ 
+     // update fan level if curve mode is active
+     for (i = 0; i < ARRAY_SIZE(ec_fans); i++) {
+         struct ec_fan *fan = &ec_fans[i];
+ 
+-        if (fan->mode == CURVE) {
++        if (fan->duty_reg) {
++            int ret;
++            if (fan->duty && time_after_eq(jiffies, fan->duty_deadline)) {
++                fan->duty = 0;
++                fan->release_pending = true;
++            }
++            if (fan->duty || fan->release_pending) {
++                ret = write_duty_verified(fan, fan->duty);
++                if (ret) {
++                    fan->duty_error = ret;
++                    fan->duty = 0;
++                    fan->release_pending = true;
++                    pr_err_ratelimited("ec_su_axb35: %s duty I/O failed; trying firmware release\n",
++                                       fan->name);
++                } else if (!fan->duty) {
++                    fan->release_pending = false;
++                }
++            }
++        }
++        if (!fan->duty && !temp_ret && fan->mode == CURVE) {
+             u8 level = read_fan_level(fan);
+             if (level < 5 && temp >= fan->rampup_curve[level + 1]) {
+                 write_fan_level(fan, level + 1);
+@@ -519,6 +634,7 @@
+         }
+     }
+ 
++    mutex_unlock(&duty_lock);
+     // Requeue the work
+     schedule_delayed_work(&ec_update_work,
+                           msecs_to_jiffies(1000)); // every 1 sec
+@@ -531,6 +647,14 @@
+ {
+     int i;
+     int ret;
++
++    if (!dmi_match(DMI_BOARD_NAME, "AXB35-02") ||
++        !dmi_match(DMI_SYS_VENDOR, "BOSGAME LIMITED") ||
++        !dmi_match(DMI_PRODUCT_NAME, "BeyondMax Series") ||
++        !dmi_match(DMI_BIOS_VERSION, "3.11")) {
++        pr_err("ec_su_axb35: board/BIOS outside validated M5 configuration\n");
++        return -ENODEV;
++    }
+ 
+     ret = alloc_chrdev_region(&ec_su_axb35_dev, 0, ARRAY_SIZE(ec_fans) + 2,
+                               "ec_su_axb35");
+@@ -564,6 +688,11 @@
+         device_create_file(fan->dev, &dev_attr_fan_level);
+         device_create_file(fan->dev, &dev_attr_fan_rampup_curve);
+         device_create_file(fan->dev, &dev_attr_fan_rampdown_curve);
++        if (fan->duty_reg) {
++            device_create_file(fan->dev, &dev_attr_fan_duty);
++            device_create_file(fan->dev, &dev_attr_fan_duty_error);
++            device_create_file(fan->dev, &dev_attr_fan_duty_raw);
++        }
+         update_fan_mode(fan);
+     }
+ 
+@@ -596,29 +725,23 @@
+ {
+     int i;
+ 
+-    /* Reset all fans to AUTO mode before unloading */
++    /* Drain worker and sysfs stores before releasing the EC override. */
++    cancel_delayed_work_sync(&ec_update_work);
+     for (i = 0; i < ARRAY_SIZE(ec_fans); i++) {
+         struct ec_fan *fan = &ec_fans[i];
+-        u8 val;
+-
+-        fan->mode = AUTO;
+-
+-        switch (fan->mode_reg) {
+-        case 0x21: // Fan 1
+-            val = 0x10;
+-            break;
+-        case 0x23: // Fan 2
+-            val = 0x20;
+-            break;
+-        case 0x25: // Fan 3
+-            val = 0x30;
+-            break;
+-        default:
+-            continue;
+-        }
+-        ec_write(fan->mode_reg, val);
+-        pr_info("ec_su_axb35: %s reset to AUTO mode\n", fan->name);
+-    }
++        if (fan->duty_reg && !IS_ERR(fan->dev)) {
++            device_remove_file(fan->dev, &dev_attr_fan_duty);
++            device_remove_file(fan->dev, &dev_attr_fan_duty_error);
++            device_remove_file(fan->dev, &dev_attr_fan_duty_raw);
++        }
++    }
++    mutex_lock(&duty_lock);
++    for (i = 0; i < ARRAY_SIZE(ec_fans); i++) {
++        struct ec_fan *fan = &ec_fans[i];
++        if (fan->duty_reg && write_duty_verified(fan, 0))
++            pr_err("ec_su_axb35: %s firmware release failed\n", fan->name);
++    }
++    mutex_unlock(&duty_lock);
+ 
+     for (i = 0; i < ARRAY_SIZE(ec_fans); i++) {
+         if (!IS_ERR(ec_fans[i].dev)) {
+@@ -645,8 +768,6 @@
+                        MKDEV(MAJOR(ec_su_axb35_dev), ARRAY_SIZE(ec_fans) + 1));
+     }
+ 
+-    cancel_delayed_work_sync(&ec_update_work);
+-
+     class_destroy(ec_class);
+     unregister_chrdev_region(ec_su_axb35_dev, ARRAY_SIZE(ec_fans) + 2);
+     pr_info("ec_su_axb35: Module unloaded\n");
+@@ -655,6 +776,7 @@
+ module_init(ec_su_axb35_init);
+ module_exit(ec_su_axb35_exit);
+ 
++MODULE_VERSION("f62c2c2.m5duty3");
+ MODULE_LICENSE("GPL");
+ MODULE_AUTHOR("loom@mopper.de");
+ MODULE_DESCRIPTION("Sixunited AXB35-02 Embedded Controller driver");
