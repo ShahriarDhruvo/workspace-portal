@@ -1,8 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import http from "node:http";
-import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { AgentConfigError, LLM_KEY_ENV } from "./driver.ts";
@@ -38,6 +36,12 @@ test("stripJsonComments removes comments outside strings only", () => {
   // A comment separates tokens, as in Qwen Code's own parser: 1/**/2 is not 12.
   assert.equal(stripJsonComments("1/**/2"), "1 2");
   assert.throws(() => JSON.parse(stripJsonComments('{"a": 1/**/2}')));
+  // Inside a comment, quotes and the other kind's marker mean nothing; "/*/" does not close itself.
+  assert.equal(stripJsonComments('1 // "a /* b\n2 /* // " */3'), "1 \n2  3");
+  assert.equal(stripJsonComments("/*/ still open */1"), " 1");
+  assert.equal(stripJsonComments("// x\r\n1"), "\n1");
+  assert.equal(stripJsonComments('{"a": "never closed // x'), '{"a": "never closed // x');
+  assert.equal(stripJsonComments('"a\\'), '"a\\');
 });
 
 test("parseSettingsText accepts JSON with comments and reports anything else clearly", () => {
