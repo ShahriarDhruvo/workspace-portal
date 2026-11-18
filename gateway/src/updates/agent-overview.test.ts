@@ -1,10 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { describeAgentVersions, offeredReleases, type AgentVersionInputs } from "./agent-overview.ts";
+import { describeAgentVersions, offeredReleases, type AgentVersionInputs, type PackageReleases } from "./agent-overview.ts";
 import type { ReleaseNotes } from "@portal/core";
 import type { WorkspaceImageSummary } from "../docker/image-builder.ts";
 import { workspaceImage } from "../docker/image-names.ts";
-import type { PackageReleases } from "./release-cache.ts";
 
 const image = (kind: "qwen" | "dsh", version: string, createdAt = 1_000): WorkspaceImageSummary => ({
   image: workspaceImage(kind, version),

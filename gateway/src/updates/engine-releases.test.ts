@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { FakeEngineRegistry, FakeNotes } from "../../test/fakes.ts";
-import { createNotesClient, createRegistryClient, EngineReleases, splitRepository, withLocalVersions } from "./engine-releases.ts";
+import { createRegistryClient, EngineReleases, splitRepository, stableNotes, withLocalVersions } from "./engine-releases.ts";
 import { createGitHubReleases } from "./github-releases.ts";
 import type { Logger } from "../lib/log.ts";
 
@@ -82,7 +82,7 @@ test("release notes: stable releases only, by version, breaking changes flagged"
         { tag_name: "nightly", body: "" },
       ]),
   });
-  const notes = await createNotesClient(createGitHubReleases(fetch)).notes("gufo-org/gufo");
+  const notes = stableNotes(await createGitHubReleases(fetch).list("gufo-org/gufo"));
   assert.deepEqual([...notes.keys()], ["0.34.0", "0.33.0"]);
   assert.deepEqual(notes.get("0.34.0"), {
     title: "v0.34.0",
@@ -101,7 +101,7 @@ test("offered: the 5 newest releases up to the one latest points at, plus what r
   const latestIs = "0.34.0";
   const digest = registry.digest.bind(registry);
   registry.digest = async (repository, tag) => digest(repository, tag === "latest" ? latestIs : tag);
-  const releases = new EngineReleases({ registry, notes: new FakeNotes(), notesRepo: "gufo-org/gufo" });
+  const releases = new EngineReleases({ registry, github: new FakeNotes(), notesRepo: "gufo-org/gufo" });
   const repo = "ghcr.io/gufo-org/toolboxes/gufo-runtime";
   const list = await releases.list(repo, {}, [
     { version: "0.28.0", digest: "sha256:local" },
@@ -126,7 +126,7 @@ test("offered: the 5 newest releases up to the one latest points at, plus what r
 
 test("withLocalVersions: notes for the local versions, newest first", () => {
   const notes = new Map([["0.29.0", { title: "v0.29.0", url: "https://github.com/x/y/releases/tag/v0.29.0", publishedAt: 1, body: "", breaking: true }]]);
-  const merged = withLocalVersions([{ version: "0.34.0", digest: "sha256:a", latest: true, notes: null }], [{ version: "0.29.0", digest: "sha256:b" }, { version: "0.34.0", digest: "sha256:c" }], notes);
+  const merged = withLocalVersions([{ version: "0.34.0", digest: "sha256:a", latest: true }], [{ version: "0.29.0", digest: "sha256:b" }, { version: "0.34.0", digest: "sha256:c" }], notes);
   assert.deepEqual(merged, [
     { version: "0.34.0", digest: "sha256:a", latest: true, notes: null },
     { version: "0.29.0", digest: "sha256:b", latest: false, notes: notes.get("0.29.0") },
@@ -139,10 +139,10 @@ test("GitHub failing is no registry failure: the list stays fresh and error-free
   const notes = new FakeNotes();
   const warnings: string[] = [];
   const log: Logger = { info() {}, warn: (message) => void warnings.push(message), error() {} };
-  const releases = new EngineReleases({ registry, notes, notesRepo: "gufo-org/gufo", now: () => clock.now, log });
+  const releases = new EngineReleases({ registry, github: notes, notesRepo: "gufo-org/gufo", now: () => clock.now, log });
   const repo = "ghcr.io/gufo-org/toolboxes/gufo-runtime";
   assert.equal((await releases.list(repo)).releases.find((release) => release.version === "0.34.0")?.notes?.breaking, true);
-  notes.notes = async () => {
+  notes.list = async () => {
     throw new Error("GitHub answered 403 for gufo-org/gufo's releases");
   };
   clock.now += 11 * 60_000;
@@ -156,7 +156,7 @@ test("GitHub failing is no registry failure: the list stays fresh and error-free
 test("the release list is cached for 10 minutes; a failed check keeps the last list and retries after a minute", async () => {
   const clock = { now: 0 };
   const registry = new FakeEngineRegistry();
-  const releases = new EngineReleases({ registry, notes: new FakeNotes(), notesRepo: "gufo-org/gufo", now: () => clock.now });
+  const releases = new EngineReleases({ registry, github: new FakeNotes(), notesRepo: "gufo-org/gufo", now: () => clock.now });
   const repo = "ghcr.io/gufo-org/toolboxes/gufo-runtime";
   const first = await releases.list(repo);
   assert.equal(first.releases.length, 5);

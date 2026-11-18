@@ -1,15 +1,12 @@
-// The LLM engine's releases, for Admin > Updates: the stable version tags of the engine's container
-// image in its registry (any Docker Registry v2, with the anonymous token flow ghcr.io and Docker Hub
-// use), their image digests, and their release notes from GitHub (github-releases.ts). Cached for 10
-// minutes like the agents' releases (release-cache.ts): the console polls, and GitHub allows 60
-// anonymous requests an hour.
+// The LLM engine's releases, for Admin > Updates: the stable version tags of the engine's container image in its
+// registry (any Docker Registry v2, with the anonymous token flow ghcr.io and Docker Hub use), their image digests,
+// and their release notes from GitHub, cached like the agents' releases (release-cache.ts).
 import { byNewestVersion, compareVersions, isStableVersion, type EngineRelease, type EngineReleaseList, type ReleaseNotes } from "@portal/core";
 import { RELEASES_OFFERED } from "./agent-overview.ts";
 import { fetchBounded } from "../lib/bounded-body.ts";
-import { createGitHubReleases, type GitHubReleases } from "./github-releases.ts";
-import { errorMessage, type Logger } from "../lib/log.ts";
-import { RELEASES_RETRY_MS, RELEASES_TTL_MS } from "./release-cache.ts";
-import { singleFlight } from "../lib/single-flight.ts";
+import type { GitHubRelease, GitHubReleases } from "./github-releases.ts";
+import type { Logger } from "../lib/log.ts";
+import { ReleaseCache } from "./release-cache.ts";
 
 /** The tag list (n=1000) and a token answer are small; anything larger than this is refused while it streams in. */
 const MAX_BYTES = 4 * 1024 * 1024;
@@ -50,11 +47,6 @@ export interface RegistryClient {
   tags(repository: string): Promise<string[]>;
   /** The digest a tag points at. */
   digest(repository: string, tag: string): Promise<string | null>;
-}
-
-export interface NotesClient {
-  /** Release notes by version (without a leading v). */
-  notes(repo: string): Promise<Map<string, ReleaseNotes>>;
 }
 
 /** Docker Registry v2 over HTTPS with anonymous bearer tokens. */
@@ -119,41 +111,38 @@ async function anonymousToken(fetchImpl: typeof fetch, challenge: string): Promi
   return token;
 }
 
-/** The engine's stable releases (X.Y.Z tags, no prereleases) on GitHub, by version. */
-export function createNotesClient(github: GitHubReleases = createGitHubReleases()): NotesClient {
-  return {
-    async notes(repo) {
-      const notes = new Map<string, ReleaseNotes>();
-      for (const release of await github.list(repo)) {
-        const version = release.tag.replace(/^v/, "");
-        if (isStableVersion(version) && !release.prerelease) notes.set(version, release.notes);
-      }
-      return notes;
-    },
-  };
+/** The engine's stable releases (X.Y.Z tags, no prereleases) among a repository's, by version. */
+export function stableNotes(releases: readonly GitHubRelease[]): Map<string, ReleaseNotes> {
+  const notes = new Map<string, ReleaseNotes>();
+  for (const release of releases) {
+    const version = release.tag.replace(/^v/, "");
+    if (isStableVersion(version) && !release.prerelease) notes.set(version, release.notes);
+  }
+  return notes;
 }
+
+type Listed = Omit<EngineRelease, "notes">;
 
 /**
  * The versions the engine card lists, newest first: `releases` (the newest in the registry), plus every version in
- * `local` (what runs, the images on the LLM server) that isn't among them, with its local digest and the notes GitHub
- * has for it.
+ * `local` (what runs, the images on the LLM server) that isn't among them, with its local digest; each with the notes
+ * GitHub has for it.
  */
 export function withLocalVersions(
-  releases: readonly EngineRelease[],
+  releases: readonly Listed[],
   local: ReadonlyArray<{ version: string | null; digest: string | null }>,
   notes: ReadonlyMap<string, ReleaseNotes>,
 ): EngineRelease[] {
   const listed = new Map(releases.map((release) => [release.version, release]));
   for (const { version, digest } of local) {
-    if (version === null || listed.has(version)) continue;
-    listed.set(version, { version, digest, latest: false, notes: notes.get(version) ?? null });
+    if (version !== null && !listed.has(version)) listed.set(version, { version, digest, latest: false });
   }
-  return [...listed.values()].sort((a, b) => byNewestRelease(a.version, b.version));
+  return [...listed.values()].sort((a, b) => byNewestRelease(a.version, b.version)).map((release) => ({ ...release, notes: notes.get(release.version) ?? null }));
 }
 
 export interface EngineReleasesOptions {
   registry: RegistryClient;
-  notes: NotesClient;
+  github: GitHubReleases;
   /** GitHub owner/name of the release notes; "" = none. */
   notesRepo: string;
   now?: () => number;
@@ -161,21 +150,34 @@ export interface EngineReleasesOptions {
 }
 
 /**
- * The engine's releases, cached; a failed check keeps the last good list and is retried after a minute. Offered: the
- * RELEASES_OFFERED newest stable tags no newer than the one `latest` points at (a version pushed but not yet made
- * latest is not offered).
+ * Offered: the RELEASES_OFFERED newest stable tags no newer than the one `latest` points at (a version pushed but not
+ * yet made latest is not offered).
  */
 export class EngineReleases {
-  readonly #options: EngineReleasesOptions;
-  readonly #now: () => number;
-  #list: EngineReleaseList | null = null;
-  /** Every stable release's notes from the last answer GitHub gave, for the versions on the LLM server too. */
-  #notes: ReadonlyMap<string, ReleaseNotes> = new Map();
-  #attemptedAt: number | null = null;
+  readonly #registry: RegistryClient;
+  /** By image repository. */
+  readonly #cache: ReleaseCache<{ githubRepo: string | null; releases: Listed[] }>;
 
-  constructor(options: EngineReleasesOptions) {
-    this.#options = options;
-    this.#now = options.now ?? Date.now;
+  constructor({ registry, notesRepo, ...rest }: EngineReleasesOptions) {
+    this.#registry = registry;
+    this.#cache = new ReleaseCache({
+      ...rest,
+      notes: stableNotes,
+      source: async (repository) => {
+        const tags = await registry.tags(repository);
+        const versions = tags.filter(isStableVersion).sort(byNewestVersion).slice(0, VERSIONS_CHECKED);
+        const [digests, latest] = await Promise.all([
+          Promise.all(versions.map((version) => registry.digest(repository, version))),
+          tags.includes("latest") ? registry.digest(repository, "latest") : null,
+        ]);
+        const latestAt = latest === null ? -1 : digests.indexOf(latest);
+        const releases = versions
+          .map((version, index) => ({ version, digest: digests[index] ?? null, latest: index === latestAt }))
+          .slice(Math.max(0, latestAt))
+          .slice(0, RELEASES_OFFERED);
+        return { etag: null, package: { githubRepo: notesRepo || null, releases } };
+      },
+    });
   }
 
   /** The releases, with the versions in `local` (withLocalVersions). */
@@ -184,53 +186,16 @@ export class EngineReleases {
     options: { refresh?: boolean } = {},
     local: ReadonlyArray<{ version: string | null; digest: string | null }> = [],
   ): Promise<EngineReleaseList> {
-    const cached = this.#list?.repository === repository ? this.#list : null;
-    const now = this.#now();
-    const fresh = cached?.checkedAt != null && now - cached.checkedAt < RELEASES_TTL_MS;
-    const retryDue = this.#attemptedAt === null || now - this.#attemptedAt >= RELEASES_RETRY_MS || cached === null;
-    if (options.refresh || (!fresh && retryDue)) await this.#check(repository);
-    const list = this.#list?.repository === repository ? this.#list : { repository, releases: [], checkedAt: null, error: null };
-    return { ...list, releases: withLocalVersions(list.releases, local, this.#notes) };
+    const { packages, checkedAt, error } = await this.#cache.snapshot([repository], options);
+    const known = packages.get(repository);
+    return { repository, releases: withLocalVersions(known?.releases ?? [], local, known?.notes ?? new Map()), checkedAt, error };
   }
 
   /** A version's digest straight from the registry (an update must not act on a stale list). */
   async resolve(repository: string, version: string): Promise<string> {
     if (!isStableVersion(version)) throw new EngineReleaseError(`${version} is not a release version (like 0.34.0)`);
-    const digest = await this.#options.registry.digest(repository, version);
+    const digest = await this.#registry.digest(repository, version);
     if (digest === null) throw new EngineReleaseError(`the registry has no digest for ${repository}:${version}`);
     return digest;
-  }
-
-  readonly #check = singleFlight((repository: string) => this.#fetch(repository));
-
-  async #fetch(repository: string): Promise<void> {
-    const { registry, notes, notesRepo } = this.#options;
-    this.#attemptedAt = this.#now();
-    const previous = this.#list?.repository === repository ? this.#list : null;
-    try {
-      const tags = await registry.tags(repository);
-      const versions = tags.filter(isStableVersion).sort(byNewestVersion).slice(0, VERSIONS_CHECKED);
-      const [digests, latest, notesByVersion] = await Promise.all([
-        Promise.all(versions.map((version) => registry.digest(repository, version))),
-        tags.includes("latest") ? registry.digest(repository, "latest") : Promise.resolve(null),
-        notesRepo === "" ? Promise.resolve(new Map<string, ReleaseNotes>()) : notes.notes(notesRepo).catch((error: unknown) => errorMessage(error)),
-      ]);
-      // Notes that couldn't be fetched this time (GitHub down, or its anonymous limit of 60 an hour reached): last
-      // time's. That is no registry failure, so it isn't the list's error: the versions are fresh and updates work.
-      if (typeof notesByVersion !== "string") this.#notes = notesByVersion;
-      else this.#options.log?.warn("could not read the LLM engine's release notes; keeping the last ones", { error: notesByVersion });
-      const latestAt = latest === null ? -1 : digests.indexOf(latest);
-      this.#list = {
-        repository,
-        releases: versions
-          .map((version, index) => ({ version, digest: digests[index] ?? null, latest: index === latestAt, notes: this.#notes.get(version) ?? null }))
-          .slice(Math.max(0, latestAt))
-          .slice(0, RELEASES_OFFERED),
-        checkedAt: this.#now(),
-        error: null,
-      };
-    } catch (error) {
-      this.#list = { repository, releases: previous?.releases ?? [], checkedAt: previous?.checkedAt ?? null, error: errorMessage(error) };
-    }
   }
 }

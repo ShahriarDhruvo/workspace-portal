@@ -42,6 +42,9 @@ function fakeRegistry() {
   return { state, registry, publish };
 }
 
+const cacheOf = (registry: NpmRegistry, rest: { github?: GitHubReleases; now?: () => number } = {}) =>
+  new ReleaseCache({ source: (name, etag) => registry.packument(name, etag), notes: notesByVersion, ...rest });
+
 const notes = (title: string, breaking = false): ReleaseNotes => ({ title, url: `https://github.com/QwenLM/qwen-code/releases/tag/${title}`, publishedAt: 1_000, body: "", breaking });
 
 function fakeGitHub(releases: GitHubRelease[]) {
@@ -59,7 +62,7 @@ function fakeGitHub(releases: GitHubRelease[]) {
 test("answers are kept for 10 minutes; then the registry is asked with the ETag, and only a change downloads again", async () => {
   const clock = { now: 1_000_000 };
   const { state, registry, publish } = fakeRegistry();
-  const cache = new ReleaseCache({ registry, now: () => clock.now });
+  const cache = cacheOf(registry, { now: () => clock.now });
   const first = await cache.snapshot([QWEN, DSH]);
   assert.deepEqual(first.packages.get(QWEN)?.distTags, { latest: "0.27.4" });
   assert.deepEqual(first.packages.get(DSH)?.versions, [{ version: "0.2.2-rc.1", publishedAt: 1_000, deprecated: false }]);
@@ -90,7 +93,7 @@ test("answers are kept for 10 minutes; then the registry is asked with the ETag,
 test("an outage keeps the last answers, reports the error and retries after a minute", async () => {
   const clock = { now: 1_000_000 };
   const { state, registry } = fakeRegistry();
-  const cache = new ReleaseCache({ registry, now: () => clock.now });
+  const cache = cacheOf(registry, { now: () => clock.now });
   await cache.snapshot([QWEN, DSH]);
   state.down = true;
   clock.now += RELEASES_TTL_MS;
@@ -111,7 +114,7 @@ test("an outage keeps the last answers, reports the error and retries after a mi
 test("a registry that was never reached leaves the releases unknown", async () => {
   const { state, registry } = fakeRegistry();
   state.down = true;
-  const snapshot = await new ReleaseCache({ registry }).snapshot([QWEN]);
+  const snapshot = await cacheOf(registry).snapshot([QWEN]);
   assert.deepEqual([snapshot.packages.size, snapshot.checkedAt], [0, null]);
   assert.match(snapshot.error!, /unreachable/);
 });
@@ -120,7 +123,7 @@ test("concurrent callers share one check", async () => {
   const { state, registry } = fakeRegistry();
   let open!: () => void;
   state.gate = new Promise((resolve) => (open = resolve));
-  const cache = new ReleaseCache({ registry });
+  const cache = cacheOf(registry);
   const both = Promise.all([cache.snapshot([QWEN]), cache.snapshot([QWEN], { refresh: true })]);
   open();
   await both;
@@ -137,7 +140,7 @@ test("release notes come from the package's GitHub repository: again when it cha
     { tag: "v0.27.4", prerelease: false, notes: notes("v0.27.4") },
     { tag: "desktop-v0.27.4", prerelease: false, notes: notes("desktop-v0.27.4") },
   ]);
-  const cache = new ReleaseCache({ registry, github: client, now: () => clock.now });
+  const cache = cacheOf(registry, { github: client, now: () => clock.now });
   const first = await cache.snapshot([QWEN, DSH]);
   assert.deepEqual([...(first.packages.get(QWEN)?.notes.keys() ?? [])], ["0.27.4"]);
   assert.equal(first.packages.get(DSH)?.notes.size, 0, "a package without a GitHub repository has none");

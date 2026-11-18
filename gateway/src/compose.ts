@@ -14,9 +14,9 @@ import type { ContainerRuntime } from "./docker/runtime.ts";
 import { EnergyMeter } from "./monitor/energy-meter.ts";
 import { EnergyPrices, type FetchText } from "./monitor/energy-prices.ts";
 import { fenceCheck, type FenceState } from "./workspaces/fence.ts";
-import { createNotesClient, createRegistryClient, EngineReleases, type NotesClient, type RegistryClient } from "./updates/engine-releases.ts";
+import { createRegistryClient, EngineReleases, type RegistryClient } from "./updates/engine-releases.ts";
 import { createEngineHost, EngineUpdater, type EngineHost } from "./updates/engine-updater.ts";
-import { createGitHubReleases } from "./updates/github-releases.ts";
+import { createGitHubReleases, type GitHubReleases } from "./updates/github-releases.ts";
 import { HostMonitor } from "./monitor/host-monitor.ts";
 import { hostdClient } from "./monitor/hostd.ts";
 import { LiveHub, userNames } from "./monitor/live.ts";
@@ -27,7 +27,6 @@ import { LlmRequests, type FinishedLlmRequest } from "./monitor/llm-requests.ts"
 import type { Logger } from "./lib/log.ts";
 import { createNpmRegistry, type NpmRegistry } from "./updates/npm-registry.ts";
 import { createReaderBackend, withPageCache, type ReaderBackend } from "./service/reader.ts";
-import { ReleaseCache } from "./updates/release-cache.ts";
 import { createSearxngBackend, type SearchBackend } from "./service/search-mcp.ts";
 import { createServiceServer, type ServiceDeps } from "./service/service-api.ts";
 import { SessionCache } from "./proxy/session-cache.ts";
@@ -44,7 +43,7 @@ export interface Seams {
   /** null: the LLM server has no portal-hostd. */
   engineHost?: EngineHost | null;
   engineRegistry?: RegistryClient;
-  engineNotes?: NotesClient;
+  engineNotes?: GitHubReleases;
   enginePollMs?: number;
   search?: SearchBackend;
   reader?: ReaderBackend | null;
@@ -93,7 +92,7 @@ export function compose(
     versions,
     builder: seams.builder ?? new DockerImageBuilder({ contextDir: config.imageContextDir }),
     registry,
-    releases: new ReleaseCache({ registry, github: createGitHubReleases(), log, now }),
+    github: createGitHubReleases(),
     workspaces: () => manager.list(),
     db,
     log,
@@ -124,7 +123,7 @@ export function compose(
     host: seams.engineHost !== undefined ? seams.engineHost : hostd.llm && createEngineHost(hostd.llm),
     releases: new EngineReleases({
       registry: seams.engineRegistry ?? createRegistryClient(),
-      notes: seams.engineNotes ?? createNotesClient(),
+      github: seams.engineNotes ?? createGitHubReleases(),
       notesRepo: config.engine.releaseNotesRepo,
       log,
       now,

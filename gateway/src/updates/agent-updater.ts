@@ -26,10 +26,11 @@ import { driverFor } from "../agents/index.ts";
 import type { Config } from "../config.ts";
 import type { ImageBuilder } from "../docker/image-builder.ts";
 import { stagingImage, workspaceImage } from "../docker/image-names.ts";
+import type { GitHubReleases } from "./github-releases.ts";
 import { HttpError } from "../lib/http-util.ts";
 import { errorMessage, type Logger } from "../lib/log.ts";
-import type { NpmRegistry } from "./npm-registry.ts";
-import type { ReleaseCache } from "./release-cache.ts";
+import type { NpmPackage, NpmRegistry } from "./npm-registry.ts";
+import { notesByVersion, ReleaseCache } from "./release-cache.ts";
 import { appendLog, finishJob } from "./update-job.ts";
 import { agentUnavailable } from "../workspaces/manager.ts";
 
@@ -61,7 +62,8 @@ export interface AgentUpdaterDeps {
   versions: AgentVersions;
   builder: ImageBuilder;
   registry: NpmRegistry;
-  releases: ReleaseCache;
+  /** Where release notes come from; none: no notes. */
+  github?: GitHubReleases;
   /** Every workspace, for the versions running ones use. */
   workspaces: () => readonly WorkspaceInfo[];
   db: PortalDb;
@@ -76,7 +78,7 @@ export class AgentUpdater {
   readonly #versions: AgentVersions;
   readonly #builder: ImageBuilder;
   readonly #registry: NpmRegistry;
-  readonly #releases: ReleaseCache;
+  readonly #releases: ReleaseCache<NpmPackage>;
   readonly #workspaces: () => readonly WorkspaceInfo[];
   readonly #db: PortalDb;
   readonly #log: Logger;
@@ -98,7 +100,7 @@ export class AgentUpdater {
     this.#versions = deps.versions;
     this.#builder = deps.builder;
     this.#registry = deps.registry;
-    this.#releases = deps.releases;
+    this.#releases = new ReleaseCache({ source: (name, etag) => deps.registry.packument(name, etag), notes: notesByVersion, github: deps.github, log: deps.log, now: deps.now });
     this.#workspaces = deps.workspaces;
     this.#db = deps.db;
     this.#log = deps.log;

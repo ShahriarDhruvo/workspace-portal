@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { WebSocketServer } from "ws";
 import { openDatabase, type PortalDb } from "@portal/core";
-import type { AgentKind, EngineJob, EngineStatus, ReleaseNotes, WorkspaceKind } from "@portal/core";
+import type { AgentKind, EngineJob, EngineStatus, WorkspaceKind } from "@portal/core";
 import { driverFor } from "../src/agents/index.ts";
 import type { SettingsObject } from "../src/agents/qwen-settings.ts";
 import type { WorkspaceStartOptions } from "../src/docker/container-spec.ts";
@@ -24,7 +24,8 @@ import {
   type SweepResult,
   type WorkspaceImageSummary,
 } from "../src/docker/image-builder.ts";
-import type { NotesClient, RegistryClient } from "../src/updates/engine-releases.ts";
+import type { RegistryClient } from "../src/updates/engine-releases.ts";
+import type { GitHubRelease, GitHubReleases } from "../src/updates/github-releases.ts";
 import type { EngineHost } from "../src/updates/engine-updater.ts";
 import { HostdError, type MeterReading } from "../src/monitor/hostd.ts";
 import { parseWorkspaceImage, STAGING_REPOSITORY, workspaceImage } from "../src/docker/image-names.ts";
@@ -1029,13 +1030,13 @@ export class FakeEngineRegistry implements RegistryClient {
   }
 }
 
-export class FakeNotes implements NotesClient {
+export class FakeNotes implements GitHubReleases {
   calls = 0;
-  async notes(): Promise<Map<string, ReleaseNotes>> {
+  async list(): Promise<GitHubRelease[]> {
     this.calls++;
-    return new Map([
-      ["0.34.0", { title: "v0.34.0", url: "https://github.com/gufo-org/gufo/releases/tag/v0.34.0", publishedAt: 0, body: "### ⚠ BREAKING CHANGES\n\n* audio", breaking: true }],
-      ["0.33.0", { title: "v0.33.0", url: "https://github.com/gufo-org/gufo/releases/tag/v0.33.0", publishedAt: 0, body: "### Features", breaking: false }],
-    ]);
+    return [
+      { tag: "v0.34.0", prerelease: false, notes: { title: "v0.34.0", url: "https://github.com/gufo-org/gufo/releases/tag/v0.34.0", publishedAt: 0, body: "### ⚠ BREAKING CHANGES\n\n* audio", breaking: true } },
+      { tag: "v0.33.0", prerelease: false, notes: { title: "v0.33.0", url: "https://github.com/gufo-org/gufo/releases/tag/v0.33.0", publishedAt: 0, body: "### Features", breaking: false } },
+    ];
   }
 }

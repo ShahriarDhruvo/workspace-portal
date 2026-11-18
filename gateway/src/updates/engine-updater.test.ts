@@ -23,7 +23,7 @@ function setup(options: { host?: FakeEngineHost | null; drainMinutes?: number } 
   const updater = new EngineUpdater({
     config,
     host,
-    releases: new EngineReleases({ registry, notes: new FakeNotes(), notesRepo: "gufo-org/gufo", now: () => clock.now }),
+    releases: new EngineReleases({ registry, github: new FakeNotes(), notesRepo: "gufo-org/gufo", now: () => clock.now }),
     queue,
     db,
     log: quiet,

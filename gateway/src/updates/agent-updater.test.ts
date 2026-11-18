@@ -9,7 +9,6 @@ import { AgentVersions } from "./agent-versions.ts";
 import { loadConfig } from "../config.ts";
 import { stagingImage, workspaceImage } from "../docker/image-names.ts";
 import type { Logger } from "../lib/log.ts";
-import { ReleaseCache } from "./release-cache.ts";
 import { FakeImageBuilder, FakeRegistry, FakeRuntime, gate } from "../../test/fakes.ts";
 
 function setup(options: { agents?: string; buildTimeoutMs?: number } = {}) {
@@ -38,7 +37,6 @@ function setup(options: { agents?: string; buildTimeoutMs?: number } = {}) {
     versions,
     builder,
     registry,
-    releases: new ReleaseCache({ registry, now: () => clock.now }),
     workspaces: () => state.workspaces,
     db,
     log,

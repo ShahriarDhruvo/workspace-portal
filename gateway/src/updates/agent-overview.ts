@@ -10,14 +10,18 @@ import {
   type AgentKind,
   type AgentRelease,
   type AgentVersionInfo,
+  type ReleaseNotes,
   type WorkspaceInfo,
 } from "@portal/core";
 import { driverFor } from "../agents/index.ts";
 import type { WorkspaceImageSummary } from "../docker/image-builder.ts";
-import type { PackageReleases } from "./release-cache.ts";
+import type { NpmPackage } from "./npm-registry.ts";
 
 /** How many of the newest stable releases the Updates page offers to build. */
 export const RELEASES_OFFERED = 5;
+
+/** What is known of a package's releases; `notes` by version. */
+export type PackageReleases = Pick<NpmPackage, "distTags" | "versions"> & { notes: ReadonlyMap<string, ReleaseNotes> };
 
 export interface AgentVersionInputs {
   kind: AgentKind;
