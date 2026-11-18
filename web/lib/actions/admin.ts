@@ -5,11 +5,12 @@ import { refresh, revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { displayName, sessions, users, WORKSPACE_KIND_NAMES, writeAudit, type SessionContext, type User } from "@portal/core";
 import { getDb } from "../db";
-import { attachWorkspaceInBackground, describeError, endSessionsInBackground, gateway, releaseInBackground, toApiError } from "../gateway";
+import { attachWorkspaceInBackground, endSessionsInBackground, gateway, logFailure, releaseInBackground, toApiError } from "../gateway";
 import { clearLoginFailures } from "../login-throttle";
 import { generateTemporaryPassword } from "../password-generator";
 import { hashPassword } from "../passwords";
 import { saveProfile, type ProfileState } from "../profile";
+import { insertUser } from "../seed";
 import { requireAdmin } from "../session";
 import { deleteSessions } from "../session-store";
 import {
@@ -30,10 +31,11 @@ export type ActionState =
   | { status: "error"; message: string }
   | { status: "done"; temporaryPassword?: string };
 
-type Target = { user: User } | { error: string };
+type Target = { session: SessionContext; user: User } | { error: string };
 
-/** Loads the user an action is about. Accounts other than the admin's own unless `allowSelf`. */
-function loadTarget(formData: FormData, session: SessionContext, options: { allowSelf?: boolean } = {}): Target {
+/** The admin's session and the user an action is about. Accounts other than the admin's own unless `allowSelf`. */
+async function loadTarget(formData: FormData, options: { allowSelf?: boolean } = {}): Promise<Target> {
+  const session = await requireAdmin();
   const id = userIdSchema.safeParse(formData.get("userId"));
   if (!id.success) return { error: "Unknown user." };
   return loadUserById(id.data, session, options);
@@ -46,7 +48,7 @@ function loadUserById(id: number, session: SessionContext, options: { allowSelf?
   if (!options.allowSelf && (user.id === session.user.id || user.role === "admin")) {
     return { error: "This action is not available for the administrator account." };
   }
-  return { user };
+  return { session, user };
 }
 
 const NEW_USER_FIELDS = ["firstName", "middleName", "lastName", "username", "password", "onlineAllowed"] as const;
@@ -69,34 +71,11 @@ export async function createUser(_previous: CreateUserState, formData: FormData)
   if (db.select({ id: users.id }).from(users).where(eq(users.username, username)).get()) return taken;
 
   const passwordHash = await hashPassword(password);
-  const now = Date.now();
   let created: User;
   try {
     created = db.transaction(() => {
-      const user = db
-        .insert(users)
-        .values({
-          username,
-          firstName,
-          middleName,
-          lastName,
-          passwordHash,
-          role: "user",
-          mustChangePassword: true,
-          onlineAllowed,
-          createdAt: now,
-          updatedAt: now,
-        })
-        .returning()
-        .get();
       clearLoginFailures(db, username);
-      writeAudit(db, {
-        action: "user_created",
-        actorUserId: session.user.id,
-        targetUserId: user.id,
-        details: { username, onlineAllowed },
-      });
-      return user;
+      return insertUser(db, { username, firstName, middleName, lastName, passwordHash, role: "user", onlineAllowed }, { actorUserId: session.user.id, details: { username, onlineAllowed } });
     });
   } catch (error) {
     if (error instanceof Error && error.message.includes("users.username")) return taken;
@@ -110,15 +89,13 @@ export async function createUser(_previous: CreateUserState, formData: FormData)
 }
 
 export async function updateProfile(_previous: ProfileState, formData: FormData): Promise<ProfileState> {
-  const session = await requireAdmin();
-  const target = loadTarget(formData, session, { allowSelf: true });
+  const target = await loadTarget(formData, { allowSelf: true });
   if ("error" in target) return { status: "error", message: target.error };
-  return saveProfile(session.user.id, target.user, formData);
+  return saveProfile(target.session.user.id, target.user, formData);
 }
 
 export async function resetPassword(_previous: ActionState, formData: FormData): Promise<ActionState> {
-  const session = await requireAdmin();
-  const target = loadTarget(formData, session);
+  const target = await loadTarget(formData);
   if ("error" in target) return { status: "error", message: target.error };
 
   const temporaryPassword = generateTemporaryPassword();
@@ -130,7 +107,7 @@ export async function resetPassword(_previous: ActionState, formData: FormData):
       .where(eq(users.id, target.user.id))
       .run();
     clearLoginFailures(db, target.user.username);
-    writeAudit(db, { action: "password_reset", actorUserId: session.user.id, targetUserId: target.user.id });
+    writeAudit(db, { action: "password_reset", actorUserId: target.session.user.id, targetUserId: target.user.id });
     return deleteSessions(db, eq(sessions.userId, target.user.id));
   });
   endSessionsInBackground(deleted);
@@ -139,8 +116,7 @@ export async function resetPassword(_previous: ActionState, formData: FormData):
 }
 
 export async function setUserActive(_previous: ActionState, formData: FormData): Promise<ActionState> {
-  const session = await requireAdmin();
-  const target = loadTarget(formData, session);
+  const target = await loadTarget(formData);
   if ("error" in target) return { status: "error", message: target.error };
   const active = formData.get("active") === "true";
   const db = getDb();
@@ -150,7 +126,7 @@ export async function setUserActive(_previous: ActionState, formData: FormData):
       db.update(users).set({ active, updatedAt: Date.now() }).where(eq(users.id, target.user.id)).run();
       writeAudit(db, {
         action: active ? "user_activated" : "user_deactivated",
-        actorUserId: session.user.id,
+        actorUserId: target.session.user.id,
         targetUserId: target.user.id,
       });
       return active ? null : deleteSessions(db, eq(sessions.userId, target.user.id));
@@ -161,7 +137,7 @@ export async function setUserActive(_previous: ActionState, formData: FormData):
   }
   if (!active) {
     try {
-      await gateway.stop(target.user.id, "deactivated", session.user.id);
+      await gateway.stop(target.user.id, "deactivated", target.session.user.id);
     } catch (error) {
       return {
         status: "error",
@@ -173,11 +149,10 @@ export async function setUserActive(_previous: ActionState, formData: FormData):
 }
 
 export async function stopWorkspace(_previous: ActionState, formData: FormData): Promise<ActionState> {
-  const session = await requireAdmin();
-  const target = loadTarget(formData, session, { allowSelf: true });
+  const target = await loadTarget(formData, { allowSelf: true });
   if ("error" in target) return { status: "error", message: target.error };
   try {
-    await gateway.stop(target.user.id, "admin", session.user.id);
+    await gateway.stop(target.user.id, "admin", target.session.user.id);
   } catch (error) {
     return { status: "error", message: toApiError(error).message };
   }
@@ -252,10 +227,9 @@ export async function eraseWorkspaceFiles(_previous: ActionState, formData: Form
 }
 
 export async function deleteUser(_previous: ActionState, formData: FormData): Promise<ActionState> {
-  const session = await requireAdmin();
-  const target = loadTarget(formData, session);
+  const target = await loadTarget(formData);
   if ("error" in target) return { status: "error", message: target.error };
-  const { user } = target;
+  const { session, user } = target;
   const confirmation = String(formData.get("confirmUsername") ?? "").trim().toLowerCase();
   if (confirmation !== user.username) return { status: "error", message: "Type the username exactly to confirm." };
 
@@ -299,14 +273,6 @@ export async function deleteUser(_previous: ActionState, formData: FormData): Pr
   redirect("/admin/users");
 }
 
-async function disconnectSession(sessionId: string): Promise<void> {
-  try {
-    await gateway.disconnect(sessionId);
-  } catch (error) {
-    console.error(`[gateway] disconnect session failed: ${describeError(error)}`);
-  }
-}
-
 /**
  * The session's target is shown in layouts (the admin console's "viewing" banner), which client
  * navigation otherwise reuses; revalidate the views that show it so the redirect renders the new state.
@@ -331,7 +297,7 @@ async function leaveViewedWorkspace(session: SessionContext): Promise<void> {
     db.update(sessions).set({ actingAsUserId: null }).where(eq(sessions.id, session.session.id)).run();
     writeAudit(db, { action: "admin_exited_workspace", actorUserId: session.user.id, targetUserId: viewed });
   });
-  await disconnectSession(session.session.id);
+  await logFailure("disconnect session", () => gateway.disconnect(session.session.id));
   releaseInBackground([viewed]);
   revalidateSessionViews();
 }
@@ -373,7 +339,7 @@ export async function openWorkspace(formData: FormData): Promise<void> {
       writeAudit(db, { action: "admin_opened_workspace", actorUserId: session.user.id, targetUserId: user.id });
     });
     // Before redirecting: this session's open connections still lead to the previous workspace.
-    await disconnectSession(session.session.id);
+    await logFailure("disconnect session", () => gateway.disconnect(session.session.id));
     releaseInBackground([previous]);
     revalidateSessionViews();
   }

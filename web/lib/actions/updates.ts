@@ -12,6 +12,14 @@ import { agentImageSchema, agentUpdateSchema, fieldErrors, type ActionResult } f
 // input; the gateway refuses what it can't do (one job at a time, an image in use) and audits updates itself,
 // attributed to actorUserId. Image removals are audited here. The page polls for a job's progress.
 
+/** An admin's request to the running job; `tooLate` when the gateway answers that it no longer applies. */
+async function ask(request: () => Promise<boolean>, words: Parameters<typeof attempt>[1], tooLate: string): Promise<ActionResult> {
+  await requireAdmin();
+  let accepted = false;
+  const result = await attempt(async () => void (accepted = await request()), words);
+  return result.ok && !accepted ? { ok: false, message: tooLate } : result;
+}
+
 /** Starts the job that makes `version` of `agent` current: the exact version the dialog showed. */
 export async function updateAgent(agent: string, version: string, rebuild: boolean): Promise<ActionResult> {
   const session = await requireAdmin();
@@ -26,14 +34,11 @@ export async function updateAgent(agent: string, version: string, rebuild: boole
 
 /** Cancels the running job; the current version stays as it was. */
 export async function cancelAgentUpdate(): Promise<ActionResult> {
-  await requireAdmin();
-  let cancelled = false;
-  const result = await attempt(
-    async () => ({ cancelled } = await gateway.cancelAgentUpdate()),
+  return ask(
+    async () => (await gateway.cancelAgentUpdate()).cancelled,
     (error) => agentActionError("cancel", error),
+    "Too late to cancel: the update has finished, or is making the new version current.",
   );
-  if (result.ok && !cancelled) return { ok: false, message: "Too late to cancel: the update has finished, or is making the new version current." };
-  return result;
 }
 
 /** Removes one of an agent's images (not the current one, and none a workspace uses). */
@@ -62,26 +67,20 @@ export async function updateEngine(version: string): Promise<ActionResult> {
 
 /** Cancels the job while it downloads or drains; nothing changes. */
 export async function cancelEngineUpdate(): Promise<ActionResult> {
-  await requireAdmin();
-  let cancelled = false;
-  const result = await attempt(
-    async () => ({ cancelled } = await gateway.cancelEngineUpdate()),
+  return ask(
+    async () => (await gateway.cancelEngineUpdate()).cancelled,
     (error) => engineActionError("cancel", error),
+    "Too late to cancel: the engine is restarting, or the job has finished.",
   );
-  if (result.ok && !cancelled) return { ok: false, message: "Too late to cancel: the engine is restarting, or the job has finished." };
-  return result;
 }
 
 /** Ends the drain: the engine restarts now, cutting off the requests still running. */
 export async function restartEngineNow(): Promise<ActionResult> {
-  await requireAdmin();
-  let restarting = false;
-  const result = await attempt(
-    async () => ({ ok: restarting } = await gateway.restartEngineNow()),
+  return ask(
+    async () => (await gateway.restartEngineNow()).ok,
     (error) => engineActionError("restart", error),
+    "The job is no longer waiting for requests: it is restarting, or has finished.",
   );
-  if (result.ok && !restarting) return { ok: false, message: "The job is no longer waiting for requests: it is restarting, or has finished." };
-  return result;
 }
 
 /** Removes an engine image from the LLM server (not the one that runs). */

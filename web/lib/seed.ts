@@ -1,7 +1,7 @@
 // Creates the admin account on first start. Takes the database and the settings as arguments (no
 // server-only imports); startup.ts passes getDb() and adminSeedSettings().
 import { eq } from "drizzle-orm";
-import { users, writeAudit, type PortalDb } from "@portal/core";
+import { users, writeAudit, type PortalDb, type User } from "@portal/core";
 import { hashPassword } from "./passwords.ts";
 import { newUserSchema } from "./validation.ts";
 
@@ -12,6 +12,18 @@ export interface AdminSeedSettings {
   firstName: string;
   middleName: string;
   lastName: string;
+}
+
+/** Inserts a user, who must choose a new password at the first sign-in, and audits it. Call it inside a transaction. */
+export function insertUser(
+  db: PortalDb,
+  values: Omit<typeof users.$inferInsert, "mustChangePassword" | "createdAt" | "updatedAt">,
+  audit: { actorUserId?: number; details: unknown },
+): User {
+  const now = Date.now();
+  const user = db.insert(users).values({ ...values, mustChangePassword: true, createdAt: now, updatedAt: now }).returning().get();
+  writeAudit(db, { action: "user_created", targetUserId: user.id, ...audit });
+  return user;
 }
 
 /**
@@ -39,30 +51,10 @@ export async function seedAdmin(db: PortalDb, settings: AdminSeedSettings): Prom
 
   const { username, password, firstName, middleName, lastName } = parsed.data;
   const passwordHash = await hashPassword(password);
-  const now = Date.now();
   try {
     // Synchronous better-sqlite3 transaction: statements through `db` inside it are part of it.
     db.transaction(() => {
-      const admin = db
-        .insert(users)
-        .values({
-          username,
-          firstName,
-          middleName,
-          lastName,
-          passwordHash,
-          role: "admin",
-          mustChangePassword: true,
-          createdAt: now,
-          updatedAt: now,
-        })
-        .returning({ id: users.id })
-        .get();
-      writeAudit(db, {
-        action: "user_created",
-        targetUserId: admin.id,
-        details: { username, role: "admin", source: "seed" },
-      });
+      insertUser(db, { username, firstName, middleName, lastName, passwordHash, role: "admin" }, { details: { username, role: "admin", source: "seed" } });
     });
     console.log(`[seed] Created the admin account "${username}".`);
   } catch (error) {

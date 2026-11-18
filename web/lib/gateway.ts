@@ -196,20 +196,23 @@ export async function attempt(work: () => Promise<unknown>, words: (error: ApiEr
 }
 
 /** One log line with the gateway's code and status. */
-export function describeError(error: unknown): string {
+function describeError(error: unknown): string {
   if (error instanceof GatewayError) return `${error.code} (${error.status}): ${error.message}`;
   return error instanceof Error ? error.message : String(error);
 }
 
-/** Runs gateway calls after the response has been sent. Failures are logged, never thrown. */
+/** A gateway call whose failure is logged, never thrown. */
+export async function logFailure(label: string, task: () => Promise<unknown>): Promise<void> {
+  try {
+    await task();
+  } catch (error) {
+    console.error(`[gateway] ${label} failed: ${describeError(error)}`);
+  }
+}
+
+/** Runs gateway calls after the response has been sent. */
 function afterResponse(label: string, task: () => Promise<unknown>): void {
-  after(async () => {
-    try {
-      await task();
-    } catch (error) {
-      console.error(`[gateway] ${label} failed: ${describeError(error)}`);
-    }
-  });
+  after(() => logFailure(label, task));
 }
 
 /**
