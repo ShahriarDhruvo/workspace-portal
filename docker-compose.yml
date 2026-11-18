@@ -1,20 +1,30 @@
-# Workspace Portal: the web app, the gateway, the search engine (SearXNG) and the page reader. The
-# per-user workspace containers are not listed here. The gateway creates and removes them on demand
-# from the image built from workspace-image/, on an internal network it creates itself (no route
-# anywhere except the gateway).
-#
-# Settings come from .env (docker compose reads it for the ${...} values below). Each service gets
-# only the variables it uses: the web app never sees the LLM or SearXNG credentials, the gateway
-# never sees the admin password, the reader sees no secret at all, and SearXNG sees only its own key.
+# Workspace Portal: the web app, the gateway, SearXNG and the page reader. The gateway creates the workspace
+# containers itself. Settings come from .env, which must hold every key of .env.example (deploy/install.sh sees to it);
+# each service is passed only the ones it uses, by name.
 name: workspace-portal
 
 x-common: &common
   restart: unless-stopped
   cap_drop: [ALL]
   security_opt: ["no-new-privileges:true"]
+  mem_limit: 512m
+  pids_limit: 256
   logging:
     driver: json-file
     options: { max-size: "10m", max-file: "3" }
+
+x-healthcheck: &healthcheck { interval: 30s, timeout: 5s, retries: 3, start_period: 20s }
+
+# SearXNG and the reader fetch what agents name from the public internet, so they get no volume, no capability,
+# no portal secret, and a network each from which deploy/firewall.sh lets them reach only public addresses on ports
+# 80 and 443 and their DNS servers. Only the gateway talks to them, through a port on the host's loopback.
+x-internet-only: &internet-only
+  <<: *common
+  read_only: true
+  # Not the host's search domains: a failed lookup would send the LAN's name to the public resolvers.
+  dns_search: ["."]
+  memswap_limit: 512m
+  cpus: 1.0
 
 services:
   web:
@@ -22,248 +32,113 @@ services:
     build: { context: ., dockerfile: web/Dockerfile }
     image: workspace-portal/web:latest
     network_mode: host
-    # A dedicated service account that owns nothing but the database directory.
+    # A service account that owns nothing but the database directory.
     user: "10001:10001"
-    environment:
-      HOSTNAME: ${WEB_BIND:-0.0.0.0}
-      PORT: ${WEB_PORT:-3000}
-      # The host's time zone (deploy/install.sh records it in .env): "today" starts at local midnight.
-      TZ: ${TZ:-}
-      PORTAL_DATA_DIR: ${PORTAL_DATA_DIR:-/srv/workspace-portal}
-      AGENT_PORT_BASE: ${AGENT_PORT_BASE:-}
-      AGENT_PORT_COUNT: ${AGENT_PORT_COUNT:-}
-      # Where the Online workspaces' frames point (empty: right after the Private ports, as in the gateway).
-      ONLINE_AGENT_PORT_BASE: ${ONLINE_AGENT_PORT_BASE:-}
-      CONTROL_PORT: ${CONTROL_PORT:-}
-      GATEWAY_CONTROL_SECRET: ${GATEWAY_CONTROL_SECRET:-}
-      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-}
-      SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-}
-      IDLE_TIMEOUT_MINUTES: ${IDLE_TIMEOUT_MINUTES:-}
-      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
-      ADMIN_FIRST_NAME: ${ADMIN_FIRST_NAME:-}
-      ADMIN_MIDDLE_NAME: ${ADMIN_MIDDLE_NAME:-}
-      ADMIN_LAST_NAME: ${ADMIN_LAST_NAME:-}
+    environment: [
+      "HOSTNAME=${WEB_BIND:?}", "PORT=${WEB_PORT:?}", TZ, PORTAL_DATA_DIR, AGENT_PORT_BASE, AGENT_PORT_COUNT, ONLINE_AGENT_PORT_BASE,
+      CONTROL_PORT, GATEWAY_CONTROL_SECRET, SESSION_COOKIE_SECURE, SESSION_TTL_HOURS, IDLE_TIMEOUT_MINUTES,
+      ADMIN_USERNAME, ADMIN_PASSWORD, ADMIN_FIRST_NAME, ADMIN_MIDDLE_NAME, ADMIN_LAST_NAME,
+    ]
     volumes:
-      - ${PORTAL_DATA_DIR:-/srv/workspace-portal}/db:${PORTAL_DATA_DIR:-/srv/workspace-portal}/db
+      - ${PORTAL_DATA_DIR:?}/db:${PORTAL_DATA_DIR:?}/db
     depends_on:
       gateway: { condition: service_healthy }
-    mem_limit: 512m
-    pids_limit: 256
     healthcheck:
+      <<: *healthcheck
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:'+process.env.PORT+'/api/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 20s
 
   gateway:
     <<: *common
     build: { context: ., dockerfile: gateway/Dockerfile }
     image: workspace-portal/gateway:latest
     network_mode: host
-    # Root inside its container with only the file capabilities it needs: every workspace runs as
-    # its own UID, and the gateway creates and owns-over each user's directories. It drives the
-    # Docker socket, which SELinux denies to confined containers.
+    # Root with only the file capabilities it needs to create each user's directories and hand them to that
+    # workspace's UID. label=disable: SELinux denies the Docker socket to confined containers.
     user: "0:0"
     cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
     security_opt: ["no-new-privileges:true", "label=disable"]
-    # The Docker socket is equivalent to root on the host: the gateway is the trusted component,
-    # and it is the only one with that access.
     read_only: true
     tmpfs: ["/tmp:size=64m"]
-    environment:
-      PORTAL_DATA_DIR: ${PORTAL_DATA_DIR:-/srv/workspace-portal}
-      # Local days for the LLM usage and the energy meter's daily totals, as in the web app.
-      TZ: ${TZ:-}
-      WEB_PORT: ${WEB_PORT:-}
-      AGENT_BIND: ${AGENT_BIND:-}
-      AGENT_PORT_BASE: ${AGENT_PORT_BASE:-}
-      AGENT_PORT_COUNT: ${AGENT_PORT_COUNT:-}
-      CONTROL_PORT: ${CONTROL_PORT:-}
-      SERVICE_PORT: ${SERVICE_PORT:-}
-      GATEWAY_CONTROL_SECRET: ${GATEWAY_CONTROL_SECRET:-}
-      LLM_UPSTREAM_URL: ${LLM_UPSTREAM_URL:-}
-      LLM_API_KEY: ${LLM_API_KEY:-}
-      LLM_MAX_CONCURRENCY: ${LLM_MAX_CONCURRENCY:-}
-      LLM_MAX_CONCURRENCY_PER_USER: ${LLM_MAX_CONCURRENCY_PER_USER:-}
-      HOSTD_PORTAL_URL: ${HOSTD_PORTAL_URL:-}
-      HOSTD_PORTAL_TOKEN: ${HOSTD_PORTAL_TOKEN:-}
-      HOSTD_LLM_URL: ${HOSTD_LLM_URL:-}
-      HOSTD_LLM_TOKEN: ${HOSTD_LLM_TOKEN:-}
-      ENGINE_RELEASE_NOTES_REPO: ${ENGINE_RELEASE_NOTES_REPO:-}
-      ENGINE_DRAIN_MINUTES: ${ENGINE_DRAIN_MINUTES:-}
-      # The stack's own SearXNG (the searxng service below), unless .env names another instance.
-      SEARXNG_URL: ${SEARXNG_URL:-http://127.0.0.1:${SEARXNG_PORT:-8888}}
-      SEARXNG_AUTHORIZATION: ${SEARXNG_AUTHORIZATION:-}
-      SEARXNG_TIMEOUT_SECONDS: ${SEARXNG_TIMEOUT_SECONDS:-}
-      SEARCH_MAX_CONCURRENT_PER_USER: ${SEARCH_MAX_CONCURRENT_PER_USER:-}
-      SEARCH_FALLBACK_ENGINES: ${SEARCH_FALLBACK_ENGINES:-}
-      SEARCH_FALLBACK_BELOW: ${SEARCH_FALLBACK_BELOW:-}
-      SEARCH_CACHE_MINUTES: ${SEARCH_CACHE_MINUTES:-}
-      READER_URL: ${READER_URL:-http://127.0.0.1:${READER_PORT:-4003}}
-      READER_URL_POLICY: ${READER_URL_POLICY:-}
-      READER_TRUSTED_HOSTS: ${READER_TRUSTED_HOSTS:-}
-      READER_PAGE_CHARS: ${READER_PAGE_CHARS:-}
-      READER_CACHE_MINUTES: ${READER_CACHE_MINUTES:-}
-      READER_TIMEOUT_SECONDS: ${READER_TIMEOUT_SECONDS:-}
-      READER_MAX_CONCURRENT_PER_USER: ${READER_MAX_CONCURRENT_PER_USER:-}
-      # The agents users choose from, and their default versions: the gateway starts
-      # workspace-portal/workspace:<agent>-<version> (deploy/lib.sh workspace_image names them the same way)
-      # for the current version, which the admin console (Admin > Agents) or deploy/update-image.sh may have
-      # changed since (PORTAL_DATA_DIR/config/agent-versions.env).
-      WORKSPACE_AGENTS: ${WORKSPACE_AGENTS:-}
-      QWEN_CODE_VERSION: ${QWEN_CODE_VERSION:-}
-      DSH_VERSION: ${DSH_VERSION:-}
-      WORKSPACE_NETWORK: ${WORKSPACE_NETWORK:-}
-      WORKSPACE_SUBNET: ${WORKSPACE_SUBNET:-}
-      WORKSPACE_GATEWAY_IP: ${WORKSPACE_GATEWAY_IP:-}
-      WORKSPACE_IP_RANGE: ${WORKSPACE_IP_RANGE:-}
-      WORKSPACE_BRIDGE: ${WORKSPACE_BRIDGE:-}
-      WORKSPACE_UID_BASE: ${WORKSPACE_UID_BASE:-}
-      # Online workspaces: their own network, ports, UIDs and DNS; ONLINE_WORKSPACES=off turns them off.
-      ONLINE_WORKSPACES: ${ONLINE_WORKSPACES:-}
-      ONLINE_NETWORK: ${ONLINE_NETWORK:-}
-      ONLINE_SUBNET: ${ONLINE_SUBNET:-}
-      ONLINE_GATEWAY_IP: ${ONLINE_GATEWAY_IP:-}
-      ONLINE_IP_RANGE: ${ONLINE_IP_RANGE:-}
-      ONLINE_BRIDGE: ${ONLINE_BRIDGE:-}
-      ONLINE_UID_BASE: ${ONLINE_UID_BASE:-}
-      ONLINE_AGENT_PORT_BASE: ${ONLINE_AGENT_PORT_BASE:-}
-      ONLINE_DNS_1: ${ONLINE_DNS_1:-}
-      ONLINE_DNS_2: ${ONLINE_DNS_2:-}
-      WORKSPACE_MEMORY: ${WORKSPACE_MEMORY:-}
-      WORKSPACE_CPUS: ${WORKSPACE_CPUS:-}
-      WORKSPACE_PIDS: ${WORKSPACE_PIDS:-}
-      WORKSPACE_SHM: ${WORKSPACE_SHM:-}
-      WORKSPACE_TMP: ${WORKSPACE_TMP:-}
-      WORKSPACE_BROWSER: ${WORKSPACE_BROWSER:-}
-      DEFAULT_REASONING_EFFORT: ${DEFAULT_REASONING_EFFORT:-}
-      MAX_RUNNING_WORKSPACES: ${MAX_RUNNING_WORKSPACES:-}
-      IDLE_TIMEOUT_MINUTES: ${IDLE_TIMEOUT_MINUTES:-}
-      MAX_BUSY_HOURS: ${MAX_BUSY_HOURS:-}
-      UPLOAD_LIMIT_MB: ${UPLOAD_LIMIT_MB:-}
+    # No ADMIN_* here. SEARXNG_URL and READER_URL are the stack's own services unless .env names others.
+    environment: [
+      TZ, PORTAL_DATA_DIR, WEB_PORT, AGENT_BIND, AGENT_PORT_BASE, AGENT_PORT_COUNT, CONTROL_PORT, SERVICE_PORT, GATEWAY_CONTROL_SECRET,
+      LLM_UPSTREAM_URL, LLM_API_KEY, LLM_MAX_CONCURRENCY, LLM_MAX_CONCURRENCY_PER_USER,
+      HOSTD_PORTAL_URL, HOSTD_PORTAL_TOKEN, HOSTD_LLM_URL, HOSTD_LLM_TOKEN, ENGINE_RELEASE_NOTES_REPO, ENGINE_DRAIN_MINUTES,
+      "SEARXNG_URL=${SEARXNG_URL:-http://127.0.0.1:${SEARXNG_PORT}}", SEARXNG_AUTHORIZATION, SEARXNG_TIMEOUT_SECONDS,
+      SEARCH_MAX_CONCURRENT_PER_USER, SEARCH_FALLBACK_ENGINES, SEARCH_FALLBACK_BELOW, SEARCH_CACHE_MINUTES,
+      "READER_URL=${READER_URL:-http://127.0.0.1:${READER_PORT}}", READER_URL_POLICY, READER_TRUSTED_HOSTS, READER_PAGE_CHARS,
+      READER_CACHE_MINUTES, READER_TIMEOUT_SECONDS, READER_MAX_CONCURRENT_PER_USER,
+      WORKSPACE_AGENTS, QWEN_CODE_VERSION, DSH_VERSION,
+      WORKSPACE_NETWORK, WORKSPACE_SUBNET, WORKSPACE_GATEWAY_IP, WORKSPACE_IP_RANGE, WORKSPACE_BRIDGE, WORKSPACE_UID_BASE,
+      ONLINE_WORKSPACES, ONLINE_NETWORK, ONLINE_SUBNET, ONLINE_GATEWAY_IP, ONLINE_IP_RANGE, ONLINE_BRIDGE, ONLINE_UID_BASE,
+      ONLINE_AGENT_PORT_BASE, ONLINE_DNS_1, ONLINE_DNS_2,
+      WORKSPACE_MEMORY, WORKSPACE_CPUS, WORKSPACE_PIDS, WORKSPACE_SHM, WORKSPACE_TMP, WORKSPACE_BROWSER, DEFAULT_REASONING_EFFORT,
+      MAX_RUNNING_WORKSPACES, IDLE_TIMEOUT_MINUTES, MAX_BUSY_HOURS, UPLOAD_LIMIT_MB,
+    ]
     volumes:
+      # Root on the host: only the gateway has it.
       - /var/run/docker.sock:/var/run/docker.sock
-      - ${PORTAL_DATA_DIR:-/srv/workspace-portal}:${PORTAL_DATA_DIR:-/srv/workspace-portal}
-      # The build context of agent updates in the admin console: the project's own workspace-image/,
-      # read-only, so the console builds what deploy/update-image.sh builds and an edit there applies to
-      # the next build. (label=disable above lets the gateway read it without relabelling the project.)
+      - ${PORTAL_DATA_DIR:?}:${PORTAL_DATA_DIR:?}
+      # The build context of agent updates from the admin console.
       - ./workspace-image:/app/workspace-image:ro
-    mem_limit: 512m
-    pids_limit: 256
     healthcheck:
+      <<: *healthcheck
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:'+(process.env.CONTROL_PORT||4002)+'/control/health',{headers:{authorization:'Bearer '+process.env.GATEWAY_CONTROL_SECRET}}).then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
       interval: 15s
-      timeout: 5s
-      retries: 3
       start_period: 15s
 
-  # The search engine behind the web_search tool: SearXNG with the portal's settings (searxng/). It
-  # sends every query to public search engines, so like the reader it gets no volumes, no
-  # capabilities, a read-only root, an unprivileged user, and a network of its own from which
-  # deploy/firewall.sh lets it reach only public addresses on ports 80 and 443 (and its public DNS
-  # servers). Its one secret is the key SearXNG requires for its own cookies. Only the gateway talks
-  # to it, through a port published on the host's loopback interface.
   searxng:
-    <<: *common
+    <<: *internet-only
     build: { context: searxng }
     image: workspace-portal/searxng:latest
-    # The upstream image's own user (its start script complains about any other). The number may
-    # belong to a system account of the host; with no volume and no host file inside, that gives the
-    # container nothing.
+    # The upstream image's own user: its start script complains about any other.
     user: "977:977"
-    read_only: true
-    # SearXNG keeps its caches (engine data, the tracker list it downloads at start) in /tmp and
-    # rebuilds them at every start.
-    # The upstream image declares /etc/searxng and /var/cache/searxng as volumes. A tmpfs on each
-    # keeps Docker from creating volumes that would outlive the container. The settings are elsewhere
-    # in the image (searxng/Dockerfile); the image's start script puts an example settings.yml into
-    # the empty /etc/searxng, which SearXNG does not read, and this release leaves the cache
-    # directory empty.
+    # /tmp holds SearXNG's caches. The other two are volumes in the upstream image: a tmpfs keeps Docker from
+    # creating volumes that would outlive the container.
     tmpfs:
       - /tmp:size=128m,noexec,nosuid,nodev
       - /etc/searxng:size=1m,uid=977,gid=977,mode=0700,noexec,nosuid,nodev
       - /var/cache/searxng:size=16m,uid=977,gid=977,mode=0700,noexec,nosuid,nodev
     networks: [searxng]
-    ports: ["127.0.0.1:${SEARXNG_PORT:-8888}:8080"]
-    dns: ["${SEARXNG_DNS_1:-1.1.1.1}", "${SEARXNG_DNS_2:-9.9.9.9}"]
-    # Not the host's search domains: a failed lookup would send the LAN's name to the public resolvers.
-    dns_search: ["."]
-    # Only these two, never the whole .env: the image's start script reads a SEARXNG_PORT in its
-    # environment as the port to listen on.
+    ports: ["127.0.0.1:${SEARXNG_PORT:?}:8080"]
+    dns: ["${SEARXNG_DNS_1:?}", "${SEARXNG_DNS_2:?}"]
+    # Never SEARXNG_PORT: the image's start script would listen on it.
     environment:
-      # The installer writes the key into .env, once the firewall is in place. Without one SearXNG
-      # gets its example key, which it refuses to start with.
+      # The installer generates the key once the firewall is loaded; SearXNG refuses to start with this example key.
       SEARXNG_SECRET: ${SEARXNG_SECRET:-ultrasecretkey}
       # The image's default is "::", and this network has no IPv6.
       GRANIAN_HOST: 0.0.0.0
-    mem_limit: 512m
-    memswap_limit: 512m
-    cpus: 1.0
-    pids_limit: 256
     healthcheck:
+      <<: *healthcheck
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 20s
 
-  # The page reader behind the read_page tool. It connects to addresses an agent named and parses
-  # what comes back, so it gets nothing: no secrets, no volumes, no capabilities, a read-only root,
-  # an unprivileged user, and a network of its own from which deploy/firewall.sh lets it reach only
-  # public addresses on ports 80 and 443 (and its public DNS servers). Only the gateway talks to it,
-  # through a port published on the host's loopback interface.
   reader:
-    <<: *common
+    <<: *internet-only
     build: { context: reader }
     image: workspace-portal/reader:latest
     user: "10002:10002"
-    read_only: true
     tmpfs: ["/tmp:size=32m,noexec,nosuid,nodev"]
     networks: [reader]
-    ports: ["127.0.0.1:${READER_PORT:-4003}:8080"]
-    dns: ["${READER_DNS_1:-1.1.1.1}", "${READER_DNS_2:-9.9.9.9}"]
-    # Not the host's search domains: a failed lookup would send the LAN's name to the public resolvers.
-    dns_search: ["."]
-    environment:
-      READER_TIMEOUT_SECONDS: ${READER_FETCH_TIMEOUT_SECONDS:-}
-      READER_MAX_CONCURRENT: ${READER_MAX_CONCURRENT:-}
-      READER_MAX_DOWNLOAD_MB: ${READER_MAX_DOWNLOAD_MB:-}
-      READER_MAX_PDF_MB: ${READER_MAX_PDF_MB:-}
-      READER_MAX_PDF_PAGES: ${READER_MAX_PDF_PAGES:-}
-      READER_USER_AGENT: ${READER_USER_AGENT:-}
-    mem_limit: 512m
-    memswap_limit: 512m
-    cpus: 1.0
+    ports: ["127.0.0.1:${READER_PORT:?}:8080"]
+    dns: ["${READER_DNS_1:?}", "${READER_DNS_2:?}"]
+    environment: [READER_FETCH_TIMEOUT_SECONDS, READER_MAX_CONCURRENT, READER_MAX_DOWNLOAD_MB, READER_MAX_PDF_MB, READER_MAX_PDF_PAGES, READER_USER_AGENT]
     pids_limit: 64
     healthcheck:
+      <<: *healthcheck
       test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3).status == 200 else 1)"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
       start_period: 15s
 
 networks:
-  # Bridges with fixed names and subnets, because the firewall matches on both. One each, so that
-  # neither container is on the other's network.
+  # Fixed bridge names and subnets: the firewall matches both. One network each, so neither service is on the other's.
   searxng:
     name: workspace-portal-searxng
     driver: bridge
     enable_ipv6: false
-    driver_opts:
-      com.docker.network.bridge.name: ${SEARXNG_BRIDGE:-br-wsearxng}
-      com.docker.network.bridge.enable_icc: "false"
-    ipam:
-      config:
-        - subnet: ${SEARXNG_SUBNET:-172.30.250.16/28}
+    driver_opts: { com.docker.network.bridge.name: "${SEARXNG_BRIDGE:?}", com.docker.network.bridge.enable_icc: "false" }
+    ipam: { config: [{ subnet: "${SEARXNG_SUBNET:?}" }] }
   reader:
     name: workspace-portal-reader
     driver: bridge
     enable_ipv6: false
-    driver_opts:
-      com.docker.network.bridge.name: ${READER_BRIDGE:-br-wreader}
-      com.docker.network.bridge.enable_icc: "false"
-    ipam:
-      config:
-        - subnet: ${READER_SUBNET:-172.30.250.0/28}
+    driver_opts: { com.docker.network.bridge.name: "${READER_BRIDGE:?}", com.docker.network.bridge.enable_icc: "false" }
+    ipam: { config: [{ subnet: "${READER_SUBNET:?}" }] }
