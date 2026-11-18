@@ -10,6 +10,8 @@ export const metadata: Metadata = {
   title: { default: "Workspace Portal", template: "%s · Workspace Portal" },
   description: "Sign in to your workspace.",
   robots: { index: false, follow: false },
+  // Installed on an iPhone: a black status bar, which suits both themes. The default one follows the phone's.
+  appleWebApp: { statusBarStyle: "black" },
 };
 
 /** The theme saved in the portal_theme cookie (dark unless it says light; the OS colour scheme is ignored). */
