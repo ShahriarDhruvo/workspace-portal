@@ -2,10 +2,9 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { displayName } from "@portal/core";
 import { openMyWorkspace } from "@/lib/actions/admin";
-import { startingAgent } from "@/lib/agent-choice";
 import { config } from "@/lib/config";
 import { gateway, toApiError } from "@/lib/gateway";
-import type { WorkspaceStatusResponse } from "@/lib/api";
+import { workspaceStatus, type WorkspaceStatusResponse } from "@/lib/api";
 import { requireUser } from "@/lib/session";
 import { loadUsageToday } from "@/lib/usage";
 import { SubmitButton } from "@/components/forms/submit-button";
@@ -25,8 +24,7 @@ export default async function HomePage() {
   let initialError: string | null = null;
   if (!actingAs) {
     try {
-      const [info, agents] = await Promise.all([gateway.getWorkspace(user.id), gateway.agents()]);
-      initial = { ...info, targetUserId: user.id, actingAs: false, agents, nextAgent: startingAgent(user.agent, agents) };
+      initial = await workspaceStatus(gateway.getWorkspace(user.id), session);
     } catch (error) {
       initialError = toApiError(error).message;
     }

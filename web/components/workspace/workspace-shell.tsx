@@ -267,6 +267,7 @@ export function WorkspaceShell({ viewer, target, frames, idleTimeoutMinutes, ban
   // Only the owner stops their workspace here; an admin viewing it has Exit (and the console's Stop).
   const canStop = target.isViewer && running !== null && !state.leaving;
   const warnings = info ? stopWarnings(info, true) : null;
+  const whose = target.isViewer ? "your" : `${target.name}'s`;
 
   usePoll<WorkspaceStatusResponse>(
     switched ? null : "/api/workspace/status",
@@ -320,7 +321,7 @@ export function WorkspaceShell({ viewer, target, frames, idleTimeoutMinutes, ban
         <iframe
           key={agentUrl}
           src={agentUrl}
-          title={`${target.isViewer ? "Your" : `${target.name}'s`} workspace`}
+          title={`${whoseOf(target)} workspace`}
           allow="clipboard-read; clipboard-write; fullscreen"
           className="absolute inset-0 size-full border-0 bg-background"
         />
@@ -333,10 +334,10 @@ export function WorkspaceShell({ viewer, target, frames, idleTimeoutMinutes, ban
       break;
     case "connecting":
     case "starting":
-      content = <BootScreen hint={`Starting ${target.isViewer ? "your" : `${target.name}'s`} workspace…`} />;
+      content = <BootScreen hint={`Starting ${whose} workspace…`} />;
       break;
     case "stopping":
-      content = <BootScreen hint={`Stopping ${target.isViewer ? "your" : `${target.name}'s`} workspace…`} />;
+      content = <BootScreen hint={`Stopping ${whose} workspace…`} />;
       break;
     case "idle": {
       const kind = state.startError ? state.startedKind : (info?.kind ?? "private");
@@ -353,7 +354,7 @@ export function WorkspaceShell({ viewer, target, frames, idleTimeoutMinutes, ban
                 <StartWorkspaceButton
                   kind={choice.kind}
                   onSwitch={choice.onlineBlocked ? undefined : () => choice.choose(otherKind(choice.kind))}
-                  whose={target.isViewer ? "your" : `${target.name}'s`}
+                  whose={whose}
                   retry={copy.retry}
                   disabled={info.nextAgent === null}
                   onStart={start}
