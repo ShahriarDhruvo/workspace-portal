@@ -22,10 +22,10 @@ export function compareEngineVersions(a: string, b: string): number {
   return compareVersions(release(a), release(b))!;
 }
 
-/** The release `latest` points at, else the newest one listed (the gateway lists them newest first). */
+/** The release `latest` points at, else the first X.Y.Z one listed (the gateway sorts newest first), else the first. */
 export function latestEngineRelease(overview: Pick<EngineOverview, "releases">): EngineRelease | null {
   const releases = overview.releases?.releases ?? [];
-  return releases.find((release) => release.latest) ?? releases[0] ?? null;
+  return releases.find((release) => release.latest) ?? releases.find((release) => isStableVersion(release.version)) ?? releases[0] ?? null;
 }
 
 /** The version "Update to …" installs: the latest release, when it is newer than what runs. */

@@ -89,6 +89,8 @@ test("versions compare numerically; the update target is latest when it is newer
   assert.equal(engineUpdateTarget(overview()), "0.34.0");
   assert.equal(engineUpdateTarget(overview({}, "0.34.0")), null);
   assert.equal(engineUpdateTarget(overview({ releases: null })), null);
+  const unflagged = { repository: "r", releases: [release("v0.36.0"), release("0.34.0"), release("0.31.0")], checkedAt: 1, error: null };
+  assert.equal(engineUpdateTarget(overview({ releases: unflagged })), "0.34.0", "no latest flag: the first X.Y.Z release");
 });
 
 test("Package images: each release with its image on the LLM server, by version, else by digest", () => {
