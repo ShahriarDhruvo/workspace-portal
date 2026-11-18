@@ -32,8 +32,8 @@ import { BuildProgress, JsonLineDecoder } from "./build-progress.ts";
 import { demuxDockerLogs, DOCKER_API_TIMEOUT_MS, engineMessage, statusCode } from "./docker-runtime.ts";
 import {
   BuildError,
-  ImageInUseError,
-  ImageNotFoundError,
+  imageInUse,
+  imageNotFound,
   VerifyError,
   type BuildObserver,
   type BuildSpec,
@@ -281,8 +281,8 @@ export class DockerImageBuilder implements ImageBuilder {
       await this.#docker.getImage(image).remove();
     } catch (error) {
       const status = statusCode(error);
-      if (status === 404) throw new ImageNotFoundError(image);
-      if (status === 409) throw new ImageInUseError(image);
+      if (status === 404) throw imageNotFound(image);
+      if (status === 409) throw imageInUse(image);
       throw error;
     }
   }

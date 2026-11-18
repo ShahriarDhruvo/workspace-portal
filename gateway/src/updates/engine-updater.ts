@@ -15,7 +15,6 @@
 import crypto from "node:crypto";
 import {
   isStableVersion,
-  type EngineHostState,
   type EngineJob,
   type EngineOverview,
   type EngineStatus,
@@ -43,28 +42,8 @@ const LOG_LINES = 400;
 export const CANCELLED = "Cancelled.";
 export const GATEWAY_STOPPED = "The gateway stopped during the update; check the engine's version.";
 
-export class EngineUnavailableError extends HttpError {
-  readonly state: EngineHostState;
-  constructor(state: EngineHostState, message: string) {
-    super(503, "engine_unavailable", message);
-    this.name = "EngineUnavailableError";
-    this.state = state;
-  }
-}
-
-export class EngineJobRunningError extends HttpError {
-  constructor(message = "An engine update is running. Wait for it to finish, or cancel it.") {
-    super(409, "engine_job_running", message);
-    this.name = "EngineJobRunningError";
-  }
-}
-
-export class EngineRequestError extends HttpError {
-  constructor(code: string, message: string) {
-    super({ invalid_version: 400, invalid_digest: 400, version_not_found: 404 }[code] ?? 409, code, message);
-    this.name = "EngineRequestError";
-  }
-}
+const unavailable = (message: string): HttpError => new HttpError(503, "engine_unavailable", message);
+const jobRunning = (): HttpError => new HttpError(409, "engine_job_running", "An engine update is running. Wait for it to finish, or cancel it.");
 
 /** What the updater needs from the LLM server's portal-hostd. */
 export interface EngineHost {
@@ -150,20 +129,20 @@ export class EngineUpdater {
    */
   async startUpdate(request: { version: string; actorUserId: number | null }): Promise<EngineUpdateJob> {
     const { version, actorUserId } = request;
-    if (!isStableVersion(version)) throw new EngineRequestError("invalid_version", "version must be a release version, like 0.34.0.");
+    if (!isStableVersion(version)) throw new HttpError(400, "invalid_version", "version must be a release version, like 0.34.0.");
     const { engine, host } = await this.#ready();
-    if (engine.version === version) throw new EngineRequestError("already_current", `The engine already runs ${version}.`);
+    if (engine.version === version) throw new HttpError(409, "already_current", `The engine already runs ${version}.`);
     const local = engine.images.find((image) => image.version === version && image.digest !== null)?.digest ?? null;
     let digest = local;
     if (digest === null) {
       try {
         digest = await this.#options.releases.resolve(engine.repository, version);
       } catch (error) {
-        if (error instanceof EngineReleaseError) throw new EngineRequestError("version_not_found", error.message);
+        if (error instanceof EngineReleaseError) throw new HttpError(404, "version_not_found", error.message);
         throw error;
       }
     }
-    if (this.running) throw new EngineJobRunningError();
+    if (this.running) throw jobRunning();
     const image = `${engine.repository}@${digest}`;
     const job = this.#begin(engine.version, version, image, local !== null, actorUserId);
     void this.#run(job, host, {
@@ -200,10 +179,10 @@ export class EngineUpdater {
 
   /** Removes a local engine image (not the running one). The web app audits it, with the admin who asked. */
   async removeImage(digest: string): Promise<void> {
-    if (!/^sha256:[0-9a-f]{64}$/.test(digest)) throw new EngineRequestError("invalid_digest", "digest must be sha256:<64 hex digits>.");
-    if (this.running) throw new EngineJobRunningError();
+    if (!/^sha256:[0-9a-f]{64}$/.test(digest)) throw new HttpError(400, "invalid_digest", "digest must be sha256:<64 hex digits>.");
+    if (this.running) throw jobRunning();
     const host = this.#options.host;
-    if (host === null) throw new EngineUnavailableError("off", "The LLM server's portal-hostd is not set up.");
+    if (host === null) throw unavailable("The LLM server's portal-hostd is not set up.");
     await host.removeImage(digest);
   }
 
@@ -216,13 +195,13 @@ export class EngineUpdater {
 
   async #ready(): Promise<{ engine: EngineStatus; host: EngineHost }> {
     const host = this.#options.host;
-    if (host === null) throw new EngineUnavailableError("off", "The LLM server's portal-hostd is not set up (HOSTD_LLM_URL, HOSTD_LLM_TOKEN).");
-    if (this.running) throw new EngineJobRunningError();
+    if (host === null) throw unavailable("The LLM server's portal-hostd is not set up (HOSTD_LLM_URL, HOSTD_LLM_TOKEN).");
+    if (this.running) throw jobRunning();
     try {
       return { engine: await host.status(), host };
     } catch (error) {
-      if (error instanceof HostdError && error.code === "no_engine") throw new EngineUnavailableError("no_engine", error.message);
-      throw new EngineUnavailableError("offline", `The LLM server's portal-hostd can't be reached: ${errorMessage(error)}`);
+      if (error instanceof HostdError && error.code === "no_engine") throw unavailable(error.message);
+      throw unavailable(`The LLM server's portal-hostd can't be reached: ${errorMessage(error)}`);
     }
   }
 

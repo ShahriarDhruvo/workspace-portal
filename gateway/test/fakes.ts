@@ -12,8 +12,8 @@ import type { SettingsObject } from "../src/agents/qwen-settings.ts";
 import type { WorkspaceStartOptions } from "../src/docker/container-spec.ts";
 import {
   BuildError,
-  ImageInUseError,
-  ImageNotFoundError,
+  imageInUse,
+  imageNotFound,
   VerifyError,
   type BuildObserver,
   type BuildSpec,
@@ -25,7 +25,7 @@ import type { NotesClient, RegistryClient } from "../src/updates/engine-releases
 import type { EngineHost } from "../src/updates/engine-updater.ts";
 import { HostdError } from "../src/monitor/hostd.ts";
 import { parseWorkspaceImage, STAGING_REPOSITORY, workspaceImage } from "../src/docker/image-names.ts";
-import { RegistryError, type NpmPackage, type NpmRegistry } from "../src/updates/npm-registry.ts";
+import { registryError, type NpmPackage, type NpmRegistry } from "../src/updates/npm-registry.ts";
 import { userPaths } from "../src/workspaces/paths.ts";
 import type { ContainerRuntime, ContainerSample, ContainerState, ContainerSummary, StartedContainer } from "../src/docker/runtime.ts";
 
@@ -794,8 +794,8 @@ export class FakeImageBuilder implements ImageBuilder {
   }
 
   async remove(image: string): Promise<void> {
-    if (!this.images.has(image)) throw new ImageNotFoundError(image);
-    if (this.#runtime.usesImage(image)) throw new ImageInUseError(image);
+    if (!this.images.has(image)) throw imageNotFound(image);
+    if (this.#runtime.usesImage(image)) throw imageInUse(image);
     this.images.delete(image);
   }
 }
@@ -824,7 +824,7 @@ export class FakeRegistry implements NpmRegistry {
   async packument(packageName: string): Promise<{ etag: string | null; package: NpmPackage }> {
     this.calls.push(`packument ${packageName}`);
     await this.gate;
-    if (this.down) throw new RegistryError("The npm registry is unreachable (fetch failed).");
+    if (this.down) throw registryError("The npm registry is unreachable (fetch failed).");
     const tags = this.tags[packageName] ?? {};
     const others = [...this.published].filter((entry) => entry.startsWith(`${packageName}@`)).map((entry) => entry.slice(packageName.length + 1));
     const versions = [...new Set([...Object.values(tags), ...others])].map((version) => ({ version, publishedAt: null, deprecated: false }));
@@ -834,7 +834,7 @@ export class FakeRegistry implements NpmRegistry {
   async hasVersion(packageName: string, version: string): Promise<boolean> {
     this.calls.push(`version ${packageName}@${version}`);
     await this.gate;
-    if (this.down) throw new RegistryError("The npm registry is unreachable (fetch failed).");
+    if (this.down) throw registryError("The npm registry is unreachable (fetch failed).");
     return this.published.has(`${packageName}@${version}`) || Object.values(this.tags[packageName] ?? {}).includes(version);
   }
 }

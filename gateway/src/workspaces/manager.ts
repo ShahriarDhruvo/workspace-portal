@@ -59,115 +59,29 @@ import { WorkspaceImageMissingError, type ContainerRuntime, type ContainerState,
 import { eraseWorkspaceFiles, prepareWorkspaceFiles, removeWorkspaceFiles } from "./files.ts";
 import { hasLegacyFiles, moveLegacyFiles } from "./paths.ts";
 
-export class CapacityError extends HttpError {
-  constructor(maxRunning: number) {
-    super(409, "capacity", `All ${maxRunning} workspace slots are in use and none has been idle long enough to make room.`);
-    this.name = "CapacityError";
-  }
-}
-
 /** The workspace's data (or, `erasing`, that kind's files) is being deleted: it can't be started meanwhile. */
-export class DeletingError extends HttpError {
-  constructor(erasing: WorkspaceKind | null = null) {
-    super(409, "deleting", erasing === null ? "This workspace is being deleted." : `The ${WORKSPACE_KIND_NAMES[erasing]} workspace's files are being erased.`);
-    this.name = "DeletingError";
-  }
-}
-
-export class StartError extends HttpError {
-  constructor(message: string) {
-    super(500, "start_failed", message);
-    this.name = "StartError";
-  }
-}
-
-/** The workspace runs another agent than the one asked for; it has to stop before switching. */
-export class AgentMismatchError extends HttpError {
-  readonly running: AgentKind;
-
-  constructor(running: AgentKind) {
-    super(409, "agent_mismatch", `${driverFor(running).name} is already running in this workspace. Stop it to switch.`);
-    this.name = "AgentMismatchError";
-    this.running = running;
-  }
-}
-
-/** The user's other kind is starting or running; it has to stop first (one kind at a time). */
-export class KindMismatchError extends HttpError {
-  readonly running: WorkspaceKind;
-
-  constructor(running: WorkspaceKind, requested: WorkspaceKind) {
-    super(409, "kind_mismatch", `Your ${WORKSPACE_KIND_NAMES[running]} workspace is running. Stop it to start the ${WORKSPACE_KIND_NAMES[requested]} one.`);
-    this.name = "KindMismatchError";
-    this.running = running;
-  }
-}
+const beingDeleted = (erasing: WorkspaceKind | null = null): HttpError =>
+  new HttpError(409, "deleting", erasing === null ? "This workspace is being deleted." : `The ${WORKSPACE_KIND_NAMES[erasing]} workspace's files are being erased.`);
 
 /**
  * No Online workspace runs on this portal now: ONLINE_WORKSPACES is off, or (`firewall`) the host firewall that keeps
  * the Online network off the LAN and the servers is not loaded (fence.ts).
  */
-export class OnlineDisabledError extends HttpError {
-  readonly firewall: boolean;
-
-  constructor(firewall = false) {
-    super(
-      409,
-      "online_disabled",
-      firewall
-        ? "Online workspaces are off: the host firewall that keeps them off the local network is not loaded. Ask your administrator."
-        : "Online workspaces are turned off on this portal.",
-    );
-    this.name = "OnlineDisabledError";
-    this.firewall = firewall;
-  }
-}
-
-/** The admin hasn't allowed this user an Online workspace (users.online_allowed). */
-export class OnlineNotAllowedError extends HttpError {
-  constructor() {
-    super(403, "online_not_allowed", "Your administrator hasn't allowed you an Online workspace.");
-    this.name = "OnlineNotAllowedError";
-  }
-}
+const onlineDisabled = (firewall = false): HttpError =>
+  new HttpError(
+    409,
+    "online_disabled",
+    firewall
+      ? "Online workspaces are off: the host firewall that keeps them off the local network is not loaded. Ask your administrator."
+      : "Online workspaces are turned off on this portal.",
+  );
 
 /** That kind is starting, running or stopping: its files can't be erased now. */
-export class WorkspaceRunningError extends HttpError {
-  constructor(kind: WorkspaceKind) {
-    super(409, "workspace_running", `The ${WORKSPACE_KIND_NAMES[kind]} workspace is running. Stop it before erasing its files.`);
-    this.name = "WorkspaceRunningError";
-  }
-}
-
-/**
- * The user's id has no workspace port (ids 1 … AGENT_PORT_COUNT - 1 have one): no workspace of theirs starts. Past
- * that range, their UIDs would also run into the other kind's (the UID bases are only AGENT_PORT_COUNT apart).
- */
-export class NoWorkspacePortError extends HttpError {
-  constructor(userId: number, agentPortCount: number) {
-    super(409, "no_workspace_port", `User ${userId} has no workspace port: this portal serves workspaces for user ids 1 to ${agentPortCount - 1} (AGENT_PORT_COUNT).`);
-    this.name = "NoWorkspacePortError";
-  }
-}
+const workspaceRunning = (kind: WorkspaceKind): HttpError =>
+  new HttpError(409, "workspace_running", `The ${WORKSPACE_KIND_NAMES[kind]} workspace is running. Stop it before erasing its files.`);
 
 /** The agent asked for is not enabled on this install (WORKSPACE_AGENTS). */
-export class AgentUnavailableError extends HttpError {
-  constructor(agent: AgentKind) {
-    super(400, "agent_unavailable", `${driverFor(agent).name} is not available on this portal.`);
-    this.name = "AgentUnavailableError";
-  }
-}
-
-/** Why a start was refused before anything happened. */
-export type StartRefusal =
-  | CapacityError
-  | DeletingError
-  | AgentMismatchError
-  | AgentUnavailableError
-  | KindMismatchError
-  | NoWorkspacePortError
-  | OnlineDisabledError
-  | OnlineNotAllowedError;
+export const agentUnavailable = (agent: AgentKind): HttpError => new HttpError(400, "agent_unavailable", `${driverFor(agent).name} is not available on this portal.`);
 
 /** What a start asks for; both optional (see requestStart). */
 export interface StartOptions {
@@ -175,21 +89,13 @@ export interface StartOptions {
   kind?: WorkspaceKind;
 }
 
-/** The container could not be stopped, so nothing was deleted. */
-export class StopError extends HttpError {
-  constructor(message: string) {
-    super(500, "stop_failed", message);
-    this.name = "StopError";
-  }
-}
-
 /**
- * A start request's outcome. Capacity is usually decided before requestStart returns; a start queued
- * behind a stop in progress decides once that stop is done, and `done` then rejects with
- * CapacityError or DeletingError instead. An Online start whose last fence check (fence.ts) fails
- * rejects with OnlineDisabledError. `done` settles once the container runs.
+ * A start request's outcome: `error` is why it was refused before anything happened. Capacity is usually decided
+ * before requestStart returns; a start queued behind a stop in progress decides once that stop is done, and `done`
+ * then rejects with `capacity` or `deleting` instead. An Online start whose last fence check (fence.ts) fails
+ * rejects with `online_disabled`. `done` settles once the container runs.
  */
-export type StartAttempt = { ok: true; done: Promise<WorkspaceInfo> } | { ok: false; error: StartRefusal };
+export type StartAttempt = { ok: true; done: Promise<WorkspaceInfo> } | { ok: false; error: HttpError };
 
 /** Why a workspace is being stopped, as recorded in stopReason and the audit log. */
 export interface StopCause {
@@ -558,10 +464,10 @@ export class WorkspaceManager {
   }
 
   /** Why an Online workspace of this user may not run (now), or null when it may. */
-  #onlineRefusal(userId: number): OnlineDisabledError | OnlineNotAllowedError | null {
-    if (!this.#config.workspace.onlineEnabled) return new OnlineDisabledError();
-    if (this.#fence !== "loaded") return new OnlineDisabledError(true);
-    return this.onlineAccess(userId) === "not_allowed" ? new OnlineNotAllowedError() : null;
+  #onlineRefusal(userId: number): HttpError | null {
+    if (!this.#config.workspace.onlineEnabled) return onlineDisabled();
+    if (this.#fence !== "loaded") return onlineDisabled(true);
+    return this.onlineAccess(userId) === "not_allowed" ? new HttpError(403, "online_not_allowed", "Your administrator hasn't allowed you an Online workspace.") : null;
   }
 
   /** Workspaces holding a container slot (starting or running). */
@@ -638,7 +544,7 @@ export class WorkspaceManager {
 
   /**
    * Starts the user's workspace of `kind` with `agent` unless one is already starting or running.
-   *   * Kind: one at a time. Asking for the other kind while one runs is refused (KindMismatchError); a start without a
+   *   * Kind: one at a time. Asking for the other kind while one runs is refused (`kind_mismatch`); a start without a
    *     kind attaches to whichever runs, and starts Private when none does. Online needs ONLINE_WORKSPACES and the
    *     admin's permission.
    *   * Agent: without one, the agent the user chose in Settings (users.agent) when it is enabled, else the first
@@ -648,13 +554,20 @@ export class WorkspaceManager {
    */
   requestStart(userId: number, options: StartOptions = {}): StartAttempt {
     const { agent, kind: requested } = options;
-    if (!this.#hasWorkspacePort(userId)) return { ok: false, error: new NoWorkspacePortError(userId, this.#config.agentPortCount) };
+    const refuse = (status: number, code: string, message: string): StartAttempt => ({ ok: false, error: new HttpError(status, code, message) });
+    if (!this.#hasWorkspacePort(userId)) {
+      return refuse(409, "no_workspace_port", `User ${userId} has no workspace port: this portal serves workspaces for user ids 1 to ${this.#config.agentPortCount - 1} (AGENT_PORT_COUNT).`);
+    }
     const existing = this.#entries.get(userId);
-    if (existing?.deleting) return { ok: false, error: new DeletingError() };
+    if (existing?.deleting) return { ok: false, error: beingDeleted() };
     if (existing?.stopping) return { ok: true, done: existing.stopping.then(() => this.start(userId, options)) };
     if (existing && (existing.starting || isActive(existing)) && existing.agent !== null) {
-      if (requested !== undefined && requested !== existing.kind) return { ok: false, error: new KindMismatchError(existing.kind, requested) };
-      if (agent !== undefined && agent !== existing.agent) return { ok: false, error: new AgentMismatchError(existing.agent) };
+      if (requested !== undefined && requested !== existing.kind) {
+        return refuse(409, "kind_mismatch", `Your ${WORKSPACE_KIND_NAMES[existing.kind]} workspace is running. Stop it to start the ${WORKSPACE_KIND_NAMES[requested]} one.`);
+      }
+      if (agent !== undefined && agent !== existing.agent) {
+        return refuse(409, "agent_mismatch", `${driverFor(existing.agent).name} is already running in this workspace. Stop it to switch.`);
+      }
       // Someone is using it again: a stop that waited for the agent to finish is off.
       existing.stopPending = false;
       return { ok: true, done: existing.starting ?? Promise.resolve(this.info(userId)) };
@@ -665,12 +578,14 @@ export class WorkspaceManager {
       const refusal = this.#onlineRefusal(userId);
       if (refusal) return { ok: false, error: refusal };
     }
-    if (existing?.erasing?.kind === kind) return { ok: false, error: new DeletingError(kind) };
+    if (existing?.erasing?.kind === kind) return { ok: false, error: beingDeleted(kind) };
     const chosen = agent ?? this.preferredAgent(userId);
-    if (!this.#config.workspace.agents.includes(chosen)) return { ok: false, error: new AgentUnavailableError(chosen) };
+    if (!this.#config.workspace.agents.includes(chosen)) return { ok: false, error: agentUnavailable(chosen) };
 
     const slot = this.#reserveSlot(userId);
-    if (!slot.ok) return { ok: false, error: new CapacityError(this.#config.maxRunning) };
+    if (!slot.ok) {
+      return refuse(409, "capacity", `All ${this.#config.maxRunning} workspace slots are in use and none has been idle long enough to make room.`);
+    }
     const eviction = slot.victim === null ? null : this.stop(slot.victim, "capacity");
 
     const entry = existing ?? this.#createEntry(userId);
@@ -720,7 +635,7 @@ export class WorkspaceManager {
     return this.info(userId);
   }
 
-  /** Like requestStart, but rejects with the StartRefusal or a StartError. */
+  /** Like requestStart, but rejects with the refusal, or with `start_failed`. */
   async start(userId: number, options: StartOptions = {}): Promise<WorkspaceInfo> {
     const attempt = this.requestStart(userId, options);
     if (!attempt.ok) throw attempt.error;
@@ -761,7 +676,7 @@ export class WorkspaceManager {
       const credential = driver.generateCredential();
       const { version, image } = this.#versions.selection(agent);
       // The fence once more, as late as it gets: an Online container runs only inside it.
-      if (kind === "online" && (await this.#updateFence()) !== "loaded") throw new OnlineDisabledError(true);
+      if (kind === "online" && (await this.#updateFence()) !== "loaded") throw onlineDisabled(true);
       if (entry.status !== "starting") return this.info(userId);
       const container = await this.#runtime.startWorkspace(userId, { kind, agent, credential, image });
       // startWorkspace removed every earlier container of this user, a leftover included.
@@ -776,9 +691,9 @@ export class WorkspaceManager {
       return this.info(userId);
     } catch (error) {
       if (entry.status !== "starting") return this.info(userId);
-      if (error instanceof OnlineDisabledError) {
+      if (error instanceof HttpError && error.code === "online_disabled") {
         // Refused before there was a container: stopped, as a running one would be for the same reason.
-        patch(entry, { ...NO_CONTAINER, status: "stopped", stoppedAt: this.#now(), stopReason: onlineStopReason(error), lastError: null });
+        patch(entry, { ...NO_CONTAINER, status: "stopped", stoppedAt: this.#now(), stopReason: error.code, lastError: null });
         this.#persist(entry);
         this.#log.warn("refused an Online workspace start: the host firewall that fences it in is not loaded", { userId });
         this.#connections.closeWorkspace(userId, CLOSE_GOING_AWAY, "workspace stopped");
@@ -789,7 +704,7 @@ export class WorkspaceManager {
           ? error.message
           : `could not start the workspace container: ${errorMessage(error)}`;
       await this.#fail(entry, message);
-      throw new StartError(message);
+      throw new HttpError(500, "start_failed", message);
     }
   }
 
@@ -898,7 +813,7 @@ export class WorkspaceManager {
 
   /**
    * Stops the workspace and deletes everything it stored (user deletion). Starts are refused until
-   * it is done, a start queued behind the stop included. Rejects with StopError, deleting nothing,
+   * it is done, a start queued behind the stop included. Rejects with `stop_failed`, deleting nothing,
    * when the container can't be removed.
    */
   deleteData(userId: number): Promise<void> {
@@ -920,7 +835,7 @@ export class WorkspaceManager {
       await this.#stopEntry(entry, { reason: "deleted" });
       // Also a container an earlier stop failed to remove: its mounts are the data about to go.
       await this.#removeLeftover(entry).catch((error: unknown) => {
-        throw new StopError(`could not stop the workspace container, so its data was not deleted: ${errorMessage(error)}`);
+        throw new HttpError(500, "stop_failed", `could not stop the workspace container, so its data was not deleted: ${errorMessage(error)}`);
       });
       await removeWorkspaceFiles(this.#config, userId);
     } catch (error) {
@@ -933,33 +848,33 @@ export class WorkspaceManager {
 
   /**
    * Empties one kind's home and workspace folders (Admin's "Erase files"), audited `workspace_files_erased` with the
-   * kind. Refused (WorkspaceRunningError) while that kind is starting, running or stopping, or while Docker still has a
-   * container of that kind for the user (one a failed stop left behind and that can't be removed), and (DeletingError)
+   * kind. Refused (`workspace_running`) while that kind is starting, running or stopping, or while Docker still has a
+   * container of that kind for the user (one a failed stop left behind and that can't be removed), and (`deleting`)
    * while the user's data is being deleted; starts of that kind are refused until it is done, and a start of the other
    * kind waits for it before it prepares its files. The other kind's files are untouched, and it may run meanwhile.
    */
   async eraseFiles(userId: number, kind: WorkspaceKind, actorUserId: number | null = null): Promise<void> {
     const existing = this.#entries.get(userId);
-    if (existing?.deleting) throw new DeletingError();
+    if (existing?.deleting) throw beingDeleted();
     if (existing?.erasing) {
       if (existing.erasing.kind === kind) return existing.erasing.done;
       await existing.erasing.done.catch(() => undefined);
     }
     const entry = existing ?? this.#createEntry(userId);
     if (entry.kind === kind && (entry.starting || entry.stopping || isActive(entry) || entry.status === "stopping")) {
-      throw new WorkspaceRunningError(kind);
+      throw workspaceRunning(kind);
     }
     const done = (async () => {
       // A container a failed stop left behind may still mount the folders, whichever kind the entry shows now (the
       // other kind's failed start leaves it in place), so it goes first; if it can't, nothing is erased.
       await this.#removeLeftover(entry).catch((error: unknown) => {
         this.#log.warn("could not remove a workspace container left behind by a failed stop; its files are not erased", { userId, kind, error });
-        throw new WorkspaceRunningError(kind);
+        throw workspaceRunning(kind);
       });
       // And Docker itself must have no container of that kind for the user (none of a kind it can't tell, either).
       const containers = await this.#runtime.list();
       if (containers.some((container) => container.userId === userId && (container.kind === kind || container.kind === null))) {
-        throw new WorkspaceRunningError(kind);
+        throw workspaceRunning(kind);
       }
       await eraseWorkspaceFiles(this.#config, userId, kind);
     })();
@@ -1071,7 +986,7 @@ export class WorkspaceManager {
     // The admin's switch (or ONLINE_WORKSPACES) went off: an Online workspace stops, working or not.
     if (entry.kind === "online") {
       const refusal = this.#onlineRefusal(entry.userId);
-      if (refusal) return void (await this.#stopEntry(entry, { reason: onlineStopReason(refusal) }));
+      if (refusal) return void (await this.#stopEntry(entry, { reason: refusal.code }));
     }
     let input = this.#reapInput(entry);
     // Nobody uses it, but the agent is still working: it stops once the work is done.
@@ -1224,8 +1139,8 @@ export class WorkspaceManager {
    * An Online container found running that may not run (ONLINE_WORKSPACES is off, or the admin barred the user since):
    * stopped, not adopted, and recorded as stopped for that reason.
    */
-  async #stopRefused(entry: Entry, containerId: string, refusal: OnlineDisabledError | OnlineNotAllowedError): Promise<void> {
-    const reason = onlineStopReason(refusal);
+  async #stopRefused(entry: Entry, containerId: string, refusal: HttpError): Promise<void> {
+    const reason = refusal.code;
     this.#log.info("stopping an Online workspace that may not run", { userId: entry.userId, containerId, reason });
     try {
       await this.#runtime.stopContainer(containerId);
@@ -1400,11 +1315,6 @@ function entryFromRow(row: Workspace): Entry {
 function endpointOf(entry: Entry): AgentEndpoint | null {
   if (!entry.ip || entry.port === null || !entry.credential) return null;
   return { host: entry.ip, port: entry.port, credential: entry.credential };
-}
-
-/** The stopReason of an Online workspace stopped because it may no longer run. */
-function onlineStopReason(refusal: OnlineDisabledError | OnlineNotAllowedError): string {
-  return refusal.code;
 }
 
 function describeStartupFailure(driver: AgentDriver, result: Exclude<ReadyResult, { ok: true }>): string {

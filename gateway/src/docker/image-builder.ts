@@ -57,20 +57,11 @@ export class VerifyError extends Error {
   }
 }
 
-export class ImageNotFoundError extends HttpError {
-  constructor(image: string) {
-    super(404, "not_found", `There is no image ${image}.`);
-    this.name = "ImageNotFoundError";
-  }
-}
+export const imageNotFound = (image: string): HttpError => new HttpError(404, "not_found", `There is no image ${image}.`);
 
 /** A container (running or not) uses the image, so Docker keeps it. */
-export class ImageInUseError extends HttpError {
-  constructor(image: string) {
-    super(409, "image_in_use", `${image} is in use by a workspace container. It can be removed once that workspace has stopped.`);
-    this.name = "ImageInUseError";
-  }
-}
+export const imageInUse = (image: string): HttpError =>
+  new HttpError(409, "image_in_use", `${image} is in use by a workspace container. It can be removed once that workspace has stopped.`);
 
 export interface ImageBuilder {
   /**
@@ -110,6 +101,6 @@ export interface ImageBuilder {
   sweep(): Promise<SweepResult>;
   /** Every workspace image tag (workspace-portal/workspace:<agent>-<version>). */
   list(): Promise<WorkspaceImageSummary[]>;
-  /** Removes one tag, never forcing. Rejects with ImageNotFoundError or ImageInUseError. */
+  /** Removes one tag, never forcing. Rejects with imageNotFound or imageInUse. */
   remove(image: string): Promise<void>;
 }

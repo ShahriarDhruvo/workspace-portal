@@ -33,19 +33,15 @@ export interface NpmPackage {
 export interface NpmRegistry {
   /**
    * The package's document; null when it hasn't changed since the answer that came with `etag` (the registry's 304).
-   * Rejects with RegistryError.
+   * Rejects with a registryError.
    */
   packument(packageName: string, etag?: string | null): Promise<{ etag: string | null; package: NpmPackage } | null>;
-  /** Whether that exact version is published. Rejects with RegistryError. */
+  /** Whether that exact version is published. Rejects with a registryError. */
   hasVersion(packageName: string, version: string): Promise<boolean>;
 }
 
-export class RegistryError extends HttpError {
-  constructor(message: string) {
-    super(502, "registry_unreachable", message);
-    this.name = "RegistryError";
-  }
-}
+/** The registry did not answer, or not with what was asked for. */
+export const registryError = (message: string): HttpError => new HttpError(502, "registry_unreachable", message);
 
 const NPM_REGISTRY_URL = "https://registry.npmjs.org";
 const TIMEOUT_MS = 10_000;
@@ -108,9 +104,9 @@ export function createNpmRegistry(options: NpmRegistryOptions = {}): NpmRegistry
   const timeoutMs = options.timeoutMs ?? TIMEOUT_MS;
   const maxPackumentBytes = options.maxPackumentBytes ?? MAX_PACKUMENT_BYTES;
 
-  const unreachable = (error: unknown): RegistryError => {
+  const unreachable = (error: unknown): HttpError => {
     const reason = (error as Error).name === "TimeoutError" ? `no answer within ${timeoutMs / 1000} s` : (error as Error).message;
-    return new RegistryError(`The npm registry is unreachable (${reason}).`);
+    return registryError(`The npm registry is unreachable (${reason}).`);
   };
   // One signal for the request and its body: a registry that sends headers and then stalls is unreachable as well.
   const get = async (url: string, headers: Record<string, string> = {}): Promise<Response> => {
@@ -131,7 +127,7 @@ export function createNpmRegistry(options: NpmRegistryOptions = {}): NpmRegistry
       }
       if (!response.ok) {
         await response.body?.cancel().catch(() => undefined);
-        throw new RegistryError(`The npm registry answered ${response.status} for ${packageName}.`);
+        throw registryError(`The npm registry answered ${response.status} for ${packageName}.`);
       }
       let text: string | null;
       try {
@@ -139,15 +135,15 @@ export function createNpmRegistry(options: NpmRegistryOptions = {}): NpmRegistry
       } catch (error) {
         throw unreachable(error);
       }
-      if (text === null) throw new RegistryError(`The npm registry's answer for ${packageName} is too large.`);
+      if (text === null) throw registryError(`The npm registry's answer for ${packageName} is too large.`);
       let body: unknown;
       try {
         body = JSON.parse(text);
       } catch {
-        throw new RegistryError(`The npm registry's answer for ${packageName} is not JSON.`);
+        throw registryError(`The npm registry's answer for ${packageName} is not JSON.`);
       }
       const pkg = readPackument(body);
-      if (pkg === null) throw new RegistryError(`The npm registry's answer for ${packageName} is not a package.`);
+      if (pkg === null) throw registryError(`The npm registry's answer for ${packageName} is not a package.`);
       return { etag: response.headers.get("etag"), package: pkg };
     },
 
@@ -156,7 +152,7 @@ export function createNpmRegistry(options: NpmRegistryOptions = {}): NpmRegistry
       await response.body?.cancel().catch(() => undefined);
       if (response.ok) return true;
       if (response.status === 404) return false;
-      throw new RegistryError(`The npm registry answered ${response.status} for ${packageName}@${version}.`);
+      throw registryError(`The npm registry answered ${response.status} for ${packageName}@${version}.`);
     },
   };
 }

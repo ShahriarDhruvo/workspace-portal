@@ -36,13 +36,6 @@ export interface LiveDeps {
 
 type Send = (event: "init" | "frame", data: unknown) => void;
 
-export class TooManyViewersError extends HttpError {
-  constructor() {
-    super(429, "too_many_viewers", `At most ${MAX_VIEWERS} live views can be open at once.`);
-    this.name = "TooManyViewersError";
-  }
-}
-
 export class LiveHub {
   readonly #deps: LiveDeps;
   readonly #now: () => number;
@@ -62,7 +55,7 @@ export class LiveHub {
 
   /** Streams the live view to `res` until the client goes away. */
   serve(res: ServerResponse): void {
-    if (this.#viewers.size >= MAX_VIEWERS) throw new TooManyViewersError();
+    if (this.#viewers.size >= MAX_VIEWERS) throw new HttpError(429, "too_many_viewers", `At most ${MAX_VIEWERS} live views can be open at once.`);
     res.writeHead(200, {
       "content-type": "text/event-stream; charset=utf-8",
       "cache-control": "no-store",

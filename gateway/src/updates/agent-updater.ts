@@ -31,7 +31,7 @@ import { errorMessage, type Logger } from "../lib/log.ts";
 import type { NpmRegistry } from "./npm-registry.ts";
 import type { ReleaseCache } from "./release-cache.ts";
 import { appendLog, finishJob } from "./update-job.ts";
-import { AgentUnavailableError } from "../workspaces/manager.ts";
+import { agentUnavailable } from "../workspaces/manager.ts";
 
 /**
  * A generous bound for one job's build and version check: a full rebuild (Debian packages, Chromium,
@@ -44,45 +44,9 @@ const CANCELLED = "Cancelled";
 /** The error of a job the gateway's shutdown abandoned. */
 export const GATEWAY_RESTARTED = "The gateway restarted during the update.";
 
+const invalidVersion = (version: string): HttpError => new HttpError(400, "invalid_version", `"${version}" is not a version (like 0.27.4).`);
 /** Another update is running (there is one at a time, for all agents). */
-export class UpdateRunningError extends HttpError {
-  constructor(message = "An agent update is already running. Wait for it to finish, or cancel it.") {
-    super(409, "update_running", message);
-    this.name = "UpdateRunningError";
-  }
-}
-
-/** Not a version (like 0.27.4). */
-export class InvalidVersionError extends HttpError {
-  constructor(message: string) {
-    super(400, "invalid_version", message);
-    this.name = "InvalidVersionError";
-  }
-}
-
-/** The registry has no such version of the agent's package. */
-export class VersionNotFoundError extends HttpError {
-  constructor(name: string, packageName: string, version: string) {
-    super(404, "version_not_found", `${name} ${version} is not published (${packageName}).`);
-    this.name = "VersionNotFoundError";
-  }
-}
-
-/** The image's CLI reports another version than the job is for (a failed job's message, not an API error). */
-class VersionMismatchError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "VersionMismatchError";
-  }
-}
-
-/** New workspaces start from this image, so it can't go. */
-export class ImageCurrentError extends HttpError {
-  constructor(name: string, version: string) {
-    super(409, "image_current", `${name} ${version} is the current version: new workspaces start from this image. Switch to another version first.`);
-    this.name = "ImageCurrentError";
-  }
-}
+const updateRunning = (message: string): HttpError => new HttpError(409, "update_running", message);
 
 export interface UpdateRequest {
   agent: AgentKind;
@@ -173,12 +137,12 @@ export class AgentUpdater {
 
   /**
    * Starts an update and returns the job as it starts (building, or verifying when it uses the image
-   * already on the server). Rejects before anything starts: AgentUnavailableError, UpdateRunningError,
-   * InvalidVersionError, VersionNotFoundError, RegistryError.
+   * already on the server). Rejects before anything starts: `agent_unavailable`, `update_running`,
+   * `invalid_version`, `version_not_found`, `registry_unreachable`.
    */
   async startUpdate(request: UpdateRequest): Promise<AgentUpdateJob> {
     const { agent } = request;
-    if (!this.#config.workspace.agents.includes(agent)) throw new AgentUnavailableError(agent);
+    if (!this.#config.workspace.agents.includes(agent)) throw agentUnavailable(agent);
     if (this.#busy()) throw this.#runningError();
     this.#pending = agent;
     try {
@@ -254,16 +218,18 @@ export class AgentUpdater {
   }
 
   /**
-   * Removes one of an agent's images. Rejects with InvalidVersionError, UpdateRunningError (a job is
-   * building that agent), ImageCurrentError, and the builder's ImageNotFoundError / ImageInUseError.
+   * Removes one of an agent's images. Rejects with `invalid_version`, `update_running` (a job is
+   * building that agent), `image_current` (new workspaces start from it), and the builder's `not_found` / `image_in_use`.
    */
   async removeImage(agent: AgentKind, version: string): Promise<void> {
     const { name } = driverFor(agent);
-    if (!isVersion(version)) throw new InvalidVersionError(`"${version}" is not a version (like 0.27.4).`);
+    if (!isVersion(version)) throw invalidVersion(version);
     if (this.#pending === agent || (this.#job?.finishedAt === null && this.#job.agent === agent)) {
-      throw new UpdateRunningError(`An update of ${name} is running. Wait for it to finish, or cancel it.`);
+      throw updateRunning(`An update of ${name} is running. Wait for it to finish, or cancel it.`);
     }
-    if (this.#versions.current(agent) === version) throw new ImageCurrentError(name, version);
+    if (this.#versions.current(agent) === version) {
+      throw new HttpError(409, "image_current", `${name} ${version} is the current version: new workspaces start from this image. Switch to another version first.`);
+    }
     const image = workspaceImage(agent, version);
     await this.#builder.remove(image);
     this.#log.info("agent image removed", { agent, version, image });
@@ -277,11 +243,11 @@ export class AgentUpdater {
     return this.#pending !== null || this.#running !== null;
   }
 
-  #runningError(): UpdateRunningError {
+  #runningError(): HttpError {
     const job = this.#job?.finishedAt === null ? this.#job : null;
-    if (job) return new UpdateRunningError(`${driverFor(job.agent).name} is being updated to ${job.toVersion}. Wait for it to finish, or cancel it.`);
-    if (this.#running) return new UpdateRunningError("The last update is still cleaning up; try again in a moment.");
-    return new UpdateRunningError();
+    if (job) return updateRunning(`${driverFor(job.agent).name} is being updated to ${job.toVersion}. Wait for it to finish, or cancel it.`);
+    if (this.#running) return updateRunning("The last update is still cleaning up; try again in a moment.");
+    return updateRunning("An agent update is already running. Wait for it to finish, or cancel it.");
   }
 
   /**
@@ -290,9 +256,11 @@ export class AgentUpdater {
    */
   async #plan(agent: AgentKind, version: string, rebuild: boolean): Promise<{ version: string; reuse: boolean }> {
     const { name, release } = driverFor(agent);
-    if (!isVersion(version)) throw new InvalidVersionError(`"${version}" is not a version (like 0.27.4).`);
+    if (!isVersion(version)) throw invalidVersion(version);
     if (!rebuild && (await this.#builder.exists(workspaceImage(agent, version)))) return { version, reuse: true };
-    if (!(await this.#registry.hasVersion(release.packageName, version))) throw new VersionNotFoundError(name, release.packageName, version);
+    if (!(await this.#registry.hasVersion(release.packageName, version))) {
+      throw new HttpError(404, "version_not_found", `${name} ${version} is not published (${release.packageName}).`);
+    }
     return { version, reuse: false };
   }
 
@@ -329,7 +297,7 @@ export class AgentUpdater {
       job.phase = "verifying";
       job.step = `${release.cli} --version`;
       const reported = await this.#builder.cliVersion(reuse ? image : staging, release.cli, signal);
-      if (reported !== version) throw new VersionMismatchError(`The ${reuse ? "" : "new "}image reports ${name} ${reported ?? "(no version)"}, not ${version}.`);
+      if (reported !== version) throw new Error(`The ${reuse ? "" : "new "}image reports ${name} ${reported ?? "(no version)"}, not ${version}.`);
       append([`${release.cli} --version: ${reported}`]);
       signal.throwIfAborted();
       // From here on the job finishes: the image becomes current.

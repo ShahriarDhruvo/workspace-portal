@@ -15,7 +15,7 @@ import { MIB } from "../config.ts";
 import { connectionRole } from "./connections.ts";
 import { forward, PayloadTooLargeError } from "../lib/forward.ts";
 import { bearerToken, frameAncestorSources, workspaceResponseHeaders, type FramePolicy, type HostParts } from "./headers.ts";
-import { createStreamingServer, isDocumentNavigation, sendError, splitTarget } from "../lib/http-util.ts";
+import { createStreamingServer, isDocumentNavigation, sendError, splitTarget, type HttpError } from "../lib/http-util.ts";
 import {
   PORTAL_PATH_PREFIX,
   START_PATH,
@@ -30,7 +30,6 @@ import {
   unreachablePage,
 } from "./pages.ts";
 import { createWsRelay } from "./ws-relay.ts";
-import type { StartRefusal } from "../workspaces/manager.ts";
 
 /**
  * The path as a lenient router might see it: percent-decoded, backslashes and repeated slashes
@@ -211,21 +210,18 @@ export function handlePortalPath(
   // permission included.
   deps.manager.touch(userId);
   const attempt = deps.manager.requestStart(userId, { kind });
-  if (!attempt.ok) return sendPage(res, refusalStatus(attempt.error), refusalPage(deps, attempt.error, userId, kind, host), framing(deps, host));
+  if (!attempt.ok) {
+    // As on the control API for these three; any other refusal is a 503 here (there, 4xx).
+    const status = ["kind_mismatch", "online_disabled", "online_not_allowed"].includes(attempt.error.code) ? attempt.error.status : 503;
+    return sendPage(res, status, refusalPage(deps, attempt.error, userId, kind, host), framing(deps, host));
+  }
   // Failures are recorded on the workspace; the starting page's next reload shows them.
   attempt.done.catch(() => undefined);
   res.writeHead(303, { location: "/", "cache-control": "no-store", "content-length": 0 });
   res.end();
 }
 
-/** A refused start's page. These three answer as on the control API; any other refusal is a 503 here (there, 4xx). */
-const SAME_STATUS = ["kind_mismatch", "online_disabled", "online_not_allowed"];
-
-function refusalStatus(error: StartRefusal): number {
-  return SAME_STATUS.includes(error.code) ? error.status : 503;
-}
-
-function refusalPage(deps: AgentDeps, error: StartRefusal, userId: number, kind: WorkspaceKind, host: HostParts): string {
+function refusalPage(deps: AgentDeps, error: HttpError, userId: number, kind: WorkspaceKind, host: HostParts): string {
   const portal = `//${host.hostname}:${deps.config.webPort}/`;
   if (error.code === "capacity") return capacityPage(deps.config.maxRunning);
   if (error.code === "kind_mismatch") return otherKindPage(deps.manager.info(userId).kind, kind, portal);

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ReleaseNotes } from "@portal/core";
 import type { GitHubRelease, GitHubReleases } from "./github-releases.ts";
-import { RegistryError, type NpmPackage, type NpmRegistry } from "./npm-registry.ts";
+import { registryError, type NpmPackage, type NpmRegistry } from "./npm-registry.ts";
 import { NOTES_TTL_MS, notesByVersion, ReleaseCache, RELEASES_RETRY_MS, RELEASES_TTL_MS } from "./release-cache.ts";
 
 const QWEN = "@qwen-code/qwen-code";
@@ -26,7 +26,7 @@ function fakeRegistry() {
   const registry: NpmRegistry = {
     async packument(name, etag = null) {
       await state.gate;
-      if (state.down) throw new RegistryError("The npm registry is unreachable (fetch failed).");
+      if (state.down) throw registryError("The npm registry is unreachable (fetch failed).");
       const current = `"${name}-${state.revisions[name]}"`;
       state.calls.push({ name, etag, notModified: etag === current });
       return etag === current ? null : { etag: current, package: structuredClone(state.packages[name]!) };
