@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds an agent's workspace image and makes that version the one new workspaces start with, as Admin > Updates
-# does, then runs deploy/verify-isolation.sh, which the console can't. Works with the portal down.
+# does, then runs deploy/verify-isolation.sh, which the console can't; that check needs the stack running.
 #   sudo bash deploy/update-image.sh qwen 0.28.0      Qwen Code to that version, newer or older (dsh: DeepSeek Harness)
 #   sudo bash deploy/update-image.sh qwen --refresh   rebuild its version in use from scratch (new Debian packages)
 #   sudo bash deploy/update-image.sh --refresh        the same for every enabled agent
