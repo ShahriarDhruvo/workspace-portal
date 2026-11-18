@@ -242,7 +242,7 @@ test("the admin's choice survives a restart; adopted containers report the versi
     // Both images' tags moved since (a rebuild; docker shows an image id then): the version label still says.
     const aliceContainer = g.runtime.containers.get(g.workspaceRow(alice)!.containerId!)!;
     aliceContainer.image = "sha256:4567cdef";
-    // bob's container is from before the label: with its tag moved, its version is unknown.
+    // Without the label a version is unknown, whatever the image's tag.
     const bobContainer = g.runtime.containers.get(g.workspaceRow(bob)!.containerId!)!;
     bobContainer.image = "sha256:0123abcd";
     bobContainer.version = null;

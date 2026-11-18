@@ -7,6 +7,7 @@
 // 304 without a body while nothing was published, so the release cache downloads it again only after a release.
 import { failureReason, fetchBounded, FETCH_TIMEOUT_MS } from "../lib/bounded-body.ts";
 import { HttpError } from "../lib/http-util.ts";
+import { isRecord } from "../lib/json.ts";
 import { isGitHubRepo } from "./github-releases.ts";
 import { isVersion } from "@portal/core";
 
@@ -73,15 +74,13 @@ export function githubRepository(repository: unknown): string | null {
 
 /** The parts of a package document the gateway uses; anything malformed is left out. */
 export function readPackument(body: unknown): NpmPackage | null {
-  if (typeof body !== "object" || body === null || Array.isArray(body)) return null;
-  const doc = body as { "dist-tags"?: unknown; versions?: unknown; time?: unknown; repository?: unknown };
-  const record = (value: unknown): Record<string, unknown> =>
-    typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+  if (!isRecord(body)) return null;
+  const record = (value: unknown): Record<string, unknown> => (isRecord(value) ? value : {});
   const distTags: Record<string, string> = {};
-  for (const [tag, version] of Object.entries(record(doc["dist-tags"]))) if (typeof version === "string") distTags[tag] = version;
-  const times = record(doc.time);
+  for (const [tag, version] of Object.entries(record(body["dist-tags"]))) if (typeof version === "string") distTags[tag] = version;
+  const times = record(body.time);
   const versions: PublishedVersion[] = [];
-  for (const [version, manifest] of Object.entries(record(doc.versions))) {
+  for (const [version, manifest] of Object.entries(record(body.versions))) {
     if (!isVersion(version)) continue;
     const time = times[version];
     const publishedAt = typeof time === "string" ? Date.parse(time) : NaN;
@@ -92,7 +91,7 @@ export function readPackument(body: unknown): NpmPackage | null {
       deprecated: typeof deprecated === "string" && deprecated !== "",
     });
   }
-  return { distTags, versions, githubRepo: githubRepository(doc.repository) };
+  return { distTags, versions, githubRepo: githubRepository(body.repository) };
 }
 
 export function createNpmRegistry(options: NpmRegistryOptions = {}): NpmRegistry {
