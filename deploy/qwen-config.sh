@@ -16,11 +16,13 @@ validate() { # file
   python3 -I - "$1" <<'PY'
 import json, os, re, sys
 path = sys.argv[1]
-text = open(path, encoding="utf-8").read()
+# newline="": a lone CR ends no comment for the gateway. The set is what its String.prototype.trim removes.
+text = open(path, encoding="utf-8", newline="").read()
+blank = re.fullmatch("[\t\n\v\f\r \xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]*", text)
 json_text = re.sub(r'"(?:\\.|[^"\\])*"|//[^\n]*|/\*.*?(?:\*/|\Z)', lambda m: m[0] if m[0][0] == '"' else " ", text, flags=re.S)
 def reject(constant): raise ValueError(f"{constant} is not valid JSON")
 try:
-    value = json.loads(json_text, parse_constant=reject) if text.strip() else {}
+    value = {} if blank else json.loads(json_text, parse_constant=reject)
 except ValueError as error:
     sys.exit(f"{path}: not valid JSON: {error}")
 if not isinstance(value, dict):
