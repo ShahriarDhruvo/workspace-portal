@@ -866,6 +866,18 @@ test("a workspace that hangs up frees its LLM slot and the upstream request", as
   assert.equal(g.finishedRequests[0]!.ok, false);
 });
 
+test("a workspace that hangs up before the LLM server answers is not that server failing", async () => {
+  const abandonedBefore = g.llm.abandoned;
+  const req = http.request({ host: "127.0.0.1", port: g.ports.service, method: "POST", path: "/llm/v1/chat/completions", agent: false });
+  req.on("error", () => undefined);
+  req.end(JSON.stringify({ hold: true }));
+  await waitFor(() => g.llmQueue.inFlight === 1, "the request to reach the LLM server");
+  req.destroy();
+  await waitFor(() => g.llm.abandoned === abandonedBefore + 1, "the upstream request to be aborted");
+  await waitFor(() => g.llmQueue.inFlight === 0, "the slot to be released");
+  assert.equal(logged(g, "LLM server did not answer"), false);
+});
+
 test("the service API refuses unknown callers and odd paths", async () => {
   g.caller.userId = null;
   const refused = await request(g.ports.service, { path: "/llm/v1/models" });

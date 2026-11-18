@@ -42,6 +42,7 @@ export function forward(req: IncomingMessage, res: ServerResponse, options: Forw
 
     const fail = (error: Error): void => {
       upstream.destroy();
+      if (res.destroyed) return; // the client hung up: its close settles, and aborting the upstream is no upstream failure
       if (!res.headersSent) options.onError(error, res);
       else res.destroy(error);
       settle("failed");

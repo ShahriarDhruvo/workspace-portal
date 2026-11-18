@@ -875,6 +875,7 @@ export async function startFakeLlm(): Promise<FakeUpstream> {
       if (!res.writableFinished) fake.abandoned++;
     });
     if (!body.stream) {
+      if (body.hold) return; // no answer until the client hangs up
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ choices: [{ message: { content: "hi" } }], usage: { prompt_tokens: 11, completion_tokens: 22 } }));
       return;
