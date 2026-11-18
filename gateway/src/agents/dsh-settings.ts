@@ -1,36 +1,31 @@
-// DeepSeek Harness's per-user settings: portal.patch.yml, rendered before every start and mounted
-// read-only at /etc/workspace-portal/dsh. It holds only what the gateway knows: the models (from Qwen
-// Code's system-defaults.json, see models.ts), all reached through the gateway, and the gateway's
-// search MCP server (plus the headless browser). Everything that locks dsh down (no DeepSeek account,
-// no web tools, no plugin installs, no telemetry, one workspace) is static, so it ships in the image
-// (workspace-image/dsh/lockdown.patch.yml); start-dsh applies both, this one last. It is not tied to
-// one dsh version: the image build adapts dsh's presets in place and checks the lockdown against the
-// installed dsh (`dsh --dump-config`), so any version the admin console builds is locked down too.
+// DeepSeek Harness's per-user settings: portal.patch.yml, rendered before every start and mounted read-only at
+// /etc/workspace-portal/dsh. It holds only what the gateway knows: the models (from Qwen Code's system-defaults.json,
+// see models.ts), all reached through the gateway, and the gateway's search MCP server (plus the headless browser).
+// Everything that locks dsh down (no DeepSeek account, no web tools, no plugin installs, no telemetry, one workspace)
+// is static, so it ships in the image (workspace-image/dsh/lockdown.patch.yml); start-dsh applies both, this one last.
 //
-// The file is JSON, which YAML 1.2 reads as it is: model names and ids come from the admin's file,
-// and as JSON strings they can never become YAML tags (dsh evaluates `!!js` tags as code).
-import { AgentConfigError, LLM_KEY_ENV } from "./driver.ts";
+// The file is JSON, which YAML 1.2 reads as it is: model names and ids come from the admin's file, and as JSON
+// strings they can never become YAML tags (dsh evaluates `!!js` tags as code).
+import { AgentConfigError, BROWSER_MCP, BROWSER_TIMEOUT_MS, LLM_KEY_ENV, SEARCH_TIMEOUT_MS } from "./driver.ts";
 import type { ModelCatalog, PortalModel } from "./models.ts";
 
 export const DSH_PATCH_FILE = "portal.patch.yml";
 
 /**
  * dsh's compaction (@deepseek-ai/dsh-compaction-basic, default settings) rejects a model unless
- * floor(0.16 × (W − O)) < W − O − 65536 for its context window W and output cap O, i.e. unless
- * W − O ≥ 78020; a session can't even switch to such a model (MODEL_SWITCH_COMPACTION_FAILED).
+ * floor(0.16 × (W − O)) < W − O − 65536 for its context window W and output cap O, i.e. unless W − O ≥ 78020; a
+ * session can't even switch to such a model (MODEL_SWITCH_COMPACTION_FAILED).
  */
 export const DSH_MIN_MESSAGE_BUDGET = 78_020;
 /** The smallest output cap worth offering when a model's cap has to shrink to fit that rule. */
-export const DSH_MIN_OUTPUT_TOKENS = 4096;
+const DSH_MIN_OUTPUT_TOKENS = 4096;
 
 /** dsh's own timeouts, as long as Qwen Code's (generationConfig.timeout / streamIdleTimeoutMs). */
 const LLM_TIMEOUT_MS = 3_600_000;
-const SEARCH_TIMEOUT_MS = 60_000;
-const BROWSER_TIMEOUT_MS = 120_000;
 /** The provider name sessions see in the model picker. */
 const PROVIDER = "portal";
 
-export interface DshPatchOptions {
+interface DshPatchOptions {
   catalog: ModelCatalog;
   /** http://<gateway bridge IP>:<service port>, the only address a workspace can reach. */
   serviceBaseUrl: string;
@@ -39,9 +34,9 @@ export interface DshPatchOptions {
 }
 
 /**
- * The models dsh can use: each output cap lowered to fit dsh's compaction budget, and the models
- * whose context window is too small for it left out (Qwen Code still offers them). The default stays
- * unless it was left out. Throws AgentConfigError when no model is left.
+ * The models dsh can use: each output cap lowered to fit dsh's compaction budget, and the models whose context window
+ * is too small for it left out (Qwen Code still offers them). The default stays unless it was left out. Throws
+ * AgentConfigError when no model is left.
  */
 export function fitDshModels(catalog: ModelCatalog): ModelCatalog {
   const models = catalog.models.flatMap((model) => {
@@ -81,9 +76,7 @@ export function dshPatchRows(options: DshPatchOptions): unknown[] {
       config: {
         transport: "stdio",
         serverName: "browser",
-        command: "/usr/local/bin/playwright-mcp",
-        // dsh gives MCP children a scrubbed environment, so the browser's path goes on the command line.
-        args: ["--headless", "--isolated", "--no-sandbox", "--executable-path=/usr/bin/chromium", "--output-dir=/workspace/.browser"],
+        ...BROWSER_MCP,
         cwd: "/tmp",
         toolCallTimeoutMs: BROWSER_TIMEOUT_MS,
       },

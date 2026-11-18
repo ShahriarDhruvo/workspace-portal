@@ -1,9 +1,12 @@
-// Qwen Code's settings files, rendered per user before every start: the admin's settings.json and
-// system-defaults.json (from PORTAL_DATA_DIR/config/qwen), with the keys the portal depends on forced
-// on top. The models listed in system-defaults.json are the portal's model list for every agent.
+// Qwen Code's settings files, rendered per user before every start: the admin's settings.json and system-defaults.json
+// (from PORTAL_DATA_DIR/config/qwen), with the keys the portal depends on forced on top. The models listed in
+// system-defaults.json are the portal's model list for every agent.
 import fs from "node:fs";
 import path from "node:path";
-import { AgentConfigError, LLM_KEY_ENV } from "./driver.ts";
+import type { WorkspaceKind } from "@portal/core";
+import type { Config } from "../config.ts";
+import { AgentConfigError, BROWSER_MCP, BROWSER_TIMEOUT_MS, LLM_KEY_ENV, SEARCH_TIMEOUT_MS, serviceBaseUrl } from "./driver.ts";
+import { isRecord } from "../lib/json.ts";
 
 export type SettingsObject = Record<string, unknown>;
 
@@ -47,39 +50,19 @@ export function parseSettingsText(text: string, label: string): SettingsObject {
   } catch (error) {
     throw new AgentConfigError(`the Qwen Code settings file ${label} is not valid JSON: ${(error as Error).message}`);
   }
-  if (!isPlainObject(value)) throw new AgentConfigError(`the Qwen Code settings file ${label} must contain a JSON object`);
+  if (!isRecord(value)) throw new AgentConfigError(`the Qwen Code settings file ${label} must contain a JSON object`);
   return value;
 }
 
-/** Removes // line and /* block comments outside strings. */
+/**
+ * Removes // line and /* block comments outside strings (the first alternative steps over a string). A block comment
+ * becomes a space: like Qwen Code's own parser, it separates tokens, it doesn't join them.
+ */
 export function stripJsonComments(text: string): string {
-  let out = "";
-  let inString = false;
-  for (let i = 0; i < text.length; i++) {
-    const char = text[i]!;
-    if (inString) {
-      out += char;
-      if (char === "\\") out += text[++i] ?? "";
-      else if (char === '"') inString = false;
-    } else if (char === '"') {
-      inString = true;
-      out += char;
-    } else if (char === "/" && text[i + 1] === "/") {
-      while (i < text.length && text[i] !== "\n") i++;
-      out += "\n";
-    } else if (char === "/" && text[i + 1] === "*") {
-      i += 2;
-      while (i < text.length && !(text[i] === "*" && text[i + 1] === "/")) i++;
-      i++;
-      out += " "; // like Qwen Code's own parser: a comment separates tokens, it doesn't join them
-    } else {
-      out += char;
-    }
-  }
-  return out;
+  return text.replace(/"(?:\\[\s\S]|[^"\\])*"?|\/\/[^\n]*\n?|\/\*[\s\S]*?(?:\*\/|$)/g, (match) => (match[0] === '"' ? match : match[1] === "/" ? "\n" : " "));
 }
 
-export interface RenderOptions {
+interface RenderOptions {
   admin: AdminQwenConfig;
   /** http://<gateway bridge IP>:<service port>, the only address a workspace can reach. */
   serviceBaseUrl: string;
@@ -87,11 +70,19 @@ export interface RenderOptions {
   browser: boolean;
   /** The portal has a page reader, so its MCP server also offers read_page. Default: no. */
   reader?: boolean;
-  /**
-   * The reasoning effort every new session starts with (DEFAULT_REASONING_EFFORT), for each model that
-   * offers it; null keeps the admin's defaultEffort. See withDefaultEffort.
-   */
+  /** The reasoning effort every new session starts with (DEFAULT_REASONING_EFFORT), see withDefaultEffort; null keeps the admin's defaultEffort. */
   defaultEffort?: string | null;
+}
+
+/** The settings of a workspace of `kind`, from the admin's files and the gateway's configuration. */
+export function qwenSettingsFor(config: Config, kind: WorkspaceKind): RenderedSettings {
+  return renderQwenSettings({
+    admin: loadAdminQwenConfig(config.qwenConfigDir),
+    serviceBaseUrl: serviceBaseUrl(config, kind),
+    browser: config.workspace.browser,
+    reader: config.reader.url !== "",
+    defaultEffort: config.workspace.defaultEffort,
+  });
 }
 
 export interface RenderedSettings {
@@ -102,10 +93,9 @@ export interface RenderedSettings {
 }
 
 /**
- * The two system settings files of a workspace: the admin's files, with the keys the portal
- * depends on (model endpoint, search, no internet features, no telemetry) forced on top. The models
- * come only from the admin's system-defaults.json; without one there is nothing to offer, so that is
- * an AgentConfigError.
+ * The two system settings files of a workspace: the admin's files, with the keys the portal depends on (model
+ * endpoint, search, no internet features, no telemetry) forced on top. The models come only from the admin's
+ * system-defaults.json; without one there is nothing to offer, so that is an AgentConfigError.
  */
 export function renderQwenSettings(options: RenderOptions): RenderedSettings {
   const { admin, serviceBaseUrl, browser, reader = false, defaultEffort = null } = options;
@@ -132,8 +122,8 @@ export function renderQwenSettings(options: RenderOptions): RenderedSettings {
     security: { auth: { enforcedType: "openai", selectedType: "openai" } },
   });
   settings.$version ??= 4;
-  // The admin may list models here too (system scope); they get the same treatment. Without any
-  // left the key goes, so an empty list can't hide the models of system-defaults.json.
+  // The admin may list models here too (system scope); they get the same treatment. Without any left the key goes,
+  // so an empty list can't hide the models of system-defaults.json.
   if (settings.modelProviders !== undefined) {
     const providers = gatewayProviders(settings.modelProviders, serviceBaseUrl);
     if (providers.length > 0) settings.modelProviders = { openai: providers };
@@ -149,7 +139,7 @@ export function renderQwenSettings(options: RenderOptions): RenderedSettings {
   const servers: SettingsObject = { ...asObject(settings.mcpServers) };
   servers.search = {
     httpUrl: `${serviceBaseUrl}/mcp/search`,
-    timeout: 60_000,
+    timeout: SEARCH_TIMEOUT_MS,
     trust: true,
     includeTools: reader ? ["web_search", "read_page"] : ["web_search"],
     alwaysLoadTools: true,
@@ -159,9 +149,8 @@ export function renderQwenSettings(options: RenderOptions): RenderedSettings {
   };
   if (browser) {
     servers.browser = {
-      command: "/usr/local/bin/playwright-mcp",
-      args: ["--headless", "--isolated", "--no-sandbox", "--executable-path=/usr/bin/chromium", "--output-dir=/workspace/.browser"],
-      timeout: 120_000,
+      ...BROWSER_MCP,
+      timeout: BROWSER_TIMEOUT_MS,
       trust: true,
       description: "Headless Chromium for pages served inside this workspace (for example a dev server). It has no internet access.",
     };
@@ -174,20 +163,19 @@ export function renderQwenSettings(options: RenderOptions): RenderedSettings {
 }
 
 /**
- * Every new session starts at `effort`, while a person can still pick another one inside a session.
- * The Web Shell saves a pick to the user's own settings (model.reasoningEffort, user scope) and builds
- * each new session from the merged settings, so the effort goes into the system scope, which beats the
- * user's: their pick lasts for that session only. Each model that offers the effort also gets it as its
- * defaultEffort, which the Web Shell shows as the default and DeepSeek Harness starts its sessions with
- * (its own picks never stick: the portal's patch owns its default model row). A model without that
- * effort keeps the admin's default. The session-wide key (which also applies after a switch to another model) is
- * set only when every model that lists efforts offers this one; otherwise each model's defaultEffort does the job.
+ * Every new session starts at `effort`, while a person can still pick another one inside a session. The Web Shell
+ * saves a pick to the user's own settings (model.reasoningEffort, user scope) and builds each new session from the
+ * merged settings, so the effort goes into the system scope, which beats the user's: their pick lasts for that
+ * session only. Each model that offers the effort also gets it as its defaultEffort, which the Web Shell shows as the
+ * default and DeepSeek Harness starts its sessions with; a model without it keeps the admin's default. The
+ * session-wide key (which also applies after a switch to another model) is set only when every model that lists
+ * efforts offers this one.
  */
 function withDefaultEffort(rendered: RenderedSettings, effort: string): RenderedSettings {
   const { settings, systemDefaults } = rendered;
   const lists = [settings, systemDefaults].map((scope) => asObject(scope.modelProviders).openai).filter(Array.isArray);
   for (const list of lists) {
-    for (const entry of (list as unknown[]).filter(isPlainObject)) {
+    for (const entry of (list as unknown[]).filter(isRecord)) {
       const capabilities = asObject(entry.capabilities);
       const reasoning = asObject(capabilities.reasoning);
       if (!Array.isArray(reasoning.efforts) || !reasoning.efforts.includes(effort)) continue;
@@ -195,7 +183,7 @@ function withDefaultEffort(rendered: RenderedSettings, effort: string): Rendered
     }
   }
   // As Qwen Code resolves them: system scope's list replaces system-defaults'.
-  const providers = ((lists[0] ?? lists[1] ?? []) as unknown[]).filter(isPlainObject);
+  const providers = ((lists[0] ?? lists[1] ?? []) as unknown[]).filter(isRecord);
   const listed = providers
     .map((entry) => asObject(asObject(entry.capabilities).reasoning).efforts)
     .filter((efforts): efforts is unknown[] => Array.isArray(efforts));
@@ -206,18 +194,18 @@ function withDefaultEffort(rendered: RenderedSettings, effort: string): Rendered
 }
 
 /**
- * Only OpenAI-compatible providers, and only through the gateway (the workspace has no other route):
- * every entry gets the gateway's URL and the placeholder key variable, and no API key at any depth.
+ * Only OpenAI-compatible providers, and only through the gateway (the workspace has no other route): every entry gets
+ * the gateway's URL and the placeholder key variable, and no API key at any depth.
  */
 function gatewayProviders(modelProviders: unknown, serviceBaseUrl: string): SettingsObject[] {
   const { openai } = asObject(modelProviders);
-  const entries = Array.isArray(openai) ? openai.filter(isPlainObject) : [];
+  const entries = Array.isArray(openai) ? openai.filter(isRecord) : [];
   return entries.map((provider) => ({ ...(withoutApiKeys(provider) as SettingsObject), baseUrl: `${serviceBaseUrl}/llm/v1`, envKey: LLM_KEY_ENV }));
 }
 
 function withoutApiKeys(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(withoutApiKeys);
-  if (!isPlainObject(value)) return value;
+  if (!isRecord(value)) return value;
   const out: SettingsObject = {};
   for (const [key, item] of Object.entries(value)) if (key !== "apiKey") out[key] = withoutApiKeys(item);
   return out;
@@ -229,7 +217,7 @@ export function mergeSettings(base: SettingsObject, override: SettingsObject): S
   for (const [key, value] of Object.entries(override)) {
     if (key === "__proto__" || key === "constructor" || key === "prototype") continue;
     const current = out[key];
-    out[key] = isPlainObject(current) && isPlainObject(value) ? mergeSettings(current, value) : clone(value);
+    out[key] = isRecord(current) && isRecord(value) ? mergeSettings(current, value) : clone(value);
   }
   return out;
 }
@@ -239,9 +227,5 @@ function clone(value: unknown): unknown {
 }
 
 export function asObject(value: unknown): SettingsObject {
-  return isPlainObject(value) ? { ...value } : {};
-}
-
-export function isPlainObject(value: unknown): value is SettingsObject {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return isRecord(value) ? { ...value } : {};
 }

@@ -1,8 +1,8 @@
-// The portal's models, for agents that don't read Qwen Code's settings themselves (DeepSeek Harness).
-// The admin defines them once, in Qwen Code's system-defaults.json (modelProviders.openai[]); this
-// reads the effective list from the rendered Qwen settings, so every agent offers the same models
-// with the same default.
-import { asObject, isPlainObject, type RenderedSettings } from "./qwen-settings.ts";
+// The portal's models, for agents that don't read Qwen Code's settings themselves (DeepSeek Harness). The admin
+// defines them once, in Qwen Code's system-defaults.json (modelProviders.openai[]); this reads the effective list from
+// the rendered Qwen settings, so every agent offers the same models with the same default.
+import { isRecord } from "../lib/json.ts";
+import { asObject, type RenderedSettings } from "./qwen-settings.ts";
 
 /** Used when an entry doesn't say (generationConfig.contextWindowSize / samplingParams.max_tokens). */
 export const DEFAULT_CONTEXT_WINDOW = 131_072;
@@ -32,9 +32,8 @@ export interface ModelCatalog {
 const EFFORT = /^[A-Za-z0-9_-]{1,32}$/;
 
 /**
- * The models Qwen Code offers with these settings: system-scope settings.json's list replaces
- * system-defaults.json's, as Qwen Code merges them. renderQwenSettings has already refused
- * settings without any model.
+ * The models Qwen Code offers with these settings: system-scope settings.json's list replaces system-defaults.json's,
+ * as Qwen Code merges them. renderQwenSettings has already refused settings without any model.
  */
 export function portalModels(rendered: RenderedSettings): ModelCatalog {
   const fromSettings = providerEntries(rendered.settings);
@@ -52,7 +51,7 @@ export function portalModels(rendered: RenderedSettings): ModelCatalog {
 
 function providerEntries(settings: Record<string, unknown>): Record<string, unknown>[] {
   const { openai } = asObject(settings.modelProviders);
-  return Array.isArray(openai) ? openai.filter(isPlainObject) : [];
+  return Array.isArray(openai) ? openai.filter(isRecord) : [];
 }
 
 function toModel(entry: Record<string, unknown>): PortalModel | null {

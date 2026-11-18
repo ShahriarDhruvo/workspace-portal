@@ -1,22 +1,19 @@
 // The Qwen Code driver: `qwen serve` (the Web Shell) in a workspace container.
-//   * Auth: a bearer token, random per start (QWEN_SERVER_TOKEN). The Web Shell sends a token on every
-//     API call and socket; the browser holds only the session-bound agentBrowserToken.
-//   * Readiness and "is the agent working?": `GET /health?deep=1`. Readiness also asks
-//     `GET /daemon/status` when the daemon is up without its agent process (see probeReady).
-//   * Settings: settings.json and system-defaults.json, mounted where the image's
-//     QWEN_CODE_SYSTEM_SETTINGS_PATH / QWEN_CODE_SYSTEM_DEFAULTS_PATH point.
-import crypto from "node:crypto";
+//   * Auth: a bearer token, random per start (QWEN_SERVER_TOKEN). The Web Shell sends a token on every API call and
+//     socket; the browser holds only the session-bound agentBrowserToken.
+//   * Readiness and "is the agent working?": `GET /health?deep=1`. Readiness also asks `GET /daemon/status` when the
+//     daemon is up without its agent process (see probeReady).
+//   * Settings: settings.json and system-defaults.json, mounted where the image's QWEN_CODE_SYSTEM_SETTINGS_PATH /
+//     QWEN_CODE_SYSTEM_DEFAULTS_PATH point.
 import { AGENT_NAMES } from "@portal/core";
 import { workspaceRequestHeaders } from "../proxy/headers.ts";
-import { agentJson, serviceBaseUrl, type AgentDriver, type AgentEndpoint } from "./driver.ts";
-import { loadAdminQwenConfig, renderQwenSettings } from "./qwen-settings.ts";
+import { agentJson, generateCredential, type AgentDriver, type AgentEndpoint } from "./driver.ts";
+import { field, isRecord } from "../lib/json.ts";
+import { qwenSettingsFor } from "./qwen-settings.ts";
 
-const HEALTH_TIMEOUT_MS = 3_000;
 const MAX_HEALTH_BYTES = 64 * 1024;
 /** `/daemon/status` lists every capability of the daemon: about 107 KB in Qwen Code 0.27.0. */
 const MAX_STATUS_BYTES = 1024 * 1024;
-
-// ------------------------------------------------------------------ health
 
 /** The parts of `GET /health?deep=1` the gateway uses. All figures cover every session of the daemon. */
 export interface QwenHealth {
@@ -31,24 +28,21 @@ export interface QwenHealth {
 }
 
 export function parseQwenHealth(body: unknown): QwenHealth | null {
-  if (typeof body !== "object" || body === null) return null;
-  const record = body as Record<string, unknown>;
-  if (record.status !== "ok") return null;
+  if (!isRecord(body) || body.status !== "ok") return null;
   const count = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0);
-  const idle = record.idleSinceMs;
+  const idle = body.idleSinceMs;
   return {
-    activePrompts: count(record.activePrompts),
-    pendingPermissions: count(record.pendingPermissions),
-    activeWork: record.activeWork === true,
-    channelAlive: record.channelAlive === true,
+    activePrompts: count(body.activePrompts),
+    pendingPermissions: count(body.pendingPermissions),
+    activeWork: body.activeWork === true,
+    channelAlive: body.channelAlive === true,
     idleSinceMs: typeof idle === "number" && Number.isFinite(idle) && idle >= 0 ? idle : null,
   };
 }
 
 /** The JSON a workspace's daemon answers a GET with; null when it does not answer with 200 and JSON of at most `maxBytes`. */
 function getJson({ host, port, credential }: AgentEndpoint, path: string, maxBytes: number): Promise<unknown> {
-  const headers = { authorization: `Bearer ${credential}`, accept: "application/json" };
-  return agentJson({ host, port, path, headers, timeout: HEALTH_TIMEOUT_MS }, maxBytes);
+  return agentJson({ host, port, path, headers: { authorization: `Bearer ${credential}`, accept: "application/json" } }, maxBytes);
 }
 
 /** Reads `/health?deep=1` from a workspace; null when it does not answer or answers oddly. */
@@ -56,25 +50,19 @@ export async function fetchQwenHealth(endpoint: AgentEndpoint): Promise<QwenHeal
   return parseQwenHealth(await getJson(endpoint, "/health?deep=1", MAX_HEALTH_BYTES));
 }
 
-/**
- * True when `GET /daemon/status` says the daemon's first start of its agent process went through
- * (`daemon.startup.preheat.status`: scheduled, running, succeeded or failed).
- */
+/** True when `GET /daemon/status` says the daemon's first start of its agent process went through (`daemon.startup.preheat.status`). */
 export function parseQwenStarted(body: unknown): boolean {
-  const field = (value: unknown, name: string): unknown => (typeof value === "object" && value !== null ? (value as Record<string, unknown>)[name] : undefined);
   return field(field(field(field(body, "daemon"), "startup"), "preheat"), "status") === "succeeded";
 }
 
 /**
- * The agent is doing something: a prompt, a tool, a subagent, a background task, or an approval it
- * waits for. An approval nobody answers needs no special case: `qwen serve` declines it after
- * --permission-response-timeout-ms, which the gateway sets to the idle timeout.
+ * The agent is doing something: a prompt, a tool, a subagent, a background task, or an approval it waits for. An
+ * approval nobody answers needs no special case: `qwen serve` declines it after --permission-response-timeout-ms,
+ * which the gateway sets to the idle timeout.
  */
 export function agentWorking(health: QwenHealth): boolean {
   return health.activePrompts > 0 || health.pendingPermissions > 0 || health.activeWork;
 }
-
-// ------------------------------------------------------------------ driver
 
 export const qwenDriver: AgentDriver = {
   kind: "qwen",
@@ -96,7 +84,7 @@ export const qwenDriver: AgentDriver = {
     return !pathname.endsWith("/heartbeat");
   },
 
-  generateCredential: () => crypto.randomBytes(32).toString("base64url"),
+  generateCredential,
 
   containerEnv(credential, config) {
     return [
@@ -108,21 +96,15 @@ export const qwenDriver: AgentDriver = {
   },
 
   renderSettings(config, kind) {
-    const rendered = renderQwenSettings({
-      admin: loadAdminQwenConfig(config.qwenConfigDir),
-      serviceBaseUrl: serviceBaseUrl(config, kind),
-      browser: config.workspace.browser,
-      reader: config.reader.url !== "",
-      defaultEffort: config.workspace.defaultEffort,
-    });
+    const rendered = qwenSettingsFor(config, kind);
     return {
       "settings.json": `${JSON.stringify(rendered.settings, null, 2)}\n`,
       "system-defaults.json": `${JSON.stringify(rendered.systemDefaults, null, 2)}\n`,
     };
   },
 
-  // `qwen serve` checks Host and Origin itself: Host is its own address and Origin is dropped (the
-  // gateway checked the browser's). Its token goes only on requests that presented the browser's.
+  // `qwen serve` checks Host and Origin itself: Host is its own address and Origin is dropped (the gateway checked
+  // the browser's). Its token goes only on requests that presented the browser's.
   requestHeaders(incoming, endpoint, { authorised, websocket }) {
     const headers = workspaceRequestHeaders(incoming, `${endpoint.host}:${endpoint.port}`, { websocket });
     if (authorised) headers.authorization = `Bearer ${endpoint.credential}`;
@@ -133,10 +115,9 @@ export const qwenDriver: AgentDriver = {
     const health = await fetchQwenHealth(endpoint);
     if (health === null) return false;
     if (health.channelAlive) return true;
-    // No agent process. While a workspace starts that means "not yet". Later it is how an unused
-    // workspace looks: `qwen serve` stops the process once no session is open and starts it again
-    // for the next one, in about two seconds. Such a workspace must count as ready when the gateway
-    // restarts and takes it over, or it would be removed as one that never came up.
+    // No agent process. While a workspace starts that means "not yet". Later it is how an unused workspace looks:
+    // `qwen serve` stops the process once no session is open and starts it again for the next one. Such a workspace
+    // must count as ready when the gateway restarts and takes it over, or it would be removed as one that never came up.
     return parseQwenStarted(await getJson(endpoint, "/daemon/status", MAX_STATUS_BYTES));
   },
 

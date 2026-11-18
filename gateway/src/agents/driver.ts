@@ -1,20 +1,17 @@
-// The seam between the gateway and the agent harness a workspace runs (Qwen Code or DeepSeek
-// Harness). Everything else (the container, its network and limits, sessions, the proxy's access
-// checks, busy/idle rules) is the same for every agent; a driver supplies only what differs:
-//   * how the container is started: port, env, the read-only settings it mounts (the image comes from
-//     the agent's current version, agent-versions.ts);
-//   * how the gateway authenticates to the agent's web server, and which paths and sockets it has;
-//   * how the gateway learns that the agent is up and whether it is working;
-//   * where its releases come from, so the admin can update it (release).
+// The seam between the gateway and the agent harness a workspace runs (Qwen Code or DeepSeek Harness). Everything
+// else (the container, its network and limits, sessions, the proxy's access checks, busy/idle rules) is the same for
+// every agent; a driver supplies only what differs: how the container is started, how the gateway authenticates to
+// the agent's web server and which paths and sockets it has, how the gateway learns that the agent is up and whether
+// it is working, and where its releases come from.
+import crypto from "node:crypto";
 import http, { type IncomingHttpHeaders } from "node:http";
 import type { AgentKind, WorkspaceKind } from "@portal/core";
+import { readBounded } from "../lib/bounded-body.ts";
+import { parseJson } from "../lib/json.ts";
 import type { Config } from "../config.ts";
 import type { HeaderMap } from "../proxy/headers.ts";
 
-/**
- * Name of the env var holding the placeholder LLM key in every workspace. The gateway's LLM proxy
- * replaces it with the real key, which never enters a workspace.
- */
+/** The env var holding the placeholder LLM key in every workspace. The gateway's LLM proxy replaces it with the real key, which never enters a workspace. */
 export const LLM_KEY_ENV = "PORTAL_LLM_KEY";
 
 /** The admin's settings for an agent are unusable; the start fails with this message. */
@@ -33,6 +30,15 @@ export function serviceBaseUrl(config: Config, kind: WorkspaceKind): string {
   return `http://${config.workspace.kinds[kind].gatewayIp}:${config.servicePort}`;
 }
 
+/** The headless browser as an MCP server. dsh gives MCP children a scrubbed environment, so the browser's path goes on the command line. */
+export const BROWSER_MCP = {
+  command: "/usr/local/bin/playwright-mcp",
+  args: ["--headless", "--isolated", "--no-sandbox", "--executable-path=/usr/bin/chromium", "--output-dir=/workspace/.browser"],
+} as const;
+/** How long one call of a browser or search tool may take. */
+export const BROWSER_TIMEOUT_MS = 120_000;
+export const SEARCH_TIMEOUT_MS = 60_000;
+
 /** Where a running agent listens, and the per-start credential the gateway uses with it. */
 export interface AgentEndpoint {
   host: string;
@@ -40,21 +46,8 @@ export interface AgentEndpoint {
   credential: string;
 }
 
-/**
- * How the browser's requests are authorised, on top of the portal session and the port's user,
- * which the proxy checks for every agent:
- *   * "token": the agent's UI sends a bearer token; the browser holds a session-bound token
- *     (agentBrowserToken) that the gateway checks and swaps for the container's credential.
- *   * "cookie": the agent's UI relies on a cookie; the gateway adds the container's credential to
- *     every request itself and never lets the browser hold it.
- */
-export type BrowserAuth = "token" | "cookie";
-
-/**
- * Where an agent's releases come from and how its workspace image is built and checked. deploy/lib.sh
- * keeps its own copy of the key (agent_version_key) and the CLI (image_agent_version).
- */
-export interface AgentRelease {
+/** Where an agent's releases come from and how its workspace image is built and checked. deploy/lib.sh keeps its own copy of the key and the CLI. */
+interface AgentRelease {
   /** The npm package the image installs (and the registry is asked about). */
   readonly packageName: string;
   /** The .env key and Dockerfile build argument that hold the version, e.g. QWEN_CODE_VERSION. */
@@ -75,13 +68,16 @@ export interface AgentDriver {
   readonly credentialEnv: string;
   /** Mount point of the per-user settings directory rendered by renderSettings (read-only). */
   readonly settingsMount: string;
-  readonly browserAuth: BrowserAuth;
+  /**
+   * How the browser's requests are authorised, on top of the portal session and the port's user, which the proxy
+   * checks for every agent. "token": the agent's UI sends a bearer token; the browser holds a session-bound token
+   * (agentBrowserToken) that the gateway checks and swaps for the container's credential. "cookie": the agent's UI
+   * relies on a cookie; the gateway adds the container's credential to every request and the browser never holds it.
+   */
+  readonly browserAuth: "token" | "cookie";
   /** WebSocket paths the agent's UI uses; any other upgrade is refused. */
   readonly socketPaths: ReadonlySet<string>;
-  /**
-   * Path prefixes the proxy refuses (canonical, lowercase): features that would hand out access to
-   * the container or that need the internet.
-   */
+  /** Path prefixes the proxy refuses (canonical, lowercase): features that would hand out access to the container or that need the internet. */
   readonly blockedPrefixes: readonly string[];
 
   /** A request that means a person is using the workspace, as opposed to a poll or heartbeat. */
@@ -97,8 +93,8 @@ export interface AgentDriver {
    */
   renderSettings(config: Config, kind: WorkspaceKind): Record<string, string>;
   /**
-   * Headers for a request forwarded to the agent, from the browser's. `authorised` is false only for
-   * token agents when the browser presented no token (the page and its static assets).
+   * Headers for a request forwarded to the agent, from the browser's. `authorised` is false only for token agents
+   * when the browser presented no token (the page and its static assets).
    */
   requestHeaders(incoming: IncomingHttpHeaders, endpoint: AgentEndpoint, options: { authorised: boolean; websocket?: boolean }): HeaderMap;
   /** The agent is up and can take prompts. */
@@ -114,29 +110,23 @@ export interface AgentStatus {
   idleSinceMs: number | null;
 }
 
+/** 32 random bytes: also the form of dsh's own browser-session secrets (start-dsh checks it). */
+export const generateCredential = (): string => crypto.randomBytes(32).toString("base64url");
+
+/** How long the gateway waits for an agent's answer about itself. */
+export const AGENT_TIMEOUT_MS = 3_000;
+
 /**
  * JSON from a workspace's agent over HTTP: the body of a 200, or null on any failure (refused, not JSON, longer than
- * `maxBytes`, no answer within `options.timeout`). `body` is what a POST sends.
+ * `maxBytes`, no answer within AGENT_TIMEOUT_MS). `body` is what a POST sends.
  */
 export function agentJson(options: http.RequestOptions, maxBytes: number, body?: string): Promise<unknown> {
   return new Promise((resolve) => {
-    const request = http.request({ ...options, agent: false }, (response) => {
-      const chunks: Buffer[] = [];
-      let size = 0;
-      response.on("data", (chunk: Buffer) => {
-        size += chunk.length;
-        if (size > maxBytes) request.destroy();
-        else chunks.push(chunk);
-      });
-      response.on("end", () => {
-        if (response.statusCode !== 200) return resolve(null);
-        try {
-          resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")));
-        } catch {
-          resolve(null);
-        }
-      });
-      response.on("error", () => resolve(null));
+    const request = http.request({ ...options, agent: false, timeout: AGENT_TIMEOUT_MS }, (response) => {
+      readBounded(response, maxBytes).then(
+        (bytes) => resolve(response.statusCode === 200 && bytes !== null ? parseJson(bytes.toString("utf8")) : null),
+        () => resolve(null),
+      );
     });
     request.on("timeout", () => request.destroy());
     request.on("error", () => resolve(null));
