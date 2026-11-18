@@ -7,12 +7,16 @@ export const FETCH_TIMEOUT_MS = 10_000;
 export async function readBounded(body: AsyncIterable<Uint8Array> | Iterable<Uint8Array>, maxBytes: number): Promise<Buffer | null> {
   const chunks: Uint8Array[] = [];
   let size = 0;
-  for await (const chunk of body) {
-    size += chunk.byteLength;
-    if (size > maxBytes) return null;
-    chunks.push(chunk);
+  try {
+    for await (const chunk of body) {
+      size += chunk.byteLength;
+      if (size > maxBytes) break;
+      chunks.push(chunk);
+    }
+  } catch (error) {
+    if (size <= maxBytes) throw error; // past the limit, only the cancel can have failed
   }
-  return Buffer.concat(chunks);
+  return size > maxBytes ? null : Buffer.concat(chunks);
 }
 
 export async function readBoundedText(response: Response, maxBytes: number): Promise<string | null> {
