@@ -93,4 +93,5 @@ test("electricity prices: the place by name", () => {
   assert.equal(auditActionLabel("energy_price_location_set", true), "Changed electricity price location");
   assert.equal(formatAuditDetails(JSON.stringify({ location: { from: null, to: "Florida, US" } })), "Location: — → Florida, US");
   assert.equal(formatAuditDetails(JSON.stringify({ location: { from: "Florida, US", to: "Germany" } })), "Location: Florida, US → Germany");
+  assert.equal(formatAuditDetails('{"someKey":1}'), "Some key: 1", "a key without a label");
 });

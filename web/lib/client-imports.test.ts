@@ -22,14 +22,14 @@ test('"use client" files import only types from @portal/core', () => {
     .flatMap((dir) => sources(path.join(WEB, dir)))
     .filter((file) => /^\s*["']use client["']/.test(fs.readFileSync(file, "utf8")))
     .flatMap((file) =>
-      [...fs.readFileSync(file, "utf8").matchAll(/^import\s+(?!type\s)[^;]*?from\s+"@portal\/core"/gm)].map(() => path.relative(WEB, file)),
+      [...fs.readFileSync(file, "utf8").matchAll(/^import\s+(?!type\s)[^;]*?from\s+["']@portal\/core["']/gm)].map(() => path.relative(WEB, file)),
     );
   assert.deepEqual(offenders, []);
 });
 
 test("@portal/core/wire imports nothing from outside its folder", () => {
   const outside = sources(WIRE).flatMap((file) =>
-    [...fs.readFileSync(file, "utf8").matchAll(/^(?:import\s+|(?:import|export)\s[^;]*?\sfrom\s+)"([^"]+)"/gm)]
+    [...fs.readFileSync(file, "utf8").matchAll(/^(?:import\s+|(?:import|export)\s[^;]*?\sfrom\s+)["']([^"']+)["']/gm)]
       .filter(([, from]) => !/^\.\/[^/]+$/.test(from!))
       .map(([, from]) => `${path.basename(file)}: ${from}`),
   );
