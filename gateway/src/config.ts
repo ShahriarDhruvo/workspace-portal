@@ -232,8 +232,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   const bool = (name: string, fallback: boolean): boolean =>
     ["true", "1", "yes", "on"].includes(word(name, String(fallback), ["true", "1", "yes", "on", "false", "0", "no", "off"], "be true or false"));
   const byteSize = (name: string, fallback: string): number => read(name, fallback, (value) => parseByteSize(value) ?? undefined, "be a size such as 1536m or 2g");
-  const absolutePath = (name: string, fallback: string): string =>
-    read(name, fallback, (value) => (path.isAbsolute(value) ? path.resolve(value) : undefined), "be an absolute path");
   const url = (name: string, fallback: string): string => read(name, fallback, httpUrl, "be an http(s) URL");
   const ipv4 = (name: string, fallback: string): string => checked(name, fallback, net.isIPv4, "be an IPv4 address");
   const cidr = (name: string, fallback: string): string => checked(name, fallback, (value) => parseCidr(value) !== undefined, "be an IPv4 CIDR such as 172.29.0.0/16");
@@ -265,7 +263,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     return value;
   };
 
-  const dataDir = absolutePath("PORTAL_DATA_DIR", "/srv/workspace-portal");
+  const dataDir = read("PORTAL_DATA_DIR", "/srv/workspace-portal", (value) => (path.isAbsolute(value) ? path.resolve(value) : undefined), "be an absolute path");
   const agentPortBase = port("AGENT_PORT_BASE", 3100);
   const agentPortCount = int("AGENT_PORT_COUNT", 200, 2);
 
