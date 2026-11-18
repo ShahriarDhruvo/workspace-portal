@@ -97,7 +97,7 @@ HTTP/1.1. Every request but `GET /v1/health` needs `Authorization: Bearer <token
 | Method and path | Answer |
 |---|---|
 | `GET /v1/health` | `{"ok": true}`, no token needed |
-| `GET /v1/info` | `hostd` (API version), `hostname`, `role`, `os`, `kernel`, `intervalMs`, `cpu`, `gpu`, `memory`, `sources`, `power`, `engine`, and what `net` and `disk` count right now: `network.interfaces`, `disks.devices`, `disks.mounts` |
+| `GET /v1/info` | `hostname`, `role`, `os`, `kernel`, `intervalMs`, `cpu`, `gpu`, `memory`, `sources`, `power`, `engine`, and what `net` and `disk` count right now: `network.interfaces`, `disks.devices`, `disks.mounts` |
 | `GET /v1/sample` | One sample: `t`, `cpu`, `gpu`, `memory`, `power`, `fans`, `throttling`, `net`, `disk`. Rates are `null` in the first sample after idle. Keeps the sampler running for 5 s |
 | `GET /v1/stream` | Server-sent events: `event: info` once, then `event: sample` every `INTERVAL_MS`, and `: ping` after 15 s without one. At most 4 streams. A slow reader gets the newest sample, not every one |
 | `GET /v1/meter` | `instance`, `startedAt`, `t`, `energyJ`, `rxBytes`, `txBytes`: totals since this daemon started, as of its last tick (`t`). `instance` is random per start. `energyJ` is `null` without a power source, the bytes without a physical interface |
