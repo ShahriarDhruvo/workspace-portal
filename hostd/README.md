@@ -34,7 +34,7 @@ What the installer does:
 
 - Writes `/etc/portal-hostd/hostd.conf` and `/etc/portal-hostd/token` (0600), installs the daemon to `/usr/local/lib/portal-hostd/` and the unit `portal-hostd.service`, enables it, and tries `GET /v1/health` up to 20 times, half a second apart.
 - Restarts the service only if the daemon, the unit, the conf or the token changed, or if it is not running.
-- `llm`: adds the permanent firewalld rich rule `source address="<portal>/32" port <port>/tcp accept` to the zone of the interface that routes to the portal, and removes the rule of an earlier address or port. Without a running firewalld it only warns.
+- `llm`: adds the permanent firewalld rich rule `rule family="ipv4" source address="<portal>/32" port port="<port>" protocol="tcp" accept` to the zone of the interface that routes to the portal, and removes the rule of an earlier address or port. Without a running firewalld it only warns.
 - `llm`: ends by printing `HOSTD_LLM_URL=...` and `HOSTD_LLM_TOKEN=...` for the portal's `.env`. A token that came in on stdin is not printed.
 - `uninstall` removes the unit, `/etc/portal-hostd`, `/usr/local/lib/portal-hostd` and the firewalld rule. It keeps the engine user's `~/.local/state/portal-hostd`.
 
