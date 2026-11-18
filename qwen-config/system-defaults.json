@@ -1,9 +1,7 @@
-// Qwen Code system defaults for every workspace (lowest precedence: users may change these in their
-// own settings). This is where the models live.
-// Upload your own with:  sudo bash deploy/qwen-config.sh install system-defaults.json
-// For every entry under modelProviders.openai the portal forces "baseUrl" to its gateway and
-// "envKey" to a placeholder (the real key, LLM_API_KEY, never enters a workspace), and removes
-// "apiKey". The gateway forwards to LLM_UPSTREAM_URL, so "id" must be a model that server serves.
+// Qwen Code's system defaults in every workspace, where the models are: users may change these in their own settings.
+// Install your own:  sudo bash deploy/qwen-config.sh install system-defaults.json
+// In every entry of modelProviders.openai the portal sets "baseUrl" to its gateway and "envKey" to a placeholder
+// (LLM_API_KEY never enters a workspace) and removes "apiKey". "id" must be a model that LLM_UPSTREAM_URL serves.
 {
   "$version": 4,
   "security": { "auth": { "selectedType": "openai" } },

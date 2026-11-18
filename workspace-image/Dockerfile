@@ -1,43 +1,20 @@
-# Per-user workspace images, one target per agent (deploy/lib.sh builds them, and so does the gateway for
-# updates from the admin console, gateway/src/docker-image-builder.ts):
-#   --target qwen   Qwen Code's Web Shell (`qwen serve`) on port 4170
-#   --target dsh    DeepSeek Harness's web UI (`dsh --profile web`) on port 3080
-# Both carry the same everyday dev tools and headless Chromium for the Playwright MCP browser tool,
-# and both run under the same container spec (gateway/src/container-spec.ts):
-#   * as that user's own UID (WORKSPACE_UID_BASE + user id), with a per-user /etc/passwd and
-#     /etc/group bind-mounted read-only, so the images contain no workspace accounts;
-#   * read-only root filesystem; only /home/user, /workspace (the user's own storage) and an
-#     in-memory, noexec /tmp are writable;
-#   * no capabilities, no-new-privileges, memory/CPU/PID limits;
-#   * on an internal network whose only reachable address is the gateway, which serves the model
-#     and web search. Nothing in here can reach the internet, the LAN or another workspace.
-# A user's workspace runs one agent at a time; both use the same /home/user and /workspace.
-
-# ------------------------------------------------------------------ base: tools and headless Chromium
+# The workspace images, one target per agent: qwen (Qwen Code's Web Shell, port 4170) and dsh (DeepSeek Harness's
+# web UI, port 3080). deploy/lib.sh builds them, and the gateway for Admin > Updates. Both hold the same tools and a
+# headless Chromium for the Playwright MCP, and no account: a workspace runs as its user's own UID on a read-only
+# root, with that user's /home/user and /workspace mounted (gateway/src/docker/container-spec.ts).
 FROM docker.io/library/node:24-bookworm-slim@sha256:c0a93797ee78814ae6d32fcca2561fdbbe423149c3f5389aad32d86e9fd85bd4 AS base
-
 ARG PLAYWRIGHT_MCP_VERSION=0.0.84
-
+# While building only: npm's cache and logs go to /tmp, a tmpfs in every step that runs npm.
+ARG NPM_CONFIG_CACHE=/tmp/npm
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates curl git jq less procps ripgrep tini unzip \
       python3 python3-venv \
       chromium fonts-liberation fonts-noto-core fonts-noto-color-emoji \
- && rm -rf /var/lib/apt/lists/*
-
-RUN npm install -g --no-fund --no-audit "@playwright/mcp@${PLAYWRIGHT_MCP_VERSION}" \
- && npm cache clean --force \
- && rm -rf /root/.npm /tmp/*
-
-# Mount points: the real content comes from the user's own directories at run time. The base
-# image's "node" account goes: workspaces run as their own per-user UID. Without setuid/setgid
-# programs nothing in a workspace can gain privileges (no-new-privileges at run time already
-# neutralises them; the find removes them outright, and each agent stage repeats it).
-RUN mkdir -p /home/user /workspace \
- && (userdel --remove node 2>/dev/null || true) \
- && ! id node 2>/dev/null \
- && find / -xdev -perm /6000 -type f -exec chmod a-s {} +
-
+ && rm -rf /var/lib/apt/lists/* \
+ && userdel --remove node \
+ && mkdir /home/user /workspace
+RUN --mount=type=tmpfs,target=/tmp npm install -g --no-fund --no-audit "@playwright/mcp@${PLAYWRIGHT_MCP_VERSION}"
 ENV HOME=/home/user \
     DO_NOT_TRACK=1 \
     NO_UPDATE_NOTIFIER=1 \
@@ -47,63 +24,47 @@ ENV HOME=/home/user \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
     PLAYWRIGHT_MCP_EXECUTABLE_PATH=/usr/bin/chromium
-
 WORKDIR /workspace
-# The gateway always runs workspaces as the user's own UID; anything else defaults to "nobody", and
-# both start scripts refuse to run as root.
+# The gateway names the user; without one it is nobody, and the start scripts refuse root.
 USER 65534:65534
 
-# ------------------------------------------------------------------ qwen: Qwen Code Web Shell
 FROM base AS qwen
 ARG QWEN_CODE_VERSION=0.27.0
 USER root
-# /etc/workspace-portal/qwen: mount point for the gateway-rendered settings.json and system-defaults.json.
-RUN npm install -g --no-fund --no-audit "@qwen-code/qwen-code@${QWEN_CODE_VERSION}" \
- && npm cache clean --force \
- && rm -rf /root/.npm /tmp/* \
+# qwen/trim-web-shell.mjs trims the Web Shell in place, as it says: Qwen Code has no setting for it. What no longer
+# fits a Qwen Code version stays as shipped, with a warning in the build log.
+# /etc/workspace-portal/qwen: where the gateway mounts settings.json and system-defaults.json.
+# The find, here and in the dsh stage: no setuid or setgid program stays in a workspace image.
+RUN --mount=type=tmpfs,target=/tmp --mount=type=bind,source=qwen/trim-web-shell.mjs,target=/mnt/trim-web-shell.mjs \
+    npm install -g "@qwen-code/qwen-code@${QWEN_CODE_VERSION}" \
+ && node /mnt/trim-web-shell.mjs "$(npm root -g)/@qwen-code/qwen-code" \
  && mkdir -p /etc/workspace-portal/qwen \
  && find / -xdev -perm /6000 -type f -exec chmod a-s {} +
-# The Web Shell is trimmed in place (qwen/trim-web-shell.mjs, bind-mounted, so it doesn't stay in the
-# image): its left rail keeps Home and the sidebar toggle (no Activity, Plugins, Channels, Channel events,
-# Live, Scheduled Tasks, PR watches, Goals or "More" menu), the chat header loses Mobile access, and new
-# sessions start with Plan mode on. Qwen Code has no setting for these. The script never fails the build:
-# what no longer fits a Qwen Code version stays as shipped, with a warning in the build log.
-RUN --mount=type=bind,source=qwen/trim-web-shell.mjs,target=/mnt/trim-web-shell.mjs \
-    node /mnt/trim-web-shell.mjs "$(npm root -g)/@qwen-code/qwen-code"
 COPY --chmod=0755 start-qwen.sh /usr/local/bin/start-qwen
 ENV QWEN_CODE_SYSTEM_SETTINGS_PATH=/etc/workspace-portal/qwen/settings.json \
     QWEN_CODE_SYSTEM_DEFAULTS_PATH=/etc/workspace-portal/qwen/system-defaults.json \
     QWEN_TELEMETRY_ENABLED=false \
     QWEN_STREAM_MAX_LIFETIME_MS=3600000
 EXPOSE 4170
-# The agent, for the gateway's cleanup: it finds old builds that lost their tag by it (docker-image-builder.ts
-# sweep). Late in the stage, so a change here doesn't invalidate the cached layers above.
+# By this the gateway finds builds that lost their tag (gateway/src/docker/docker-image-builder.ts).
 LABEL workspace-portal.agent="qwen"
 USER 65534:65534
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/start-qwen"]
 
-# ------------------------------------------------------------------ dsh: DeepSeek Harness web UI
 FROM base AS dsh
 ARG DSH_VERSION=0.2.2-rc.1
 USER root
-# dsh's agent presets (dsh-web-app/presets/*.patch.yml) are adapted in place for a workspace without
-#   internet: dsh/adapt-presets.mjs disables their web-search and plugin-manager rows, which the
-#   lockdown's disabled plugins would otherwise break, and fails the build when a dsh version's presets
-#   no longer fit. Neither the script (bind-mounted) nor its pinned YAML parser (/tmp) stays in the image.
-# /etc/workspace-portal/dsh: mount point for the gateway-rendered portal.patch.yml.
-# /usr/local/share/workspace-portal/dsh/lockdown.patch.yml: the static lockdown.
-# /usr/local/lib/workspace-portal/dsh-cwd: dsh's launch directory. dsh loads <cwd>/.env at start, so
-#   it is an empty, root-owned directory.
-# /usr/local/lib/workspace-portal/dsh-documents: the lockdown's workspace-controller documentsDirectory.
-#   dsh's first-use default workspace, <it>/deepseek-harness/default-workspace, is a root-owned
-#   symlink to /workspace, so the only workspace dsh creates is /workspace itself.
-RUN --mount=type=bind,source=dsh/adapt-presets.mjs,target=/mnt/adapt-presets.mjs \
-    npm install -g --no-fund --no-audit "@deepseek-ai/dsh@${DSH_VERSION}" \
- && npm install --prefix /tmp/wp-tools --no-fund --no-audit yaml@2.9.1 \
+# dsh/adapt-presets.mjs fits dsh's agent presets to a workspace without internet and fails the build when they no
+# longer fit. Neither it nor its YAML parser (in /tmp) stays in the image.
+# /etc/workspace-portal/dsh: where the gateway mounts portal.patch.yml.
+# dsh-cwd: dsh's launch directory, empty and root's, because dsh loads <cwd>/.env.
+# dsh-documents: the lockdown's documentsDirectory. dsh's first workspace, deepseek-harness/default-workspace in
+#   it, is a link to /workspace, so /workspace is the only workspace dsh creates.
+RUN --mount=type=tmpfs,target=/tmp --mount=type=bind,source=dsh/adapt-presets.mjs,target=/mnt/adapt-presets.mjs \
+    npm install -g "@deepseek-ai/dsh@${DSH_VERSION}" \
+ && npm install --prefix /tmp/wp-tools yaml@2.9.1 \
  && cp /mnt/adapt-presets.mjs /tmp/wp-tools/ \
  && node /tmp/wp-tools/adapt-presets.mjs "$(npm root -g)/@deepseek-ai/dsh" \
- && npm cache clean --force \
- && rm -rf /root/.npm /tmp/* \
  && mkdir -p /etc/workspace-portal/dsh /usr/local/share/workspace-portal/dsh \
              /usr/local/lib/workspace-portal/dsh-cwd \
              /usr/local/lib/workspace-portal/dsh-documents/deepseek-harness \
@@ -111,23 +72,17 @@ RUN --mount=type=bind,source=dsh/adapt-presets.mjs,target=/mnt/adapt-presets.mjs
  && find / -xdev -perm /6000 -type f -exec chmod a-s {} +
 COPY --chmod=0755 start-dsh.sh /usr/local/bin/start-dsh
 COPY --chmod=0644 dsh/lockdown.patch.yml /usr/local/share/workspace-portal/dsh/lockdown.patch.yml
-# The build fails if a lockdown row doesn't apply to this dsh version (dsh/check-lockdown.sh: dsh would
-# only warn and run with a weaker lockdown).
+# The build fails when a row of the lockdown doesn't apply to this dsh version: dsh would only warn.
 RUN --mount=type=bind,source=dsh/check-lockdown.sh,target=/mnt/check-lockdown.sh \
     sh /mnt/check-lockdown.sh /usr/local/share/workspace-portal/dsh/lockdown.patch.yml
-# DSH_HOME / DSH_AGENTS_HOME: dsh's state (settings, sessions) and skills, in the user's home.
-# NARB_DISABLE_NATIVE_CACHE: dsh's native-addon loader otherwise copies its .node files to $TMPDIR
-#   and loads them from there, which fails on the noexec /tmp ("failed to map segment"), and dsh
-#   does not start.
+# NARB_DISABLE_NATIVE_CACHE: dsh would copy its native addons to /tmp, which is noexec, and not start.
 ENV DSH_HOME=/home/user/.dsh \
     DSH_AGENTS_HOME=/home/user/.agents \
     DSH_TELEMETRY_DISABLED=1 \
     DSH_TELEMETRY_MODE=DISABLED \
     NARB_DISABLE_NATIVE_CACHE=1
 EXPOSE 3080
-# The agent, for the gateway's cleanup (see the qwen stage).
 LABEL workspace-portal.agent="dsh"
 USER 65534:65534
-# start-dsh is the entrypoint itself and execs tini once it has stored and dropped the cookie
-# secret, so PID 1 (tini) never carries it in its environment.
+# Not under tini: start-dsh execs it once the cookie secret is out of the environment, so PID 1 never holds it.
 ENTRYPOINT ["/usr/local/bin/start-dsh"]

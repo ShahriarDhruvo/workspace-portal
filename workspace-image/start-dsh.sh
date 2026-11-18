@@ -1,13 +1,9 @@
 #!/bin/sh
-# Starts the DeepSeek Harness web UI (dsh --profile web) on the container's own address, port 3080.
-#
-# The gateway reaches it there and authenticates every request with a dsh-auth-* cookie it mints itself
-# (for Host localhost:3080) from DSH_COOKIE_SECRET: 32 random bytes, base64url without padding, new for
-# every container start. This script stores the secret as dsh's browser-session signing record in a
-# fresh /tmp/dsh-credentials.yaml (the lockdown patch points the credentials plugin there), removes it
-# from the environment, and only then execs tini and dsh. So neither dsh nor anything it starts (agent
-# bash, terminal, MCP servers) inherits it, and /proc/1/environ (tini) doesn't show it.
-# This script is the image's ENTRYPOINT (not run under tini) for that reason.
+# The dsh image's entrypoint: the DeepSeek Harness web UI on the container's own address, port 3080.
+# The gateway signs the dsh-auth-* cookie of its requests with DSH_COOKIE_SECRET: 32 random bytes as base64url, new
+# at every start. This script stores it as dsh's browser-session record in /tmp/dsh-credentials.yaml (where the
+# lockdown points the credentials plugin) and unsets it before it execs tini and dsh, so neither they nor what dsh
+# starts hold it.
 set -eu
 
 if [ "$(id -u)" = "0" ]; then

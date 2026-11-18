@@ -1,17 +1,9 @@
 #!/bin/sh
-# Build-time check (Dockerfile, dsh stage): every row of the lockdown must apply to the installed dsh.
-# dsh skips a patch row whose target is gone with only a warning ("patch: entry X not found"), so after a
-# dsh update that renamed or removed a row the image would ship a silently weaker lockdown. This fails the
-# build instead, and the current image stays in use. `dsh --dump-config` composes the web profile with the
-# lockdown without booting it or evaluating `!!js`, and prints those warnings on stderr.
-# A row marked `# optional` (a plugin some supported dsh versions no longer have) may be missing.
-#
-# The check relies on dsh's wording, so it first proves it still can: it checks a copy of the lockdown with
-# one more row whose id exists nowhere (the canary) and fails unless dsh reports that row exactly the way
-# this script looks for missing rows. A dsh release that rewords its warnings fails the build here instead
-# of passing every lockdown.
-#
-# Usage: check-lockdown.sh <lockdown.patch.yml>
+# check-lockdown.sh <lockdown.patch.yml>
+# Fails the image build unless every row of the lockdown applies to the installed dsh, which only warns about a row
+# whose target is gone. Rows marked "# optional" may be missing. dsh --dump-config composes the web profile with
+# the lockdown, without starting it, and prints those warnings. The check reads dsh's wording, so it adds a row
+# that exists nowhere (the canary) and fails unless dsh reports it the way missing() expects.
 set -eu
 lockdown=$1
 canary=workspace-portal-canary

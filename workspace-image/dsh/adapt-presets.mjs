@@ -1,23 +1,11 @@
-// Adapts DeepSeek Harness's shipped agent presets to a workspace without internet, in place, at image
-// build time (Dockerfile, dsh stage, right after `npm install -g @deepseek-ai/dsh`).
-//
-// Why in place: the presets a session runs (standard, ptc, minimal, cordis) are insert patches in
-// @deepseek-ai/dsh-web-app/presets/*.patch.yml, each with its own plugin list. lockdown.patch.yml
-// disables the `web` plugin and the plugin manager, so a preset row that uses them (OFFLINE_ROWS) can't
-// activate, and the preset is reported broken. A patch can't disable one plugin inside a preset (it
-// replaces the preset row's whole `config`), and a preset restated in the lockdown goes stale with every
-// dsh release (new rows, `!!js` expressions that resolve relative to the preset file's own location).
-// Disabling those rows where dsh ships them leaves everything else exactly as shipped, in any version.
-//
-// The edits are spliced into the source text at the node ranges the yaml parser reports, so apart from
-// the `disabled: true` lines each file stays byte-for-byte as shipped (re-stringifying the document
-// keeps comments and `!!js` tags but re-folds some scalars).
-//
-// Fails (exit 1) when the presets are missing or don't parse, a file declares no preset, or a listed row
-// is still enabled afterwards: a dsh release that moves things fails the image build instead of shipping
-// a broken preset, and the current image stays in use.
-//
-// Usage: node adapt-presets.mjs <dsh package dir>   (with the `yaml` package next to this script)
+// node adapt-presets.mjs <dsh package dir>   (with the yaml package beside this script)
+// Disables, in the agent presets dsh ships (dsh-web-app/presets/*.patch.yml), the rows that need what
+// lockdown.patch.yml turns off (OFFLINE_ROWS): with them a preset is reported broken. A patch can't do it, because
+// it replaces a preset row's whole config, and a preset restated in the lockdown goes stale with every dsh release.
+// The edits are spliced into the source text at the ranges the parser reports, so the rest of each file stays byte
+// for byte as shipped (writing the parsed document back would re-fold some scalars).
+// Exits 1, failing the image build, when the presets are missing or don't parse, a file declares no preset, or a
+// listed row is still enabled afterwards.
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";

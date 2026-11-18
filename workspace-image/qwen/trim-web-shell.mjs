@@ -1,32 +1,22 @@
-// Trims Qwen Code's Web Shell to what the portal's users use, in place, at image build time (Dockerfile,
-// qwen stage, right after `npm install -g @qwen-code/qwen-code`):
-//   * the left rail keeps only Home and the sidebar toggle: no Activity view, Plugins, Channels, Channel
-//     events, Live, Scheduled Tasks, PR watches, Goals, nor the "More" menu (Settings, theme, Session
-//     Overview, Split View, Daemon Status, Local files, Use this computer);
-//   * the chat header loses Mobile access (pairing a phone with Local Control, which the gateway blocks);
-//   * every new session starts with Plan mode on (the composer's + menu toggle), running the approved plan
-//     in the approval mode the composer shows, as when a person turns the toggle on;
-//   * the Web preview shows the workspace's own web apps: it loads its address in the person's browser, where
-//     http://localhost:3000 is the person's own computer, so localhost, 127.x.x.x and 0.0.0.0 go to the
-//     workspace's preview port instead (the gateway's preview-proxy.ts), and its frame may lock the pointer
-//     (mouse look in a game) and show alert/confirm dialogs.
-// Qwen Code has no setting for any of this: the Web Shell app hard-codes the options of its shell component,
-// and `tools.approvalMode: "plan"` would also start the terminal's `qwen` and headless `qwen -p` in plan
-// mode (headless can't leave it, so it could change nothing) and run approved plans with "Ask" approval.
-//
+// node trim-web-shell.mjs <qwen-code package dir>
+// Trims Qwen Code's Web Shell in place, in the image build:
+//   * the left rail keeps Home and the sidebar toggle: no Activity, Plugins, Channels, Channel events, Live,
+//     Scheduled Tasks, PR watches, Goals or "More" menu;
+//   * the chat header loses Mobile access (pairing a phone, which the gateway blocks);
+//   * a new session starts with Plan mode on, as when a person turns the composer's toggle on;
+//   * the Web preview shows the workspace's web apps: in the person's browser localhost is their own computer, so
+//     localhost, 127.x.x.x and 0.0.0.0 go to the workspace's preview port (the gateway's preview proxy), and its
+//     frame may lock the pointer and show alert and confirm dialogs.
+// Qwen Code has no setting for these: the app hard-codes its shell component's options, and tools.approvalMode
+// "plan" would also put the terminal's qwen and the headless qwen -p in plan mode.
 // Two layers, each working without the other:
-//   1. The app bundle: the shell component's own options (sidebar.primaryNav and footer items, showLive,
-//      header.showMobileAccess) and the Plan toggle's initial state for a new session. Covers every layout
-//      (rail, expanded sidebar, phone drawer) and language. The edited bundle gets a new file name (an import
-//      map in index.html points the other chunks at it): browsers keep the shipped one cached as immutable.
-//   2. A stylesheet in index.html, keyed on the Web Shell's data-* attributes and icon names, never on its
-//      generated class names: the rail shows only Home and the toggle, and the Activity and Mobile access
-//      buttons are hidden. Covers the desktop layouts even when a later version no longer fits layer 1.
-//
-// Never fails the build: an edit that no longer fits (the code it expects isn't there exactly once, or
-// the result doesn't parse) is skipped with a warning, and that part of the Web Shell stays as shipped.
-//
-// Usage: node trim-web-shell.mjs <qwen-code package dir>
+//   1. The app bundle: the shell component's options and the Plan toggle's initial state, for every layout and
+//      language. The edited bundle gets a new file name (an import map in index.html points the other chunks at
+//      it), because browsers keep the shipped one cached as immutable.
+//   2. A stylesheet in index.html, keyed on the Web Shell's data-* attributes and icon names, not on its generated
+//      class names: it hides the same on the desktop layouts when a version no longer fits layer 1.
+// Never fails the build: an edit that no longer fits (its code isn't there exactly once, or the result doesn't
+// parse) is skipped with a warning, and that part stays as shipped.
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
