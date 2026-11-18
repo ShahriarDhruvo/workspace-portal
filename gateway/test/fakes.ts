@@ -573,7 +573,6 @@ export class FakeRuntime implements ContainerRuntime {
       running: c.running,
       ip: c.ip,
       port: c.server?.port ?? 1,
-      image: c.image,
       version: c.version,
     }));
   }

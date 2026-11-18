@@ -11,26 +11,17 @@ export interface StartedContainer {
   port: number;
 }
 
+/** userId, kind, agent and version are the container's labels: null when one is missing or names nothing known. */
 export interface ContainerSummary {
   id: string;
-  /** From the user-id label; null when the label is missing or malformed. */
   userId: number | null;
-  /** From the kind label (none means Private, from before kinds); null when it names no known kind. */
   kind: WorkspaceKind | null;
-  /** From the agent label (none means Qwen Code, from before the choice); null when it names no known agent. */
   agent: AgentKind | null;
   running: boolean;
   /** Its address on its own kind's network. */
   ip: string | null;
   /** The agent's port; null when the agent is unknown. */
   port: number | null;
-  /**
-   * The image as the container was created from it (`workspace-portal/workspace:<agent>-<version>`;
-   * image-names.ts parseWorkspaceImage reads the version back), or an image id when that tag has
-   * moved on since.
-   */
-  image: string;
-  /** From the version label (container-spec.ts VERSION_LABEL); null for containers from before it. */
   version: string | null;
 }
 

@@ -219,7 +219,7 @@ test("a start removes whatever is left of either kind first, then creates its ow
   assert.deepEqual(started, { id: "id-wp-wo-7", ip: "172.28.128.2", port: 4170 });
 });
 
-test("list reads each container's kind (none: Private) and its address on its own kind's network only", async () => {
+test("list reads each container's kind from its label, and its address on its own kind's network only", async () => {
   const row = (id: string, labels: Record<string, string>, networks: Record<string, string>) => ({
     Id: id,
     Labels: { "workspace-portal.workspace": "1", "workspace-portal.user-id": "3", ...labels },
@@ -228,8 +228,9 @@ test("list reads each container's kind (none: Private) and its address on its ow
     NetworkSettings: { Networks: Object.fromEntries(Object.entries(networks).map(([name, ip]) => [name, { IPAddress: ip }])) },
   });
   const { runtime } = containerDocker([
-    row("old", {}, { "workspace-portal-ws": "172.29.128.2" }),
-    row("on", { "workspace-portal.kind": "online" }, { "workspace-portal-online": "172.28.128.2" }),
+    row("unlabelled", {}, { "workspace-portal-ws": "172.29.128.1" }),
+    row("private", { "workspace-portal.kind": "private" }, { "workspace-portal-ws": "172.29.128.2" }),
+    row("on",{ "workspace-portal.kind": "online" }, { "workspace-portal-online": "172.28.128.2" }),
     // An Online container somehow also on the Private network: only its Online address is its own.
     row("both", { "workspace-portal.kind": "online" }, { "workspace-portal-ws": "172.29.128.9" }),
     row("odd", { "workspace-portal.kind": "public" }, { "workspace-portal-ws": "172.29.128.3" }),
@@ -238,7 +239,8 @@ test("list reads each container's kind (none: Private) and its address on its ow
   assert.deepEqual(
     listed.map(({ id, kind, ip }) => ({ id, kind, ip })),
     [
-      { id: "old", kind: "private", ip: "172.29.128.2" },
+      { id: "unlabelled", kind: null, ip: null },
+      { id: "private", kind: "private", ip: "172.29.128.2" },
       { id: "on", kind: "online", ip: "172.28.128.2" },
       { id: "both", kind: "online", ip: null },
       { id: "odd", kind: null, ip: null },

@@ -1,11 +1,10 @@
 // ContainerRuntime backed by the Docker Engine API (dockerode, /var/run/docker.sock or DOCKER_HOST).
 import Docker from "dockerode";
-import { compareVersions, isAgentKind, isVersion, WORKSPACE_KINDS, type AgentKind, type WorkspaceKind } from "@portal/core";
+import { compareVersions, isAgentKind, isVersion, isWorkspaceKind, WORKSPACE_KINDS, type AgentKind, type WorkspaceKind } from "@portal/core";
 import { driverFor } from "../agents/index.ts";
 import type { Config, KindConfig } from "../config.ts";
 import {
   AGENT_LABEL,
-  containerKind,
   containerName,
   KIND_LABEL,
   USER_ID_LABEL,
@@ -149,9 +148,10 @@ export class DockerRuntime implements ContainerRuntime {
   async list(): Promise<ContainerSummary[]> {
     const rows = await this.#docker.listContainers({ all: true, filters: { label: [`${WORKSPACE_LABEL}=1`] } });
     return rows.map((row) => {
+      const { [AGENT_LABEL]: agentLabel, [KIND_LABEL]: kindLabel, [VERSION_LABEL]: version } = row.Labels;
       const userId = Number(row.Labels[USER_ID_LABEL]);
-      const agent = containerAgent(row.Labels[AGENT_LABEL]);
-      const kind = containerKind(row.Labels[KIND_LABEL]);
+      const agent = isAgentKind(agentLabel) ? agentLabel : null;
+      const kind = isWorkspaceKind(kindLabel) ? kindLabel : null;
       // Only the address on its own kind's network counts: that is where the gateway knows it from.
       const network = kind === null ? null : this.#config.workspace.kinds[kind].network;
       return {
@@ -162,8 +162,7 @@ export class DockerRuntime implements ContainerRuntime {
         running: row.State === "running",
         ip: (network !== null && row.NetworkSettings.Networks[network]?.IPAddress) || null,
         port: agent === null ? null : driverFor(agent).port,
-        image: row.Image,
-        version: isVersion(row.Labels[VERSION_LABEL] ?? "") ? row.Labels[VERSION_LABEL]! : null,
+        version: isVersion(version) ? version : null,
       };
     });
   }
@@ -279,10 +278,4 @@ export function engineMessage(error: unknown): string {
   const json = (error as { json?: { message?: unknown } } | null)?.json;
   if (typeof json?.message === "string" && json.message.trim() !== "") return json.message.trim();
   return error instanceof Error ? error.message : String(error);
-}
-
-/** The agent label of a workspace container; containers from before agents had a label run Qwen Code. */
-export function containerAgent(label: string | undefined): AgentKind | null {
-  if (label === undefined) return "qwen";
-  return isAgentKind(label) ? label : null;
 }

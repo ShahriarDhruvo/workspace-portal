@@ -4,7 +4,7 @@ import { loadConfig, MIB } from "../config.ts";
 import { AGENT_KINDS, WORKSPACE_KINDS } from "@portal/core";
 import { driverFor } from "../agents/index.ts";
 import { qwenDriver } from "../agents/qwen.ts";
-import { containerKind, containerName, workspaceContainerOptions, workspaceNetworkOptions } from "./container-spec.ts";
+import { containerName, workspaceContainerOptions, workspaceNetworkOptions } from "./container-spec.ts";
 import { workspaceImage } from "./image-names.ts";
 
 const config = loadConfig({
@@ -107,9 +107,6 @@ test("a user's two kinds share no mount, no UID, no network and no name", () => 
     assert.notEqual(a!.HostConfig!.NetworkMode, b!.HostConfig!.NetworkMode);
     assert.notEqual(a!.name, b!.name);
   }
-  assert.equal(containerKind(undefined), "private", "containers from before kinds are Private");
-  assert.equal(containerKind("online"), "online");
-  assert.equal(containerKind("bogus"), null);
 });
 
 test("every agent gets the same sandbox: limits, no capabilities, read-only root, the internal network", () => {

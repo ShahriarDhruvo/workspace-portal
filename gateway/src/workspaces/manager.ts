@@ -37,7 +37,6 @@ import type { Config } from "../config.ts";
 import { closeEndedSessions, type ConnectionRegistry } from "../proxy/connections.ts";
 import { containerName } from "../docker/container-spec.ts";
 import type { FenceState } from "./fence.ts";
-import { parseWorkspaceImage } from "../docker/image-names.ts";
 import type { LlmQueue } from "../service/llm-queue.ts";
 import { HttpError } from "../lib/http-util.ts";
 import { errorMessage, type Logger } from "../lib/log.ts";
@@ -1137,13 +1136,12 @@ export class WorkspaceManager {
     }
     if (entry.starting || entry.stopping || entry.deleting || isActive(entry)) return false;
     const now = this.#now();
-    const image = parseWorkspaceImage(container.image);
     patch(entry, {
       ...NO_CONTAINER,
       status: "starting",
       agent: container.agent,
       kind: container.kind,
-      version: container.version ?? (image?.kind === container.agent ? image.version : null),
+      version: container.version,
       containerId: container.id,
       ip: container.ip,
       port: container.port,

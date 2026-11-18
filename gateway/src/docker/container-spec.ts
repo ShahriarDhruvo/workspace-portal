@@ -17,7 +17,7 @@
 // and settings, the kind only its network, DNS, UID and mounts, and the image is the agent's current version
 // (WorkspaceManager asks agent-versions.ts at every start).
 import type Docker from "dockerode";
-import { isWorkspaceKind, type AgentKind, type WorkspaceKind } from "@portal/core";
+import type { AgentKind, WorkspaceKind } from "@portal/core";
 import { LLM_KEY_ENV, type AgentDriver } from "../agents/index.ts";
 import { MIB, type Config, type KindConfig } from "../config.ts";
 import { parseWorkspaceImage } from "./image-names.ts";
@@ -25,15 +25,9 @@ import { userPaths, workspaceOwner } from "../workspaces/paths.ts";
 
 export const WORKSPACE_LABEL = "workspace-portal.workspace";
 export const USER_ID_LABEL = "workspace-portal.user-id";
-/** The agent the container runs (an AgentKind). Containers from before the choice have none: Qwen Code. */
 export const AGENT_LABEL = "workspace-portal.agent";
-/**
- * The agent version the container started with. Docker lists a container's image as an image id once its tag has
- * moved to a rebuild (an update), so a restarted gateway reads the version from here. Containers from before it
- * have none.
- */
+/** Docker lists a container's image as an image id once its tag has moved to a rebuild, so a restarted gateway reads the version from here. */
 export const VERSION_LABEL = "workspace-portal.version";
-/** The workspace kind (a WorkspaceKind). Containers from before kinds have none: Private. */
 export const KIND_LABEL = "workspace-portal.kind";
 
 /** Swap allowed on top of the memory limit, so short spikes slow down instead of OOM-killing the agent. */
@@ -41,15 +35,8 @@ const SWAP_HEADROOM_BYTES = 512 * MIB;
 /** Makes workspaces the OOM killer's first choice, so the LLM server survives a memory shortage. */
 const OOM_SCORE_ADJ = 500;
 
-/** The name of a user's workspace container of one kind: Private wp-ws-<id> (as before kinds), Online wp-wo-<id>. */
 export function containerName(userId: number, kind: WorkspaceKind): string {
   return `${kind === "online" ? "wp-wo" : "wp-ws"}-${userId}`;
-}
-
-/** The kind label of a workspace container; containers from before kinds have none and are Private. */
-export function containerKind(label: string | undefined): WorkspaceKind | null {
-  if (label === undefined) return "private";
-  return isWorkspaceKind(label) ? label : null;
 }
 
 export interface WorkspaceStartOptions {
