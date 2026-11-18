@@ -16,11 +16,11 @@ function key(field: number, wireType: 0 | 2): number[] {
   return varint((field << 3) | wireType);
 }
 
-export function varintField(field: number, value: number | bigint | boolean): number[] {
+function varintField(field: number, value: number | bigint | boolean): number[] {
   return [...key(field, 0), ...varint(typeof value === "boolean" ? (value ? 1 : 0) : value)];
 }
 
-export function bytesField(field: number, value: string | Uint8Array | number[]): number[] {
+function bytesField(field: number, value: string | Uint8Array | number[]): number[] {
   const data = typeof value === "string" ? [...Buffer.from(value, "utf8")] : [...value];
   return [...key(field, 2), ...varint(data.length), ...data];
 }

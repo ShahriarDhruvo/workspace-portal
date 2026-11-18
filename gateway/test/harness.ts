@@ -52,7 +52,7 @@ export const CONTROL_SECRET = "control-secret-for-tests-0123456789";
 /** Workspace ports base+1 … base+PORT_COUNT-1 of each kind: users 1-9. */
 const PORT_COUNT = 10;
 /** The admin's system-defaults.json every test gateway starts with: models come only from there. */
-export const SYSTEM_DEFAULTS = { modelProviders: { openai: [{ id: "qwen3.8-flash-next", name: "Qwen3.8 Flash-Next" }] } };
+const SYSTEM_DEFAULTS = { modelProviders: { openai: [{ id: "qwen3.8-flash-next", name: "Qwen3.8 Flash-Next" }] } };
 const DAY = 24 * 60 * MIN;
 
 export type UserName = "alice" | "bob" | "carol" | "dave" | "admin";

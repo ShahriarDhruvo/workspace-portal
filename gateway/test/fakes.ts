@@ -168,7 +168,7 @@ const json = (res: http.ServerResponse, status: number, body: unknown): void => 
   res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(body));
 };
 
-export async function startFakeQwen(token: string, options: { readyAfterMs: number; pingIntervalMs: number; host: string }): Promise<FakeQwen> {
+async function startFakeQwen(token: string, options: { readyAfterMs: number; pingIntervalMs: number; host: string }): Promise<FakeQwen> {
   const readyAt = Date.now() + options.readyAfterMs;
   const fake: FakeQwen = {
     host: options.host,
@@ -329,7 +329,7 @@ function refuseDsh(req: IncomingMessage, secret: string): number | null {
   return validDshCookie(req.headers.cookie, secret) ? null : 401;
 }
 
-export async function startFakeDsh(secret: string, options: { readyAfterMs: number; pingIntervalMs: number; host: string }): Promise<FakeDsh> {
+async function startFakeDsh(secret: string, options: { readyAfterMs: number; pingIntervalMs: number; host: string }): Promise<FakeDsh> {
   const readyAt = Date.now() + options.readyAfterMs;
   const fake: FakeDsh = {
     host: options.host,

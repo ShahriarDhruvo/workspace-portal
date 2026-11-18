@@ -164,7 +164,7 @@ export const energyPrices = sqliteTable(
 
 // Portal-wide settings the admin changes in the browser, one row per key (PORTAL_SETTING_KEYS); a missing row is
 // "not set".
-export const PORTAL_SETTING_KEYS = ["energy_price_location"] as const;
+const PORTAL_SETTING_KEYS = ["energy_price_location"] as const;
 export type PortalSettingKey = (typeof PORTAL_SETTING_KEYS)[number];
 
 export const portalSettings = sqliteTable("portal_settings", {
