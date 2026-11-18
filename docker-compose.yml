@@ -1,6 +1,6 @@
 # Workspace Portal: the web app, the gateway, SearXNG and the page reader. The gateway creates the workspace
-# containers itself. Settings come from .env, which must hold every key of .env.example (deploy/install.sh sees to it);
-# each service is passed only the ones it uses, by name.
+# containers itself. Settings come from .env, which deploy/install.sh completes from .env.example and checks against
+# this file (what is written with ":?" needs a value); each service is passed only the ones it uses, by name.
 name: workspace-portal
 
 x-common: &common

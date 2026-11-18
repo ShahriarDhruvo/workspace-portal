@@ -9,8 +9,8 @@ warn() { printf '\033[1;33m!!\033[0m %s\n' "$*" >&2; }
 die() { printf '\033[1;31mxx\033[0m %s\n' "$*" >&2; exit 1; }
 require_root() { [[ $EUID -eq 0 ]] || die "run as root: sudo bash $0"; }
 
-# KEY's value in FILE as docker compose reads it: without quotes, or without a " #" comment when unquoted.
-# Fails when the key is missing or empty.
+# KEY's value in FILE as docker compose reads a KEY=value line without "$" or escapes: without quotes, or without
+# a " #" comment when unquoted. Fails when the key is missing or empty.
 env_value() { # file key
   local line
   line=$(grep -E "^$2=" "$1" 2>/dev/null | tail -n 1) || return 1

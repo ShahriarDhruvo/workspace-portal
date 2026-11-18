@@ -20,6 +20,10 @@ systemctl enable --quiet docker.service
 [[ -f $ENV_FILE ]] || { log "creating .env from .env.example"; cp .env.example "$ENV_FILE"; }
 chmod 600 "$ENV_FILE"
 chown "${SUDO_USER:-root}": "$ENV_FILE"
+# docker compose also reads "export KEY=value" and " KEY = value", and a key's last line counts: a default added
+# below would replace such a line's value.
+other=$(grep -nvE '^([^[:space:]=#]+=|[[:space:]]*(#|$))' "$ENV_FILE" | cut -d= -f1) &&
+  die ".env: write each setting as KEY=value from the start of its line (no \"export\", no spaces); see line ${other//$'\n'/, line }"
 while IFS= read -r line; do
   grep -q "^${line%%=*}=" "$ENV_FILE" || { env_set "${line%%=*}" "${line#*=}"; log "added ${line%%=*} to .env"; }
 done < <(grep -E '^[A-Z0-9_]+=' .env.example)
@@ -31,6 +35,7 @@ set_if_missing TZ "$(timedatectl show -p Timezone --value 2>/dev/null || true)"
 
 # What only this host can tell, and what would otherwise fail after the builds. The gateway checks the rest of
 # .env when it starts.
+docker compose config -q || die "docker compose does not accept .env (see above)"
 load_enabled_agents
 for agent in "${ENABLED_AGENTS[@]}"; do
   valid_version "$(env_get "${AGENT_VERSION_KEY[$agent]}")" || die "${AGENT_VERSION_KEY[$agent]} in .env is not a version such as 0.27.0"
