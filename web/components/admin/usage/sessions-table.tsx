@@ -100,8 +100,8 @@ export function SessionsTable({ initial, version, llm, now }: SessionsTableProps
             <DataTableHead align="right" title="Time its requests took on the LLM server">
               LLM time
             </DataTableHead>
-            <DataTableHead align="right" title="The average draw of its share of the LLM server's energy">
-              Power
+            <DataTableHead align="right" title="Its share of the LLM server's measured energy while its requests ran">
+              Energy
             </DataTableHead>
             <DataTableHead align="right">Cost</DataTableHead>
           </TableRow>
@@ -135,8 +135,8 @@ export function SessionsTable({ initial, version, llm, now }: SessionsTableProps
                 </TableCell>
                 <TableCell className={number}>{formatCount(row.tokensOut)}</TableCell>
                 <TableCell className={number}>{row.requests > 0 ? formatElapsed(row.llmMs) : "—"}</TableCell>
-                <TableCell className={number} title={row.energyWh !== null ? `${formatWh(row.energyWh)} in all` : undefined}>
-                  {formatWatts(row.watts)}
+                <TableCell className={number} title={row.watts !== null ? `${formatWatts(row.watts)} on average while its requests ran` : undefined}>
+                  {row.energyWh === null ? "—" : formatWh(row.energyWh)}
                 </TableCell>
                 <TableCell className={number}>
                   <Cost row={row} currency={data.currency} />
