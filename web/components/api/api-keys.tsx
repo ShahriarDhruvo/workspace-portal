@@ -97,7 +97,13 @@ export function ApiKeys(view: ApiKeysView) {
             <EmptyContent>{createButton}</EmptyContent>
           </Empty>
         ) : (
-          <DataTable tableProps={{ "aria-label": "Keys" }}>
+          <DataTable
+            tableProps={{
+              "aria-label": "Keys",
+              // A narrow screen shows the key, its last use and Revoke without scrolling sideways: the numbers are under Usage.
+              className: "max-lg:[&_:is(th,td):not(:first-child,:nth-child(3),:last-child)]:hidden",
+            }}
+          >
             <TableHeader>
               <TableRow>
                 <DataTableHead>Key</DataTableHead>
@@ -112,8 +118,8 @@ export function ApiKeys(view: ApiKeysView) {
             <TableBody>
               {keys.map((key) => (
                 <TableRow key={key.id}>
-                  <TableCell>
-                    <div className="max-w-64 truncate font-medium" title={key.name}>
+                  <TableCell className="max-lg:w-full max-lg:max-w-0">
+                    <div className="truncate font-medium lg:max-w-64" title={key.name}>
                       {key.name}
                     </div>
                     <div className="font-mono text-12 text-muted-foreground" title="How the key ends">
