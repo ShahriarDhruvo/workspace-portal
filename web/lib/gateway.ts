@@ -99,6 +99,8 @@ export const gateway = {
   stats: () => call<HostStats>("GET", "/control/stats"),
   /** The agents enabled on this install, in display order. */
   agents: async (timeoutMs?: number) => (await call<{ agents: AgentInfo[] }>("GET", "/control/agents", { timeoutMs })).agents,
+  /** The ids of the models the LLM serves, as the admin's model settings name them, the default first. */
+  models: async () => (await call<{ models: string[] }>("GET", "/control/models")).models,
   listWorkspaces: async () => (await call<{ workspaces: WorkspaceInfo[] }>("GET", "/control/workspaces")).workspaces,
   getWorkspace: (userId: number, timeoutMs?: number) => call<WorkspaceInfo>("GET", `/control/workspaces/${userId}`, { timeoutMs }),
   /**

@@ -3,26 +3,12 @@
 // takes the database as an argument (no server-only imports).
 import crypto from "node:crypto";
 import { and, count, desc, eq, isNull } from "drizzle-orm";
-import { apiKeys, apiKeyUsage, hashSessionToken, writeAudit, type EnergyCurrency, type PortalDb } from "@portal/core";
-import { loadEnergyLocation, loadPricePeriods, priceOn, sumKnown } from "./energy.ts";
+import { apiKeys, apiKeyUsage, hashSessionToken, usageDay, writeAudit, type EnergyCurrency, type PortalDb } from "@portal/core";
+import { loadEnergyLocation, loadPricePeriods, priceOn } from "./energy.ts";
+import { sumUse, type KeyUse } from "./key-use.ts";
 import { MAX_API_KEYS } from "./limits.ts";
 
 const JOULES_PER_WH = 3600;
-
-/** What a key used, on a day or in all. */
-interface KeyUse {
-  /** Requests that reached the LLM server, and those of them it failed. */
-  requests: number;
-  failed: number;
-  tokensIn: number;
-  tokensOut: number;
-  /** Its share of the LLM server's measured energy; null when none was measured. */
-  energyWh: number | null;
-  /** That energy at each day's price; null without energy, a place or a price. */
-  cost: number | null;
-  /** A price stands in for a month not yet published. */
-  costEstimate: boolean;
-}
 
 /** A working key. */
 export interface ApiKeyRow extends KeyUse {
@@ -50,22 +36,11 @@ export interface ApiKeysView {
   days: KeyDay[];
   /** The currency of the chosen place's prices; null until the admin picks a place. */
   currency: EnergyCurrency | null;
+  /** The day it is for the usage's days (YYYY-MM-DD). */
+  today: string;
 }
 
-function total(days: readonly KeyUse[]): KeyUse {
-  const sum = (pick: (day: KeyUse) => number): number => days.reduce((all, day) => all + pick(day), 0);
-  return {
-    requests: sum((day) => day.requests),
-    failed: sum((day) => day.failed),
-    tokensIn: sum((day) => day.tokensIn),
-    tokensOut: sum((day) => day.tokensOut),
-    energyWh: sumKnown(days.map((day) => day.energyWh)),
-    cost: sumKnown(days.map((day) => day.cost)),
-    costEstimate: days.some((day) => day.costEstimate),
-  };
-}
-
-export function loadApiKeys(db: PortalDb, userId: number): ApiKeysView {
+export function loadApiKeys(db: PortalDb, userId: number, now = Date.now()): ApiKeysView {
   const location = loadEnergyLocation(db);
   const periods = loadPricePeriods(db, location);
   const days: KeyDay[] = db
@@ -95,10 +70,11 @@ export function loadApiKeys(db: PortalDb, userId: number): ApiKeysView {
   const working = db.select().from(apiKeys).where(and(eq(apiKeys.userId, userId), isNull(apiKeys.revokedAt))).orderBy(apiKeys.id).all();
   return {
     currency: location?.currency ?? null,
+    today: usageDay(new Date(now)),
     days,
     keys: working.map(({ id, name, hint, createdAt }) => {
       const own = days.filter((day) => day.keyId === id);
-      return { id, name, hint, createdAt, lastUsed: own[0]?.day ?? null, ...total(own) };
+      return { id, name, hint, createdAt, lastUsed: own[0]?.day ?? null, ...sumUse(own) };
     }),
   };
 }

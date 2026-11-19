@@ -105,8 +105,9 @@ Safari on an iPhone under Share > Add to Home Screen.
 ## LLM API
 
 On the API page a user creates up to five keys, names each after the software that gets it, and revokes them.
-The page shows per key and per day the requests, the tokens in and out, and the electricity with its cost. A
-key opens the model server's API under the portal's address:
+The page gives the base URL and the model's name to enter, and shows per key and per day the requests, the
+tokens in and out, and the electricity with its cost. A key opens the model server's API under the portal's
+address:
 
 ```sh
 curl https://<portal>/llm/api/v1/models -H "Authorization: Bearer $KEY"

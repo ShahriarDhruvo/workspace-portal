@@ -13,7 +13,7 @@ import {
   type EnergyLocation,
   type PortalDb,
 } from "@portal/core";
-import { formatPricePeriod, formatUnitPrice, priceUnit } from "./live-format.ts";
+import { formatPricePeriod, formatUnitPrice, priceUnit, sumKnown } from "./live-format.ts";
 
 /** A published price, for the days from `periodStart` up to (not including) `periodEnd`. */
 export interface PricePeriod {
@@ -89,12 +89,6 @@ export function priceOn(periods: readonly PricePeriod[], day: string): DayPrice 
   }
   if (!found) return null;
   return { price: found.price, period: found.period, estimate: day < found.periodStart || day >= found.periodEnd };
-}
-
-/** Adds up what is known: null only when every part is. */
-export function sumKnown(values: ReadonlyArray<number | null>): number | null {
-  const known = values.filter((value): value is number => value !== null);
-  return known.length === 0 ? null : known.reduce((sum, value) => sum + value, 0);
 }
 
 /** A day's servers (host_daily rows, Wh) priced at that day's price. */

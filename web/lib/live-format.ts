@@ -1,4 +1,4 @@
-// Formatting and history for Admin > Usage's live view and Admin > Energy.
+// Formatting and history for Admin > Usage's live view, Admin > Energy and the API page.
 import { formatBytes } from "./format.ts";
 import type { EnergyCurrency, HostSample, LiveFrame, LiveInit, LlmTotalsPoint } from "@portal/core";
 
@@ -193,6 +193,18 @@ export function daysOfMonth(month: string): string[] {
   const [year = 1970, index = 1] = month.split("-").map(Number);
   const count = new Date(Date.UTC(year, index, 0)).getUTCDate();
   return Array.from({ length: count }, (_, i) => `${month}-${String(i + 1).padStart(2, "0")}`);
+}
+
+/** Adds up what is known: null only when every part is. */
+export function sumKnown(values: ReadonlyArray<number | null>): number | null {
+  const known = values.filter((value): value is number => value !== null);
+  return known.length === 0 ? null : known.reduce((sum, value) => sum + value, 0);
+}
+
+/** The `count` days that end with `day`, YYYY-MM-DD, in order. */
+export function daysUntil(day: string, count: number): string[] {
+  const end = Date.parse(`${day}T00:00:00Z`);
+  return Array.from({ length: count }, (_, i) => new Date(end - (count - 1 - i) * 86_400_000).toISOString().slice(0, 10));
 }
 
 /**

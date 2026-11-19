@@ -8,6 +8,8 @@ import { AGENT_KINDS, STOP_REASONS, users, WORKSPACE_KINDS, type AgentInfo, type
 import type { AgentUpdater, UpdateRequest } from "./updates/agent-updater.ts";
 import type { AgentVersions } from "./updates/agent-versions.ts";
 import { driverFor } from "./agents/index.ts";
+import { portalModels } from "./agents/models.ts";
+import { qwenSettingsFor } from "./agents/qwen-settings.ts";
 import type { Config } from "./config.ts";
 import { SESSION_DISCONNECTED, type ConnectionRegistry } from "./proxy/connections.ts";
 import { invalidVersion, type EngineUpdater } from "./updates/engine-updater.ts";
@@ -63,6 +65,15 @@ const ROUTES: Route[] = [
     },
   },
   { method: "GET", pattern: /^\/control\/agents$/, handler: (deps) => ({ agents: agentList(deps.config, deps.versions) }) },
+  {
+    // The admin's models (the same for both kinds of workspace), the default first: what the API page says to ask for.
+    method: "GET",
+    pattern: /^\/control\/models$/,
+    handler: (deps) => {
+      const { models, defaultModel } = portalModels(qwenSettingsFor(deps.config, "private"));
+      return { models: [defaultModel, ...models.map((model) => model.id).filter((id) => id !== defaultModel)] };
+    },
+  },
   { method: "GET", pattern: /^\/control\/energy-prices$/, handler: (deps) => deps.prices.status() },
   // Answers once both sources are done (one downloaded in the last 10 minutes is not asked again).
   { method: "POST", pattern: /^\/control\/energy-prices\/refresh$/, handler: (deps) => deps.prices.refresh() },

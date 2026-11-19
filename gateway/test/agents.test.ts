@@ -20,6 +20,11 @@ test("GET /control/agents lists the enabled agents in display order, with their 
     });
   }));
 
+test("GET /control/models lists the admin's model ids", () =>
+  withGateway({}, async (g) => {
+    assert.deepEqual(json(await g.control("GET", "/control/models")), { models: ["qwen3.8-flash-next"] });
+  }));
+
 test("a start without an agent runs the user's choice from Settings, else the first enabled agent", () =>
   withGateway(BOTH, async (g) => {
     const { alice, bob } = g.ids;

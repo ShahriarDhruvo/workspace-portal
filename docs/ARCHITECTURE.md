@@ -327,6 +327,7 @@ client --(key)--> web app  app/llm/api/[[...path]]/route.ts
 | GET | `/control/stats` | `HostStats` | |
 | GET | `/control/live` | an event stream, see [Live view](#live-view) | 429 `too_many_viewers` |
 | GET | `/control/agents` | `{ agents: AgentInfo[] }`: the enabled agents | |
+| GET | `/control/models` | `{ models }`: the ids in the admin's model settings, the default first | |
 | GET | `/control/energy-prices` | `EnergyPriceStatus` | |
 | POST | `/control/energy-prices/refresh` | the same, once both sources are done | |
 | GET | `/control/updates/running` | `{ running, agent, engine }`, for the deploy scripts | |

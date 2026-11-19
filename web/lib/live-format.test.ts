@@ -5,6 +5,7 @@ import {
   axisTicks,
   formatAxisTick,
   daysOfMonth,
+  daysUntil,
   formatBandwidth,
   formatBytesOf,
   formatClock,
@@ -101,6 +102,7 @@ test("days and months read the same in every time zone", () => {
   assert.equal(formatMonth("2026-11"), "November 2026");
   assert.equal(daysOfMonth("2026-11").length, 30);
   assert.equal(daysOfMonth("2028-02").at(-1), "2028-02-29");
+  assert.deepEqual(daysUntil("2026-03-01", 3), ["2026-02-27", "2026-02-28", "2026-03-01"]);
   assert.equal(daysOfMonth("2026-12")[0], "2026-12-01");
 });
 

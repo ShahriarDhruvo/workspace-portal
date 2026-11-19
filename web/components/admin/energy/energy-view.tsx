@@ -6,10 +6,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ENERGY_SOURCE_NAMES, type EnergyCurrency, type EnergyLocation } from "@portal/core/wire";
 import type { DayPrice, EnergyMonth, EnergyTotal } from "@/lib/energy";
 import { fetchJson, needsReauth } from "@/lib/fetch-json";
-import { formatDay, formatKwh, formatMoney, formatMonth, formatPricePeriod, formatUnitPrice, priceUnit } from "@/lib/live-format";
+import { daysOfMonth, formatAxisTick, formatDay, formatKwh, formatMoney, formatMonth, formatPricePeriod, formatUnitPrice, priceUnit } from "@/lib/live-format";
 import { cn } from "@/lib/utils";
 import { Estimate } from "@/components/admin/estimate";
 import { DataTable, DataTableEmpty, DataTableHead, DataTablePagination, usePagination } from "@/components/common/data-table";
+import { DayChart } from "@/components/common/day-chart";
 import { PageHeading } from "@/components/layout/page-heading";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -18,7 +19,6 @@ import { InfoIcon, WarningIcon } from "@/components/ui/icons";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { TableBody, TableCell, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { EnergyChart } from "./energy-chart";
 
 const REFRESH_MS = 60_000;
 
@@ -33,6 +33,12 @@ export function EnergyView({ initial }: { initial: EnergyMonth }) {
   // Each month's days start on the table's first page.
   const { rows, pagination } = usePagination(data.days, data.month);
   const currency = data.location?.currency ?? null;
+  // Both servers' kWh on every day of the month, those still to come included.
+  const byDay = new Map(data.days.map((day) => [day.day, day]));
+  const points = daysOfMonth(data.month).map((day) => {
+    const { kwh = null, cost = null } = byDay.get(day) ?? {};
+    return { day, value: kwh, lines: [["Energy", `${formatKwh(kwh)} kWh`], ...(currency ? [["Cost", formatMoney(cost, currency)] as const] : [])] as const };
+  });
 
   return (
     <>
@@ -92,7 +98,7 @@ export function EnergyView({ initial }: { initial: EnergyMonth }) {
                 .
               </p>
             )}
-            <EnergyChart month={data.month} days={data.days} currency={currency} />
+            <DayChart label="Energy per day" points={points} formatTick={formatAxisTick} />
           </CardContent>
         </Card>
         <DataTable footer={<DataTablePagination {...pagination} label="Energy pages" />} tableProps={{ "aria-label": "Energy per day" }}>
