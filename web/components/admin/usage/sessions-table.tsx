@@ -86,10 +86,10 @@ export function SessionsTable({ initial, version, llm, now }: SessionsTableProps
               Reqs
             </DataTableHead>
             <DataTableHead align="right" title="Prompt tokens read per second of the engine's time">
-              Read t/s
+              Avg read t/s
             </DataTableHead>
             <DataTableHead align="right" title="Answer tokens written per second of the engine's time">
-              Write t/s
+              Avg write t/s
             </DataTableHead>
             <DataTableHead align="right" title="Tokens in: prompts, cached ones included">
               In
