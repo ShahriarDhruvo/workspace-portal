@@ -26,7 +26,10 @@ const EXAMPLES: ReadonlyArray<{ id: string; label: string; code: (baseUrl: strin
     label: "Python",
     code: (baseUrl, model) => `from openai import OpenAI
 
-client = OpenAI(base_url="${baseUrl}", api_key="${KEY}")
+client = OpenAI(
+    base_url="${baseUrl}",
+    api_key="${KEY}",
+)
 reply = client.chat.completions.create(
     model="${model}",
     messages=[{"role": "user", "content": "Hello"}],
@@ -38,7 +41,10 @@ print(reply.choices[0].message.content)`,
     label: "JavaScript",
     code: (baseUrl, model) => `import OpenAI from "openai";
 
-const client = new OpenAI({ baseURL: "${baseUrl}", apiKey: "${KEY}" });
+const client = new OpenAI({
+  baseURL: "${baseUrl}",
+  apiKey: "${KEY}",
+});
 const reply = await client.chat.completions.create({
   model: "${model}",
   messages: [{ role: "user", content: "Hello" }],
@@ -67,7 +73,7 @@ export function Connect({ baseUrl, model, examplesOpen }: ConnectProps) {
       description="Anything that speaks the OpenAI API works. In an editor, choose the OpenAI-compatible provider, then enter these and one of your keys."
     >
       <CardContent className="flex flex-col gap-4">
-        <dl className="grid gap-4 md:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+        <dl className="grid gap-4">
           <Value label="Base URL" value={baseUrl} />
           {model ? <Value label="Model" value={model} /> : null}
         </dl>

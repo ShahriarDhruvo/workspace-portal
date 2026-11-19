@@ -101,7 +101,7 @@ export function ApiKeys(view: ApiKeysView) {
             tableProps={{
               "aria-label": "Keys",
               // A narrow screen shows the key, its last use and Revoke without scrolling sideways: the numbers are under Usage.
-              className: "max-lg:[&_:is(th,td):not(:first-child,:nth-child(3),:last-child)]:hidden",
+              className: "max-md:[&_:is(th,td):not(:first-child,:nth-child(3),:last-child)]:hidden",
             }}
           >
             <TableHeader>
@@ -118,8 +118,9 @@ export function ApiKeys(view: ApiKeysView) {
             <TableBody>
               {keys.map((key) => (
                 <TableRow key={key.id}>
-                  <TableCell className="max-lg:w-full max-lg:max-w-0">
-                    <div className="truncate font-medium lg:max-w-64" title={key.name}>
+                  {/* The name takes the width the other columns leave. */}
+                  <TableCell className="w-full max-w-0">
+                    <div className="truncate font-medium" title={key.name}>
                       {key.name}
                     </div>
                     <div className="font-mono text-12 text-muted-foreground" title="How the key ends">
@@ -229,7 +230,7 @@ function Usage({ days, currency, today }: ApiKeysView) {
       <Card className="py-0">
         <CardContent className="flex flex-col gap-4 p-4">
           <p className="text-12 text-muted-foreground">Last {WINDOW_DAYS} days</p>
-          <div role="group" aria-label="What the chart shows" className="-mt-1 grid grid-cols-[repeat(auto-fit,minmax(8.5rem,1fr))] gap-3">
+          <div role="group" aria-label="What the chart shows" className="-mt-1 grid grid-cols-2 gap-3 md:grid-flow-col md:auto-cols-fr md:grid-cols-none">
             {metrics.map((each) => (
               <button
                 key={each.id}
@@ -237,7 +238,8 @@ function Usage({ days, currency, today }: ApiKeysView) {
                 aria-pressed={each === metric}
                 onClick={() => setMetricId(each.id)}
                 className={cn(
-                  "flex min-w-0 flex-col gap-1.5 rounded-lg border border-transparent bg-muted/40 p-3 text-left transition-colors outline-none hover:bg-muted/70 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50",
+                  // In two columns a fifth tile takes the whole last row.
+                  "flex min-w-0 flex-col gap-1.5 rounded-lg border border-transparent bg-muted/40 p-3 text-left transition-colors outline-none hover:bg-muted/70 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 max-md:last:odd:col-span-2",
                   each === metric && "border-ring bg-muted/70",
                 )}
               >
@@ -270,6 +272,9 @@ function Usage({ days, currency, today }: ApiKeysView) {
           <TableRow>
             <DataTableHead>Day</DataTableHead>
             <DataTableHead>Key</DataTableHead>
+            <DataTableHead align="right" title="Requests that reached the LLM server">
+              Requests
+            </DataTableHead>
             <UseHeads />
           </TableRow>
         </TableHeader>
@@ -278,10 +283,14 @@ function Usage({ days, currency, today }: ApiKeysView) {
             <TableRow key={`${day.day} ${day.keyId}`}>
               <TableCell>{day.day === today ? "Today" : formatDay(day.day)}</TableCell>
               <TableCell>
-                <span className="inline-block max-w-64 truncate align-bottom" title={day.name}>
+                <span className="inline-block max-w-40 truncate align-bottom" title={day.name}>
                   {day.name}
                 </span>
                 {day.revoked ? <Quiet>revoked</Quiet> : null}
+              </TableCell>
+              <TableCell className={number}>
+                {formatCount(day.requests)}
+                {day.failed > 0 ? <Quiet className="text-destructive">{formatCount(day.failed)} failed</Quiet> : null}
               </TableCell>
               <UseCells use={day} currency={currency} />
             </TableRow>
@@ -314,9 +323,6 @@ function Quiet({ className = "text-muted-foreground", children }: { className?: 
 function UseHeads() {
   return (
     <>
-      <DataTableHead align="right" title="Requests that reached the LLM server">
-        Requests
-      </DataTableHead>
       <DataTableHead align="right" title="Tokens in: prompts">
         In
       </DataTableHead>
@@ -337,10 +343,6 @@ function UseCells({ use, currency }: { use: KeyUse; currency: EnergyCurrency | n
   const cost = formatCost(use.cost, currency);
   return (
     <>
-      <TableCell className={number}>
-        {formatCount(use.requests)}
-        {use.failed > 0 ? <Quiet className="text-destructive">{formatCount(use.failed)} failed</Quiet> : null}
-      </TableCell>
       <TableCell className={number} title={`${use.tokensIn.toLocaleString("en")} tokens`}>
         {formatCount(use.tokensIn)}
       </TableCell>

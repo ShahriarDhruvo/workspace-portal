@@ -2,8 +2,8 @@ import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 /**
- * Content widths: sm for a page of one or two cards (Home), md for forms and settings, lg for the admin console,
- * and wide for Usage, which grows into the margins of a wide desktop (3xl, 2048px) to show its cards side by side.
+ * Content widths: sm for a page of one or two cards (Home), md for forms, Settings and the API page, lg for the admin
+ * console, and wide for Usage, which grows into the margins of a wide desktop (3xl, 2048px) to show its cards side by side.
  */
 const WIDTHS = { sm: "max-w-[560px]", md: "max-w-[760px]", lg: "max-w-[1200px]", wide: "max-w-[1200px] 3xl:max-w-[2400px]" } as const;
 

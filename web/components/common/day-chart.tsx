@@ -5,7 +5,7 @@ import { axisTicks, formatDay } from "@/lib/live-format";
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart";
 
 const CONFIG = { value: { color: "var(--chart-1)" } } satisfies ChartConfig;
-const monthName = new Intl.DateTimeFormat("en-US", { month: "short", timeZone: "UTC" });
+const tickDay = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
 
 export interface DayPoint {
   /** YYYY-MM-DD. */
@@ -28,7 +28,8 @@ interface DayChartProps {
 export function DayChart({ label, points, formatTick }: DayChartProps) {
   const ticks = axisTicks(Math.max(0, ...points.map((point) => point.value ?? 0)));
   return (
-    <ChartContainer config={CONFIG} className="aspect-auto h-40 w-full" aria-label={label}>
+    // On a narrow chart the last day's name reaches past the plot, into the card's padding.
+    <ChartContainer config={CONFIG} className="aspect-auto h-40 w-full [&_.recharts-surface]:overflow-visible" aria-label={label}>
       <BarChart data={[...points]} margin={{ top: 4, right: 0, bottom: 0, left: 0 }} barCategoryGap={2} accessibilityLayer>
         <CartesianGrid vertical={false} />
         <XAxis
@@ -36,11 +37,10 @@ export function DayChart({ label, points, formatTick }: DayChartProps) {
           tickLine={false}
           axisLine={false}
           tickMargin={6}
-          minTickGap={12}
-          // A month that begins inside the stretch is named at its first day.
-          tickFormatter={(day: string) =>
-            day.endsWith("-01") && day !== points[0]?.day ? `${monthName.format(new Date(`${day}T00:00:00Z`))} 1` : String(Number(day.slice(8)))
-          }
+          // One day a week is named, from the first: that fits a phone, and the tooltip names the others.
+          ticks={points.filter((_, index) => index % 7 === 0).map((point) => point.day)}
+          interval={0}
+          tickFormatter={(day: string) => tickDay.format(new Date(`${day}T00:00:00Z`))}
         />
         <YAxis
           width="auto"

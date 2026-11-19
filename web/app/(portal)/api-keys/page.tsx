@@ -18,8 +18,7 @@ export default async function ApiKeysPage() {
   const [host, models] = await Promise.all([headers().then((all) => all.get("host")), gateway.models().catch(() => [])]);
   const view = loadApiKeys(getDb(), user.id);
   return (
-    // From the top, not centred: the page grows with every key and day of use.
-    <PageMain width="lg" className="my-0">
+    <PageMain width="md">
       <PageHeading title="API" />
       {/* The address the browser used: the portal is reached directly, or through a proxy that keeps Host. */}
       <Connect baseUrl={`${config.cookieSecure ? "https" : "http"}://${host}/llm/api/v1`} model={models[0] ?? null} examplesOpen={view.keys.length === 0} />
