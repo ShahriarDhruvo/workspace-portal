@@ -15,7 +15,7 @@ export function UsageToday({ usage }: { usage: Usage }) {
         <CardTitle>
           <h2 className="text-16">LLM usage today</h2>
         </CardTitle>
-        <CardDescription>Your agent&apos;s requests to the LLM since midnight.</CardDescription>
+        <CardDescription>Your requests to the LLM since midnight, from your workspace and your API keys.</CardDescription>
       </CardHeader>
       <CardContent>
         <dl className="grid grid-cols-3 gap-2">

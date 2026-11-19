@@ -31,6 +31,7 @@ function finished(id: number, userId: number, changes: Partial<FinishedLlmReques
   return {
     id,
     userId,
+    keyId: null,
     forwardedAt: 2_000,
     finishedAt: 5_000,
     durationMs: 3_000,
@@ -93,8 +94,8 @@ test("a request counts in the session open when it reached the LLM server, even 
   const row = rows().find((r) => r.id === id)!;
   assert.deepEqual(
     [row.requests, row.failed, row.promptTokens, row.outputTokens, row.cachedTokens, row.readTokens, row.readMs, row.writeTokens, row.writeMs, row.llmMs],
-    [2, 1, 2_000, 120, 200, 1_800, 3_000, 120, 2_000, 4_000],
-    "usage counts the tokens; without it the timings do; a request counts once",
+    [2, 1, 1_000, 60, 200, 1_800, 3_000, 120, 2_000, 4_000],
+    "usage counts the tokens in and out, the timings the rest; a request counts once",
   );
 });
 

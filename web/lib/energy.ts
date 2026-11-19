@@ -92,7 +92,7 @@ export function priceOn(periods: readonly PricePeriod[], day: string): DayPrice 
 }
 
 /** Adds up what is known: null only when every part is. */
-function sumKnown(values: ReadonlyArray<number | null>): number | null {
+export function sumKnown(values: ReadonlyArray<number | null>): number | null {
   const known = values.filter((value): value is number => value !== null);
   return known.length === 0 ? null : known.reduce((sum, value) => sum + value, 0);
 }

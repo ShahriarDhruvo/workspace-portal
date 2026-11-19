@@ -1,6 +1,7 @@
 // Token usage of LLM responses, read from a copy of the stream as it passes through: the `usage` object of a JSON
-// body, or of the last SSE event that carries one. Recorded per user and day. The SSE parser also reports each
-// streamed token and the engine's closing `timings` to an observer (llm-requests.ts).
+// body, or of the last SSE event that carries one (for a stream without one, what the engine's closing `timings`
+// count). Recorded per user and day. The SSE parser also reports each streamed token and those `timings` to an
+// observer (llm-requests.ts).
 import type { IncomingHttpHeaders } from "node:http";
 import { StringDecoder } from "node:string_decoder";
 import { Transform, type TransformCallback } from "node:stream";
@@ -19,14 +20,20 @@ const MAX_JSON_BYTES = 8 * MIB;
 /** SSE events larger than this are skipped (usage chunks are a few hundred bytes). */
 const MAX_EVENT_CHARS = 1024 * 1024;
 
-/** Reads `usage` from an OpenAI-style response object (chat/completions or responses naming). */
+/**
+ * Reads `usage` from a response object or stream event, in Chat Completions, Responses or Anthropic Messages naming.
+ * The Responses stream's closing event carries it inside its `response`.
+ */
 export function extractUsage(payload: unknown): TokenUsage | null {
-  if (!isRecord(payload) || !isRecord(payload.usage)) return null;
-  const { usage } = payload;
+  if (!isRecord(payload)) return null;
+  const usage = isRecord(payload.response) ? payload.response.usage : payload.usage;
+  if (!isRecord(usage)) return null;
   const prompt = tokenCount(usage.prompt_tokens ?? usage.input_tokens);
   const completion = tokenCount(usage.completion_tokens ?? usage.output_tokens);
   if (prompt === null && completion === null) return null;
-  return { promptTokens: prompt ?? 0, completionTokens: completion ?? 0 };
+  // Anthropic's naming counts the part of a prompt that came from the cache apart from input_tokens.
+  const cached = (tokenCount(usage.cache_read_input_tokens) ?? 0) + (tokenCount(usage.cache_creation_input_tokens) ?? 0);
+  return { promptTokens: (prompt ?? 0) + cached, completionTokens: completion ?? 0 };
 }
 
 export interface UsageParser {
@@ -136,12 +143,13 @@ export class SseUsageParser implements UsageParser {
     this.#data = [];
     this.#dataChars = 0;
     if (data === "") return;
-    const observer = this.#observer;
-    if (observer !== null) {
-      if (TOKEN_EVENT.test(data)) observer.token();
-      if (data.includes('"timings"')) {
-        const timings = extractTimings(parseJson(data));
-        if (timings) observer.timings(timings);
+    if (this.#observer !== null && TOKEN_EVENT.test(data)) this.#observer.token();
+    if (data.includes('"timings"')) {
+      const timings = extractTimings(parseJson(data));
+      if (timings) {
+        this.#observer?.timings(timings);
+        // A stream that was not asked for its usage has none.
+        this.usage ??= { promptTokens: timings.promptTokens + timings.cachedTokens, completionTokens: timings.generatedTokens };
       }
     }
     if (!data.includes('"usage"')) return;

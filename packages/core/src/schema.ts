@@ -215,6 +215,42 @@ export const workspaceSessions = sqliteTable(
   ],
 );
 
+// A user's keys to the LLM API (/llm/api, gateway/src/service/llm-api.ts), created and revoked on the web app's API
+// page. A revoked key stays, for what it used.
+export const apiKeys = sqliteTable("api_keys", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  userId: integer("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  /** sha256 hex of the key (hashSessionToken); the key itself is never stored. */
+  tokenHash: text("token_hash").notNull().unique(),
+  /** The key's last four characters, to tell one's keys apart. */
+  hint: text("hint").notNull(),
+  createdAt: integer("created_at").notNull(),
+  /** null while it works. */
+  revokedAt: integer("revoked_at"),
+});
+
+// Written by the gateway (key-usage.ts): what each key's requests added up to per local day (usageDay()).
+export const apiKeyUsage = sqliteTable(
+  "api_key_usage",
+  {
+    keyId: integer("key_id")
+      .notNull()
+      .references(() => apiKeys.id, { onDelete: "cascade" }),
+    day: text("day").notNull(),
+    /** Requests that reached the LLM server, and those of them it failed. */
+    requests: integer("requests").notNull().default(0),
+    failed: integer("failed").notNull().default(0),
+    promptTokens: integer("prompt_tokens").notNull().default(0),
+    outputTokens: integer("output_tokens").notNull().default(0),
+    /** Its share of the LLM server's measured energy while its requests ran; 0 while none was measured. */
+    energyJ: real("energy_j").notNull().default(0),
+  },
+  (t) => [primaryKey({ columns: [t.keyId, t.day] })],
+);
+
 export type User = typeof users.$inferSelect;
 export type Session = typeof sessions.$inferSelect;
 export type Workspace = typeof workspaces.$inferSelect;

@@ -1,7 +1,7 @@
-import { AuditIcon, EnergyIcon, HomeIcon, PackageIcon, SettingsIcon, UsageIcon, UsersIcon } from "@/components/ui/icons";
+import { AuditIcon, EnergyIcon, HomeIcon, KeyIcon, PackageIcon, SettingsIcon, UsageIcon, UsersIcon } from "@/components/ui/icons";
 import type { NavLink } from "./header-nav";
 
-// The portal's pages in the order the top bar shows them: Settings for everyone, then the admin's five pages.
+// The portal's pages in the order the top bar shows them: API and Settings for everyone, then the admin's five pages.
 // Home is the mark at the bar's left end; menus that have no mark list it first.
 
 export const HOME_LINK: NavLink = { href: "/", label: "Home", icon: <HomeIcon /> };
@@ -15,5 +15,9 @@ const ADMIN_LINKS: NavLink[] = [
 ];
 
 export function portalLinks(isAdmin: boolean): NavLink[] {
-  return [{ href: "/settings", label: "Settings", icon: <SettingsIcon /> }, ...(isAdmin ? ADMIN_LINKS : [])];
+  return [
+    { href: "/api-keys", label: "API", icon: <KeyIcon /> },
+    { href: "/settings", label: "Settings", icon: <SettingsIcon /> },
+    ...(isAdmin ? ADMIN_LINKS : []),
+  ];
 }

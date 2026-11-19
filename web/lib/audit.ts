@@ -27,6 +27,8 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   energy_price_location_set: "Changed electricity price location",
   workspace_files_erased: "Erased workspace files",
   user_online_access_changed: "Changed Online access",
+  api_key_created: "Created API key",
+  api_key_revoked: "Revoked API key",
 };
 
 function isKnownAction(action: string): action is AuditAction {

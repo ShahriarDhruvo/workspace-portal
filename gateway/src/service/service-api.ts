@@ -9,16 +9,14 @@ import type http from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { PortalDb, WorkspaceKind } from "@portal/core";
 import type { Config } from "../config.ts";
-import { forward, type ForwardResult } from "../lib/forward.ts";
-import { endToEndHeaders, llmRequestHeaders } from "../proxy/headers.ts";
-import { createStreamingServer, remoteAddress, sendError, sendJson, splitTarget } from "../lib/http-util.ts";
-import type { LlmQueue, ReleaseSlot } from "./llm-queue.ts";
-import type { LlmRequestHandle, LlmRequests } from "../monitor/llm-requests.ts";
+import { createStreamingServer, remoteAddress, sendError, splitTarget } from "../lib/http-util.ts";
+import { isPlainPath, proxyLlm, sendLlmError } from "./llm-proxy.ts";
+import type { LlmQueue } from "./llm-queue.ts";
+import type { LlmRequests } from "../monitor/llm-requests.ts";
 import type { Logger } from "../lib/log.ts";
 import type { ReaderBackend } from "./reader.ts";
 import { createLimiter, handleSearchMcp, type Limiter, type PageReader, type SearchBackend } from "./search-mcp.ts";
 import { canonicalUrl, hostTrusted, ShownUrls, urlHost, urlsShownInLlmRequest } from "./url-policy.ts";
-import { recordUsage, usageParserFor, usageTap, type UsageParser } from "../monitor/usage.ts";
 import type { WorkspaceManager } from "../workspaces/manager.ts";
 
 export interface ServiceDeps {
@@ -179,19 +177,26 @@ async function handle(
       const allow = allowed.map((route) => route.method).join(", ");
       return sendLlmError(res, 405, "method_not_allowed", `Use ${allow} for ${pathname}.`, { allow });
     }
-    return proxyLlm(deps, web, req, res, userId, pathname, search);
+    deps.manager.noteAgentActivity(userId);
+    // What the model is shown in a request (the user's messages, tool output) it may then open with read_page. The
+    // body has arrived in full before the model can answer, let alone call a tool.
+    const collector = method === "POST" && web.tracksShown ? shownUrlCollector((urls) => web.shown.add(userId, urls)) : null;
+    if (collector) {
+      req.once("end", () => {
+        try {
+          collector.finish();
+        } catch (error) {
+          deps.log.warn("could not read the URLs in an LLM request", { userId, error });
+        }
+      });
+    }
+    try {
+      return await proxyLlm(deps, req, res, { caller: { userId, keyId: null }, pathname: pathname.slice("/llm".length), search, observeBody: collector?.observe });
+    } finally {
+      deps.manager.noteAgentActivity(userId);
+    }
   }
   return sendError(res, 404, "not_found", "Unknown route.");
-}
-
-/** The error shape OpenAI clients understand (the LLM server's own errors pass through as they are). */
-function sendLlmError(res: ServerResponse, status: number, type: string, message: string, headers?: Record<string, string>): void {
-  sendJson(res, status, { error: { message, type } }, headers);
-}
-
-/** No dot segments or encoded separators, so the LLM server only ever sees /v1/… paths. */
-function isPlainPath(pathname: string): boolean {
-  return !/%2e|%2f|%5c|\\/i.test(pathname) && new URL(pathname, "http://localhost").pathname === pathname;
 }
 
 /** Collects a request body as it streams by and, once it has all arrived, hands over the URLs in it that the model is being shown. */
@@ -211,100 +216,4 @@ function shownUrlCollector(onUrls: (urls: string[]) => void): { observe: (chunk:
       if (body !== null && size > 0) onUrls(urlsShownInLlmRequest(Buffer.concat(body)));
     },
   };
-}
-
-async function proxyLlm(
-  deps: ServiceDeps,
-  web: WebTools,
-  req: IncomingMessage,
-  res: ServerResponse,
-  userId: number,
-  pathname: string,
-  search: string,
-): Promise<void> {
-  const method = req.method ?? "GET";
-  // Generation requests wait for a slot; GET (model listing) never queues behind them.
-  const generation = method !== "GET" && method !== "HEAD";
-  deps.manager.noteAgentActivity(userId);
-
-  let release: ReleaseSlot = () => undefined;
-  const progress: LlmRequestHandle | null = generation ? deps.requests.begin(userId) : null;
-  if (generation) {
-    const hangUp = new AbortController();
-    const onClose = (): void => hangUp.abort();
-    res.once("close", onClose);
-    try {
-      release = await deps.llm.acquire(userId, hangUp.signal);
-    } catch {
-      progress?.finish(false);
-      return; // the workspace hung up while queued
-    } finally {
-      res.off("close", onClose);
-    }
-    if (req.socket.destroyed) {
-      release();
-      progress?.finish(false);
-      return;
-    }
-    progress?.forwarded();
-  }
-
-  // What the model is shown in this request (the user's messages, tool output) it may then open with read_page. The
-  // body has arrived in full before the model can answer, let alone call a tool.
-  const collector = generation && web.tracksShown ? shownUrlCollector((urls) => web.shown.add(userId, urls)) : null;
-  if (collector) {
-    req.once("end", () => {
-      try {
-        collector.finish();
-      } catch (error) {
-        deps.log.warn("could not read the URLs in an LLM request", { userId, error });
-      }
-    });
-  }
-
-  const started = Date.now();
-  const tapped: { parser: UsageParser | null } = { parser: null };
-  let result: ForwardResult | null = null;
-  try {
-    result = await forward(req, res, {
-      url: new URL(`${deps.config.llm.upstreamUrl}${pathname.slice("/llm".length)}${search}`),
-      method,
-      headers: llmRequestHeaders(req.headers, deps.config.llm.apiKey),
-      observeBody: collector?.observe,
-      responseHeaders: (incoming) => endToEndHeaders(incoming.headers),
-      tap: (incoming) => {
-        tapped.parser = generation ? usageParserFor(incoming.headers, progress) : null;
-        return tapped.parser ? usageTap(tapped.parser) : null;
-      },
-      onError: (error, response) => {
-        deps.log.warn("LLM server did not answer", { userId, error });
-        sendLlmError(response, 502, "llm_unreachable", "The LLM server is not reachable.");
-      },
-    });
-  } finally {
-    release();
-    deps.manager.noteAgentActivity(userId);
-    // A workspace that hangs up (a cancelled turn, a helper request it dropped, its stop) is not the LLM server failing.
-    const ok = result !== null && result.outcome !== "failed" && (result.status === null || (result.status >= 200 && result.status < 300));
-    progress?.finish(ok, tapped.parser?.usage ?? null);
-  }
-
-  const usage = tapped.parser?.usage ?? null;
-  if (generation && result.status !== null && result.status >= 200 && result.status < 300) {
-    try {
-      recordUsage(deps.db, userId, usage);
-    } catch (error) {
-      deps.log.error("could not record LLM usage", { userId, error });
-    }
-  }
-  deps.log.info("llm request", {
-    userId,
-    method,
-    path: pathname,
-    status: result.status,
-    outcome: result.outcome,
-    ms: Date.now() - started,
-    promptTokens: usage?.promptTokens ?? null,
-    completionTokens: usage?.completionTokens ?? null,
-  });
 }

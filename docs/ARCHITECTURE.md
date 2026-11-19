@@ -7,11 +7,11 @@ in [hostd/README.md](../hostd/README.md). A value that may change is named by th
 ## Components and trust boundaries
 
 ```
-browser --(cookie portal_session)--> web app   WEB_BIND:WEB_PORT
+browser --(cookie portal_session)--> web app   WEB_BIND:WEB_PORT  <--(API key)-- other software
    |                                    |
-   |                                    | Bearer GATEWAY_CONTROL_SECRET
+   |                                    | Bearer GATEWAY_CONTROL_SECRET; under /llm/api the caller's API key
    |                                    v
-   |                                 gateway   127.0.0.1:CONTROL_PORT       control API
+   |                                 gateway   127.0.0.1:CONTROL_PORT       control API, LLM API
    +--(same cookie)----------------> gateway   AGENT_BIND: agent ports      one per user and kind
    +--(same cookie)----------------> gateway   AGENT_BIND: preview ports    agent port + 1000
                                        |  ^
@@ -35,6 +35,8 @@ browser --(cookie portal_session)--> web app   WEB_BIND:WEB_PORT
   containers. Like the web app it runs in the host's network namespace.
 - `GATEWAY_CONTROL_SECRET` is the control API's bearer token and the HMAC key of the browser tokens. The web
   app and the gateway both refuse to start with one shorter than 16 characters.
+- An API key is a user's credential for the LLM and nothing else. The web app passes `/llm/api` on unread and
+  the gateway checks the key, so the web app never vouches for such a caller with the control secret.
 - A workspace is untrusted. It holds no secret of the portal (`PORTAL_LLM_KEY` in it is a placeholder), and
   what it sends is hostile input. So is what SearXNG and the page reader bring back from the internet.
 
@@ -46,14 +48,14 @@ browser --(cookie portal_session)--> web app   WEB_BIND:WEB_PORT
 | `gateway/src/main.ts` | the process: Docker checks, networks, listeners, shutdown |
 | `gateway/src/compose.ts` | composition root: builds every part once, for `main.ts` and the test harness; starts nothing |
 | `gateway/src/config.ts` | the environment, parsed and checked once (`loadConfig`); every problem reported together |
-| `gateway/src/control-api.ts` | the control API's routes |
+| `gateway/src/control-api.ts` | the control listener: the control API's routes, and the LLM API beside them |
 | `gateway/src/workspaces/` | lifecycle (`manager.ts`), its pure decisions (`policy.ts`), file layout, readiness, fence probe |
 | `gateway/src/docker/` | container and network specs, the Docker runtime, the image builder (BuildKit) |
 | `gateway/src/agents/` | one driver per agent (`driver.ts` is the interface), settings rendering |
 | `gateway/src/proxy/` | agent ports, preview ports, WebSocket relay, header rules, connections, session cache |
-| `gateway/src/service/` | service API: LLM proxy and queue, MCP server, URL policy, reader client |
+| `gateway/src/service/` | service API and LLM API, the LLM proxy and queue under both, MCP server, URL policy, reader client |
 | `gateway/src/updates/` | agent updater and versions, engine updater, registries, release cache |
-| `gateway/src/monitor/` | live view, hostd client, host and LLM monitors, energy meter, prices, usage, session log |
+| `gateway/src/monitor/` | live view, hostd client, host and LLM monitors, energy meter, prices, usage per user, session and API key |
 | `gateway/src/lib/`, `gateway/test/` | HTTP helpers and `HttpError`, forwarding, logging; the harness, fakes and integration suites |
 | `web/` | the web app (Next.js); installable through `app/manifest.ts`, without a service worker, since it does nothing offline |
 | `workspace-image/` | one Dockerfile, a target per agent; start scripts; the Web Shell trim; the dsh lockdown |
@@ -63,10 +65,11 @@ browser --(cookie portal_session)--> web app   WEB_BIND:WEB_PORT
 | `deploy/` | installer, firewall, isolation check, image update, model settings, HTTPS, uninstall; `lib.sh` is shared |
 
 The web app keeps sessions, renders the pages and calls the control API. Pages: `/login`, `/change-password`,
-`/` (Home), `/workspace`, `/settings`, and for the admin `/admin` (Usage), `/admin/energy`, `/admin/users`
-with `/new`, `/[id]` and `/[id]/workspace`, `/admin/updates`, `/admin/audit`. JSON routes: `/api/health`,
-`/api/workspace/` `start`, `stop`, `status`, and `/api/admin/` `overview`, `agents`, `engine`, `energy`,
-`llm-sessions`, and the event stream `live`. Stable entry points: `web/lib/gateway.ts` (the only control API
+`/` (Home), `/workspace`, `/api-keys` (API: a page at `/api` would sit among the JSON routes), `/settings`, and
+for the admin `/admin` (Usage), `/admin/energy`, `/admin/users` with `/new`, `/[id]` and `/[id]/workspace`,
+`/admin/updates`, `/admin/audit`. JSON routes: `/api/health`, `/api/workspace/` `start`, `stop`, `status`, and
+`/api/admin/` `overview`, `agents`, `engine`, `energy`, `llm-sessions`, and the event stream `live`. `/llm/api/*`
+is the [LLM API](#llm-api). Stable entry points: `web/lib/gateway.ts` (the only control API
 client), `web/lib/config.ts` (the environment), `web/instrumentation.ts` (start-up: no start without the
 control secret; creates the admin account when there is none) and `web/scripts/reset-admin-password.mjs`.
 
@@ -77,7 +80,7 @@ control secret; creates the admin account when there is none) and `web/scripts/r
 | web app | `WEB_BIND:WEB_PORT` | `docker-compose.yml` |
 | agent port of user N | `AGENT_BIND`, `AGENT_PORT_BASE + N` Private, `ONLINE_AGENT_PORT_BASE + N` Online | `agent-origin.ts` in core |
 | preview port | agent port + `PREVIEW_PORT_OFFSET` (1000) | `gateway/src/config.ts` |
-| control API | `127.0.0.1:CONTROL_PORT` | `gateway/src/main.ts` |
+| control API, LLM API | `127.0.0.1:CONTROL_PORT` | `gateway/src/main.ts` |
 | service API | `WORKSPACE_GATEWAY_IP:SERVICE_PORT`, `ONLINE_GATEWAY_IP:SERVICE_PORT` | `gateway/src/main.ts` |
 | agent in a container | Qwen Code 4170, DeepSeek Harness 3080 | the drivers |
 | SearXNG, page reader | `127.0.0.1:SEARXNG_PORT`, `127.0.0.1:READER_PORT`, container port 8080 | `docker-compose.yml` |
@@ -130,6 +133,8 @@ keys on, a 5 s busy timeout). Times are integer milliseconds. `schema.ts` is the
 | `audit_log` | time, actor, action (`AuditAction` in `sessions.ts`), target, details | both |
 | `workspaces` | the last known state of each user's container | gateway |
 | `llm_usage` | requests and tokens per user and local day | gateway |
+| `api_keys` | a user's keys for the LLM API: name, SHA-256 of the key, its last four characters, `revoked_at` | web app |
+| `api_key_usage` | requests, tokens and energy per key and local day | gateway |
 | `workspace_sessions` | one row per run of a workspace, with its LLM totals and energy | gateway |
 | `host_daily` | each server's energy and network bytes per local day | gateway |
 | `host_meter` | the last reading of each server's meter | gateway |
@@ -261,7 +266,8 @@ traffic between containers. State is per listener: nothing carries between kinds
   `LLM_MAX_CONCURRENCY_PER_USER` each, first come first served; a user at the limit does not hold up the users
   behind. An engine update pauses the queue, and requests wait instead of failing.
 - **Usage**: token counts are read from a copy of the answer as it streams (`monitor/usage.ts`) into
-  `llm_usage` and the workspace's session row. Prompts and answers are not stored.
+  `llm_usage` and the workspace's session row: the answer's `usage`, or for a stream that was not asked for
+  one what the engine's closing `timings` say. Prompts and answers are not stored.
 - **`web_search`** asks SearXNG, and once more the `SEARCH_FALLBACK_ENGINES` by name when fewer than
   `SEARCH_FALLBACK_BELOW` results came back. **`read_page`** asks the reader for a page and hands the model
   `READER_PAGE_CHARS` at a time. Both are limited per workspace and cached for some minutes.
@@ -272,6 +278,41 @@ traffic between containers. State is per listener: nothing carries between kinds
   URL admitted only for its host may redirect only to trusted hosts.
 - **The reader** (`reader/reader.py`) connects only to public IPv4 addresses on ports 80 and 443, to the very
   address it checked, redirects included. Each request is its own process, limited in time, bytes and memory.
+
+## LLM API
+
+`/llm/api/<path>` is the LLM server's `<path>` for software outside the portal (an editor, a script), opened by
+a key its user made on the API page. `https://<portal>/llm/api/v1` is an OpenAI base URL.
+
+```
+client --(key)--> web app  app/llm/api/[[...path]]/route.ts
+                     |  the same request, unread
+                     v
+                  gateway  127.0.0.1:CONTROL_PORT/llm/api/<path>  (service/llm-api.ts)
+                     |  the key checked and taken off, LLM_API_KEY put on
+                     v
+                  LLM_UPSTREAM_URL/<path>
+```
+
+- **The web app is a pipe.** Method, path, query, headers (but `cookie`) and body go on as they came, and the
+  answer comes back as it streams. It uses `node:http`: `fetch` gives up after 300 s without response headers,
+  and a long prompt is read for longer than that. Next.js cuts a request body off at 10 MB unless
+  `proxyClientMaxBodySize` says otherwise; `LLM_API_BODY_BYTES` in `web/lib/limits.ts` (64 MiB, the reference
+  engine's own limit) sets it, and the route answers a longer body with 413.
+- **The gateway checks the key.** On the control listener `/llm/api` is opened by an API key and every other
+  path by the control secret. A key is `sk-` and 48 hex digits, given as `Authorization: Bearer` or as
+  `x-api-key` (Anthropic's clients). It holds while it is not revoked and its user is active without a temporary
+  password; anything else gets 401 `invalid_api_key` in OpenAI's error shape. `OPTIONS` passes without a key,
+  because a browser's preflight carries none.
+- **Every path is passed on**, where a workspace gets five: the API stands in for the LLM server's own, and its
+  caller is a user, not an agent that a web page can talk into things. With a hosted provider behind
+  `LLM_UPSTREAM_URL`, a key so opens all of that provider's API on the portal's account. WebSocket upgrades
+  are not passed.
+- **Queue and counting** are the workspaces' (`service/llm-proxy.ts`). A `POST` is a generation unless its path
+  only counts or formats a prompt (`NOT_A_GENERATION`): it waits for a slot within the same limit per user,
+  counts in `llm_usage`, and counts per key and day in `api_key_usage` (`monitor/key-usage.ts`) where a
+  workspace's counts in its session. A waiting request's body stays unread, for longer than the 5 minutes Node
+  allows a request by default, so the control listener sets no such limit.
 
 ## Gateway control API
 
@@ -383,7 +424,8 @@ These parts of `gateway/src/monitor/` run all the time:
   `host_daily`. `host_meter` keeps the last reading, so a gateway restart counts only what came after it. A
   day is the server's local day (`TZ`), the same in the web app and the gateway (`usage-day.ts`).
 - **LLM energy**: while requests run, the LLM server's meter is read every 2 s and each stretch is shared
-  among the running requests by time, into their `workspace_sessions` rows. Idle draw belongs to no one.
+  among the running requests by time, into the `workspace_sessions` row of a workspace's request and the
+  `api_key_usage` row of an API key's. Idle draw belongs to no one.
 - **Electricity prices**: EIA (US states) and Eurostat (European households) into `energy_prices` at start,
   daily and on refresh. A page that does not parse is an error, never a wrong price.
 

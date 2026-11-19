@@ -1,5 +1,6 @@
 // Control API for the web app (127.0.0.1:CONTROL_PORT, bearer token). JSON in and out; errors are
-// `{ error, message }`. Routes and shapes: docs/ARCHITECTURE.md, "Gateway control API".
+// `{ error, message }`. Routes and shapes: docs/ARCHITECTURE.md, "Gateway control API". The same port answers the
+// LLM API the web app passes on (/llm/api, service/llm-api.ts), which is opened by a user's API key instead.
 import crypto from "node:crypto";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import { eq } from "drizzle-orm";
@@ -14,6 +15,8 @@ import { readHostStats } from "./monitor/host-stats.ts";
 import { HttpError, readJsonBody, sendError, sendJson, splitTarget } from "./lib/http-util.ts";
 import type { LiveHub } from "./monitor/live.ts";
 import type { EnergyPrices } from "./monitor/energy-prices.ts";
+import type { LlmRequests } from "./monitor/llm-requests.ts";
+import { isLlmApi, serveLlmApi } from "./service/llm-api.ts";
 import type { LlmQueue } from "./service/llm-queue.ts";
 import type { Logger } from "./lib/log.ts";
 import type { SessionCache } from "./proxy/session-cache.ts";
@@ -27,6 +30,7 @@ interface ControlDeps {
   updater: AgentUpdater;
   engine: EngineUpdater;
   llm: LlmQueue;
+  requests: LlmRequests;
   live: LiveHub;
   prices: EnergyPrices;
   sessions: SessionCache;
@@ -188,8 +192,12 @@ const ROUTES: Route[] = [
 
 export function createControlServer(deps: ControlDeps): http.Server {
   const expected = digest(`Bearer ${deps.config.controlSecret}`);
-  return http.createServer((req, res) => {
-    handle(deps, expected, req, res).catch((error: unknown) => {
+  // No request timeout, as in createStreamingServer: an API key's request waits for its turn with its body unread,
+  // for longer than Node's five minutes.
+  return http.createServer({ requestTimeout: 0, headersTimeout: 60_000 }, (req, res) => {
+    const served = isLlmApi(splitTarget(req.url ?? "").pathname) ? serveLlmApi(deps, req, res) : handle(deps, expected, req, res);
+    served.catch((error: unknown) => {
+      if (res.headersSent) return void res.destroy();
       if (error instanceof HttpError) return sendError(res, error.status, error.code, error.message);
       deps.log.error("control request failed", { method: req.method, path: splitTarget(req.url ?? "").pathname, error });
       sendError(res, 500, "internal", "Internal error.");

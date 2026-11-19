@@ -114,7 +114,9 @@ export type AuditAction =
   | "engine_image_removed"
   | "energy_price_location_set"
   | "workspace_files_erased"
-  | "user_online_access_changed";
+  | "user_online_access_changed"
+  | "api_key_created"
+  | "api_key_revoked";
 
 export function writeAudit(
   db: PortalDb,

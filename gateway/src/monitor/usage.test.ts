@@ -47,6 +47,11 @@ test("extractUsage reads chat-completions and responses naming", () => {
   assert.deepEqual(extractUsage({ usage: { input_tokens: 5, output_tokens: 6 } }), { promptTokens: 5, completionTokens: 6 });
   assert.deepEqual(extractUsage({ usage: { prompt_tokens: 7 } }), { promptTokens: 7, completionTokens: 0 });
   assert.equal(extractUsage({ usage: null }), null);
+  // The Responses stream's closing event, and its opening ones.
+  assert.deepEqual(extractUsage({ type: "response.completed", response: { usage: { input_tokens: 55, output_tokens: 28 } } }), { promptTokens: 55, completionTokens: 28 });
+  assert.equal(extractUsage({ type: "response.created", response: { usage: null } }), null);
+  // Anthropic Messages: the cached part of the prompt is counted apart.
+  assert.deepEqual(extractUsage({ usage: { input_tokens: 5, output_tokens: 24, cache_creation_input_tokens: 2, cache_read_input_tokens: 55 } }), { promptTokens: 62, completionTokens: 24 });
   assert.equal(extractUsage({ usage: { prompt_tokens: -1, completion_tokens: "2" } }), null);
   assert.equal(extractUsage([1, 2]), null);
   assert.equal(extractUsage("x"), null);
@@ -129,6 +134,14 @@ test("recordUsage upserts one row per user and day", () => {
     { userId: user.id, day: "2026-11-08", requests: 3, promptTokens: 11, completionTokens: 7 },
     { userId: user.id, day: "2026-11-09", requests: 1, promptTokens: 7, completionTokens: 7 },
   ]);
+});
+
+test("SSE: a stream without usage counts what the engine's closing timings say, until a usage says otherwise", () => {
+  const timings = 'data: {"choices":[{"delta":{},"finish_reason":"stop"}],"timings":{"cache_n":4,"prompt_n":5,"prompt_ms":1,"predicted_n":3,"predicted_ms":1}}\n\n';
+  const usage = 'data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2}}\n\n';
+  assert.deepEqual(feed(new SseUsageParser(), [Buffer.from(timings)]).usage, { promptTokens: 9, completionTokens: 3 });
+  assert.deepEqual(feed(new SseUsageParser(), [Buffer.from(timings + usage)]).usage, { promptTokens: 10, completionTokens: 2 });
+  assert.deepEqual(feed(new SseUsageParser(), [Buffer.from(usage + timings)]).usage, { promptTokens: 10, completionTokens: 2 });
 });
 
 test("the SSE parser reports streamed tokens and the engine's closing timings to its observer", () => {

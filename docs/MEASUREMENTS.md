@@ -82,7 +82,8 @@ kernel 7.3.4:
 - -55 through -200 are accepted but behave exactly like -50 (kernel 7.2.15).
 - With the offset on, November 18: all cores checked their arithmetic for 5 minutes and each of the 16 cores
   alone for 30 seconds, twice, without an error, and the tests of four 256K sessions under [Load](#load) ran.
-  It was not run for days, and the machine was not rebooted with the unit installed.
+  After a reboot the unit set the offset 8 seconds into the boot, and the same all-core test gave 25,490
+  operations a second. It was not run for days.
 - Set with [RyzenAdj](https://github.com/FlyGoat/RyzenAdj) 0.18.0 from
   [COPR shdwchn10/ryzenadj](https://copr.fedorainfracloud.org/coprs/shdwchn10/ryzenadj/):
   `sudo ryzenadj --set-coall=1048526`, which is 1048576 minus the offset and lasts until a reboot. The package

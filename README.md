@@ -9,14 +9,15 @@ server and talking to a model you host. A user signs in and gets two workspaces,
   workspace. The admin can bar it per user; `ONLINE_WORKSPACES=off` turns it off for everyone.
 
 Each workspace has its own files (`/home/user`, `/workspace`) and runs the agent the user picks in Settings:
-Qwen Code or DeepSeek Harness. Web apps started in a workspace open in the browser on its preview port. The
-admin manages users, watches usage and energy, updates the agents and the LLM engine, and reads the audit log.
+Qwen Code or DeepSeek Harness. Web apps started in a workspace open in the browser on its preview port. With
+a key from the API page, a user's other software (an editor, a script) uses the same model through the portal.
+The admin manages users, watches usage and energy, updates the agents and the LLM engine, and reads the audit log.
 
 ## What runs where
 
 | Where | What | Address (defaults) |
 |---|---|---|
-| Portal server | web app: sign-in, Home, Settings, admin pages | `:3000` |
+| Portal server | web app: sign-in, Home, API, Settings, admin pages; the LLM API under `/llm/api` | `:3000` |
 | | gateway: agent ports, one per user and kind | `:3101-3299` Private, `:3301-3499` Online |
 | | gateway: preview ports (agent port + 1000) | `:4101-4299`, `:4301-4499` |
 | | gateway: control API, for the web app | `127.0.0.1:4002` |
@@ -101,6 +102,21 @@ script with `off` before changing a port or uninstalling the portal, and again a
 Over HTTPS a browser offers to install the portal as an app: Chrome on Android under "Add to Home screen",
 Safari on an iPhone under Share > Add to Home Screen.
 
+## LLM API
+
+On the API page a user creates up to five keys, names each after the software that gets it, and revokes them.
+The page shows per key and per day the requests, the tokens in and out, and the electricity with its cost. A
+key opens the model server's API under the portal's address:
+
+```sh
+curl https://<portal>/llm/api/v1/models -H "Authorization: Bearer $KEY"
+```
+
+Software that speaks the OpenAI API takes `https://<portal>/llm/api/v1` as its base URL and the key as its API
+key; `x-api-key` carries the key as well. Every path, method, header and body reaches the model server as it
+was sent, with `LLM_API_KEY` in the user's key's place, and the answer streams back. A body may be 64 MiB.
+Generations wait in the workspaces' queue, within the same limit per user (`LLM_MAX_CONCURRENCY_PER_USER`).
+
 ## Operate
 
 ```sh
@@ -123,7 +139,7 @@ from it, or with `update-image.sh`, which restarts the gateway and runs the isol
 stack. Running workspaces keep their image until they stop.
 
 Back up `.env` and the data directory (`PORTAL_DATA_DIR`): `db/` is the SQLite database (accounts, sessions,
-audit log, usage, energy), `users/<id>/private` and `users/<id>/online` are the workspace files, `config/`
+API keys, audit log, usage, energy), `users/<id>/private` and `users/<id>/online` are the workspace files, `config/`
 holds the model settings and the agent versions in use. Stop the stack for a consistent copy of `db/`, and
 keep numeric owners and modes: each workspace's files belong to a UID of its own.
 
@@ -158,6 +174,9 @@ download, a full-load test, and fan control for the one board it was tested on.
   Without the rules the gateway runs no Online workspace.
 - **A browser** reaches a workspace only on that workspace's own port, and only with the portal session of its
   user or of the admin who opened it.
+- **An API key** opens the model server's API and nothing of the portal. The database keeps only its hash. It
+  stops working when it is revoked or its user is deactivated. With a hosted provider as the model server it
+  opens that provider's whole API on your account, not only the routes a workspace gets.
 - **The admin** sees accounts, running workspaces, token and energy use, and the audit log. The admin can
   open a user's workspace, files and conversations included: the audit log records it and the user sees
   "Admin connected" meanwhile. The database stores no prompt and no answer, and passwords only as argon2id

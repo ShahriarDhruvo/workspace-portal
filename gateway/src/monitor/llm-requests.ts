@@ -22,6 +22,8 @@ export interface ActiveLlmRequest {
 export interface FinishedLlmRequest {
   id: number;
   userId: number;
+  /** The API key it came with; null from a workspace. */
+  keyId: number | null;
   forwardedAt: number;
   finishedAt: number;
   /** From being forwarded to the last byte. */
@@ -32,7 +34,7 @@ export interface FinishedLlmRequest {
   ttftMs: number | null;
   /** The engine's account; null when it sent none (an error, a non-streaming reply, another engine). */
   timings: EngineTimings | null;
-  /** The answer's `usage`; null when it had none. */
+  /** The answer's `usage`, or of a stream without one what the engine's timings count; null without either. */
   usage: TokenUsage | null;
   /** False when the LLM server failed it: an answer that is not 2xx, or none, or a stream that broke. */
   ok: boolean;
@@ -40,7 +42,7 @@ export interface FinishedLlmRequest {
 
 /** Hears the requests that reach the LLM server. Its methods must not throw. */
 export interface LlmRequestListener {
-  forwarded(request: { id: number; userId: number; forwardedAt: number }): void;
+  forwarded(request: { id: number; userId: number; keyId: number | null; forwardedAt: number }): void;
   finished(request: FinishedLlmRequest): void;
 }
 
@@ -62,8 +64,8 @@ export class LlmRequests {
     this.#listener = options.listener ?? null;
   }
 
-  /** A generation request arrived (it may still wait for a slot). */
-  begin(userId: number): LlmRequestHandle {
+  /** A generation request arrived (it may still wait for a slot), from a workspace or with an API key. */
+  begin(userId: number, keyId: number | null = null): LlmRequestHandle {
     const entry: ActiveLlmRequest = { id: this.#nextId++, userId, queuedAt: this.#now(), forwardedAt: null, firstTokenAt: null, tokens: 0 };
     this.#active.set(entry.id, entry);
     let timings: EngineTimings | null = null;
@@ -72,7 +74,7 @@ export class LlmRequests {
       forwarded: () => {
         if (done || entry.forwardedAt !== null) return;
         entry.forwardedAt = this.#now();
-        this.#listener?.forwarded({ id: entry.id, userId, forwardedAt: entry.forwardedAt });
+        this.#listener?.forwarded({ id: entry.id, userId, keyId, forwardedAt: entry.forwardedAt });
       },
       token: () => {
         if (done) return;
@@ -92,6 +94,7 @@ export class LlmRequests {
         this.#listener?.finished({
           id: entry.id,
           userId,
+          keyId,
           forwardedAt: entry.forwardedAt,
           finishedAt,
           durationMs: finishedAt - entry.forwardedAt,

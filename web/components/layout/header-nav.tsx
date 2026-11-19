@@ -22,7 +22,7 @@ function isCurrent(pathname: string, link: NavLink): boolean {
   return pathname === link.href || (link.prefixes ?? []).some((prefix) => pathname.startsWith(prefix));
 }
 
-/** Web Shell tabs. Below `lg` (a tablet) the icons give way so that the admin's six tabs fit the bar. */
+/** Web Shell tabs. */
 export function HeaderNav({ label, links, className }: { label: string; links: NavLink[]; className?: string }) {
   const pathname = usePathname();
   return (
@@ -35,7 +35,7 @@ export function HeaderNav({ label, links, className }: { label: string; links: N
             href={link.href}
             aria-current={current ? "page" : undefined}
             className={cn(
-              "-mb-px inline-flex shrink-0 items-center gap-1.5 border-b-2 px-3 text-13 font-medium whitespace-nowrap transition-colors focus-visible:-outline-offset-2 max-lg:px-2.5 max-lg:[&_svg]:hidden",
+              "-mb-px inline-flex shrink-0 items-center gap-1.5 border-b-2 px-3 text-13 font-medium whitespace-nowrap transition-colors focus-visible:-outline-offset-2",
               current ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground",
             )}
           >

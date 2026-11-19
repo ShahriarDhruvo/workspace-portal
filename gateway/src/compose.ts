@@ -22,6 +22,7 @@ import { hostdClient } from "./monitor/hostd.ts";
 import { LiveHub, userNames } from "./monitor/live.ts";
 import { LlmMonitor } from "./monitor/llm-monitor.ts";
 import { LlmQueue } from "./service/llm-queue.ts";
+import { KeyUsage } from "./monitor/key-usage.ts";
 import { LlmEnergy } from "./monitor/llm-energy.ts";
 import { LlmRequests, type FinishedLlmRequest } from "./monitor/llm-requests.ts";
 import type { Logger } from "./lib/log.ts";
@@ -61,23 +62,30 @@ export function compose(
   const llm = new LlmQueue(config.llm.maxConcurrency, config.llm.maxConcurrencyPerUser);
   // Each run of a workspace and what its LLM requests added up to, energy included (Admin > Usage).
   const sessionLog = new SessionLog({ db, log, now });
+  // The same for each API key (the API page).
+  const keyUsage = new KeyUsage({ db, log, now });
   const hostd = { portal: hostdClient(config.hostd.portal), llm: hostdClient(config.hostd.llm) };
   const llmEnergy = new LlmEnergy({
     source: hostd.llm,
-    onShares: (shares) => sessionLog.addEnergy(shares),
+    onShares: (shares) => {
+      sessionLog.addEnergy(shares.filter((share) => "sessionId" in share));
+      keyUsage.addEnergy(shares.filter((share) => "keyId" in share));
+    },
     log,
   });
   const requests = new LlmRequests({
     now,
     listener: {
-      forwarded: (request) => {
-        const sessionId = sessionLog.forwarded(request.id, request.userId);
-        if (sessionId !== null) llmEnergy.started(request.id, sessionId, request.forwardedAt);
+      forwarded: ({ id, userId, keyId, forwardedAt }) => {
+        const sessionId = keyId === null ? sessionLog.forwarded(id, userId) : null;
+        const owner = keyId !== null ? { keyId } : sessionId !== null ? { sessionId } : null;
+        if (owner) llmEnergy.started(id, owner, forwardedAt);
       },
       finished: (request) => {
         seams.onLlmFinished?.(request);
         llmEnergy.ended(request.id, request.finishedAt);
-        sessionLog.finished(request);
+        if (request.keyId === null) sessionLog.finished(request);
+        else keyUsage.finished(request.keyId, request);
       },
     },
   });
@@ -166,7 +174,7 @@ export function compose(
     prices,
     live,
     engine,
-    control: createControlServer({ config, db, manager, versions, updater, engine, llm, live, prices, sessions, connections, log }),
+    control: createControlServer({ config, db, manager, versions, updater, engine, llm, requests, live, prices, sessions, connections, log }),
     createAgentServer: createAgentServerFactory({ config, manager, sessions, connections, log }),
     createPreviewServer: createPreviewServerFactory({ config, manager, sessions, connections, log }),
     /** A service listener for one kind's network. */

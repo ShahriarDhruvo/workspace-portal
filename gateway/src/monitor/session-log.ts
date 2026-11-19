@@ -20,13 +20,6 @@ export interface WorkspaceRunState {
   stoppedAt?: number | null;
 }
 
-/** Energy a session's requests used in one stretch of time, and how long it had a request running in it (parallel ones count once). */
-export interface EnergyShare {
-  sessionId: number;
-  joules: number;
-  ms: number;
-}
-
 export class SessionLog {
   readonly #db: PortalDb;
   readonly #log: Logger;
@@ -125,9 +118,6 @@ export class SessionLog {
     if (sessionId === undefined) return;
     this.#requests.delete(request.id);
     const { timings, usage } = request;
-    // Tokens as the answer's usage counts them (as llm_usage does), else as the engine's timings do.
-    const tokensIn = usage?.promptTokens ?? (timings ? timings.promptTokens + timings.cachedTokens : 0);
-    const tokensOut = usage?.completionTokens ?? timings?.generatedTokens ?? 0;
     const s = workspaceSessions;
     try {
       this.#db
@@ -135,8 +125,8 @@ export class SessionLog {
         .set({
           requests: sql`${s.requests} + 1`,
           failed: sql`${s.failed} + ${request.ok ? 0 : 1}`,
-          promptTokens: sql`${s.promptTokens} + ${tokensIn}`,
-          outputTokens: sql`${s.outputTokens} + ${tokensOut}`,
+          promptTokens: sql`${s.promptTokens} + ${usage?.promptTokens ?? 0}`,
+          outputTokens: sql`${s.outputTokens} + ${usage?.completionTokens ?? 0}`,
           cachedTokens: sql`${s.cachedTokens} + ${timings?.cachedTokens ?? 0}`,
           readTokens: sql`${s.readTokens} + ${timings?.promptTokens ?? 0}`,
           readMs: sql`${s.readMs} + ${timings?.promptMs ?? 0}`,
@@ -152,8 +142,8 @@ export class SessionLog {
     }
   }
 
-  /** Shares of the LLM server's measured energy (llm-energy.ts). */
-  addEnergy(shares: readonly EnergyShare[]): void {
+  /** The sessions' shares of the LLM server's measured energy (llm-energy.ts). */
+  addEnergy(shares: ReadonlyArray<{ sessionId: number; joules: number; ms: number }>): void {
     if (shares.length === 0) return;
     const s = workspaceSessions;
     try {

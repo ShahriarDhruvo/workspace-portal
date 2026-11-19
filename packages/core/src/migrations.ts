@@ -136,4 +136,26 @@ export const MIGRATIONS: readonly string[] = [
   CREATE UNIQUE INDEX workspace_sessions_open ON workspace_sessions (user_id) WHERE ended_at IS NULL;
   CREATE INDEX workspace_sessions_order ON workspace_sessions (ended_at, started_at);
   `,
+  `
+  CREATE TABLE api_keys (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    name       TEXT    NOT NULL,
+    token_hash TEXT    NOT NULL UNIQUE,
+    hint       TEXT    NOT NULL,
+    created_at INTEGER NOT NULL,
+    revoked_at INTEGER
+  );
+
+  CREATE TABLE api_key_usage (
+    key_id        INTEGER NOT NULL REFERENCES api_keys (id) ON DELETE CASCADE,
+    day           TEXT    NOT NULL CHECK (day GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
+    requests      INTEGER NOT NULL DEFAULT 0,
+    failed        INTEGER NOT NULL DEFAULT 0,
+    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    energy_j      REAL    NOT NULL DEFAULT 0,
+    PRIMARY KEY (key_id, day)
+  );
+  `,
 ];

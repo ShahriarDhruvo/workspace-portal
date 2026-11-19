@@ -1,22 +1,27 @@
-// Each LLM request's share of the LLM server's measured energy, for its workspace session (session-log.ts). While
-// requests run, the LLM server's portal-hostd meter (GET /v1/meter, brought up to date every 2 s) is read every
-// READ_MS; the energy each reading adds is shared among the requests that ran in that stretch, by how long each ran in
-// it, and each session also gets the time it had a request running (its parallel ones count once, so its energy over
-// that time is its average draw). Nothing is read while the LLM server has no request, so its idle draw goes to no
-// one. Each stretch is bounded by the meter's own times (the LLM server's clock), unless that clock is off by more
-// than CLOCK_SKEW_MS; a request keeps its place until a reading covers its end.
+// Each LLM request's share of the LLM server's measured energy, for its workspace session (session-log.ts) or its
+// API key (key-usage.ts). While requests run, the LLM server's portal-hostd meter (GET /v1/meter, brought up to date
+// every 2 s) is read every READ_MS; the energy each reading adds is shared among the requests that ran in that
+// stretch, by how long each ran in it, and each owner also gets the time it had a request running (its parallel ones
+// count once, so its energy over that time is its average draw). Nothing is read while the LLM server has no
+// request, so its idle draw goes to no one. Each stretch is bounded by the meter's own times (the LLM server's
+// clock), unless that clock is off by more than CLOCK_SKEW_MS; a request keeps its place until a reading covers its
+// end.
 import { isMeterReading, type MeterSource } from "./energy-meter.ts";
 import type { Logger } from "../lib/log.ts";
 import { singleFlight } from "../lib/single-flight.ts";
-import type { EnergyShare } from "./session-log.ts";
 
 const READ_MS = 2_000;
 const CLOCK_SKEW_MS = 5_000;
 
+/** Whose a request's share is: its workspace session's, or its API key's. */
+export type EnergyOwner = { sessionId: number } | { keyId: number };
+/** Energy an owner's requests used in one stretch of time, and how long it had a request running in it (parallel ones count once). */
+export type EnergyShare = EnergyOwner & { joules: number; ms: number };
+
 export interface LlmEnergyOptions {
   /** The LLM server's portal-hostd; null when it isn't set up (then nothing is measured). */
   source: MeterSource | null;
-  /** Each reading's shares, per session. Must not throw. */
+  /** Each reading's shares, per owner. Must not throw. */
   onShares: (shares: EnergyShare[]) => void;
   log: Logger;
   now?: () => number;
@@ -24,7 +29,7 @@ export interface LlmEnergyOptions {
 }
 
 interface Tracked {
-  sessionId: number;
+  owner: EnergyOwner;
   from: number;
   /** When it ended; null while it runs. */
   to: number | null;
@@ -51,10 +56,10 @@ export class LlmEnergy {
     this.#readMs = options.readMs ?? READ_MS;
   }
 
-  /** A request of `sessionId` reached the LLM server at `at`. */
-  started(requestId: number, sessionId: number, at: number): void {
+  /** A request of `owner` reached the LLM server at `at`. */
+  started(requestId: number, owner: EnergyOwner, at: number): void {
     if (this.#source === null || this.#stopped) return;
-    this.#requests.set(requestId, { sessionId, from: at, to: null });
+    this.#requests.set(requestId, { owner, from: at, to: null });
     if (this.#timer !== null) return;
     void this.read();
     this.#timer = setInterval(() => void this.read(), this.#readMs);
@@ -108,20 +113,21 @@ export class LlmEnergy {
 
   /** `joules` used from `from` to `to`, shared by how long each request ran in that stretch. */
   #share(from: number, to: number, joules: number): void {
-    const sessions = new Map<number, { span: number; intervals: Array<[number, number]> }>();
+    const owners = new Map<string, { owner: EnergyOwner; span: number; intervals: Array<[number, number]> }>();
     let total = 0;
     for (const request of this.#requests.values()) {
       const start = Math.max(from, request.from);
       const end = Math.min(to, request.to ?? to);
       if (end <= start) continue;
-      const session = sessions.get(request.sessionId) ?? { span: 0, intervals: [] };
-      session.span += end - start;
-      session.intervals.push([start, end]);
-      sessions.set(request.sessionId, session);
+      const key = JSON.stringify(request.owner);
+      const share = owners.get(key) ?? { owner: request.owner, span: 0, intervals: [] };
+      share.span += end - start;
+      share.intervals.push([start, end]);
+      owners.set(key, share);
       total += end - start;
     }
     if (total <= 0) return;
-    this.#onShares([...sessions].map(([sessionId, { span, intervals }]) => ({ sessionId, joules: (joules * span) / total, ms: coveredMs(intervals) })));
+    this.#onShares([...owners.values()].map(({ owner, span, intervals }) => ({ ...owner, joules: (joules * span) / total, ms: coveredMs(intervals) })));
   }
 
   #idle(): void {
