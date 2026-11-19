@@ -377,9 +377,9 @@ own copy at every start into `system/<agent>/`, mounted read-only. What the rend
   evaluates YAML tags, and JSON has none, so no string of the admin's can become one. Models whose context
   window leaves dsh too little room are left out (`fitDshModels` in `dsh-settings.ts`). What users may not
   change is a static lockdown patch in the image; the image build fails when a row of it does not apply.
-- **The Web Shell trim** (`workspace-image/qwen/trim-web-shell.mjs`) removes what the portal does not offer
-  and points the Web preview at the preview port. An edit that does not fit is skipped with a warning: the
-  build never fails.
+- **The Web Shell trim** (`workspace-image/qwen/trim-web-shell.mjs`) removes what the portal does not offer,
+  points the Web preview at the preview port and sizes the dropped-file dialog to its buttons. An edit that
+  does not fit is skipped with a warning: the build never fails.
 
 ## Agent versions and updates
 

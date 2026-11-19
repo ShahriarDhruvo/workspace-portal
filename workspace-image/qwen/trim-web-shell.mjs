@@ -6,7 +6,9 @@
 //   * a new session starts with Plan mode on, as when a person turns the composer's toggle on;
 //   * the Web preview shows the workspace's web apps: in the person's browser localhost is their own computer, so
 //     localhost, 127.x.x.x and 0.0.0.0 go to the workspace's preview port (the gateway's preview proxy), and its
-//     frame may lock the pointer and show alert and confirm dialogs.
+//     frame may lock the pointer and show alert and confirm dialogs;
+//   * the dialog that asks what to do with a dropped file holds its three buttons: as shipped it is 24rem wide, less
+//     than they need in English and Russian, and its content sticks out of it.
 // Qwen Code has no setting for these: the app hard-codes its shell component's options, and tools.approvalMode
 // "plan" would also put the terminal's qwen and the headless qwen -p in plan mode.
 // Two layers, each working without the other:
@@ -14,7 +16,8 @@
 //      language. The edited bundle gets a new file name (an import map in index.html points the other chunks at
 //      it), because browsers keep the shipped one cached as immutable.
 //   2. A stylesheet in index.html, keyed on the Web Shell's data-* attributes and icon names, not on its generated
-//      class names: it hides the same on the desktop layouts when a version no longer fits layer 1.
+//      class names: it hides the same on the desktop layouts when a version no longer fits layer 1, and sizes the
+//      dropped-file dialog.
 // Never fails the build: an edit that no longer fits (its code isn't there exactly once, or the result doesn't
 // parse) is skipped with a warning, and that part stays as shipped.
 import { createHash } from "node:crypto";
@@ -34,6 +37,9 @@ const STYLE = [
   "nav[data-web-shell-navigation-rail] button:not([data-web-shell-home-trigger]):not([data-web-shell-sidebar-collapse]),",
   "[data-sidebar-shell] button:has(> svg.lucide-bell),",
   "header button:has(> svg.lucide-qr-code) { display: none !important; }",
+  // Wide enough for the English buttons in one row; longer ones wrap instead of widening the dialog's grid.
+  "[data-web-shell-drop-choice-dialog] { max-width: min(32rem, calc(100% - 2rem)) !important; }",
+  '[data-web-shell-drop-choice-dialog] [data-slot="dialog-footer"] { flex-wrap: wrap; }',
 ].join("\n");
 
 /**
