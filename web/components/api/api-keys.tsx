@@ -10,6 +10,7 @@ import { formatCount } from "@/lib/format";
 import { sumUse, type KeyUse } from "@/lib/key-use";
 import { API_KEY_NAME_MAX_LENGTH, MAX_API_KEYS } from "@/lib/limits";
 import { daysUntil, formatCost, formatDay, formatWh } from "@/lib/live-format";
+import { PAGE_SIZES } from "@/lib/pagination";
 import { cn } from "@/lib/utils";
 import { Estimate } from "@/components/admin/estimate";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
@@ -254,7 +255,11 @@ function Usage({ days, currency, today }: ApiKeysView) {
           />
         </CardContent>
       </Card>
-      <DataTable footer={<DataTablePagination {...pagination} label="Usage pages" />} tableProps={{ "aria-label": "Usage by day" }}>
+      <DataTable
+        // Rows that fit the smallest page need no pager.
+        footer={shown.length > PAGE_SIZES[0]! ? <DataTablePagination {...pagination} label="Usage pages" /> : null}
+        tableProps={{ "aria-label": "Usage by day" }}
+      >
         <TableHeader>
           <TableRow>
             <DataTableHead>Day</DataTableHead>
