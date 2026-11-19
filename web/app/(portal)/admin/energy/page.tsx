@@ -7,11 +7,11 @@ import { PageMain } from "@/components/layout/page-main";
 
 export const metadata: Metadata = { title: "Energy" };
 
-/** Admin > Energy: both servers' energy per day and its cost, this month rendered here (the view asks for others). */
+/** Admin > Energy: both servers' energy per day, each user's share and the cost, this month rendered here (the view asks for others). */
 export default async function EnergyPage() {
   await requireAdmin();
   return (
-    <PageMain width="lg">
+    <PageMain width="md">
       <EnergyView initial={loadEnergyMonth(getDb())} />
     </PageMain>
   );

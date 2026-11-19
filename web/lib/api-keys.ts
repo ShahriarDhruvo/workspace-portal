@@ -4,11 +4,9 @@
 import crypto from "node:crypto";
 import { and, count, desc, eq, isNull } from "drizzle-orm";
 import { apiKeys, apiKeyUsage, hashSessionToken, usageDay, writeAudit, type EnergyCurrency, type PortalDb } from "@portal/core";
-import { loadEnergyLocation, loadPricePeriods, priceOn } from "./energy.ts";
+import { JOULES_PER_WH, loadEnergyLocation, loadPricePeriods, priceOn } from "./energy.ts";
 import { sumUse, type KeyUse } from "./key-use.ts";
 import { MAX_API_KEYS } from "./limits.ts";
-
-const JOULES_PER_WH = 3600;
 
 /** A working key. */
 export interface ApiKeyRow extends KeyUse {

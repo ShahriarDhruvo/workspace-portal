@@ -7,7 +7,7 @@ const COLUMNS = ["Day", "LLM server (kWh)", "Portal server (kWh)", "Total (kWh)"
 
 export default function EnergyLoading() {
   return (
-    <PageMain width="lg">
+    <PageMain width="md">
       <div className="flex items-center justify-between gap-4">
         <HeadingSkeleton className="w-20" />
         <Skeleton className="h-8 w-44" />
@@ -22,6 +22,7 @@ export default function EnergyLoading() {
             <Skeleton className="h-40" />
           </CardContent>
         </Card>
+        <Skeleton className="h-8 w-34 self-end" />
         <TableSkeleton columns={COLUMNS} rows={5} rowHeight="h-11" />
       </div>
     </PageMain>

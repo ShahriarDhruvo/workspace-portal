@@ -3,10 +3,8 @@
 // on the day each session started (prices are monthly or half-yearly, so a session past midnight costs the same).
 import { count, eq, sql } from "drizzle-orm";
 import { displayName, usageDay, users, workspaceSessions, type EnergyCurrency, type PortalDb, type WorkspaceKind, type WorkspaceSession } from "@portal/core";
-import { loadEnergyLocation, loadPricePeriods, priceOn, type DayPrice } from "./energy.ts";
+import { JOULES_PER_WH, loadEnergyLocation, loadPricePeriods, priceOn, type DayPrice } from "./energy.ts";
 import { clampPage, SESSION_PAGE_SIZE } from "./pagination.ts";
-
-const JOULES_PER_WH = 3600;
 
 /** One run of a user's workspace, from Start to its stop, and what its LLM requests added up to. */
 export interface SessionRow {

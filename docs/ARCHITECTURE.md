@@ -426,7 +426,8 @@ These parts of `gateway/src/monitor/` run all the time:
   day is the server's local day (`TZ`), the same in the web app and the gateway (`usage-day.ts`).
 - **LLM energy**: while requests run, the LLM server's meter is read every 2 s and each stretch is shared
   among the running requests by time, into the `workspace_sessions` row of a workspace's request and the
-  `api_key_usage` row of an API key's. Idle draw belongs to no one.
+  `api_key_usage` row of an API key's. Idle draw belongs to no one. Admin > Energy adds both up per user and
+  day, a session on the day it started.
 - **Electricity prices**: EIA (US states) and Eurostat (European households) into `energy_prices` at start,
   daily and on refresh. A page that does not parse is an error, never a wrong price.
 

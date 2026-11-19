@@ -1,13 +1,18 @@
 // Energy and its cost for Admin > Energy. It takes the database as an argument (no server-only imports).
-import { and, asc, desc, eq, gte, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, isNotNull, lt, lte, sql } from "drizzle-orm";
 import {
   ENERGY_SOURCE_NAMES,
+  apiKeys,
+  apiKeyUsage,
+  displayName,
   energyLocation,
   energyLocationLabel,
   energyPrices,
   hostDaily,
   readSetting,
   usageDay,
+  users,
+  workspaceSessions,
   writeAudit,
   writeSetting,
   type EnergyLocation,
@@ -52,6 +57,20 @@ export interface EnergyTotal {
   cost: number | null;
 }
 
+/**
+ * A user's share of the LLM server's measured energy on one day: what their requests used, from their workspace
+ * sessions (each on the day it started, as Admin > Usage prices it) and their API keys.
+ */
+export interface UserEnergyDay {
+  userId: number;
+  name: string;
+  /** YYYY-MM-DD. */
+  day: string;
+  wh: number;
+  /** In the place's currency; null without a place or a price. */
+  cost: number | null;
+}
+
 export interface EnergyMonth {
   /** YYYY-MM: the month shown. */
   month: string;
@@ -60,6 +79,8 @@ export interface EnergyMonth {
   /** The month's days that have readings, newest first. */
   days: EnergyDay[];
   total: EnergyTotal;
+  /** The month's days of every user whose requests used energy, newest first. */
+  users: UserEnergyDay[];
   /** Today so far, whichever month is shown. */
   todayTotal: EnergyTotal;
   /** The months with readings, newest first; always includes the current one. */
@@ -71,6 +92,7 @@ export interface EnergyMonth {
 }
 
 const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
+export const JOULES_PER_WH = 3600;
 
 /** A YYYY-MM month (from a URL). */
 export function isMonth(value: unknown): value is string {
@@ -120,6 +142,34 @@ function pricedDays(rows: readonly DayRow[], periods: readonly PricePeriod[]): E
     .map((day) => priceDay(day, byDay.get(day) ?? [], priceOn(periods, day)));
 }
 
+/** Every user's energy on each day of `month`, priced, newest first. */
+function userDays(db: PortalDb, month: string, periods: readonly PricePeriod[]): UserEnergyDay[] {
+  const [year = 0, index = 1] = month.split("-").map(Number);
+  const s = workspaceSessions;
+  const sessions = db
+    .select({ userId: s.userId, startedAt: s.startedAt, energyJ: s.energyJ })
+    .from(s)
+    // The month in local time, as usageDay counts the days.
+    .where(and(gte(s.startedAt, new Date(year, index - 1, 1).getTime()), lt(s.startedAt, new Date(year, index, 1).getTime()), isNotNull(s.energyJ)))
+    .all()
+    .map((row) => ({ userId: row.userId, day: usageDay(new Date(row.startedAt)), energyJ: row.energyJ ?? 0 }));
+  const keys = db
+    .select({ userId: apiKeys.userId, day: apiKeyUsage.day, energyJ: apiKeyUsage.energyJ })
+    .from(apiKeyUsage)
+    .innerJoin(apiKeys, eq(apiKeys.id, apiKeyUsage.keyId))
+    .where(and(gte(apiKeyUsage.day, `${month}-01`), lte(apiKeyUsage.day, `${month}-31`), gt(apiKeyUsage.energyJ, 0)))
+    .all();
+  const names = new Map(db.select().from(users).all().map((user) => [user.id, displayName(user)]));
+  const byUserDay = new Map<string, UserEnergyDay>();
+  for (const { userId, day, energyJ } of [...sessions, ...keys]) {
+    const key = `${day} ${userId}`;
+    const wh = (byUserDay.get(key)?.wh ?? 0) + energyJ / JOULES_PER_WH;
+    const price = priceOn(periods, day);
+    byUserDay.set(key, { userId, name: names.get(userId) ?? "", day, wh, cost: price === null ? null : (wh / 1000) * price.price });
+  }
+  return [...byUserDay.values()].sort((a, b) => b.day.localeCompare(a.day) || a.name.localeCompare(b.name));
+}
+
 /** The place the admin picked (a stored id no longer known counts as none). */
 export function loadEnergyLocation(db: PortalDb): EnergyLocation | null {
   return energyLocation(readSetting(db, "energy_price_location"));
@@ -163,6 +213,7 @@ export function loadEnergyMonth(db: PortalDb, month?: string | null, now: Date =
     today,
     days,
     total: totalOf(days),
+    users: userDays(db, shown, periods),
     todayTotal: totalOf(pricedDays(todayRows, periods)),
     months,
     location,

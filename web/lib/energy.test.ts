@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { auditLog, energyLocation, energyPrices, hostDaily, openDatabase, readSetting, users, writeSetting } from "@portal/core";
+import { apiKeys, apiKeyUsage, auditLog, energyLocation, energyPrices, hostDaily, openDatabase, readSetting, users, workspaceSessions, writeSetting } from "@portal/core";
 import { isMonth, loadEnergyLocation, loadEnergyMonth, loadPricePeriods, priceDay, priceOn, priceSummary, saveEnergyLocation, totalOf, type PricePeriod } from "./energy.ts";
 
 function tempDb() {
@@ -129,6 +129,38 @@ test("a month: its days newest first, each at its own month's price, its total, 
 
   writeSetting(db, "energy_price_location", "XX-ZZ");
   assert.equal(loadEnergyMonth(db, "2026-08", noon("2026-11-16")).location, null, "a stored place no longer known is none");
+});
+
+test("a month's users: each one's sessions and API keys per day, priced, newest first", () => {
+  const db = seedMonth();
+  writeSetting(db, "energy_price_location", "US-FL");
+  const [ana = 0, ben = 0] = ["Ana", "Ben"].map(
+    (firstName) => db.insert(users).values({ username: firstName, firstName, lastName: "L", passwordHash: "x", createdAt: 0, updatedAt: 0 }).returning().get().id,
+  );
+  const session = (userId: number, day: string, energyJ: number | null) => ({ userId, kind: "online" as const, startedAt: noon(day).getTime(), endedAt: noon(day).getTime() + 1, energyJ });
+  db.insert(workspaceSessions)
+    .values([session(ana, "2026-08-01", 3600), session(ana, "2026-08-01", 7200), session(ben, "2026-08-02", 1800), session(ben, "2026-08-01", null), session(ana, "2026-07-31", 3600)])
+    .run();
+  const key = db.insert(apiKeys).values({ userId: ana, name: "Editor", tokenHash: "h", hint: "abcd", createdAt: 0 }).returning().get().id;
+  db.insert(apiKeyUsage)
+    .values([
+      { keyId: key, day: "2026-08-01", energyJ: 3600 },
+      { keyId: key, day: "2026-08-02", energyJ: 0 },
+      { keyId: key, day: "2026-09-01", energyJ: 3600 },
+    ])
+    .run();
+
+  const august = loadEnergyMonth(db, "2026-08", noon("2026-11-16"));
+  assert.deepEqual(
+    august.users.map((user) => [user.day, user.name, user.wh]),
+    [["2026-08-02", "Ben L", 0.5], ["2026-08-01", "Ana L", 4]],
+    "a day's sessions and keys together; nothing for a session or a key without measured energy",
+  );
+  assert.ok(Math.abs((august.users[1]?.cost ?? 0) - 0.004 * 0.1499) < 1e-12);
+  assert.deepEqual(loadEnergyMonth(db, "2026-07", noon("2026-11-16")).users.map((user) => [user.day, user.userId, user.wh]), [["2026-07-31", ana, 1]]);
+
+  writeSetting(db, "energy_price_location", "XX-ZZ");
+  assert.equal(loadEnergyMonth(db, "2026-08", noon("2026-11-16")).users[0]?.cost, null, "no place: no cost");
 });
 
 test("a place's periods, oldest first, and none for no place", () => {
