@@ -131,7 +131,7 @@ An apply, which is also how to go back to an older image, runs these steps; each
 5. Wait up to 10 minutes for the engine's `/ready` to answer 200.
 6. With a version: check that `build_info` in the engine's `/props` starts with it.
 
-If step 3 or a later one fails, the old quadlet is written back and the unit restarted; the job ends `failed`, with `rolledBack: true` once the old engine answers `/ready` again. If that fails too, `rolledBack` stays `false` and `error` names both failures.
+If step 3 or a later one fails, the old quadlet is written back and the unit restarted; the job ends `failed`, with `rolledBack: true` once the old engine answers `/ready` again. If that fails too, `rolledBack` stays `false` and `error` names both failures. When the engine did not start or answer `/ready`, `error` ends with its own last 10 log lines since the restart (`journalctl --user -u <unit>`, systemd's lines left out): why it did not start.
 
 ## Run it locally
 

@@ -380,7 +380,7 @@ own copy at every start into `system/<agent>/`, mounted read-only. What the rend
 - **The Web Shell trim** (`workspace-image/qwen/trim-web-shell.mjs`) removes what the portal does not offer,
   points the Web preview at the preview port and sizes the dropped-file dialog to its buttons. Its uploads
   take the gateway's `UPLOAD_LIMIT_MB` and go to disk as they arrive; as shipped, the daemon holds each one in
-  memory, up to 50 MiB. An edit that does not fit is skipped with a warning: the build never fails.
+  memory, up to 50 MiB. All or nothing: when a change does not fit, the trim names it and the build fails.
 
 ## Agent versions and updates
 
@@ -397,6 +397,10 @@ One update job runs at a time, for all agents (`gateway/src/updates/agent-update
 4. Promotion tags the image, saves the version and audits `agent_updated`; from there it is not cancellable. A
    failure or a cancel discards the staging image, audits `agent_update_failed` and leaves the version.
 
+A version the portal's changes don't fit fails at step 2: the Web Shell trim and dsh's preset and lockdown
+checks fail the build. A failed build's error is the failed step's last ten output lines, then the engine's message, so it says
+which change did not fit.
+
 A gateway that stops mid-job records it as failed; at its next start `sweep` removes staging tags and check
 containers before the control API listens. `deploy/update-image.sh` does the same build from the shell, writes
 the same file, and refuses while `/control/updates/running` reports a job.
@@ -411,7 +415,8 @@ container; the steps hostd runs are in [hostd/README.md](../hostd/README.md). Ph
   registry and hostd pulls by digest while the engine keeps serving. An image already there skips the pull.
 - Draining pauses the LLM queue and waits until no request is in flight, `ENGINE_DRAIN_MINUTES` have passed,
   or the admin chooses "Restart now". Waiting requests are held, not failed. Until then a cancel works.
-- Restarting is hostd's `apply`. If it fails hostd puts the previous image back and the job ends `failed`;
+- Restarting is hostd's `apply`. If it fails hostd puts the previous image back and the job ends `failed`,
+  its error ending with the engine's own last log lines (an option the new version refuses, say);
   `rolledBack` says whether the previous engine serves again. The queue resumes in every case. A gateway that
   stops mid-job records it as failed, with a note to check the engine's version: hostd carries on.
 

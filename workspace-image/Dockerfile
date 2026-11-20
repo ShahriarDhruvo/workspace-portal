@@ -31,8 +31,8 @@ USER 65534:65534
 FROM base AS qwen
 ARG QWEN_CODE_VERSION=0.27.0
 USER root
-# qwen/trim-web-shell.mjs trims the Web Shell in place, as it says: Qwen Code has no setting for it. What no longer
-# fits a Qwen Code version stays as shipped, with a warning in the build log.
+# qwen/trim-web-shell.mjs trims the Web Shell in place, as it says: Qwen Code has no setting for it. When a change
+# no longer fits a Qwen Code version, it names the change and fails the build, as the dsh stage's checks do.
 # /etc/workspace-portal/qwen: where the gateway mounts settings.json and system-defaults.json.
 # The find, here and in the dsh stage: no setuid or setgid program stays in a workspace image.
 RUN --mount=type=tmpfs,target=/tmp --mount=type=bind,source=qwen/trim-web-shell.mjs,target=/mnt/trim-web-shell.mjs \

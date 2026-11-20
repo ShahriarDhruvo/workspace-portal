@@ -695,6 +695,7 @@ class FakeEngineState:
         self.pull_block.set()
         self.pull_started = threading.Event()
         self.calls = []
+        self.journal = []   # the engine unit's journal entries, as journalctl -o json gives them
 
 
 class FakeRunner(H.Runner):
@@ -730,6 +731,8 @@ class FakeRunner(H.Runner):
                     return 0, 'Untagged', ''
                 return 1, '', 'no such image'
             return 125, '', 'unexpected podman call'
+        if argv[:2] == ['journalctl', '--user']:
+            return 0, ''.join(json.dumps(entry) + '\n' for entry in self.s.journal), ''
         if argv[:2] == ['systemctl', '--user']:
             cmd = argv[2]
             if cmd == 'show':
@@ -953,6 +956,18 @@ class TestEngine(EngineCase):
         self.assertIn('/ready', j['error'])
         self.assertEqual(self.state.running, D_OLD)
         self.assertEqual(self.read_quadlet(), QUADLET)
+
+    def test_failed_apply_names_the_engines_own_reason(self):
+        self.state.local[f'{REPO}@{D_BAD}'] = self.state.remote[f'{REPO}@{D_BAD}']
+        self.state.journal = [{'_COMM': 'systemd', 'MESSAGE': 'Starting gufo.service...'},
+                              {'_COMM': 'conmon', 'MESSAGE': "error: unexpected argument '--bogus' found"}]
+        self.engine.start_apply(f'{REPO}@{D_BAD}', None)
+        j = self.wait_job()
+        self.assertEqual((j['phase'], j['rolledBack']), ('failed', True))
+        self.assertIn("the engine said:\nerror: unexpected argument '--bogus' found", j['error'])
+        self.assertNotIn('Starting gufo', j['error'])
+        journal = next(c for c in self.state.calls if c[:2] == ['journalctl', '--user'])
+        self.assertTrue(journal[journal.index('--since') + 1].startswith('@'), 'only what the engine said since the restart')
 
     def test_rollback_failure_reported(self):
         self.state.local[f'{REPO}@{D_NEW}'] = self.state.remote[f'{REPO}@{D_NEW}']

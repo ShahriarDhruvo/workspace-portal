@@ -34,6 +34,7 @@ HEADER_TIMEOUT = 10.0
 KEEPALIVE_AFTER_SAMPLE = 5.0
 PERF_LINGER = 30.0
 FAN_PERIOD = 3.0
+ENGINE_LOG_LINES = 10   # the engine's last log lines a failed apply's error carries: why it did not start
 BUSY_PCT = 1.0          # a logical CPU counts as busy (for clock averages) above this usage
 PING_EVERY = 15.0
 STATUS_CACHE = 5.0
@@ -1227,6 +1228,20 @@ class Engine:
     def ready(self):
         return self._http('/ready')[0] == 200
 
+    def engine_said(self, since):
+        """The engine's own last log lines since `since` (journalctl's @epoch), systemd's lines left out."""
+        rc, out, _ = self.runner.run(['journalctl', '--user', '-u', self.unit, '--since', since,
+                                      '-n', '200', '-o', 'json', '--no-pager'], 15)
+        said = []
+        for line in out.splitlines() if rc == 0 else []:
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            if entry.get('_COMM') != 'systemd' and isinstance(entry.get('MESSAGE'), str):
+                said.append(entry['MESSAGE'])
+        return '; the engine said:\n' + '\n'.join(said[-ENGINE_LOG_LINES:]) if said else ''
+
     def build_info(self):
         st, body = self._http('/props')
         if st != 200:
@@ -1413,14 +1428,15 @@ class Engine:
         if rc != 0:
             raise StepError(f'daemon-reload failed: {err.strip() or rc}')
         job.set_step(f'Restarting {self.unit}')
+        since = f'@{int(time.time())}'
         rc, _, err = self.runner.run(['systemctl', '--user', 'restart', self.unit], self.restart_timeout)
         if rc != 0:
-            raise StepError(f'restart failed: {err.strip() or rc}')
+            raise StepError(f'restart failed: {err.strip() or rc}{self.engine_said(since)}')
         job.set_step('Waiting for /ready')
         deadline = time.monotonic() + self.ready_timeout
         while not self.ready():
             if time.monotonic() > deadline:
-                raise StepError(f'/ready did not answer 200 within {self.ready_timeout:.0f} s')
+                raise StepError(f'/ready did not answer 200 within {self.ready_timeout:.0f} s{self.engine_said(since)}')
             time.sleep(self.poll)
         if version:
             job.set_step('Checking version')

@@ -57,13 +57,26 @@ test("the stream decodes the same however it is chunked", () => {
   }
 });
 
-test("a recorded failed build reports the engine's error after the step's output", () => {
+test("a recorded failed build: its error is the step's own explanation, then the engine's", () => {
   const { progress, lines } = replay(fixture("buildkit-qwen-9.9.9-failed.jsonl"), 4096);
-  assert.match(progress.error!, /^process "\/bin\/sh -c npm install .* did not complete successfully: exit code: 1$/);
+  const [engine, ...said] = progress.error!.split("\n").reverse();
+  assert.match(engine!, /^process "\/bin\/sh -c npm install .* did not complete successfully: exit code: 1$/);
+  assert.ok(said.includes("npm error notarget No matching version found for @qwen-code/qwen-code@9.9.9."), "npm's explanation leads the error");
   const notarget = lines.findIndex((line) => line.endsWith("npm error notarget No matching version found for @qwen-code/qwen-code@9.9.9."));
   assert.ok(notarget > 0, "npm's own explanation is in the log");
   assert.match(lines.at(-2)!, /^#\d+ ERROR: process .* exit code: 1$/, "the failed step");
-  assert.equal(lines.at(-1), `ERROR: ${progress.error}`);
+  assert.equal(lines.at(-1), `ERROR: ${engine}`);
+});
+
+test("a failed step's last ten output lines lead the error; other steps' output does not", () => {
+  const progress = new BuildProgress();
+  const push = (parts: Parameters<typeof traceMessage>[0]): string[] => progress.push(traceMessage(parts));
+  push({ vertexes: [{ digest: "a", name: "[base 1/1] RUN ok", started: 1_000 }, { digest: "b", name: "[qwen 1/1] RUN adapt", started: 1_000 }] });
+  push({ logs: [{ vertex: "a", msg: "not the reason\n" }] });
+  push({ logs: [{ vertex: "b", msg: Array.from({ length: 12 }, (_, i) => `line ${i + 1}`).join("\n") }] });
+  push({ vertexes: [{ digest: "b", name: "[qwen 1/1] RUN adapt", started: 1_000, error: "exit code: 1" }] });
+  progress.push({ errorDetail: { message: "process did not complete successfully: exit code: 1" } });
+  assert.equal(progress.error, [...Array.from({ length: 10 }, (_, i) => `line ${i + 3}`), "process did not complete successfully: exit code: 1"].join("\n"));
 });
 
 test("output is split into lines per step: partial lines wait, carriage returns and escapes are cleaned", () => {

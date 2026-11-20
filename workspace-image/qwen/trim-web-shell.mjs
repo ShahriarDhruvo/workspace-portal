@@ -14,17 +14,17 @@
 // Qwen Code has no setting for these: the app hard-codes its shell component's options, tools.approvalMode
 // "plan" would also put the terminal's qwen and the headless qwen -p in plan mode, and the upload limit is a
 // constant.
-// Three layers, each working without the others:
+// Three layers:
 //   1. The app bundle: the shell component's options and the Plan toggle's initial state, for every layout and
 //      language. The edited bundle gets a new file name (an import map in index.html points the other chunks at
 //      it), because browsers keep the shipped one cached as immutable.
 //   2. A stylesheet in index.html, keyed on the Web Shell's data-* attributes and icon names, not on its generated
-//      class names: it hides the same on the desktop layouts when a version no longer fits layer 1, and sizes the
-//      dropped-file dialog.
-//   3. The daemon's upload route, all of its edits or none: a larger limit without the streaming would let one
-//      upload fill the workspace's memory.
-// Never fails the build: an edit that no longer fits (its code isn't there exactly once, or the result doesn't
-// parse) is skipped with a warning, and that part stays as shipped.
+//      class names: on the desktop layouts it hides the buttons layer 1 removes, and the rail's agents button,
+//      which layer 1 keeps; and it sizes the dropped-file dialog.
+//   3. The daemon's upload route.
+// All or nothing: when an edit no longer fits (its code isn't there exactly once, or the result doesn't parse) or
+// the app lacks what the stylesheet keys on, the script names each such change, writes nothing and fails the
+// build, so an update to that Qwen Code version fails and the current one stays.
 import { createHash } from "node:crypto";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -46,6 +46,20 @@ const STYLE = [
   "[data-web-shell-drop-choice-dialog] { max-width: min(32rem, calc(100% - 2rem)) !important; }",
   '[data-web-shell-drop-choice-dialog] [data-slot="dialog-footer"] { flex-wrap: wrap; }',
 ].join("\n");
+
+/** What the stylesheet keys on, as the app's code holds it: the data-* attributes, and lucide icons by name. */
+const STYLE_HOOKS = [
+  /"data-web-shell-navigation-rail"/,
+  /"data-web-shell-home-trigger"/,
+  /"data-web-shell-sidebar-collapse"/,
+  /"data-sidebar-shell"/,
+  /"data-web-shell-drop-choice-dialog"/,
+  /"data-slot":"dialog-footer"/,
+  // cn("bell",…) is the icon whose svg has the class lucide-bell.
+  /`lucide-\$\{[\w$]+\}`/,
+  /\("bell",[\w$]+\)/,
+  /\("qr-code",[\w$]+\)/,
+];
 
 /**
  * Layer 1, edits of the Web Shell app's bundle. Each pattern must match exactly once. Minified names are
@@ -118,7 +132,8 @@ const UPLOAD_LIMIT_ENV = "WORKSPACE_PORTAL_UPLOAD_LIMIT_BYTES";
  * In place of the upload route's express.raw(): the request itself is the body. The daemon's atomic write
  * (FileHandle.writeFile) takes it chunk by chunk, counting and hashing on the way, as the write's result needs both.
  * An encoded body is refused (415), as express.raw does, and so is a byte over the limit. A second write, which only
- * a file appearing under the same name mid-upload asks for, fails instead of writing nothing.
+ * a file appearing under the same name mid-upload asks for, fails instead of writing nothing. The limit's edit
+ * alone would let one upload fill the workspace's memory, which all or nothing rules out.
  */
 const STREAMED_BODY =
   '(req,res,next)=>{const encoding=req.headers["content-encoding"];if(encoding&&encoding!=="identity")return next({status:415});' +
@@ -131,18 +146,18 @@ const STREAMED_BODY =
 
 const UPLOAD_EDITS = [
   {
-    name: "the limit",
+    name: "uploads: the limit",
     // var MAX_UPLOAD_BYTES=50*1024*1024; also what the daemon tells the Web Shell, which checks a file before sending it.
     pattern: /(var MAX_UPLOAD_BYTES=)(50\*1024\*1024;)/g,
     replace: (_, head, shipped) => `${head}Number(process.env.${UPLOAD_LIMIT_ENV})||${shipped}`,
   },
   {
-    name: "the body as a stream",
+    name: "uploads: the body as a stream",
     pattern: /import_express\d*\.default\.raw\(\{type:"application\/octet-stream",limit:MAX_UPLOAD_BYTES,inflate:false\}\)/g,
     replace: () => STREAMED_BODY,
   },
   {
-    name: "the size and hash of a stream",
+    name: "uploads: the size and hash of a stream",
     // function writeBufferToTemp(input){await input.handle.writeFile(input.buf);…
     //   return{sizeBytes:input.buf.length,hash:hashBuffer(input.buf),stat:st}}
     pattern: /(function writeBufferToTemp\(([\w$]+)\)\{await \2\.handle\.writeFile\(\2\.buf\);[\s\S]{0,800}?return\{sizeBytes:\2\.buf\.length,hash:)(hashBuffer\(\2\.buf\))/g,
@@ -150,8 +165,9 @@ const UPLOAD_EDITS = [
   },
 ];
 
+/** The changes that don't fit this version; any of them fails the build. */
+const problems = [];
 const log = (message) => console.log(`trim-web-shell: ${message}`);
-const warn = (message) => console.warn(`trim-web-shell: warning: ${message}`);
 
 /** Why the JavaScript doesn't parse as a module, or null when it does (`node --check` on a copy: nothing runs). */
 function parseError(code) {
@@ -168,83 +184,83 @@ function parseError(code) {
   }
 }
 
-/** Layer 1: the edited bundle and its new name, or null when no edit applies. Throws when the result doesn't parse. */
-function editBundle(assets, entry) {
-  let code = readFileSync(join(assets, entry), "utf8");
-  let applied = 0;
-  for (const edit of EDITS) {
-    const count = code.match(edit.pattern)?.length ?? 0;
-    if (count !== 1) {
-      warn(`${edit.name}: not applied (the code it edits was found ${count} times, expected once)`);
+/** The JavaScript files of a directory, by name. */
+const scripts = (dir) => new Map(readdirSync(dir).filter((name) => name.endsWith(".js")).map((name) => [name, readFileSync(join(dir, name), "utf8")]));
+
+/**
+ * Applies each edit to the one file of `files` that holds its code exactly once, and notes a problem for each
+ * edit that isn't there exactly once or a file that doesn't parse afterwards. Returns the edited files.
+ */
+function applyEdits(files, edits, where) {
+  const edited = new Map();
+  for (const edit of edits) {
+    const found = [...files].flatMap(([name, code]) => (code.match(edit.pattern) ?? []).map(() => name));
+    if (found.length !== 1) {
+      problems.push(`${edit.name}: its code is in ${where} ${found.length} times, expected once`);
       continue;
     }
-    code = code.replace(edit.pattern, edit.replace);
-    applied++;
-    log(`${edit.name}: applied`);
+    const [name] = found;
+    edited.set(name, (edited.get(name) ?? files.get(name)).replace(edit.pattern, edit.replace));
   }
-  if (applied === 0) return null;
-  const error = parseError(code);
-  if (error) throw new Error(`the edited code doesn't parse: ${error}`);
-  const hash = createHash("sha256").update(code).digest("hex").slice(0, 10);
-  return { code, name: entry.replace(/\.js$/, `.portal-${hash}.js`) };
+  for (const [name, code] of edited) {
+    const error = parseError(code);
+    if (error) problems.push(`${where}${name}, edited, doesn't parse: ${error}`);
+  }
+  return edited;
 }
 
-/** Layer 3: every upload edit, or none. Which of the daemon's chunks holds an edit's code differs by version. */
-function streamUploads(packageDir) {
-  const dir = join(packageDir, "chunks");
-  const chunks = new Map(readdirSync(dir).filter((name) => name.endsWith(".js")).map((name) => [name, readFileSync(join(dir, name), "utf8")]));
-  if ([...chunks.values()].some((code) => code.includes(UPLOAD_LIMIT_ENV))) return log("uploads: already streamed");
-  const edited = new Set();
-  for (const edit of UPLOAD_EDITS) {
-    const found = [...chunks].flatMap(([name, code]) => (code.match(edit.pattern) ?? []).map(() => name));
-    if (found.length !== 1) return warn(`uploads: ${edit.name}: found ${found.length} times, expected once; uploads stay as shipped`);
-    chunks.set(found[0], chunks.get(found[0]).replace(edit.pattern, edit.replace));
-    edited.add(found[0]);
-  }
-  for (const name of edited) {
-    const error = parseError(chunks.get(name));
-    if (error) return warn(`uploads: the edited chunks/${name} doesn't parse (${error}); uploads stay as shipped`);
-  }
-  for (const name of edited) writeFileSync(join(dir, name), chunks.get(name));
-  log(`uploads: streamed to disk, up to ${UPLOAD_LIMIT_ENV} bytes (chunks/${[...edited].join(", chunks/")})`);
-}
+/** Every file to write, by path: nothing is written unless all of it fits. */
+function adapt(packageDir) {
+  const writes = new Map();
+  const chunks = join(packageDir, "chunks");
+  for (const [name, code] of applyEdits(scripts(chunks), UPLOAD_EDITS, "chunks/")) writes.set(join(chunks, name), code);
 
-function main(packageDir) {
-  if (!packageDir) throw new Error("usage: node trim-web-shell.mjs <qwen-code package dir>");
-  streamUploads(packageDir);
   const webShell = join(packageDir, "web-shell");
+  const assets = join(webShell, "assets");
   const indexFile = join(webShell, "index.html");
   const html = readFileSync(indexFile, "utf8");
-  if (html.includes(MARKER)) return log("already trimmed");
-  if (!html.includes("</head>")) return warn("index.html has no </head>; the Web Shell stays as shipped");
-
-  // Function replacements throughout: a replacement string would interpret `$` sequences.
-  let page = html.replace("</head>", () => `<style ${MARKER}>\n${STYLE}\n</style>\n  </head>`);
+  const app = scripts(assets);
+  for (const hook of STYLE_HOOKS) if (![...app.values()].some((code) => hook.test(code))) problems.push(`the stylesheet keys on ${hook.source}, which is not in web-shell/assets/`);
+  if (!html.includes("</head>")) problems.push("web-shell/index.html has no </head> to add the stylesheet to");
   const entries = [...html.matchAll(/<script\b[^>]*><\/script>/g)]
     .map(([tag]) => ({ tag, src: /\bsrc="\/assets\/([^"/?#]+\.js)"/.exec(tag)?.[1] }))
     .filter(({ tag, src }) => src && /\btype="module"/.test(tag));
   if (entries.length !== 1) {
-    warn(`index.html loads ${entries.length} module scripts, expected one; only the stylesheet applies`);
-  } else {
-    try {
-      const [entry] = entries;
-      const bundle = editBundle(join(webShell, "assets"), entry.src);
-      if (!bundle) throw new Error("no edit applies");
-      writeFileSync(join(webShell, "assets", bundle.name), bundle.code);
-      const map = JSON.stringify({ imports: { [`/assets/${entry.src}`]: `/assets/${bundle.name}` } });
-      const tag = entry.tag.replace(`/assets/${entry.src}`, () => `/assets/${bundle.name}`);
-      page = page.replace(entry.tag, () => `<script type="importmap" ${MARKER}>${map}</script>\n    ${tag}`);
-      log(`app bundle: assets/${bundle.name}`);
-    } catch (error) {
-      warn(`the app bundle stays as shipped (${error.message}); only the stylesheet applies`);
-    }
+    problems.push(`web-shell/index.html loads ${entries.length} module scripts, expected one`);
+    return writes;
   }
-  writeFileSync(indexFile, page);
-  log("stylesheet: applied");
+  const [entry] = entries;
+  const code = applyEdits(new Map([[entry.src, app.get(entry.src)]]), EDITS, "web-shell/assets/").get(entry.src) ?? "";
+  const bundle = entry.src.replace(/\.js$/, `.portal-${createHash("sha256").update(code).digest("hex").slice(0, 10)}.js`);
+  writes.set(join(assets, bundle), code);
+  // Function replacements throughout: a replacement string would interpret `$` sequences.
+  const map = JSON.stringify({ imports: { [`/assets/${entry.src}`]: `/assets/${bundle}` } });
+  const tag = entry.tag.replace(`/assets/${entry.src}`, () => `/assets/${bundle}`);
+  writes.set(
+    indexFile,
+    html
+      .replace("</head>", () => `<style ${MARKER}>\n${STYLE}\n</style>\n  </head>`)
+      .replace(entry.tag, () => `<script type="importmap" ${MARKER}>${map}</script>\n    ${tag}`),
+  );
+  return writes;
+}
+
+function main(packageDir) {
+  if (!packageDir) throw new Error("usage: node trim-web-shell.mjs <qwen-code package dir>");
+  const { version } = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
+  if (readFileSync(join(packageDir, "web-shell", "index.html"), "utf8").includes(MARKER)) return log(`Qwen Code ${version} is adapted already`);
+  const writes = adapt(packageDir);
+  if (problems.length > 0) {
+    for (const problem of problems) console.error(`trim-web-shell: ${problem}`);
+    throw new Error(`Qwen Code ${version} doesn't take ${problems.length} of the portal's changes (above); nothing was changed`);
+  }
+  for (const [file, code] of writes) writeFileSync(file, code);
+  log(`Qwen Code ${version}: ${[...EDITS, ...UPLOAD_EDITS].length} edits and the stylesheet applied, in ${[...writes.keys()].map((file) => file.slice(packageDir.length + 1)).join(", ")}`);
 }
 
 try {
   main(process.argv[2]);
 } catch (error) {
-  warn(`${error.message}; the Web Shell stays as shipped`);
+  console.error(`trim-web-shell: ${error.message}`);
+  process.exit(1);
 }
