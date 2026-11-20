@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { loadConfig, MIB } from "../config.ts";
 import { AGENT_KINDS, WORKSPACE_KINDS } from "@portal/core";
 import { driverFor } from "../agents/index.ts";
@@ -62,6 +63,7 @@ test("Qwen Code workspace containers follow the container spec", () => {
       "QWEN_SERVER_TOKEN=per-start-token",
       "QWEN_USAGE_STATISTICS_ENABLED=false",
       `QWEN_PERMISSION_TIMEOUT_MS=${20 * 60_000}`,
+      `WORKSPACE_PORTAL_UPLOAD_LIMIT_BYTES=${10240 * MIB}`,
     ],
     HostConfig: {
       Binds: [
@@ -179,4 +181,9 @@ test("the Online network reaches out through NAT, with no inter-container traffi
     IPAM: { Driver: "default", Config: [{ Subnet: "172.28.0.0/16", Gateway: "172.28.0.1", IPRange: "172.28.128.0/17" }] },
     Labels: { "workspace-portal.network": "1", "workspace-portal.kind": "online" },
   });
+});
+
+test("the image's upload route reads the upload limit under the name the gateway sets", () => {
+  const script = fs.readFileSync(new URL("../../../workspace-image/qwen/trim-web-shell.mjs", import.meta.url), "utf8");
+  assert.match(script, /^const UPLOAD_LIMIT_ENV = "WORKSPACE_PORTAL_UPLOAD_LIMIT_BYTES";$/m);
 });

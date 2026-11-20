@@ -8,20 +8,25 @@
 //     localhost, 127.x.x.x and 0.0.0.0 go to the workspace's preview port (the gateway's preview proxy), and its
 //     frame may lock the pointer and show alert and confirm dialogs;
 //   * the dialog that asks what to do with a dropped file holds its three buttons: as shipped it is 24rem wide, less
-//     than they need in English and Russian, and its content sticks out of it.
-// Qwen Code has no setting for these: the app hard-codes its shell component's options, and tools.approvalMode
-// "plan" would also put the terminal's qwen and the headless qwen -p in plan mode.
-// Two layers, each working without the other:
+//     than they need in English and Russian, and its content sticks out of it;
+//   * a file dropped or attached in the Web Shell may be as large as the gateway's upload limit, and goes to disk
+//     as it arrives: as shipped the daemon holds each upload in memory whole, up to 50 MiB.
+// Qwen Code has no setting for these: the app hard-codes its shell component's options, tools.approvalMode
+// "plan" would also put the terminal's qwen and the headless qwen -p in plan mode, and the upload limit is a
+// constant.
+// Three layers, each working without the others:
 //   1. The app bundle: the shell component's options and the Plan toggle's initial state, for every layout and
 //      language. The edited bundle gets a new file name (an import map in index.html points the other chunks at
 //      it), because browsers keep the shipped one cached as immutable.
 //   2. A stylesheet in index.html, keyed on the Web Shell's data-* attributes and icon names, not on its generated
 //      class names: it hides the same on the desktop layouts when a version no longer fits layer 1, and sizes the
 //      dropped-file dialog.
+//   3. The daemon's upload route, all of its edits or none: a larger limit without the streaming would let one
+//      upload fill the workspace's memory.
 // Never fails the build: an edit that no longer fits (its code isn't there exactly once, or the result doesn't
 // parse) is skipped with a warning, and that part stays as shipped.
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -106,6 +111,45 @@ const EDITS = [
   },
 ];
 
+/** Layer 3. The upload limit in bytes, which the gateway sets (gateway/src/agents/qwen.ts; a gateway test checks the name). */
+const UPLOAD_LIMIT_ENV = "WORKSPACE_PORTAL_UPLOAD_LIMIT_BYTES";
+
+/**
+ * In place of the upload route's express.raw(): the request itself is the body. The daemon's atomic write
+ * (FileHandle.writeFile) takes it chunk by chunk, counting and hashing on the way, as the write's result needs both.
+ * An encoded body is refused (415), as express.raw does, and so is a byte over the limit. A second write, which only
+ * a file appearing under the same name mid-upload asks for, fails instead of writing nothing.
+ */
+const STREAMED_BODY =
+  '(req,res,next)=>{const encoding=req.headers["content-encoding"];if(encoding&&encoding!=="identity")return next({status:415});' +
+  "let used=false;req.body={length:0,async*[Symbol.asyncIterator](){" +
+  'if(used)throw new Error("the upload was already written");used=true;' +
+  'const hash=process.getBuiltinModule("node:crypto").createHash("sha256");' +
+  "for await(const chunk of req){this.length+=chunk.length;" +
+  'if(this.length>MAX_UPLOAD_BYTES)throw new FsError("file_too_large","upload exceeds "+MAX_UPLOAD_BYTES+" bytes");' +
+  'hash.update(chunk);yield chunk}this.hash="sha256:"+hash.digest("hex")}};next()}';
+
+const UPLOAD_EDITS = [
+  {
+    name: "the limit",
+    // var MAX_UPLOAD_BYTES=50*1024*1024; also what the daemon tells the Web Shell, which checks a file before sending it.
+    pattern: /(var MAX_UPLOAD_BYTES=)(50\*1024\*1024;)/g,
+    replace: (_, head, shipped) => `${head}Number(process.env.${UPLOAD_LIMIT_ENV})||${shipped}`,
+  },
+  {
+    name: "the body as a stream",
+    pattern: /import_express\d*\.default\.raw\(\{type:"application\/octet-stream",limit:MAX_UPLOAD_BYTES,inflate:false\}\)/g,
+    replace: () => STREAMED_BODY,
+  },
+  {
+    name: "the size and hash of a stream",
+    // function writeBufferToTemp(input){await input.handle.writeFile(input.buf);…
+    //   return{sizeBytes:input.buf.length,hash:hashBuffer(input.buf),stat:st}}
+    pattern: /(function writeBufferToTemp\(([\w$]+)\)\{await \2\.handle\.writeFile\(\2\.buf\);[\s\S]{0,800}?return\{sizeBytes:\2\.buf\.length,hash:)(hashBuffer\(\2\.buf\))/g,
+    replace: (_, head, input, shipped) => `${head}${input}.buf.hash??${shipped}`,
+  },
+];
+
 const log = (message) => console.log(`trim-web-shell: ${message}`);
 const warn = (message) => console.warn(`trim-web-shell: warning: ${message}`);
 
@@ -145,8 +189,29 @@ function editBundle(assets, entry) {
   return { code, name: entry.replace(/\.js$/, `.portal-${hash}.js`) };
 }
 
+/** Layer 3: every upload edit, or none. Which of the daemon's chunks holds an edit's code differs by version. */
+function streamUploads(packageDir) {
+  const dir = join(packageDir, "chunks");
+  const chunks = new Map(readdirSync(dir).filter((name) => name.endsWith(".js")).map((name) => [name, readFileSync(join(dir, name), "utf8")]));
+  if ([...chunks.values()].some((code) => code.includes(UPLOAD_LIMIT_ENV))) return log("uploads: already streamed");
+  const edited = new Set();
+  for (const edit of UPLOAD_EDITS) {
+    const found = [...chunks].flatMap(([name, code]) => (code.match(edit.pattern) ?? []).map(() => name));
+    if (found.length !== 1) return warn(`uploads: ${edit.name}: found ${found.length} times, expected once; uploads stay as shipped`);
+    chunks.set(found[0], chunks.get(found[0]).replace(edit.pattern, edit.replace));
+    edited.add(found[0]);
+  }
+  for (const name of edited) {
+    const error = parseError(chunks.get(name));
+    if (error) return warn(`uploads: the edited chunks/${name} doesn't parse (${error}); uploads stay as shipped`);
+  }
+  for (const name of edited) writeFileSync(join(dir, name), chunks.get(name));
+  log(`uploads: streamed to disk, up to ${UPLOAD_LIMIT_ENV} bytes (chunks/${[...edited].join(", chunks/")})`);
+}
+
 function main(packageDir) {
   if (!packageDir) throw new Error("usage: node trim-web-shell.mjs <qwen-code package dir>");
+  streamUploads(packageDir);
   const webShell = join(packageDir, "web-shell");
   const indexFile = join(webShell, "index.html");
   const html = readFileSync(indexFile, "utf8");

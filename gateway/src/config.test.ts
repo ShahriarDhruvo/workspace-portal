@@ -60,7 +60,7 @@ test("the defaults are .env.example's", () => {
       urls: { search: "http://127.0.0.1:8888", reader: "" },
       trustsGithub: true,
       workspace: [3072 * MIB, 1024 * MIB, 1024],
-      limits: [4, 24 * 3_600_000, 100 * MIB],
+      limits: [4, 24 * 3_600_000, 10240 * MIB],
     },
   );
 });

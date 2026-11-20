@@ -125,6 +125,7 @@ export interface Config {
   idleTimeoutMs: number;
   /** A working agent keeps its workspace up this long after a person last used it; 0: no limit. */
   maxBusyMs: number;
+  /** The largest request body into a workspace, and the Web Shell's largest upload. */
   uploadLimitBytes: number;
 }
 
@@ -365,7 +366,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     maxRunning: int("MAX_RUNNING_WORKSPACES", 4, 1),
     idleTimeoutMs: int("IDLE_TIMEOUT_MINUTES", 30, 1) * 60_000,
     maxBusyMs: int("MAX_BUSY_HOURS", 24, 0) * 3_600_000,
-    uploadLimitBytes: int("UPLOAD_LIMIT_MB", 100, 1) * MIB,
+    uploadLimitBytes: int("UPLOAD_LIMIT_MB", 10240, 1) * MIB,
   };
 
   if (/[\r\n]/.test(config.search.authorization)) problems.push("SEARXNG_AUTHORIZATION must be a single header value");

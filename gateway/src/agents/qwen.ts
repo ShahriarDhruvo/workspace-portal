@@ -92,6 +92,8 @@ export const qwenDriver: AgentDriver = {
       "QWEN_USAGE_STATISTICS_ENABLED=false",
       // An approval nobody answers is declined after this long, so it can't keep the workspace up forever.
       `QWEN_PERMISSION_TIMEOUT_MS=${config.idleTimeoutMs}`,
+      // The Web Shell's upload limit (workspace-image/qwen/trim-web-shell.mjs), the same as the gateway's.
+      `WORKSPACE_PORTAL_UPLOAD_LIMIT_BYTES=${config.uploadLimitBytes}`,
     ];
   },
 
