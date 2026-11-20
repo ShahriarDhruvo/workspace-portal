@@ -84,6 +84,9 @@ kernel 7.3.4:
   alone for 30 seconds, twice, without an error, and the tests of four 256K sessions under [Load](#load) ran.
   After a reboot the unit set the offset 8 seconds into the boot, and the same all-core test gave 25,490
   operations a second. It was not run for days.
+- November 20, with the offset on, a 102 GB download came out with one bit changed and btrfs reported no
+  error, so the bit changed in memory or in the CPU before it reached the disk. Not traced: a day of the checks
+  above, with and without the offset, would show whether the offset is to blame.
 - Set with [RyzenAdj](https://github.com/FlyGoat/RyzenAdj) 0.18.0 from
   [COPR shdwchn10/ryzenadj](https://copr.fedorainfracloud.org/coprs/shdwchn10/ryzenadj/):
   `sudo ryzenadj --set-coall=1048526`, which is 1048576 minus the offset and lasts until a reboot. The package
@@ -254,6 +257,38 @@ Gufo 0.30 scored the same as 0.31, with a median of 8:22.
 - Against Q5 on the same text, Q4's perplexity is 0.35% worse (3.831 against 3.818) and it picks the same next
   word 94.1% of the time.
 - Q4 is the largest Flash-Next file that Gufo loads.
+
+### Full-precision n-gram table
+
+Flash-Next has a table of 51.2 billion values that Gufo reads from the SSD a few rows at a time, while the rest
+of the model stays in memory. The Q4 files store it at 4.5 bits a value (IQ4_NL, 28.8 GB). Unsloth also
+publishes it at full precision (BF16, 102 GB, in `engram/` of the model's repository). The same Q4 model with
+only the table swapped, November 20, 2026, Gufo 0.35.0:
+
+- Next word on wikitext-2, 3,681 positions: both pick the same word at 94.9% of them. The right word 63.7% of
+  the time with IQ4_NL and 63.3% with BF16, a difference of -0.4 points (95% interval -0.9 to +0.1). Perplexity
+  with BF16 between 0.2% better and 0.9% worse. The IQ4_NL run repeated gave the same numbers to the last
+  digit, so the differences come from the table alone.
+- `gufo eval --greedy`, 75 questions: 56 right with IQ4_NL, 53 with BF16. They disagree on 7 questions, 5 to 2,
+  and four of the five were BF16 answers cut off at the 16,000-token limit while still thinking. That is
+  chance (sign test p = 0.45).
+
+| | IQ4_NL | BF16 |
+|---|--:|--:|
+| Writing, one user, five 1,000-token answers | 49.9 tok/s | 50.1 tok/s |
+| Reading an 8K prompt, three runs | 1,839-1,861 tok/s | 1,850-1,883 tok/s |
+| Reading a 32K prompt, three runs | 1,843-1,859 tok/s | 1,839-1,848 tok/s |
+| Four users at once, writing, each | 19-35 tok/s | 18-33 tok/s |
+| Four users at once, reading, each | 1,586-1,840 tok/s | 1,734-1,905 tok/s |
+| Read from the SSD per prompt token | 33-42 KB | 44-49 KB |
+| Four 256,000-token prompts, first words | 632-639 s, two runs | 640-645 s |
+| Model load, as Gufo logs it | 16.5-17.6 s | 16.2-17.6 s |
+
+- The first BF16 copy read prompts 10-16% slower. `/models` on the test machine is on btrfs, which Fedora mounts
+  with `compress=zstd:1`. The BF16 values compress, and every row read then unpacks a whole compressed extent:
+  264-283 KB from the SSD per prompt token.
+  A copy into an empty file marked `chattr +m`, which btrfs leaves uncompressed, gave the numbers above.
+- Not used: 102 GB more on the SSD for no measured gain. The guide downloads the Q4 files only.
 
 ### Gufo and llama.cpp
 
