@@ -161,8 +161,9 @@ it lacks, the model settings and all data, and refuses while an update from Admi
 `HOSTD_LLM_URL` and `HOSTD_LLM_TOKEN` for the portal's `.env`. With them Admin > Usage and Energy show that
 server too, and Admin > Updates updates its engine: see [hostd/README.md](hostd/README.md).
 
-[`llm-server/`](llm-server) holds what the reference LLM server runs: the engine's service file, the model
-download, a full-load test, and fan control for the one board it was tested on.
+[`llm-server/`](llm-server) holds what the reference LLM server runs: the engine's service file, a full-load
+test, and fan control for the one board it was tested on. [docs/GUIDE.md](docs/GUIDE.md) sets up both servers
+step by step from a fresh Fedora, the model download included.
 
 ## Security model
 
