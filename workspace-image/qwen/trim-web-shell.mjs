@@ -3,7 +3,6 @@
 //   * the left rail keeps Home and the sidebar toggle: no Activity, Plugins, Channels, Channel events, Live,
 //     Scheduled Tasks, PR watches, Goals or "More" menu;
 //   * the chat header loses Mobile access (pairing a phone, which the gateway blocks);
-//   * a new session starts with Plan mode on, as when a person turns the composer's toggle on;
 //   * the Web preview shows the workspace's web apps: in the person's browser localhost is their own computer, so
 //     localhost, 127.x.x.x and 0.0.0.0 go to the workspace's preview port (the gateway's preview proxy), and its
 //     frame may lock the pointer and show alert and confirm dialogs;
@@ -11,13 +10,12 @@
 //     than they need in English and Russian, and its content sticks out of it;
 //   * a file dropped or attached in the Web Shell may be as large as the gateway's upload limit, and goes to disk
 //     as it arrives: as shipped the daemon holds each upload in memory whole, up to 50 MiB.
-// Qwen Code has no setting for these: the app hard-codes its shell component's options, tools.approvalMode
-// "plan" would also put the terminal's qwen and the headless qwen -p in plan mode, and the upload limit is a
+// Qwen Code has no setting for these: the app hard-codes its shell component's options, and the upload limit is a
 // constant.
 // Three layers:
-//   1. The app bundle: the shell component's options and the Plan toggle's initial state, for every layout and
-//      language. The edited bundle gets a new file name (an import map in index.html points the other chunks at
-//      it), because browsers keep the shipped one cached as immutable.
+//   1. The app bundle: the shell component's options and the Web preview, for every layout and language. The
+//      edited bundle gets a new file name (an import map in index.html points the other chunks at it), because
+//      browsers keep the shipped one cached as immutable.
 //   2. A stylesheet in index.html, keyed on the Web Shell's data-* attributes and icon names, not on its generated
 //      class names: on the desktop layouts it hides the buttons layer 1 removes, and the rail's agents button,
 //      which layer 1 keeps; and it sizes the dropped-file dialog.
@@ -95,16 +93,6 @@ const EDITS = [
     name: "header: no Mobile access",
     pattern: /(header:\{showMobileAccess:)!0/g,
     replace: (_, a) => `${a}!1`,
-  },
-  {
-    name: "Plan mode on for new sessions",
-    // The effect that sets the Plan toggle (tb) from the session's mode: without a session, an
-    // execution mode ("auto", ...) becomes Plan running in that mode; a session shows its own mode.
-    //   const T=ce.currentMode,...,a1e(T??"default"))},[ce.currentMode,ce.planExecutionMode,ce.sessionId,ns])
-    pattern:
-      /(const ([\w$]+)=([\w$]+)\.currentMode,[\s\S]{0,400}?[\w$]+\()\2\?\?"default"(\)\)\},\[\3\.currentMode,\3\.planExecutionMode,\3\.sessionId,[\w$]+\]\))/g,
-    replace: (_, head, mode, state, tail) =>
-      `${head}(!${state}.sessionId&&${mode}&&${mode}!=="plan")?"plan":(${mode}??"default")${tail}`,
   },
   {
     name: "Web preview: the workspace's own addresses through the gateway",
