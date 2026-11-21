@@ -378,9 +378,10 @@ own copy at every start into `system/<agent>/`, mounted read-only. What the rend
   window leaves dsh too little room are left out (`fitDshModels` in `dsh-settings.ts`). What users may not
   change is a static lockdown patch in the image; the image build fails when a row of it does not apply.
 - **The Web Shell trim** (`workspace-image/qwen/trim-web-shell.mjs`) removes what the portal does not offer,
-  points the Web preview at the preview port and sizes the dropped-file dialog to its buttons. Its uploads
-  take the gateway's `UPLOAD_LIMIT_MB` and go to disk as they arrive; as shipped, the daemon holds each one in
-  memory, up to 50 MiB. All or nothing: when a change does not fit, the trim names it and the build fails.
+  points the Web preview at the preview port, sizes the dropped-file dialog to its buttons and keeps a turn's
+  answer on screen when replies to background tasks follow it. Its uploads take the gateway's `UPLOAD_LIMIT_MB`
+  and go to disk as they arrive; as shipped, the daemon holds each one in memory, up to 50 MiB. All or nothing:
+  when a change does not fit, the trim names it and the build fails.
 
 ## Agent versions and updates
 

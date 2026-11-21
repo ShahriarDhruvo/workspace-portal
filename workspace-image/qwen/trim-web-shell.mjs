@@ -3,6 +3,8 @@
 //   * the left rail keeps Home and the sidebar toggle: no Activity, Plugins, Channels, Channel events, Live,
 //     Scheduled Tasks, PR watches, Goals or "More" menu;
 //   * the chat header loses Mobile access (pairing a phone, which the gateway blocks);
+//   * a finished turn keeps its answer on screen when background tasks get replies after it: as shipped, the last
+//     reply alone stays and the answer is folded into "Processed" with the turn's steps;
 //   * the Web preview shows the workspace's web apps: in the person's browser localhost is their own computer, so
 //     localhost, 127.x.x.x and 0.0.0.0 go to the workspace's preview port (the gateway's preview proxy), and its
 //     frame may lock the pointer and show alert and confirm dialogs;
@@ -13,9 +15,9 @@
 // Qwen Code has no setting for these: the app hard-codes its shell component's options, and the upload limit is a
 // constant.
 // Three layers:
-//   1. The app bundle: the shell component's options and the Web preview, for every layout and language. The
-//      edited bundle gets a new file name (an import map in index.html points the other chunks at it), because
-//      browsers keep the shipped one cached as immutable.
+//   1. The app bundle: the shell component's options, a turn's visible replies and the Web preview, for every
+//      layout and language. The edited bundle gets a new file name (an import map in index.html points the other
+//      chunks at it), because browsers keep the shipped one cached as immutable.
 //   2. A stylesheet in index.html, keyed on the Web Shell's data-* attributes and icon names, not on its generated
 //      class names: on the desktop layouts it hides the buttons layer 1 removes, and the rail's agents button,
 //      which layer 1 keeps; and it sizes the dropped-file dialog.
@@ -93,6 +95,26 @@ const EDITS = [
     name: "header: no Mobile access",
     pattern: /(header:\{showMobileAccess:)!0/g,
     replace: (_, a) => `${a}!1`,
+  },
+  {
+    name: "a turn's answer stays visible when background tasks get replies after it",
+    // A finished turn shows its last reply and folds the rest into "Processed …". Walking back from that reply,
+    // the shipped loop keeps the reply before it too, but only with nothing but a task's "completed" row between
+    // the two. A background turn puts its start row and the reply's thinking there, so the answer was folded away:
+    //   for(let de=M-1;de>y;de--){const we=e[de];if(we.type!=="message")break;
+    //   if(we.message.role==="system"&&we.message.source==="background_task_completed")Z=!0;
+    //   else if(Z&&we.message.role==="assistant")P=de,Z=!1;else break}
+    // (e: the turn's rows, M: the last reply, P: the first row kept; 0.28.3 skips "mod_log" rows first). The walk
+    // now goes to the turn's start and keeps every reply that ended the turn or a background turn: the last text
+    // before a background turn began or a task completed, unless tool calls came after it.
+    pattern:
+      /for\(let ([\w$]+)=([\w$]+)-1;\1>([\w$]+);\1--\)\{const ([\w$]+)=([\w$]+)\[\1\];if\(\4\.type!=="message"\)break;(?:if\(!\(\4\.message\.role==="system"&&\4\.message\.source==="mod_log"\)\))?if\(\4\.message\.role==="system"&&\4\.message\.source==="background_task_completed"\)([\w$]+)=!0;else if\(\6&&\4\.message\.role==="assistant"\)([\w$]+)=\1,\6=!1;else break\}/g,
+    replace: (_, i, last, start, row, rows, crossed, from) =>
+      `for(let ${i}=${last}-1,portalWork=!1;${i}>${start};${i}--){const ${row}=${rows}[${i}],` +
+      `portalRole=${row}.type==="message"?${row}.message.role:"",portalSource=portalRole==="system"?${row}.message.source:"";` +
+      `if(portalSource==="background_task_completed"||portalSource==="background_notification_turn_started")${crossed}=!0,portalWork=!1;` +
+      `else if(${row}.type==="parallel_agents"||portalRole==="tool_group"||portalRole==="plan")portalWork=!0;` +
+      `else if(${crossed}&&!portalWork&&portalRole==="assistant"&&${row}.message.content?.trim())${from}=${i},${crossed}=!1}`,
   },
   {
     name: "Web preview: the workspace's own addresses through the gateway",
