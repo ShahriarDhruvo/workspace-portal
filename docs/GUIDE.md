@@ -49,7 +49,7 @@ it was not tried with busy sandboxes next to the model. Free memory in each layo
 - **A USB stick** with [Fedora Server](https://fedoraproject.org/server/download/) for both machines, and your own
   PC with SSH. The LLM server was measured on [Fedora
   44](https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Server/x86_64/iso/); the portal server runs 45.
-- **Time:** about an hour of typing, plus a 189 GB download (83 minutes at 38 MB/s).
+- **Time:** about an hour of typing, plus a 141 GB download (62 minutes at 38 MB/s).
 
 The commands use three placeholders. Put your own values in their place: `LLM_IP` and `PORTAL_IP`, the addresses of
 the two servers, and `YOUR_LOGIN`, your login on both.
@@ -95,7 +95,7 @@ df -h /
 lsblk -o NAME,SIZE,FSTYPE,MOUNTPOINTS
 ```
 
-**LLM server:** grow the root to 200 GB and put the rest of the disk into `/models`, where the 189 GB of model
+**LLM server:** grow the root to 200 GB and put the rest of the disk into `/models`, where the 141 GB of model
 files go:
 
 **LLM server**, only for a small LVM root:
@@ -405,7 +405,7 @@ sudo reboot
 
 ### 6. Download the model
 
-*LLM server · about 85 minutes, unattended*
+*LLM server · about 65 minutes, unattended*
 
 Opens a terminal session that keeps running if your connection drops.
 
@@ -424,8 +424,8 @@ environment in your home folder.
 python3 -m venv ~/.hf-cli && ~/.hf-cli/bin/pip install --quiet huggingface_hub
 ```
 
-Fetches Qwen3.8-Flash-Next (Q4) with its n-gram table at full precision, its MTP helper and the vision file from
-one fixed revision of Unsloth's repository: seven files, 189 GB. The last line checks each file against the SHA256
+Fetches Qwen3.8-Flash-Next (Q4) with its n-gram table at 8.5 bits a value, its MTP helper and the vision file from
+one fixed revision of Unsloth's repository: seven files, 141 GB. The last line checks each file against the SHA256
 the Hub lists for it.
 
 **LLM server**, inside tmux:
@@ -434,7 +434,7 @@ the Hub lists for it.
 REV=f5d175de2cf7f720d45d6064019a81fcf056e986
 ~/.hf-cli/bin/hf download unsloth/Qwen3.8-Flash-Next-GGUF --revision $REV --local-dir /models/qwen3.8-flash-next \
     UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL-0000{1..3}-of-00004.gguf \
-    engram/Qwen3.8-Flash-Next-engram-BF16.gguf_file engram/set_split.py \
+    engram/Qwen3.8-Flash-Next-engram-Q8_0.gguf_file engram/set_split.py \
     MTP/mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf mmproj-BF16.gguf
 ~/.hf-cli/bin/hf cache verify unsloth/Qwen3.8-Flash-Next-GGUF --revision $REV --local-dir /models/qwen3.8-flash-next
 ```
@@ -462,17 +462,17 @@ of 4.
 
 ```sh
 cd /models/qwen3.8-flash-next
-python3 engram/set_split.py engram/Qwen3.8-Flash-Next-engram-BF16.gguf_file 4 4
-mv engram/Qwen3.8-Flash-Next-engram-BF16.gguf_file UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL-00004-of-00004.gguf
+python3 engram/set_split.py engram/Qwen3.8-Flash-Next-engram-Q8_0.gguf_file 4 4
+mv engram/Qwen3.8-Flash-Next-engram-Q8_0.gguf_file UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL-00004-of-00004.gguf
 ```
 
 Both lines print nothing. Afterwards the download block would fetch the table again, and the check reports the
 fourth file as not matching: the Hub lists Unsloth's own under that name.
 
 > The n-gram table is 51 billion values that the engine reads from the SSD as it needs them. Unsloth's own fourth
-> file holds it at 4.5 bits a value in 29 GB; this one is the table at full precision, 102 GB. With it the model
-> predicts Wikipedia text 0.3% better and code the same. It takes no more memory and writes as fast; four full
-> sessions at once read 1 to 2% slower ([measurements](MEASUREMENTS.md#full-precision-n-gram-table)).
+> file holds it at 4.5 bits a value in 29 GB; this one holds it at 8.5 bits in 54 GB. With it the model predicts
+> Wikipedia text 0.3% better and code the same, as it does with the full-precision table of 102 GB. It takes no
+> more memory and is as fast ([measurements](MEASUREMENTS.md#n-gram-table)).
 
 > The model is under the [Qwen Community
 > License](https://huggingface.co/Qwen/Qwen3.8-Flash-Next/blob/main/LICENSE). Selling it as a paid AI service needs
@@ -684,7 +684,7 @@ curl -sSN http://127.0.0.1:8080/v1/chat/completions -H 'Content-Type: applicatio
 **You should see** 51 to 79 tokens per second, most often about 65:
 
 ```text
-{"decode_tok_s":64.15901876157089,"tokens":512,"draft_accepted":359,"drafted":437}
+{"decode_tok_s":64.92572051060347,"tokens":436,"draft_accepted":307,"drafted":364}
 ```
 
 **Full load.** Sends a 256,000-token prompt into all four sessions at the same moment, makes each one find three
@@ -700,10 +700,10 @@ python3 ~/workspace-portal/llm-server/acceptance.py
 **You should see** one line per session, one line of readings, and both verdicts:
 
 ```text
-Prompts: 4 of 256000 to 256000 tokens. Sending them all at once.
-user 0: first word after 648.8 s, follow-up after 0.9 s: PASS
+Prompts: 4 of 255997 to 255999 tokens. Sending them all at once.
+user 0: first word after 636.2 s, follow-up after 0.9 s: PASS
 ...
-Sessions busy at once: 4 of 4. Lowest free memory: 6.7 GiB. Swap pages moved: 3. Killed for memory: 0. Hottest: 101 °C.
+Sessions busy at once: 4 of 4. Lowest free memory: 6.5 GiB. Swap pages moved: 1. Killed for memory: 0. Hottest: 99 °C.
 FUNCTIONAL PASS
 CAPACITY PASS
 ```
@@ -850,8 +850,8 @@ person chooses their own at the first sign-in.
 Each person has two workspaces with separate files, of which one runs at a time. **Private** has no internet
 access. **Online** also reaches public internet addresses, but never your LAN, the servers or another workspace. On
 Home, press **Start Private** or **Start Online**, confirm, then **Open workspace**. The agent is Qwen Code unless
-the person picks DeepSeek Harness under **Settings > Harness**. With **Plan**, under Qwen Code's input, switched
-on, the agent changes nothing and runs no command until its plan is approved.
+the person picks DeepSeek Harness under **Settings > Harness**. With **Plan mode** on, in the **+** menu under Qwen
+Code's input, the agent changes nothing and runs no command until its plan is approved.
 
 #### The API, for your own software
 
@@ -1237,12 +1237,12 @@ fan service is running and that the vents have space on all sides. How each was 
 
 | What | Result | Conditions |
 |---|---|---|
-| Writing, one user | **51-79 tok/s** | 42 answers, half of them at 63 to 68. Varies with how many drafted tokens are accepted |
+| Writing, one user | **51-79 tok/s** | 99 answers, half of them at 62 to 67. Varies with how many drafted tokens are accepted |
 | Writing, four users at once | **about 20 tok/s each**, 70 in total | 8,000-token prompts; measured with a four-session layout on Gufo 0.28.1 |
 | Writing, six and eight users on those four sessions | 20 and 18 tok/s each | The extra users wait for a free session: up to 90 s and 114 s to the first word |
 | Reading a prompt | **1,760-1,787 tok/s** | 32,000-token prompts, machine hot, fans at 80-95% |
 | A 90,000-token prompt | about 55 s to the first word | One user |
-| Four 256,000-token prompts at once | 10.7-10.8 min to the first word | The full-load test of step 9. Follow-up turns: 0.7-1.1 s |
+| Four 256,000-token prompts at once | 10.6-10.7 min to the first word | The full-load test of step 9. Follow-up turns: 0.7-1.0 s |
 | A turn in a long agent session | 0.6 s to the first word, 53 tok/s | Median of 278 agent requests; history served from cache |
 | A new 122,000-token prompt on a full machine | 9-17 min to the first word | Measured with seven 128K sessions, all of them already reading 122,000-token prompts |
 | Model load / restart | 16-17 s / healthy after 17-18 s | Four restarts. The load after a reboot took 17.4 s |
@@ -1250,7 +1250,7 @@ fan service is running and that the vents have space on all sides. How each was 
 | Raw photo, whole answer | 147 s (12 MP), 353 s (16.8 MP) | Idle server, image sent to the API at full size. Qwen Code shrinks images to 1,568 pixels on the long edge first, which is quick |
 | Chip power | 121-128 W under load, about 7 W idle | The chip's own sensor, not a wall meter |
 | Chip temperature under load | 83-89 °C average | Fans at 80-95%; 86-94 °C on firmware fans. At its limit, 98-101 °C, for the first three minutes of the full-load test |
-| Free memory, LLM server | 9.6 GiB after load, 6.4-6.7 GiB with four full prompts at once | 4.7 GiB while four raw 12 MP photos were read. The two full-load runs moved 0 and 3 pages to swap, the other tests none |
+| Free memory, LLM server | 9.6 GiB after load, 6.5 GiB with four full prompts at once | 4.7 GiB while four raw 12 MP photos were read. The full-load run moved 1 page to swap, the other tests none |
 | Cancelling a reply | session free 0.5 s later | Three clients dropped mid-reply. With three sessions busy, a fourth request waited 5 s for its first word |
 
 ## Not tested
@@ -1259,11 +1259,11 @@ fan service is running and that the vents have space on all sides. How each was 
   1](#1-install-fedora-server) was not run on them: its LVM commands for the LLM server ran on a test disk image,
   the portal server's line not at all.
 - [Step 6](#6-download-the-model) from an empty folder. Its blocks ran as written in a scratch folder that already
-  held the n-gram table, the MTP helper and the vision file, so the download fetched the other four files and only
-  checked those three. The files were then moved into place.
-- Most numbers with the full-precision n-gram table. The writing speed and the full-load test are from it; the
-  others were taken with Unsloth's 4.5-bit table, which side by side reads and writes within 2% of it
-  ([measurements](MEASUREMENTS.md#full-precision-n-gram-table)).
+  held the three model files, the MTP helper and the vision file, so the download fetched the n-gram table and the
+  script and only checked those five. The files were then moved into place.
+- Most numbers with the 8.5-bit n-gram table. The full-load test and 20 of the 99 writing speeds are from it; the
+  others were taken with Unsloth's 4.5-bit table or the full-precision one, which side by side read and write
+  within 2% of it ([measurements](MEASUREMENTS.md#n-gram-table)).
 - The older numbers on the current kernel. The reading speeds on the fan curve, the image timings and the
   full-machine run date from kernel 7.2.15 and were not repeated with 7.3.4.
 - Fedora 45 on the LLM server, and a Fedora release upgrade on either server.
@@ -1296,7 +1296,7 @@ fan service is running and that the vents have space on all sides. How each was 
 |---|---|
 | LLM server | Ryzen AI Max+ 395, 128 GB, board AXB35-02, BIOS 3.11 (May 8, 2026); Fedora 44 Server, kernel 7.3.4-200.fc44, Mesa 26.2.6, Podman 5.8.9, crun 1.30 |
 | Engine | [Gufo 0.35.0](https://github.com/gufo-org/gufo/releases/tag/v0.35.0) (build 0260e11), image digest `sha256:99e9b547...f9e9c2b6` |
-| Model | [Qwen3.8-Flash-Next](https://huggingface.co/Qwen/Qwen3.8-Flash-Next), [UD-Q4_K_XL from Unsloth](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/tree/f5d175de2cf7f720d45d6064019a81fcf056e986) with the BF16 n-gram table, shared Q8 MTP, BF16 vision projector; downloaded with huggingface_hub 2.4.0 and hf-xet 1.8.0 |
+| Model | [Qwen3.8-Flash-Next](https://huggingface.co/Qwen/Qwen3.8-Flash-Next), [UD-Q4_K_XL from Unsloth](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/tree/f5d175de2cf7f720d45d6064019a81fcf056e986) with the Q8_0 n-gram table, shared Q8 MTP, BF16 vision projector; downloaded with huggingface_hub 2.4.0 and hf-xet 1.8.0 |
 | Fan driver | `llm-server/fans/ec_su_axb35.c` in the repository, version m5-1: reduced from [cmetz/ec-su_axb35-linux](https://github.com/cmetz/ec-su_axb35-linux/tree/f62c2c228959a08683273a26ef3afd8991e69f6d) at f62c2c2, duty registers after [FanControl.AXB35](https://github.com/crmaris/FanControl.AXB35) |
 | CPU undervolt | [RyzenAdj](https://github.com/FlyGoat/RyzenAdj) 0.18.0 (527cacc) from [COPR shdwchn10/ryzenadj](https://copr.fedorainfracloud.org/coprs/shdwchn10/ryzenadj/), with its `ryzen_smu` driver (d298366) |
 | Portal server | Pentium G4400T (2 cores), 8 GB; Fedora 45 Server, kernel 7.3.4-300.fc45, moby-engine 29.9.3, Tailscale 1.102.5 |

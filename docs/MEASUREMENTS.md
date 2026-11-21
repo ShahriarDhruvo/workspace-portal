@@ -21,8 +21,8 @@ numbers led to are in [`llm-server/`](../llm-server).
 | Fan curve | up to 95% | Chip about 6 °C cooler. Reading holds 1,760-1,787 tok/s instead of sagging to as low as 1,484 after long load: up to 20% faster when hot. |
 | CPU governor | performance | TuneD profile `accelerator-performance`. Baseline for all numbers. |
 | CPU undervolt | Curve offset -50 | 9% more CPU work at 5 W less and 4 °C cooler. Prompt reading gains about 1%. |
-| N-gram table | Full precision (BF16) | Wikitext is predicted 0.3% better than with the 4.5-bit table of the Q4 files, code the same. Same memory and writing speed; four full sessions at once read 1 to 2% slower; 74 GB more on the SSD. |
-| Speculative decoding | MTP | A helper file drafts tokens ahead and about 80% are accepted. Writing runs at 51 to 79 tok/s, half of the runs at 63 to 68 (42 runs, November 20, 2026), against 24 to 27 on llama.cpp without it. |
+| N-gram table | 8.5 bits a value (Q8_0) | Predicts like the full-precision table, which is 48 GB larger. Wikitext is predicted 0.3% better than with the 4.5-bit table of the Q4 files, code the same. Same memory and speed; 26 GB more on the SSD. |
+| Speculative decoding | MTP | A helper file drafts tokens ahead and about 80% are accepted. Writing runs at 51 to 79 tok/s, half of the runs at 62 to 67 (99 runs with three n-gram tables, November 20 and 21, 2026), against 24 to 27 on llama.cpp without it. |
 
 ## Levers tried and left alone
 
@@ -115,7 +115,7 @@ same way (0.12 page records, 0.11 firmware with 32 MiB for graphics, 0.14 kernel
 
 | Layout | Free memory | Timings |
 |---|---|---|
-| 4 × 256K | 9.6 GiB after load. Lowest: 5.7-7.0 GiB with four full prompts at once (five runs), 4.7 GiB while four raw 12 MP photos were read | See [Load](#load) |
+| 4 × 256K | 9.6 GiB after load. Lowest: 5.7-7.0 GiB with four full prompts at once (six runs), 4.7 GiB while four raw 12 MP photos were read | See [Load](#load) |
 | 4 × 225K | 12.7 GiB after load. Lowest: 9.1 GiB with four full prompts at once | See [Load](#load) |
 | 7 × 128K | 11.7 GiB after load, about 6 GiB while in use. Lowest: 5.7 GiB with seven full prompts at once on Gufo 0.34.0 (8.8 GiB on 0.35.0, right after a restart), 4.0 GiB while a raw 12 MP photo was read | See [Load](#load) |
 | 3 × 256K | About 12 GiB under full load, with an idle workspace stack next to the model | Three 259,000-token prompts at once: first words after 8 minutes, follow-up turns after 0.7 seconds |
@@ -148,10 +148,10 @@ straight to the API, 11,800 tokens to the model:
 - Four pictures of 1,568 pixels, the size Qwen Code sends: 5 to 6 seconds, and free memory did not move.
 - In all of it nothing was written to swap, no request failed and the model never restarted.
 
-Four more runs on November 20, 2026, two with each [n-gram table](#full-precision-n-gram-table): first words
-after 632 to 639 seconds with the 4.5-bit table and 640 to 649 with the full-precision one, every tool call
-correct. Free memory stayed above 5.7 GiB. Three runs moved 0 to 9 pages to swap; one, with the 4.5-bit table,
-moved 6,400, which the test reports as `CAPACITY FAIL`.
+Five more runs on November 20 and 21, 2026, with three [n-gram tables](#n-gram-table): first words after 632 to
+639 seconds with the 4.5-bit table (two runs), 636 to 641 with the 8.5-bit one (one run) and 640 to 649 with the
+full-precision one (two runs), every tool call correct. Free memory stayed above 5.7 GiB. Four runs moved 0 to 9
+pages to swap; one, with the 4.5-bit table, moved 6,400, which the test reports as `CAPACITY FAIL`.
 
 Four 225,000-token prompts at once, one run on November 18, 2026 with four sessions of 230,400 tokens:
 
@@ -262,10 +262,10 @@ Gufo 0.30 scored the same as 0.31, with a median of 8:22.
 - Q5 writes 23 tok/s for one user, and four 128K sessions of it filled the RAM and fell to 0.5 tok/s each.
 - Against Q5 on the same text, Q4's perplexity is 0.35% worse (3.831 against 3.818) and it picks the same next
   word 94.1% of the time. The Q5 files also hold the n-gram table at 8.5 bits instead of 4.5: see
-  [Full-precision n-gram table](#full-precision-n-gram-table).
+  [N-gram table](#n-gram-table).
 - Q4 is the largest Flash-Next file that Gufo loads.
 
-### Full-precision n-gram table
+### N-gram table
 
 Flash-Next has a table of 51.2 billion values that Gufo reads from the SSD a few rows at a time, while the rest
 of the model stays in memory. Unsloth's Q4 files bring it at 4.5 bits a value (IQ4_NL, 28.8 GB), in the
@@ -273,7 +273,7 @@ revision the guide uses as a file of its own. The repository has the table to pu
 bits (Q8_0, 54.4 GB) and at full precision (BF16, 102.4 GB). On 3,000 random rows an IQ4_NL row is off its BF16
 row by 7.6% and a Q8_0 row by 0.5%, as Unsloth lists.
 
-The same Q4 model with only the table swapped, November 20, 2026.
+The same Q4 model with only the table swapped, November 20 and 21, 2026.
 
 **What the model predicts.** llama.cpp b12464 scored 102,400 tokens of each text in chunks of 2,048, and 98,304
 in chunks of 32,768, and compared every prediction with the BF16 table's. The control is the BF16 table once
@@ -298,6 +298,8 @@ more with the prompt computed in batches of 256 tokens instead of 512: the same 
 - IQ4_NL changes the top token at 1.0 point more positions than the control on wikitext and 0.4 on the code, 10
   and 6 standard errors. On wikitext its perplexity is 0.30% worse, 3.3 standard errors; on the code it is the
   same.
+- IQ4_NL against Q8_0 directly: its perplexity is 0.27% worse on wikitext (2.9 standard errors), 0.17% better
+  on the code in chunks of 2,048 (2.0) and the same in chunks of 32,768.
 - Against the Q5 model with the BF16 table, on the code, the Q4 model's KL divergence is 0.0464 with IQ4_NL,
   0.0443 with BF16 and 0.0441 with Q8_0. Q5's own perplexity there is within 0.1% of Q4's.
 - llama.cpp swaps the table with `--ple FILE`. With the BF16 table it also needs `-lm mmap`: without it the
@@ -306,43 +308,50 @@ more with the prompt computed in batches of 256 tokens instead of 512: the same 
 **Answers**, through Gufo 0.35.0, greedy:
 
 - 76 LiveCodeBench problems from December 2024 to April 2025, 60 medium and 16 hard, four at a time, thinking
-  ended after 3,000 tokens, each answer run against the problem's tests: 52 solved with each table. 22 problems
-  were solved with one and not with the other, 11 each way. The thinking took 159,348 tokens with IQ4_NL and
-  159,411 with BF16.
+  ended after 3,000 tokens, each answer run against the problem's tests: 52 solved with IQ4_NL, 52 with BF16 and
+  54 with Q8_0. Between any two tables 16 to 22 problems were solved with one and not with the other, split 11
+  to 11, 9 to 11 and 7 to 9: chance. The thinking took 159,348 tokens with IQ4_NL, 159,411 with BF16 and 155,855
+  with Q8_0.
 - `gufo eval`, 75 questions: 56 right with IQ4_NL, 53 with BF16. They disagree on 7 questions, 5 to 2, and
   four of the five were BF16 answers cut off at the 16,000-token limit while still thinking. That is chance
-  (sign test p = 0.45).
-- Next word at 3,681 positions of wikitext-2: the right one at 63.7% with IQ4_NL and 63.3% with BF16, a
-  difference of -0.4 points (95% interval -0.9 to +0.1). Too few positions to show a difference of the size
-  above.
+  (sign test p = 0.45). Not run with Q8_0.
+- Next word at 3,681 positions of wikitext-2: the right one at 63.7% with IQ4_NL, 63.3% with BF16 and 63.6% with
+  Q8_0. No two differ by more than 0.4 points, and each 95% interval spans zero: too few positions to show a
+  difference of the size above.
+- At those positions Q8_0 has BF16's top token 96.9% of the time and IQ4_NL 94.9%, 5.8 standard errors apart.
+  A second run with IQ4_NL reproduced every prediction of the first. So did, at 300 positions, the revision the
+  guide uses, where that table is the fourth file: the other IQ4_NL runs used an older revision that has it
+  inside the second.
 
-**Speed**, Gufo 0.35.0, two runs per table, each after a restart and with the page cache dropped:
+**Speed**, Gufo 0.35.0, each run after a restart and with the page cache dropped: three runs with IQ4_NL, two
+with each of the others.
 
-| | IQ4_NL | BF16 |
-|---|--:|--:|
-| Reading a 2K prompt, tok/s | 1,627-1,725 | 1,598-1,736 |
-| Reading an 8K prompt | 1,826-1,857 | 1,823-1,863 |
-| Reading a 32K prompt | 1,819-1,847 | 1,788-1,832 |
-| Reading a 64K prompt | 1,755-1,804 | 1,753-1,762 |
-| Reading a 128K prompt | 1,714 and 1,719 | 1,711 and 1,719 |
-| Writing, five 1,000-token answers | 49.9 and 49.9 | 50.2 and 50.2 |
-| Writing after a 64K prompt, the same four prompts for both | 51.8 | 51.2 |
-| The guide's speed check, 20 sampled answers each, back to back | 54.5-69.5, median 64.0 | 53.9-72.9, median 65.8 |
-| Four users at once, writing, each | 18-33 | 19-31 |
-| Four users at once, reading, each | 1,541-1,884 | 1,529-1,843 |
-| GPU memory in use | 110.8-111.5 GiB | 110.8-111.5 GiB |
-| Read from the SSD per token of a prompt of 32K or more | 28-33 KB | 42-46 KB |
-| Four 256,000-token prompts, first words | 632-639 s, two runs | 640-649 s, two runs |
-| Model load, as Gufo logs it | 16.4-19.3 s | 16.3-17.6 s |
+| | IQ4_NL | Q8_0 | BF16 |
+|---|--:|--:|--:|
+| Reading a 2K prompt, tok/s | 1,627-1,846 | 1,729-1,772 | 1,598-1,736 |
+| Reading an 8K prompt | 1,826-1,920 | 1,857-1,918 | 1,823-1,863 |
+| Reading a 32K prompt | 1,819-1,861 | 1,847-1,854 | 1,788-1,832 |
+| Reading a 64K prompt | 1,755-1,804 | 1,754-1,824 | 1,753-1,762 |
+| Reading a 128K prompt | 1,714-1,721 | 1,717 and 1,720 | 1,711 and 1,719 |
+| Writing, five 1,000-token answers | 49.9 in each run | 50.2 and 50.2 | 50.2 and 50.2 |
+| Writing after a 64K prompt, the same four prompts for all | 50.8 and 51.8 | 51.5 and 52.7 | 51.2 |
+| The guide's speed check, sampled answers | 54.5-73.0, median 64.3 (40 answers) | 52.0-69.0, median 64.9 (20) | 51.4-78.9, median 65.7 (39) |
+| Four users at once, writing, each | 18-33 | 18-33 | 19-31 |
+| Four users at once, reading, each | 1,541-1,938 | 1,655-1,922 | 1,529-1,843 |
+| GPU memory in use | 110.8-111.5 GiB | 110.8-111.6 GiB | 110.8-111.5 GiB |
+| Read from the SSD per token of a prompt of 32K or more | 27-38 KB | 30-43 KB | 42-46 KB |
+| Four 256,000-token prompts, first words | 632-639 s, two runs | 636-641 s, one run | 640-649 s, two runs |
+| Model load, as Gufo logs it | 16.4-19.3 s | 15.8-17.0 s | 16.3-17.6 s |
 
 - `/models` on the test machine is on btrfs, which Fedora mounts with `compress=zstd:1`. The BF16 values
   compress, and every row read then unpacks a whole compressed extent: 264-283 KB from the SSD per prompt
-  token, and prompts read 10-16% slower. The numbers above are from an uncompressed table: `chattr +m` on the
+  token, and prompts read 10-16% slower. The numbers above are from uncompressed tables: `chattr +m` on the
   folder before the download keeps btrfs from compressing what lands in it. The guide's `/models` is XFS, which
   does not compress.
-- Used since November 20, 2026. BF16 costs 74 GB of SSD, no memory, no writing speed and 1 to 2% of reading
-  speed when all four sessions are full. What it buys is small: 0.3% on wikitext and nothing that the code or
-  the answers show. Q8_0 measured the same as BF16 and would take 48 GB less.
+- Q8_0 is in use since November 20, 2026. Over the 4.5-bit table it costs 26 GB of SSD, no memory and no speed
+  that these runs show. What it buys is small: 0.3% on wikitext, predictions as close to the full-precision
+  table's as a reordering of the arithmetic leaves them, and nothing that the code or the answers show. BF16
+  measured the same as Q8_0 and takes 48 GB more.
 
 ### Gufo and llama.cpp
 
