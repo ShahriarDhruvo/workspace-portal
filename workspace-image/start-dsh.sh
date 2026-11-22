@@ -27,9 +27,7 @@ esac
 [ "${#secret}" -eq 43 ] || { echo "start-dsh: DSH_COOKIE_SECRET must be 32 bytes (43 base64url characters)" >&2; exit 1; }
 
 umask 077
-# The home caches are the only part of $HOME the agent's sandboxed commands may write (the lockdown's
-# sandbox-policy); Landlock needs them to exist.
-mkdir -p "$HOME" "$DSH_HOME" "$DSH_AGENTS_HOME" "$HOME/.cache" "$HOME/.local" "$HOME/.npm"
+mkdir -p "$HOME" "$DSH_HOME" "$DSH_AGENTS_HOME"
 # /tmp is a fresh tmpfs per start; noclobber refuses to write through anything already there.
 # printf is a shell builtin, so the secret never appears in a process's argv.
 set -C
@@ -40,6 +38,11 @@ unset secret
 
 # The container's own address (dsh rejects 0.0.0.0, :: and host names).
 IP=$(hostname -i | awk '{print $1}')
+
+# Auto review switched on once in the person's own profile (theirs to switch off under Plugins). Not a reason to
+# keep the workspace from starting.
+node /usr/local/lib/workspace-portal/dsh-default-profile.mjs /usr/local/lib/node_modules/@deepseek-ai/dsh ||
+  echo "start-dsh: Auto review was not switched on in the profile; dsh starts without it" >&2
 
 # dsh loads <cwd>/.env at start: launch from an empty, root-owned directory.
 cd /usr/local/lib/workspace-portal/dsh-cwd

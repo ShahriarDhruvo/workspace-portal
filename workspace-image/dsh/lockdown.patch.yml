@@ -1,16 +1,20 @@
-# The lockdown of DeepSeek Harness in a workspace. start-dsh applies it and then the gateway's portal.patch.yml
-# (models, search, browser), both after the user's own patch, where the UI's settings land: these rows win, and the
-# UI shows their plugins read-only. Top-level rows only: a patch replaces a row's whole config, so the preset rows
-# that need what is off here are disabled in the shipped presets instead (dsh/adapt-presets.mjs).
+# What a workspace changes of DeepSeek Harness's web profile; everything else is as dsh ships it. start-dsh applies it
+# and then the gateway's portal.patch.yml (models, search, browser), both after the user's own patch, where the UI's
+# settings land: these rows win, and the UI shows their plugins read-only. Top-level rows only: a patch replaces a
+# row's whole config, so the preset rows of the web tools turned off here are disabled in the shipped presets instead
+# (dsh/adapt-presets.mjs).
 # The image build fails unless every row applies to its dsh version (dsh/check-lockdown.sh). A row marked
 # "# optional" is of a plugin some dsh versions no longer have, and may be missing.
+# Not here, because it is dsh's own setting: DSH_PERMISSION_MODE in the image (Full access for new sessions).
 
-# The cookie secret: start-dsh writes this file at every start, in a tmpfs.
+# The cookie secret: start-dsh writes this file at every start, in a tmpfs. The gateway signs the browser's session
+# cookies with it.
 - id: credentials
   config:
     path: /tmp/dsh-credentials.yaml
 
-# No internet: the DeepSeek account, its LLM routes and its API's request extensions.
+# No sign-in: the DeepSeek account, its LLM routes, the DeepSeek API key route and their request extensions. The
+# models are the portal's (portal.patch.yml).
 - id: deepseek-account
   disabled: true
 - id: llm-deepseek-account
@@ -24,7 +28,8 @@
 - id: plugin-package-inventory-deepseek
   disabled: true
 
-# No internet: the built-in web_fetch and web_search (the portal's MCP server searches).
+# No built-in web tools: their search is DeepSeek's (an account or API key), and their web_search would stay listed,
+# failing, without it. The portal's search MCP server searches and reads pages (portal.patch.yml).
 - id: web
   disabled: true
 - id: web-search-deepseek
@@ -36,47 +41,19 @@
 - id: ui-settings-web-search
   disabled: true
 
-# No internet: the plugin manager and market, which install from registries.
-- id: plugin-manager
-  disabled: true
-- id: ui-plugin-manager
-  disabled: true
-
-# No internet: feedback upload. (DSH_TELEMETRY_DISABLED in the image removes telemetry.)
-- id: message-feedback
-  disabled: true
-- id: ui-message-feedback
-  disabled: true
-- id: command-feedback
-  disabled: true
-
-# Desktop integrations, of which a container has none.
+# Opening a folder in an app installed on the host: a container has none to offer.
 - id: open-in-app
   disabled: true
 - id: ui-open-in-app
   disabled: true
-# The sidebar browser, an iframe in the user's own browser: off by default, and here so no user patch turns it on.
-- id: ui-sidebar-browser
-  disabled: true
 
-# One workspace, /workspace: dsh creates <documentsDirectory>/deepseek-harness/default-workspace at the first load,
-# which the image ships as a link to it. No directory picker, and so no add-workspace button.
+# The sidebar Browser, dsh's web preview: off in dsh's web profile, on here. It is a frame in the person's own
+# browser, so dsh/web-preview.mjs sends the workspace's own addresses (localhost, 127.x) to the gateway's preview port.
+- id: ui-sidebar-browser
+  disabled: false
+
+# The default workspace where dsh puts it on a Linux desktop: <Documents>/deepseek-harness/default-workspace, with
+# Documents as `xdg-user-dir DOCUMENTS` says, ~/Documents. A container has no desktop session to ask.
 - id: workspace-controller
   config:
-    documentsDirectory: /usr/local/lib/workspace-portal/dsh-documents
-- id: directory-picker
-  disabled: true
-
-# The agent's bash runs under dsh's Landlock launcher. workspace-write lets it write /workspace, /tmp, /dev/null and
-# the roots below without asking; anything else needs an approval. Fixed here, not from DSH_PERMISSION_MODE. A user
-# can still switch one session's mode in the UI, and the UI's terminal is not confined.
-# Of the home only the caches package managers write (start-dsh creates them): the rest holds what runs unconfined
-# later (dsh's settings, where a user patch may carry !!js, skills and shell start-up files).
-- id: sandbox-policy
-  config:
-    mode: workspace-write
-    workspaceRoot: /workspace
-    additionalWritableRoots: [/home/user/.cache, /home/user/.local, /home/user/.npm, /dev/shm]
-- id: approval
-  config:
-    policy: ask
+    documentsDirectory: /home/user/Documents

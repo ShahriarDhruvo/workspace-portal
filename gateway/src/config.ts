@@ -5,8 +5,8 @@ import { fileURLToPath } from "node:url";
 import { AGENT_KINDS, isAgentKind, isVersion, MIN_CONTROL_SECRET_LENGTH, type AgentKind, type WorkspaceKind } from "@portal/core";
 
 /**
- * A workspace's preview port is its agent port plus this. Fixed: the Web Shell's Web preview works it out too
- * (PREVIEW_PORT_OFFSET in workspace-image/qwen/trim-web-shell.mjs).
+ * A workspace's preview port is its agent port plus this. Fixed: both agents' web previews work it out too
+ * (PREVIEW_PORT_OFFSET in workspace-image/qwen/trim-web-shell.mjs and workspace-image/dsh/web-preview.mjs).
  */
 export const PREVIEW_PORT_OFFSET = 1000;
 

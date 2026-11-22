@@ -232,9 +232,10 @@ test("the workspace port ranges must fit and must not overlap each other or the 
   assert.equal(problems({ ...secrets, AGENT_PORT_COUNT: "9007199254740991" })[1], "ONLINE_AGENT_PORT_BASE must be a TCP port (got 9007199254744092)", "a default it refuses is named too");
 });
 
-test("the gateway, the Web Shell's Web preview and the deploy scripts agree on where the preview ports are", () => {
+test("the gateway, both agents' web previews and the deploy scripts agree on where the preview ports are", () => {
   const source = (file: string): string => fs.readFileSync(new URL(`../../${file}`, import.meta.url), "utf8");
   assert.match(source("workspace-image/qwen/trim-web-shell.mjs"), new RegExp(`^const PREVIEW_PORT_OFFSET = ${PREVIEW_PORT_OFFSET};$`, "m"));
+  assert.match(source("workspace-image/dsh/web-preview.mjs"), new RegExp(`^const PREVIEW_PORT_OFFSET = ${PREVIEW_PORT_OFFSET};$`, "m"));
   assert.match(source("deploy/lib.sh"), new RegExp(`^PREVIEW_PORT_OFFSET=${PREVIEW_PORT_OFFSET}$`, "m"));
 });
 

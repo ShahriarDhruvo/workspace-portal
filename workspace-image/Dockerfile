@@ -53,31 +53,42 @@ ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/start-qwen"]
 
 FROM base AS dsh
 ARG DSH_VERSION=0.2.2-rc.1
+# What dsh's plugin manager installs plugins with (its Plugins page, and its agent tools), into the profile in
+# DSH_HOME. They come from the npm registry or GitHub, so only an Online workspace can install one; both can switch on
+# the plugins dsh comes with.
+ARG PNPM_VERSION=11.28.13
 USER root
-# dsh/adapt-presets.mjs fits dsh's agent presets to a workspace without internet and fails the build when they no
-# longer fit. Neither it nor its YAML parser (in /tmp) stays in the image.
+# The two edits of dsh's files, each failing the build when it no longer fits; neither script nor the YAML parser (in
+# /tmp) stays in the image:
+#   dsh/adapt-presets.mjs: its agent presets without the built-in web tools the lockdown turns off;
+#   dsh/web-preview.mjs: its web preview (the sidebar Browser) shows the workspace's own web apps.
 # /etc/workspace-portal/dsh: where the gateway mounts portal.patch.yml.
 # dsh-cwd: dsh's launch directory, empty and root's, because dsh loads <cwd>/.env.
-# dsh-documents: the lockdown's documentsDirectory. dsh's first workspace, deepseek-harness/default-workspace in
-#   it, is a link to /workspace, so /workspace is the only workspace dsh creates.
 RUN --mount=type=tmpfs,target=/tmp --mount=type=bind,source=dsh/adapt-presets.mjs,target=/mnt/adapt-presets.mjs \
-    npm install -g "@deepseek-ai/dsh@${DSH_VERSION}" \
+    --mount=type=bind,source=dsh/web-preview.mjs,target=/mnt/web-preview.mjs \
+    npm install -g "@deepseek-ai/dsh@${DSH_VERSION}" "pnpm@${PNPM_VERSION}" \
  && npm install --prefix /tmp/wp-tools yaml@2.9.1 \
  && cp /mnt/adapt-presets.mjs /tmp/wp-tools/ \
  && node /tmp/wp-tools/adapt-presets.mjs "$(npm root -g)/@deepseek-ai/dsh" \
- && mkdir -p /etc/workspace-portal/dsh /usr/local/share/workspace-portal/dsh \
-             /usr/local/lib/workspace-portal/dsh-cwd \
-             /usr/local/lib/workspace-portal/dsh-documents/deepseek-harness \
- && ln -s /workspace /usr/local/lib/workspace-portal/dsh-documents/deepseek-harness/default-workspace \
+ && node /mnt/web-preview.mjs "$(npm root -g)/@deepseek-ai/dsh" \
+ && mkdir -p /etc/workspace-portal/dsh /usr/local/share/workspace-portal/dsh /usr/local/lib/workspace-portal/dsh-cwd \
  && find / -xdev -perm /6000 -type f -exec chmod a-s {} +
 COPY --chmod=0755 start-dsh.sh /usr/local/bin/start-dsh
 COPY --chmod=0644 dsh/lockdown.patch.yml /usr/local/share/workspace-portal/dsh/lockdown.patch.yml
-# The build fails when a row of the lockdown doesn't apply to this dsh version: dsh would only warn.
+# start-dsh runs it: Auto review switched on once in each person's profile.
+COPY --chmod=0644 dsh/default-profile.mjs /usr/local/lib/workspace-portal/dsh-default-profile.mjs
+# The build fails when a row of the lockdown doesn't apply to this dsh version (dsh would only warn), or when
+# default-profile.mjs no longer finds what it uses of dsh.
 RUN --mount=type=bind,source=dsh/check-lockdown.sh,target=/mnt/check-lockdown.sh \
-    sh /mnt/check-lockdown.sh /usr/local/share/workspace-portal/dsh/lockdown.patch.yml
+    sh /mnt/check-lockdown.sh /usr/local/share/workspace-portal/dsh/lockdown.patch.yml \
+ && node /usr/local/lib/workspace-portal/dsh-default-profile.mjs /usr/local/lib/node_modules/@deepseek-ai/dsh --check
+# DSH_PERMISSION_MODE: dsh's own default for new sessions, here Full access (its danger-full-access preset: the
+#   agent's commands write anything the workspace's user can, without asking; the container is the boundary). A person
+#   picks another mode per session, and another default under Settings.
 # NARB_DISABLE_NATIVE_CACHE: dsh would copy its native addons to /tmp, which is noexec, and not start.
 ENV DSH_HOME=/home/user/.dsh \
     DSH_AGENTS_HOME=/home/user/.agents \
+    DSH_PERMISSION_MODE=danger-full-access \
     DSH_TELEMETRY_DISABLED=1 \
     DSH_TELEMETRY_MODE=DISABLED \
     NARB_DISABLE_NATIVE_CACHE=1

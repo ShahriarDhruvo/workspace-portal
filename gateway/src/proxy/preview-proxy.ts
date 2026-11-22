@@ -1,7 +1,8 @@
 // The preview ports: the web apps running in a workspace, as the person's browser sees them. A workspace runs on a
-// host the browser can't reach, so the Web Shell's Web preview (trim-web-shell.mjs) opens `http://localhost:<n>` here
-// instead: one port per user and kind, the agent port + PREVIEW_PORT_OFFSET, so an app is a browser origin of its
-// own, apart from the agent's (its page can't read the Web Shell's token or storage) and every other workspace's.
+// host the browser can't reach, so the agent's web preview (Qwen Code's Web preview, trim-web-shell.mjs; DeepSeek
+// Harness's sidebar Browser, web-preview.mjs) opens `http://localhost:<n>` here instead: one port per user and kind,
+// the agent port + PREVIEW_PORT_OFFSET, so an app is a browser origin of its own, apart from the agent's (its page
+// can't read the agent UI's token or storage) and every other workspace's.
 //
 // A request passes the agent ports' checks, then goes to the port of the workspace the person chose:
 // `/__portal/port/<n>/<path>` keeps n in a cookie of this port and redirects to /<path>; everything after goes to n,

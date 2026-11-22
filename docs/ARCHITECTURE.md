@@ -58,7 +58,7 @@ browser --(cookie portal_session)--> web app   WEB_BIND:WEB_PORT  <--(API key)--
 | `gateway/src/monitor/` | live view, hostd client, host and LLM monitors, energy meter, prices, usage per user, session and API key |
 | `gateway/src/lib/`, `gateway/test/` | HTTP helpers and `HttpError`, forwarding, logging; the harness, fakes and integration suites |
 | `web/` | the web app (Next.js); installable through `app/manifest.ts`, without a service worker, since it does nothing offline |
-| `workspace-image/` | one Dockerfile, a target per agent; start scripts; the Web Shell trim; the dsh lockdown |
+| `workspace-image/` | one Dockerfile, a target per agent; start scripts; the Web Shell trim; the dsh lockdown, web preview and profile |
 | `reader/`, `searxng/` | the page reader (Python, Defuddle in Node); SearXNG with its `settings.yml` built in |
 | `hostd/`, `qwen-config/` | portal-hostd; the model settings a fresh install starts with |
 | `llm-server/` | the reference LLM server: engine service file, model download, load test, fan control for one board |
@@ -375,8 +375,14 @@ own copy at every start into `system/<agent>/`, mounted read-only. What the rend
   removed, and the MCP server `search` (plus `browser` with `WORKSPACE_BROWSER`).
 - **DeepSeek Harness** gets the same models as a patch file written as JSON, which is valid YAML: dsh
   evaluates YAML tags, and JSON has none, so no string of the admin's can become one. Models whose context
-  window leaves dsh too little room are left out (`fitDshModels` in `dsh-settings.ts`). What users may not
-  change is a static lockdown patch in the image; the image build fails when a row of it does not apply.
+  window leaves dsh too little room are left out (`fitDshModels` in `dsh-settings.ts`). Otherwise dsh runs as it
+  ships: a static lockdown patch in the image turns off only the DeepSeek sign-in and API, the built-in web tools
+  and opening folders in desktop apps, turns on the sidebar Browser and names `~/Documents` as dsh's Documents
+  folder; the image build fails when a row of it does not apply. `DSH_PERMISSION_MODE` in the image starts new
+  sessions with Full access, and `default-profile.mjs` switches Auto review on once in each person's profile.
+- **dsh's web preview** (`workspace-image/dsh/web-preview.mjs`): its sidebar Browser opens a workspace's own
+  addresses (`localhost`, `127.x`) on the preview port, as the Web Shell's Web preview does. When the edit no
+  longer fits, the build fails.
 - **The Web Shell trim** (`workspace-image/qwen/trim-web-shell.mjs`) removes what the portal does not offer,
   points the Web preview at the preview port, sizes the dropped-file dialog to its buttons and keeps a turn's
   answer on screen when replies to background tasks follow it. Its uploads take the gateway's `UPLOAD_LIMIT_MB`
@@ -398,9 +404,9 @@ One update job runs at a time, for all agents (`gateway/src/updates/agent-update
 4. Promotion tags the image, saves the version and audits `agent_updated`; from there it is not cancellable. A
    failure or a cancel discards the staging image, audits `agent_update_failed` and leaves the version.
 
-A version the portal's changes don't fit fails at step 2: the Web Shell trim and dsh's preset and lockdown
-checks fail the build. A failed build's error is the failed step's last ten output lines, then the engine's message, so it says
-which change did not fit.
+A version the portal's changes don't fit fails at step 2: the Web Shell trim and dsh's preset, web preview,
+profile and lockdown checks fail the build. A failed build's error is the failed step's last ten output lines,
+then the engine's message, so it says which change did not fit.
 
 A gateway that stops mid-job records it as failed; at its next start `sweep` removes staging tags and check
 containers before the control API listens. `deploy/update-image.sh` does the same build from the shell, writes

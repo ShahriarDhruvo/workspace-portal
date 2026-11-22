@@ -78,7 +78,7 @@ export function admit(deps: AgentDeps, req: IncomingMessage, res: ServerResponse
   const access: AgentAccess = target.startsWith("/")
     ? checkAgentAccess(req, deps, false, surface)
     : { ok: false, status: 400, code: "bad_request", message: "Unsupported request target.", host: null };
-  // A preview is framed by its workspace's Web Shell (the agent port), inside the portal.
+  // A preview is framed by its workspace's agent UI (the agent port), inside the portal.
   const agentPort = surface === "preview" ? (req.socket.localPort ?? 0) - PREVIEW_PORT_OFFSET : undefined;
   const frame = access.host && framePolicy(deps.config, access.host.hostname, agentPort);
   if (access.ok) return { ...access, method, target, navigation, frame: frame! };

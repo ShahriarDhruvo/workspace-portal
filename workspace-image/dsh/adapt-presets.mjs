@@ -1,7 +1,8 @@
 // node adapt-presets.mjs <dsh package dir>   (with the yaml package beside this script)
-// Disables, in the agent presets dsh ships (dsh-web-app/presets/*.patch.yml), the rows that need what
-// lockdown.patch.yml turns off (OFFLINE_ROWS): with them a preset is reported broken. A patch can't do it, because
-// it replaces a preset row's whole config, and a preset restated in the lockdown goes stale with every dsh release.
+// Disables, in the agent presets dsh ships (dsh-web-app/presets/*.patch.yml), the rows a workspace keeps off
+// (ROWS_OFF): the built-in web tools, which need what lockdown.patch.yml turns off (with them a preset is reported
+// broken). A patch can't do it, because it replaces a preset row's whole config, and a preset restated in the lockdown
+// goes stale with every dsh release.
 // The edits are spliced into the source text at the ranges the parser reports, so the rest of each file stays byte
 // for byte as shipped (writing the parsed document back would re-fold some scalars).
 // Exits 1, failing the image build, when the presets are missing or don't parse, a file declares no preset, or a
@@ -11,11 +12,9 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { isMap, isScalar, isSeq, parseDocument } from "yaml";
 
-/** Preset rows that can't work in a workspace, by plugin name. */
-const OFFLINE_ROWS = new Set([
+/** Preset rows a workspace keeps off, by plugin name. */
+const ROWS_OFF = new Set([
   "@deepseek-ai/dsh-tool-web", // web_search, web_fetch: need the `web` plugin (search is the portal's MCP server)
-  "@deepseek-ai/dsh-plugin-manager/tools", // plugin installs: need the npm registry
-  "@deepseek-ai/dsh-plugin-market/tools", // plugin market: needs the npm registry
 ]);
 
 /** dsh-web-app's presets directory, resolved the way dsh itself resolves its dependency. */
@@ -48,8 +47,8 @@ function* pluginRows(list) {
   }
 }
 
-function offlineRows(doc) {
-  return presetPluginLists(doc).flatMap((list) => [...pluginRows(list)]).filter((row) => OFFLINE_ROWS.has(row.get("name")));
+function rowsOff(doc) {
+  return presetPluginLists(doc).flatMap((list) => [...pluginRows(list)]).filter((row) => ROWS_OFF.has(row.get("name")));
 }
 
 /** A literal `disabled: true`; a `!!js` condition is not (it may evaluate to false). */
@@ -102,25 +101,25 @@ function parse(text) {
 }
 
 /** The document's data without the `disabled` keys of the listed rows: all an adaptation may change. */
-function dataBesidesOfflineRows(doc) {
+function dataBesidesRowsOff(doc) {
   return JSON.stringify(doc.toJS(), function (key, value) {
-    return key === "disabled" && OFFLINE_ROWS.has(this.name) ? undefined : value;
+    return key === "disabled" && ROWS_OFF.has(this.name) ? undefined : value;
   });
 }
 
 function checkAdapted(original, text) {
   const adapted = parse(text);
-  const enabled = offlineRows(adapted).filter((row) => !isDisabled(row));
+  const enabled = rowsOff(adapted).filter((row) => !isDisabled(row));
   if (enabled.length > 0) throw new Error(`still enabled: ${enabled.map((row) => row.get("id")).join(", ")}`);
-  if (dataBesidesOfflineRows(adapted) !== dataBesidesOfflineRows(original)) throw new Error("the edit changed other rows");
+  if (dataBesidesRowsOff(adapted) !== dataBesidesRowsOff(original)) throw new Error("the edit changed other rows");
 }
 
-/** Disables the file's offline rows; returns a one-line summary. */
+/** Disables the file's rows that a workspace keeps off; returns a one-line summary. */
 function adaptFile(file) {
   const text = readFileSync(file, "utf8");
   const doc = parse(text);
   if (presetPluginLists(doc).length === 0) throw new Error("declares no preset (no config.plugins)");
-  const rows = offlineRows(doc).filter((row) => !isDisabled(row));
+  const rows = rowsOff(doc).filter((row) => !isDisabled(row));
   if (rows.length === 0) return "unchanged";
   const adapted = applyEdits(text, rows.map((row) => disableEdit(text, row)));
   checkAdapted(doc, adapted);

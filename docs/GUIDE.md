@@ -853,6 +853,17 @@ Home, press **Start Private** or **Start Online**, confirm, then **Open workspac
 the person picks DeepSeek Harness under **Settings > Harness**. With **Plan mode** on, in the **+** menu under Qwen
 Code's input, the agent changes nothing and runs no command until its plan is approved.
 
+DeepSeek Harness runs as it ships, with its own workspaces, plugins and permission modes; a workspace leaves out
+only signing in to DeepSeek, its own web search (the portal's search replaces it) and opening folders in desktop
+apps. A new session starts with **Full access**: the agent changes any file and runs any command in the workspace
+without asking. The session's permission menu switches it to **Workspace Write**, **Read Only** or **Auto review**,
+where the model judges each action first and asks the person about any it would not allow; **Settings** changes the
+default for new sessions. Its first workspace is `Documents/deepseek-harness/default-workspace` in the person's home,
+apart from Qwen Code's files; **Add workspace** opens any other folder. **Plugins**, in its sidebar, switches on the
+plugins DeepSeek Harness comes with and, in an Online workspace, installs others from npm or GitHub. A plugin runs
+with the person's own access, so install only those you trust. Its **Browser** shows a web app the agent started in
+the workspace: open `http://localhost:PORT`.
+
 #### The API, for your own software
 
 An editor, a script or any other program that speaks the OpenAI API uses the model through the portal. Each person
