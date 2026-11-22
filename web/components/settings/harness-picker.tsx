@@ -2,6 +2,7 @@
 
 import { useOptimistic, useRef, useState, useTransition } from "react";
 import { AGENT_NAMES, type AgentInfo, type AgentKind, type WorkspaceInfo } from "@portal/core/wire";
+import { restartUserWorkspace, setUserHarness } from "@/lib/actions/admin";
 import { restartWorkspace, saveHarness } from "@/lib/actions/settings";
 import { formatVersion } from "@/lib/format";
 import { stopWarnings } from "@/lib/workspace-stop";
@@ -20,14 +21,16 @@ interface HarnessPickerProps {
   /** The running (or starting) workspace, to tell when it runs another harness; null when stopped or unknown. */
   running: Pick<WorkspaceInfo, "agent" | "busy" | "connections"> | null;
   labelledBy: string;
+  /** Whose workspace: absent, the signed-in user's own (Settings); else a user on an administrator's user page. */
+  owner?: { id: number; name: string };
 }
 
 /**
- * Settings' harness choice: a radio card per enabled agent (its name and version, side by side on wider screens),
- * saved as soon as it changes. A running workspace keeps its harness until it starts again; the card says so and
- * offers "Restart now", which confirms first (the restart runs in the dialog).
+ * The harness choice of Settings and of a user's page: a radio card per enabled agent (its name and version, side by
+ * side on wider screens), saved as soon as it changes. A running workspace keeps its harness until it starts again;
+ * the card says so and offers "Restart now", which confirms first (the restart runs in the dialog).
  */
-export function HarnessPicker({ agents, chosen, running, labelledBy }: HarnessPickerProps) {
+export function HarnessPicker({ agents, chosen, running, labelledBy, owner }: HarnessPickerProps) {
   const [value, setValue] = useOptimistic(chosen);
   const [saving, startSaving] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -42,18 +45,19 @@ export function HarnessPicker({ agents, chosen, running, labelledBy }: HarnessPi
     setRestarted(null);
     startSaving(async () => {
       setValue(agent);
-      const result = await saveHarness(agent);
+      const result = owner ? await setUserHarness(owner.id, agent) : await saveHarness(agent);
       if (!result.ok) setError(result.message);
     });
   }
 
   async function restart() {
-    const result = await restartWorkspace();
+    const result = owner ? await restartUserWorkspace(owner.id) : await restartWorkspace();
     if (result.ok) setRestarted(value);
     return result;
   }
 
   const differs = running?.agent != null && running.agent !== value;
+  const whose = owner ? `${owner.name}'s` : "Your";
   return (
     <div className="flex flex-col gap-4">
       <RadioGroup
@@ -80,7 +84,9 @@ export function HarnessPicker({ agents, chosen, running, labelledBy }: HarnessPi
       {error ? <FormError>{error}</FormError> : null}
       {differs && running?.agent ? (
         <Alert role="status">
-          <AlertTitle>Your workspace is running {AGENT_NAMES[running.agent]}.</AlertTitle>
+          <AlertTitle>
+            {whose} workspace is running {AGENT_NAMES[running.agent]}.
+          </AlertTitle>
           <AlertDescription>{AGENT_NAMES[value]} starts next time.</AlertDescription>
           <div className="mt-2">
             <Button
@@ -98,7 +104,7 @@ export function HarnessPicker({ agents, chosen, running, labelledBy }: HarnessPi
       ) : restarted ? (
         <p role="status" className="flex items-center gap-1.5 text-13 text-success">
           <CheckIcon className="shrink-0" />
-          Your workspace restarted with {AGENT_NAMES[restarted]}.
+          {whose} workspace restarted with {AGENT_NAMES[restarted]}.
         </p>
       ) : null}
       {running ? (
@@ -106,6 +112,7 @@ export function HarnessPicker({ agents, chosen, running, labelledBy }: HarnessPi
           open={confirmOpen}
           onOpenChange={setConfirmOpen}
           kind="restart"
+          owner={owner?.name}
           warnings={stopWarnings(running, false)}
           onConfirm={restart}
           returnFocusTo={restartButton}

@@ -2,7 +2,15 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { eq } from "drizzle-orm";
-import { AGENT_NAMES, displayName, users, WORKSPACE_KIND_NAMES, type WorkspaceInfo, type WorkspaceKind } from "@portal/core";
+import {
+  AGENT_NAMES,
+  displayName,
+  users,
+  WORKSPACE_KIND_NAMES,
+  type AgentInfo,
+  type WorkspaceInfo,
+  type WorkspaceKind,
+} from "@portal/core";
 import { updateProfile } from "@/lib/actions/admin";
 import { startingAgent } from "@/lib/agent-choice";
 import { config } from "@/lib/config";
@@ -18,9 +26,11 @@ import { OpenWorkspaceForm } from "@/components/admin/open-workspace-form";
 import { ProfileForm } from "@/components/admin/profile-form";
 import { UserDialogButton } from "@/components/admin/user-dialogs";
 import { UserAvatar } from "@/components/brand";
+import { FormError } from "@/components/forms/form-error";
 import { PageMain } from "@/components/layout/page-main";
 import { Section } from "@/components/layout/section";
 import { LocalTime } from "@/components/local-time";
+import { HarnessPicker } from "@/components/settings/harness-picker";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -54,10 +64,18 @@ export default async function UserPage({ params }: PageProps<"/admin/users/[id]"
   } catch (error) {
     workspaceError = toApiError(error).message;
   }
-  const enabled = await gateway.agents().catch(() => null);
+  let enabled: AgentInfo[] | null = null;
+  let agentsError: string | null = null;
+  try {
+    enabled = await gateway.agents();
+  } catch (error) {
+    agentsError = toApiError(error).message;
+  }
   const running = workspace?.status === "running" || workspace?.status === "starting";
-  // The harness the workspace runs; stopped, the one it starts with next (the user's choice while enabled).
-  const harness = running ? (workspace?.agent ?? null) : enabled ? startingAgent(user.agent, enabled) : user.agent;
+  // The harness the workspace starts with: the user's choice while enabled, else the install's default.
+  const chosen = enabled ? startingAgent(user.agent, enabled) : null;
+  // The harness the workspace runs; stopped, the one it starts with next.
+  const harness = running ? (workspace?.agent ?? null) : enabled ? chosen : user.agent;
   const version = running ? (workspace?.agentVersion ?? null) : (enabled?.find((agent) => agent.id === harness)?.version ?? null);
   // The facts behind the status pill (idle time, memory, why it stopped), for its tooltip.
   const summary = workspaceError ? null : summarizeWorkspace(workspace, config.idleTimeoutMinutes);
@@ -149,6 +167,41 @@ export default async function UserPage({ params }: PageProps<"/admin/users/[id]"
               Erase Online files…
             </UserDialogButton>
           </CardFooter>
+        </Section>
+
+        <Section
+          id="harness"
+          title="Harness"
+          description={
+            enabled?.length === 1 ? (
+              <>The coding agent {name}&apos;s workspace runs.</>
+            ) : (
+              <>The coding agent {name}&apos;s workspace starts with.</>
+            )
+          }
+        >
+          <CardContent>
+            {agentsError ? (
+              <FormError>The harnesses can&apos;t be listed right now: {agentsError}</FormError>
+            ) : !enabled || chosen === null ? (
+              <p className="text-14 text-muted-foreground">No harness is enabled on this server.</p>
+            ) : enabled.length === 1 ? (
+              <p className="flex flex-wrap items-baseline gap-x-2 text-14">
+                <span className="font-medium">{enabled[0]!.name}</span>
+                <span className="font-mono text-12 text-muted-foreground">{formatVersion(enabled[0]!.version)}</span>
+              </p>
+            ) : (
+              <HarnessPicker
+                agents={enabled}
+                chosen={chosen}
+                running={
+                  running && workspace ? { agent: workspace.agent, busy: workspace.busy, connections: workspace.connections } : null
+                }
+                labelledBy="harness-title"
+                owner={{ id: user.id, name }}
+              />
+            )}
+          </CardContent>
         </Section>
 
         <Section

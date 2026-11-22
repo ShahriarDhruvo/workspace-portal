@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import { displayName, sessions, users, WORKSPACE_KIND_NAMES, writeAudit, type SessionContext, type User } from "@portal/core";
 import { getDb } from "../db";
 import { attachWorkspaceInBackground, endSessionsInBackground, gateway, logFailure, releaseInBackground, toApiError } from "../gateway";
+import { restartWorkspaceOf, saveHarnessOf } from "../harness";
 import { clearLoginFailures } from "../login-throttle";
 import { generateTemporaryPassword } from "../password-generator";
 import { hashPassword } from "../passwords";
@@ -20,6 +21,7 @@ import {
   newUserFormSchema,
   onlineAccessSchema,
   userIdSchema,
+  type ActionResult,
   type FieldErrors,
 } from "../validation";
 
@@ -158,6 +160,31 @@ export async function stopWorkspace(_previous: ActionState, formData: FormData):
   }
   refresh();
   return { status: "done" };
+}
+
+/** The user a harness action is about, or why there is none. The administrator's own account included. */
+async function loadHarnessTarget(userId: number): Promise<Target> {
+  const session = await requireAdmin();
+  const id = userIdSchema.safeParse(userId);
+  if (!id.success) return { error: "Unknown user." };
+  return loadUserById(id.data, session, { allowSelf: true });
+}
+
+/** Sets the harness a user's workspace starts with, as Settings does for one's own (lib/harness.ts). */
+export async function setUserHarness(userId: number, agent: string): Promise<ActionResult> {
+  const target = await loadHarnessTarget(userId);
+  if ("error" in target) return { ok: false, message: target.error };
+  return saveHarnessOf(target.user, agent, target.session.user.id);
+}
+
+/**
+ * "Restart now" on a user's page: their running workspace again, with the harness now saved. The page warns first
+ * when their agent is working or they have it open. One that stopped since the page rendered stays stopped.
+ */
+export async function restartUserWorkspace(userId: number): Promise<ActionResult> {
+  const target = await loadHarnessTarget(userId);
+  if ("error" in target) return { ok: false, message: target.error };
+  return restartWorkspaceOf(target.user.id, "admin", target.session.user.id, "The workspace has stopped since this page loaded.");
 }
 
 /** Switching it off also stops the user's Online workspace if it starts or runs (the confirmation says so). */

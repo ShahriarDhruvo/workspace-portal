@@ -850,8 +850,9 @@ person chooses their own at the first sign-in.
 Each person has two workspaces with separate files, of which one runs at a time. **Private** has no internet
 access. **Online** also reaches public internet addresses, but never your LAN, the servers or another workspace. On
 Home, press **Start Private** or **Start Online**, confirm, then **Open workspace**. The agent is Qwen Code unless
-the person picks DeepSeek Harness under **Settings > Harness**. With **Plan mode** on, in the **+** menu under Qwen
-Code's input, the agent changes nothing and runs no command until its plan is approved.
+the person picks DeepSeek Harness under **Settings > Harness**, or the administrator does on the person's page under
+**Admin > Users**; a running workspace keeps its agent until it restarts. With **Plan mode** on, in the **+** menu
+under Qwen Code's input, the agent changes nothing and runs no command until its plan is approved.
 
 DeepSeek Harness runs as it ships, with its own workspaces, plugins and permission modes; a workspace leaves out
 only signing in to DeepSeek, its own web search (the portal's search replaces it) and opening folders in desktop
