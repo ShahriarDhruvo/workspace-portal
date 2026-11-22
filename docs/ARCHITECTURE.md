@@ -377,9 +377,12 @@ own copy at every start into `system/<agent>/`, mounted read-only. What the rend
   evaluates YAML tags, and JSON has none, so no string of the admin's can become one. Models whose context
   window leaves dsh too little room are left out (`fitDshModels` in `dsh-settings.ts`). Otherwise dsh runs as it
   ships: a static lockdown patch in the image turns off only the DeepSeek sign-in and API, the built-in web tools
-  and opening folders in desktop apps, turns on the sidebar Browser and names `~/Documents` as dsh's Documents
-  folder; the image build fails when a row of it does not apply. `DSH_PERMISSION_MODE` in the image starts new
-  sessions with Full access, and `default-profile.mjs` switches Auto review on once in each person's profile.
+  and opening folders in desktop apps, turns on the sidebar Browser and agent teamwork for new sessions, and names
+  `~/Documents` as dsh's Documents folder. The image build fails when a row of it does not apply (one marked
+  optional may be missing: agent teamwork, which dsh 0.2.2-rc.1 does not have), or when a setting a row gives is
+  not one its plugin declares, with a value it takes, because dsh would ignore it without a word
+  (`check-lockdown-config.mjs`). `DSH_PERMISSION_MODE` in the image starts new sessions with Full access, and
+  `default-profile.mjs` switches Auto review on once in each person's profile.
 - **dsh's web preview** (`workspace-image/dsh/web-preview.mjs`): its sidebar Browser opens a workspace's own
   addresses (`localhost`, `127.x`) on the preview port, as the Web Shell's Web preview does. When the edit no
   longer fits, the build fails.

@@ -859,7 +859,10 @@ only signing in to DeepSeek, its own web search (the portal's search replaces it
 apps. A new session starts with **Full access**: the agent changes any file and runs any command in the workspace
 without asking. The session's permission menu switches it to **Workspace Write**, **Read Only** or **Auto review**,
 where the model judges each action first and asks the person about any it would not allow; **Settings** changes the
-default for new sessions. Its first workspace is `Documents/deepseek-harness/default-workspace` in the person's home,
+default for new sessions. A new session also has **agent teamwork** on: the agent and the subagents it starts divide
+large tasks on a shared task board, which spends more tokens; **Enable agent teamwork**, in the menu of the session's
+model, switches it off for that session.
+Its first workspace is `Documents/deepseek-harness/default-workspace` in the person's home,
 apart from Qwen Code's files; **Add workspace** opens any other folder. **Plugins**, in its sidebar, switches on the
 plugins DeepSeek Harness comes with and, in an Online workspace, installs others from npm or GitHub. A plugin runs
 with the person's own access, so install only those you trust. Its **Browser** shows a web app running in the

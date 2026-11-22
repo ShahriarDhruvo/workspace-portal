@@ -3,8 +3,9 @@
 # settings land: these rows win, and the UI shows their plugins read-only. Top-level rows only: a patch replaces a
 # row's whole config, so the preset rows of the web tools turned off here are disabled in the shipped presets instead
 # (dsh/adapt-presets.mjs).
-# The image build fails unless every row applies to its dsh version (dsh/check-lockdown.sh). A row marked
-# "# optional" is of a plugin some dsh versions no longer have, and may be missing.
+# The image build fails unless every row applies to its dsh version and every setting a row gives is one its plugin
+# has, with a value it takes (dsh/check-lockdown.sh). A row marked "# optional" is of a plugin some dsh versions don't
+# have, and may be missing: the build names each that is.
 # Not here, because it is dsh's own setting: DSH_PERMISSION_MODE in the image (Full access for new sessions).
 
 # The cookie secret: start-dsh writes this file at every start, in a tmpfs. The gateway signs the browser's session
@@ -51,6 +52,16 @@
 # browser, so dsh/web-preview.mjs sends the workspace's own addresses (localhost, 127.x) to the gateway's preview port.
 - id: ui-sidebar-browser
   disabled: false
+
+# Agent teamwork on for new sessions, where dsh ships it off: the agent and the subagents it starts divide the work on
+# a shared task board, which does better on large tasks and spends more tokens. A person switches it off for a session
+# in the model menu (Enable agent teamwork). A session keeps the mode it saved, so sessions from before stay as they
+# were. The row replaces dsh's config of the plugin: maxTasks, its only other setting, falls to the plugin's default,
+# 256, which is also what dsh sets. dsh 0.2.2-rc.1 has no such row: there teamwork is an experimental plugin, off
+# unless a person switches it on under Plugins.
+- id: agent-team  # optional: not in dsh 0.2.2-rc.1
+  config:
+    defaultEnabled: true
 
 # The default workspace where dsh puts it on a Linux desktop: <Documents>/deepseek-harness/default-workspace, with
 # Documents as `xdg-user-dir DOCUMENTS` says, ~/Documents. A container has no desktop session to ask.

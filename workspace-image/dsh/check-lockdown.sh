@@ -3,7 +3,9 @@
 # Fails the image build unless every row of the lockdown applies to the installed dsh, which only warns about a row
 # whose target is gone. Rows marked "# optional" may be missing. dsh --dump-config composes the web profile with
 # the lockdown, without starting it, and prints those warnings. The check reads dsh's wording, so it adds a row
-# that exists nowhere (the canary) and fails unless dsh reports it the way missing() expects.
+# that exists nowhere (the canary) and fails unless dsh reports it the way missing() expects. Then
+# check-lockdown-config.mjs, beside this script, fails unless every setting a row gives is one its plugin has, with a
+# value it takes: about those dsh says nothing.
 set -eu
 lockdown=$1
 canary=workspace-portal-canary
@@ -18,7 +20,7 @@ mkdir "$work/home"
 # A fresh DSH_HOME holds no user patch, so every warning comes from the lockdown. dsh loads <cwd>/.env:
 # run from the empty launch directory, as start-dsh does.
 if ! output=$(cd /usr/local/lib/workspace-portal/dsh-cwd && DSH_HOME="$work/home" \
-    dsh --profile web --patch "$work/lockdown.patch.yml" --dump-config 2>&1 >/dev/null); then
+    dsh --profile web --patch "$work/lockdown.patch.yml" --dump-config 2>&1 >"$work/composed.yml"); then
   printf 'check-lockdown: dsh --dump-config failed:\n%s\n' "$output" >&2
   exit 1
 fi
@@ -47,3 +49,4 @@ if [ -n "$skipped" ]; then
 else
   echo "check-lockdown: every row of $lockdown applies to dsh $(dsh --version)"
 fi
+node "$(dirname "$0")/check-lockdown-config.mjs" "$(npm root -g)/@deepseek-ai/dsh" "$lockdown" "$work/composed.yml"

@@ -80,9 +80,11 @@ COPY --chmod=0755 start-dsh.sh /usr/local/bin/start-dsh
 COPY --chmod=0644 dsh/lockdown.patch.yml /usr/local/share/workspace-portal/dsh/lockdown.patch.yml
 # start-dsh runs it: Auto review switched on once in each person's profile.
 COPY --chmod=0644 dsh/default-profile.mjs /usr/local/lib/workspace-portal/dsh-default-profile.mjs
-# The build fails when a row of the lockdown doesn't apply to this dsh version (dsh would only warn), or when
-# default-profile.mjs no longer finds what it uses of dsh.
+# The build fails when a row of the lockdown doesn't apply to this dsh version (dsh would only warn), when a setting a
+# row gives isn't one its plugin has (dsh would say nothing), or when default-profile.mjs no longer finds what it uses
+# of dsh.
 RUN --mount=type=bind,source=dsh/check-lockdown.sh,target=/mnt/check-lockdown.sh \
+    --mount=type=bind,source=dsh/check-lockdown-config.mjs,target=/mnt/check-lockdown-config.mjs \
     sh /mnt/check-lockdown.sh /usr/local/share/workspace-portal/dsh/lockdown.patch.yml \
  && node /usr/local/lib/workspace-portal/dsh-default-profile.mjs /usr/local/lib/node_modules/@deepseek-ai/dsh --check
 # DSH_PERMISSION_MODE: dsh's own default for new sessions, here Full access (its danger-full-access preset: the
