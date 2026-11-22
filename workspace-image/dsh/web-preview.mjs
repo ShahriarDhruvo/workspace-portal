@@ -36,9 +36,11 @@ const PREVIEW_ADDRESS =
   `if(!w.port||q>65535||(u.hostname===w.hostname&&u.port===String(q)))return u;` +
   `return new URL("/__portal/port/"+(u.port||(u.protocol==="https:"?"443":"80"))+u.pathname+u.search+u.hash,w.protocol+"//"+w.hostname+":"+q)}`;
 
-const FUNCTION = /function parseBrowserAddress\(([\w$]+), ([\w$]+)\) \{/g;
+// Whatever the layout: dsh has shipped this file formatted (0.2.2-rc.1) and minified (0.2.2-rc.5), with "" or ``.
+const FUNCTION = /function parseBrowserAddress\(([\w$]+),\s*([\w$]+)\)\s*\{/g;
 /** In the function, the target of an accepted address: `kind: …, url: url.href, title: url.hostname`. */
-const TARGET = /(kind: ([\w$]+)\.protocol === "https:" \? "https" : "http",\s*url: )\2\.href(,\s*title: \2\.hostname)/g;
+const TARGET =
+  /(kind:\s*([\w$]+)\.protocol\s*===\s*(["`])https:\3\s*\?\s*\3https\3\s*:\s*\3http\3,\s*url:\s*)\2\.href(,\s*title:\s*\2\.hostname)/g;
 
 /** What the edited function must answer: [input, page origin, the target's url (null: refused)]. */
 const EXAMPLES = [
@@ -81,11 +83,28 @@ function parseError(code) {
   }
 }
 
-/** The edited parseBrowserAddress, on its own: its source runs without the rest of the bundle. */
-function editedFunction(code, start) {
-  const end = code.indexOf("//#endregion", start);
-  if (end === -1) throw new Error("parseBrowserAddress has no //#endregion after it");
-  return new Function(`${code.slice(start, end)}\nreturn parseBrowserAddress;`)();
+/** The function declared at `start`, as a source string. */
+const declaration = (source) => `${source}\nreturn parseBrowserAddress;`;
+
+/**
+ * Where the function declared at `start` ends: after the first "}" at which the source from `start` compiles. An
+ * earlier "}" leaves its body open, or a string or template unterminated, so it doesn't.
+ */
+function functionEnd(code, start) {
+  for (let end = code.indexOf("}", start); end !== -1; end = code.indexOf("}", end + 1)) {
+    try {
+      new Function(declaration(code.slice(start, end + 1)));
+      return end + 1;
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+    }
+  }
+  throw new Error("parseBrowserAddress has no end");
+}
+
+/** The function declared at `start`, on its own: its source runs without the rest of the bundle. */
+function functionAt(code, start) {
+  return new Function(declaration(code.slice(start, functionEnd(code, start))))();
 }
 
 /** The edited file, or throws naming what doesn't fit. */
@@ -94,15 +113,15 @@ function edit(code) {
   if (headers.length !== 1) throw new Error(`parseBrowserAddress is in the file ${headers.length} times, expected once`);
   const [header] = headers;
   const origin = header[2];
-  const end = code.indexOf("//#endregion", header.index);
-  const targets = [...code.matchAll(TARGET)].filter((match) => match.index > header.index && (end === -1 || match.index < end));
+  const end = functionEnd(code, header.index);
+  const targets = [...code.matchAll(TARGET)].filter((match) => match.index > header.index && match.index < end);
   if (targets.length !== 1) throw new Error(`parseBrowserAddress's accepted target is in it ${targets.length} times, expected once`);
   const [target] = targets;
-  const replaced = `${target[1]}${MARKER}(${PREVIEW_ADDRESS})(${target[2]}, ${origin}).href${target[3]}`;
+  const replaced = `${target[1]}${MARKER}(${PREVIEW_ADDRESS})(${target[2]}, ${origin}).href${target[4]}`;
   const edited = code.slice(0, target.index) + replaced + code.slice(target.index + target[0].length);
   const error = parseError(edited);
   if (error) throw new Error(`the edited file doesn't parse: ${error}`);
-  const parse = editedFunction(edited, header.index);
+  const parse = functionAt(edited, header.index);
   for (const [input, page, expected] of EXAMPLES) {
     const result = parse(input, page);
     const actual = result.ok ? result.target.url : null;

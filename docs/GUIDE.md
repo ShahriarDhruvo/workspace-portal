@@ -861,8 +861,8 @@ where the model judges each action first and asks the person about any it would 
 default for new sessions. Its first workspace is `Documents/deepseek-harness/default-workspace` in the person's home,
 apart from Qwen Code's files; **Add workspace** opens any other folder. **Plugins**, in its sidebar, switches on the
 plugins DeepSeek Harness comes with and, in an Online workspace, installs others from npm or GitHub. A plugin runs
-with the person's own access, so install only those you trust. Its **Browser** shows a web app the agent started in
-the workspace: open `http://localhost:PORT`.
+with the person's own access, so install only those you trust. Its **Browser** shows a web app running in the
+workspace, whoever started it: open `http://localhost:PORT`.
 
 #### The API, for your own software
 
@@ -1227,7 +1227,7 @@ workspaces keep running, and an open browser tab carries on without a reload.
 | The installer in step 11 ends with `the stack did not become healthy` | One of the four containers did not come up. `sudo docker compose ps` names it and `sudo docker compose logs NAME` says why. Run the installer again afterwards. |
 | Portal chat: `404 model ... is not served` | The model name in `system-defaults.json` must be `qwen3.8-flash-next`, the name Gufo serves. |
 | An agent dies on its first tool call | `WORKSPACE_MEMORY` is too small. Qwen Code needs about 1.9 GB for a moment; use 2 GiB or more. |
-| The Web preview stays blank | Type the app's own address, such as `http://localhost:3000`: the portal opens that port of the workspace. The app's server must listen on all addresses (`0.0.0.0`; Vite needs `--host`). In a Private workspace the preview loads nothing from other sites, so an app that takes scripts or fonts from a CDN stays incomplete there. Sites that forbid framing, Google among them, stay blank in any preview: use **Open externally**. |
+| The Web preview (DeepSeek Harness: Browser) stays blank | Type the app's own address, such as `http://localhost:3000`: the portal opens that port of the workspace. The app's server must listen on all addresses (`0.0.0.0`; Vite needs `--host`). In a Private workspace the preview loads nothing from other sites, so an app that takes scripts or fonts from a CDN stays incomplete there. Sites that forbid framing, Google among them, stay blank in any preview: use **Open externally**. |
 | Agents report no search results | The answer names the engines that did not answer. They sit out for 10 to 60 minutes and come back by themselves. |
 | `read_page only opens pages you were shown` | The agent took the address from memory or made it up. Have it search first, paste the address into the chat, or change `READER_URL_POLICY` ([step 11](#settings)). |
 | `read_page`: `The site refused the request` | That site turns automated readers away. The agent has to use another source. |
