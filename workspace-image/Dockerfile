@@ -58,19 +58,22 @@ ARG DSH_VERSION=0.2.2-rc.1
 # the plugins dsh comes with.
 ARG PNPM_VERSION=11.28.13
 USER root
-# The two edits of dsh's files, each failing the build when it no longer fits; neither script nor the YAML parser (in
+# The three edits of dsh's files, each failing the build when it no longer fits; neither script nor the YAML parser (in
 # /tmp) stays in the image:
 #   dsh/adapt-presets.mjs: its agent presets without the built-in web tools the lockdown turns off;
-#   dsh/web-preview.mjs: its web preview (the sidebar Browser) shows the workspace's own web apps.
+#   dsh/web-preview.mjs: its web preview (the sidebar Browser) shows the workspace's own web apps;
+#   dsh/portal-theme.mjs: its dark theme in the blacks of Qwen Code's Web Shell and the portal.
 # /etc/workspace-portal/dsh: where the gateway mounts portal.patch.yml.
 # dsh-cwd: dsh's launch directory, empty and root's, because dsh loads <cwd>/.env.
 RUN --mount=type=tmpfs,target=/tmp --mount=type=bind,source=dsh/adapt-presets.mjs,target=/mnt/adapt-presets.mjs \
     --mount=type=bind,source=dsh/web-preview.mjs,target=/mnt/web-preview.mjs \
+    --mount=type=bind,source=dsh/portal-theme.mjs,target=/mnt/portal-theme.mjs \
     npm install -g "@deepseek-ai/dsh@${DSH_VERSION}" "pnpm@${PNPM_VERSION}" \
  && npm install --prefix /tmp/wp-tools yaml@2.9.1 \
  && cp /mnt/adapt-presets.mjs /tmp/wp-tools/ \
  && node /tmp/wp-tools/adapt-presets.mjs "$(npm root -g)/@deepseek-ai/dsh" \
  && node /mnt/web-preview.mjs "$(npm root -g)/@deepseek-ai/dsh" \
+ && node /mnt/portal-theme.mjs "$(npm root -g)/@deepseek-ai/dsh" \
  && mkdir -p /etc/workspace-portal/dsh /usr/local/share/workspace-portal/dsh /usr/local/lib/workspace-portal/dsh-cwd \
  && find / -xdev -perm /6000 -type f -exec chmod a-s {} +
 COPY --chmod=0755 start-dsh.sh /usr/local/bin/start-dsh

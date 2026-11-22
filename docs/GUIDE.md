@@ -863,7 +863,7 @@ default for new sessions. Its first workspace is `Documents/deepseek-harness/def
 apart from Qwen Code's files; **Add workspace** opens any other folder. **Plugins**, in its sidebar, switches on the
 plugins DeepSeek Harness comes with and, in an Online workspace, installs others from npm or GitHub. A plugin runs
 with the person's own access, so install only those you trust. Its **Browser** shows a web app running in the
-workspace, whoever started it: open `http://localhost:PORT`.
+workspace, whoever started it: open `http://localhost:PORT`. Its dark theme takes the portal's blacks, as Qwen Code's.
 
 #### The API, for your own software
 

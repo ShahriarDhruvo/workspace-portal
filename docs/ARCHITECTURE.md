@@ -383,6 +383,10 @@ own copy at every start into `system/<agent>/`, mounted read-only. What the rend
 - **dsh's web preview** (`workspace-image/dsh/web-preview.mjs`): its sidebar Browser opens a workspace's own
   addresses (`localhost`, `127.x`) on the preview port, as the Web Shell's Web preview does. When the edit no
   longer fits, the build fails.
+- **dsh's dark theme** (`workspace-image/dsh/portal-theme.mjs`): a stylesheet in its frontend's `index.html` sets
+  its dark surface tokens (page, sidebar, panels, message box, code blocks) to the Web Shell's blacks, which
+  `web/app/theme.css` copies, and its boot background follows; its light theme and what sits on the surfaces stay
+  dsh's own. When the theme no longer defines a token the sheet sets, the build fails.
 - **The Web Shell trim** (`workspace-image/qwen/trim-web-shell.mjs`) removes what the portal does not offer,
   points the Web preview at the preview port, sizes the dropped-file dialog to its buttons and keeps a turn's
   answer on screen when replies to background tasks follow it. Its uploads take the gateway's `UPLOAD_LIMIT_MB`
