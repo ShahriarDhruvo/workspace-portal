@@ -5,6 +5,7 @@ import { AGENT_NAMES, type AgentInfo, type AgentKind, type WorkspaceInfo } from 
 import { restartUserWorkspace, setUserHarness } from "@/lib/actions/admin";
 import { restartWorkspace, saveHarness } from "@/lib/actions/settings";
 import { formatVersion } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import { stopWarnings } from "@/lib/workspace-stop";
 import { FormError } from "@/components/forms/form-error";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -26,9 +27,10 @@ interface HarnessPickerProps {
 }
 
 /**
- * The harness choice of Settings and of a user's page: a radio card per enabled agent (its name and version, side by
- * side on wider screens), saved as soon as it changes. A running workspace keeps its harness until it starts again;
- * the card says so and offers "Restart now", which confirms first (the restart runs in the dialog).
+ * The harness choice of Settings and of a user's page: a radio card per enabled agent with its name and version, saved
+ * as soon as it changes. On wider screens the cards sit side by side: two in a row, or three with the version under
+ * the name once there are more than two. A running workspace keeps its harness until it starts again; the card says so
+ * and offers "Restart now", which confirms first (the restart runs in the dialog).
  */
 export function HarnessPicker({ agents, chosen, running, labelledBy, owner }: HarnessPickerProps) {
   const [value, setValue] = useOptimistic(chosen);
@@ -57,6 +59,7 @@ export function HarnessPicker({ agents, chosen, running, labelledBy, owner }: Ha
   }
 
   const differs = running?.agent != null && running.agent !== value;
+  const threeAcross = agents.length > 2;
   const whose = owner ? `${owner.name}'s` : "Your";
   return (
     <div className="flex flex-col gap-4">
@@ -65,13 +68,13 @@ export function HarnessPicker({ agents, chosen, running, labelledBy, owner }: Ha
         onValueChange={choose}
         aria-labelledby={labelledBy}
         aria-busy={saving || undefined}
-        className="sm:grid-cols-2"
+        className={threeAcross ? "sm:grid-cols-3" : "sm:grid-cols-2"}
       >
         {agents.map((agent) => (
           <FieldLabel key={agent.id} htmlFor={`harness-${agent.id}`}>
             <Field orientation="horizontal">
               <FieldContent>
-                <FieldTitle className="flex-wrap gap-x-2 gap-y-0">
+                <FieldTitle className={cn("flex-wrap gap-x-2 gap-y-0", threeAcross && "sm:flex-col sm:items-start")}>
                   {agent.name}
                   <span className="font-mono text-12 font-normal text-muted-foreground">{formatVersion(agent.version)}</span>
                 </FieldTitle>

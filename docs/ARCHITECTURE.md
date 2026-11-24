@@ -58,7 +58,7 @@ browser --(cookie portal_session)--> web app   WEB_BIND:WEB_PORT  <--(API key)--
 | `gateway/src/monitor/` | live view, hostd client, host and LLM monitors, energy meter, prices, usage per user, session and API key |
 | `gateway/src/lib/`, `gateway/test/` | HTTP helpers and `HttpError`, forwarding, logging; the harness, fakes and integration suites |
 | `web/` | the web app (Next.js); installable through `app/manifest.ts`, without a service worker, since it does nothing offline |
-| `workspace-image/` | one Dockerfile, a target per agent; start scripts; the Web Shell trim; the dsh lockdown, web preview and profile |
+| `workspace-image/` | one Dockerfile, a target per agent; start scripts; the Web Shell trim; the dsh lockdown, web preview and profile; OpenCode's build check |
 | `reader/`, `searxng/` | the page reader (Python, Defuddle in Node); SearXNG with its `settings.yml` built in |
 | `hostd/`, `qwen-config/` | portal-hostd; the model settings a fresh install starts with |
 | `llm-server/` | the reference LLM server: engine service file, model download, load test, fan control for one board |
@@ -82,14 +82,15 @@ control secret; creates the admin account when there is none) and `web/scripts/r
 | preview port | agent port + `PREVIEW_PORT_OFFSET` (1000) | `gateway/src/config.ts` |
 | control API, LLM API | `127.0.0.1:CONTROL_PORT` | `gateway/src/main.ts` |
 | service API | `WORKSPACE_GATEWAY_IP:SERVICE_PORT`, `ONLINE_GATEWAY_IP:SERVICE_PORT` | `gateway/src/main.ts` |
-| agent in a container | Qwen Code 4170, DeepSeek Harness 3080 | the drivers |
+| agent in a container | Qwen Code 4170, DeepSeek Harness 3080, OpenCode 4096 | the drivers |
 | SearXNG, page reader | `127.0.0.1:SEARXNG_PORT`, `127.0.0.1:READER_PORT`, container port 8080 | `docker-compose.yml` |
 
 A port is a browser origin. Each workspace has its own, so one workspace's page cannot read another's storage
 or token, and a user's Online workspace cannot read the Private one's. Web apps get the preview port for the
 same reason: an app's page is not the agent's origin. User ids 1 to `AGENT_PORT_COUNT - 1` have ports; any
-other id gets 409 `no_workspace_port`. The offset is fixed because the Web Shell trim and `deploy/lib.sh` hold
-the same number; `config.test.ts` compares the three. Online's ports listen even with `ONLINE_WORKSPACES=off`.
+other id gets 409 `no_workspace_port`. The offset is fixed because the Web Shell trim, dsh's web preview and
+`deploy/lib.sh` hold the same number; `config.test.ts` compares them. Online's ports listen even with
+`ONLINE_WORKSPACES=off`.
 A service listener waits up to 60 s for its bridge address; the gateway exits if it never appears.
 
 Neither process speaks TLS. For HTTPS, `deploy/tailscale-https.sh` has Tailscale Serve end TLS on port 443 for
@@ -162,8 +163,9 @@ and the gateway hold. A driver declares one of two ways to let the browser's age
   the iframe's URL fragment. The Web Shell presents it as a bearer token, or on a WebSocket as the subprotocol
   `qwen-bearer.<base64url>`. The gateway recomputes it and swaps it for the container's credential. The token
   is useless without the session cookie and ends with the session.
-- **cookie** (DeepSeek Harness): the browser presents nothing more. The gateway mints the cookie dsh expects,
-  signed with the container's credential and valid for 10 minutes, on every request it forwards.
+- **session** (DeepSeek Harness, OpenCode): the browser presents nothing more, and the gateway adds the
+  credential to every request it forwards. For dsh it mints the cookie dsh expects, signed with the container's
+  credential and valid for 10 minutes; for OpenCode the credential is the password of its HTTP sign-in.
 
 ## Workspace lifecycle
 
@@ -195,6 +197,12 @@ and the gateway hold. A driver declares one of two ways to let the browser's age
   more than 0.15 cores. An agent that stops answering counts as working for 5 more minutes. A person acts by a
   navigation, a request the driver calls a user action, or a browser message on a socket; past
   `MAX_BUSY_HOURS` since the last such act, work stops counting, so a looping agent cannot hold a slot.
+  A task is a turn, or a command a turn left running in the background. A turn that only waits for the person
+  (an approval, a question) is a task for Qwen Code, which declines it after `IDLE_TIMEOUT_MINUTES`, and none for
+  DeepSeek Harness and OpenCode, which leave it open for as long as nobody answers. OpenCode lists the sessions
+  that run a turn on one route, for every project folder, and its background jobs on another; a subagent is a
+  session of its own, which its approvals are asked in, and the session that started it does not run while it
+  waits for it.
 - **Reconcile**, at start and every 5 minutes: running containers of known users are adopted (kind, agent and
   version from their labels, the credential from their environment) and probed again; containers nobody owns
   or with unknown labels are removed; Online containers that may not run are stopped. A container's exit is
@@ -225,20 +233,23 @@ Then, on an agent port (`agent-proxy.ts`):
 - Only the port's own kind is reached. Otherwise: 409 `kind_mismatch` while the other kind runs, else 503
   `workspace_starting`, `workspace_error` or `workspace_stopped`. Navigations get a page; after a failure or
   at the cap it offers "Try again" (`POST /__portal/start`), which starts this port's kind.
-- A driver's blocked paths (phone pairing, OAuth) are refused in every spelling (403 `not_available`).
+- A driver's blocked paths (pairing a phone, another browser or a remote machine; OAuth sign-ins) are refused in
+  every spelling (403 `not_available`).
 - Going in, the gateway removes hop-by-hop headers, `Host`, `Cookie`, `Origin`, `Authorization`, `Expect`,
   `Forwarded`, `X-Forwarded-*`, `X-Real-IP` and `Sec-Fetch-*`; the driver then sets `Host` and the credential,
   which a token agent gets only on requests that presented the browser token.
-- Coming out, it removes `Set-Cookie` and `X-Frame-Options`, sets `frame-ancestors` to the portal's origin,
-  and makes `Cache-Control` `private, no-store` unless the agent's forbids reuse or says `immutable`.
+- Coming out, it removes `Set-Cookie`, `WWW-Authenticate` and `X-Frame-Options`, sets `frame-ancestors` to the
+  portal's origin, and makes `Cache-Control` `private, no-store` unless the agent's forbids reuse or says
+  `immutable`.
 - Bodies above `UPLOAD_LIMIT_MB` end in 413 `payload_too_large`; an agent that does not answer, in 502
   `workspace_unreachable` and a check of the container.
 
-WebSockets (`ws-relay.ts`) exist only on the driver's socket paths; a target with a `#` is a 400. The gateway
-connects to the workspace first and accepts the browser once the workspace has accepted, so a refusal comes back
-as a plain HTTP status. It pings the browser every 20 s, drops it after two missed pongs, and pauses a sender
-while 4 MiB wait for the other side. A session that ended, or moved to another workspace, has its connections
-closed with code 4001.
+WebSockets (`ws-relay.ts`) exist only on the driver's socket paths (OpenCode's is one per terminal,
+`/api/experimental/persistent-pty/<id>/connect`); a target with a `#` is a 400. The gateway connects to the
+workspace first and accepts the browser once the workspace has accepted, so a refusal comes back as a plain HTTP
+status. It pings the browser every 20 s, drops it after two missed pongs, and pauses a sender while 4 MiB wait
+for the other side. A session that ended, or moved to another workspace, has its connections closed with code
+4001.
 
 A preview port (`preview-proxy.ts`) passes the same five checks. `GET /__portal/port/<n>/<path>` stores n
 (1024 to 65535, never the agent's port) in a cookie of that preview port and redirects to the path; later
@@ -391,6 +402,30 @@ own copy at every start into `system/<agent>/`, mounted read-only. What the rend
   its dark surface tokens (page, sidebar, panels, message box, code blocks) to the Web Shell's blacks, which
   `web/app/theme.css` copies, and its boot background follows; its light theme and what sits on the surfaces stay
   dsh's own. When the theme no longer defines a token the sheet sets, the build fails.
+- **OpenCode** (OpenCode 2, the npm package `@opencode/cli`) gets the same models as `opencode.json` in
+  `/etc/opencode`, its directory for managed settings. What the file names wins over a person's and a project's
+  own settings, under the older names OpenCode still reads too; what it leaves out stays theirs, a permission
+  rule for another tool included. It names the portal's provider and, by policy, no other (OpenCode otherwise
+  offers hosted models of its own; a session that names one fails), no update and no session sharing, its
+  `webfetch` and `websearch` tools off, the `fetch` of its `execute` tool with them, and the MCP server `search`
+  (plus `browser` with `WORKSPACE_BROWSER`), whose tools the model calls by name. The image adds
+  `OPENCODE_DISABLE_MODELS_FETCH`: its list of the world's models stays the one it ships with. A model's efforts
+  are its variants in OpenCode's picker, and its default effort goes with every request for which no variant
+  was picked. A start is refused (`AgentConfigError`) when a model's id or name contains `{env:` or `{file:`,
+  which OpenCode would replace, or its id a `#`, which OpenCode reads as the start of a variant's name. No file
+  of OpenCode is edited in the image; the build only removes the builds this CPU does not run. OpenCode loads
+  its native libraries from its temporary folder, and `/tmp` forbids execution, so the start script points
+  `BUN_TMPDIR` at a folder in the home; without the libraries OpenCode watches no folder for changes. Sessions
+  are OpenCode's own and show in any browser; the projects in its sidebar and its open tabs are kept in the
+  browser, per workspace port. OpenCode 1 is another package (`opencode-ai`) with other settings and another
+  API; this driver is not for it.
+- **OpenCode's build check** (`workspace-image/opencode/check-serve.mjs`) starts OpenCode once, without a
+  network, against a stand-in for the service API, with settings a gateway test keeps as the renderer writes
+  them. The build fails when OpenCode does not serve its page, or serves its API to anyone without its password;
+  when a person's or a project's settings undo the managed ones or move its server; when a turn asks the model
+  with another key, output limit, effort or set of tools; when the routes of the status check (a running turn,
+  a pending approval, a background job) or a terminal's ticket and socket answer differently; or when its
+  native libraries are not unpacked into `BUN_TMPDIR`.
 - **The Web Shell trim** (`workspace-image/qwen/trim-web-shell.mjs`) removes what the portal does not offer,
   points the Web preview at the preview port, sizes the dropped-file dialog to its buttons and keeps a turn's
   answer on screen when replies to background tasks follow it. Its uploads take the gateway's `UPLOAD_LIMIT_MB`
@@ -412,9 +447,9 @@ One update job runs at a time, for all agents (`gateway/src/updates/agent-update
 4. Promotion tags the image, saves the version and audits `agent_updated`; from there it is not cancellable. A
    failure or a cancel discards the staging image, audits `agent_update_failed` and leaves the version.
 
-A version the portal's changes don't fit fails at step 2: the Web Shell trim and dsh's preset, web preview,
-profile and lockdown checks fail the build. A failed build's error is the failed step's last ten output lines,
-then the engine's message, so it says which change did not fit.
+A version the portal's changes or checks don't fit fails at step 2: the Web Shell trim, dsh's preset, web
+preview, theme, profile and lockdown checks, and OpenCode's `check-serve.mjs` fail the build. A failed build's
+error is the failed step's last ten output lines, then the engine's message, so it says what did not fit.
 
 A gateway that stops mid-job records it as failed; at its next start `sweep` removes staging tags and check
 containers before the control API listens. `deploy/update-image.sh` does the same build from the shell, writes

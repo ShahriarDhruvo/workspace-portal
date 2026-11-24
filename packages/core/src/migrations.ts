@@ -158,4 +158,22 @@ export const MIGRATIONS: readonly string[] = [
     PRIMARY KEY (key_id, day)
   );
   `,
+  // OpenCode joins the agents. A column's CHECK goes and comes with the column, so each agent column is replaced by
+  // one that admits the new name: no table is rebuilt, and no row of another table is touched.
+  `
+  ALTER TABLE users ADD COLUMN agent_next TEXT CHECK (agent_next IN ('qwen', 'dsh', 'opencode'));
+  UPDATE users SET agent_next = agent;
+  ALTER TABLE users DROP COLUMN agent;
+  ALTER TABLE users RENAME COLUMN agent_next TO agent;
+
+  ALTER TABLE workspaces ADD COLUMN agent_next TEXT CHECK (agent_next IN ('qwen', 'dsh', 'opencode'));
+  UPDATE workspaces SET agent_next = agent;
+  ALTER TABLE workspaces DROP COLUMN agent;
+  ALTER TABLE workspaces RENAME COLUMN agent_next TO agent;
+
+  ALTER TABLE workspace_sessions ADD COLUMN agent_next TEXT CHECK (agent_next IN ('qwen', 'dsh', 'opencode'));
+  UPDATE workspace_sessions SET agent_next = agent;
+  ALTER TABLE workspace_sessions DROP COLUMN agent;
+  ALTER TABLE workspace_sessions RENAME COLUMN agent_next TO agent;
+  `,
 ];

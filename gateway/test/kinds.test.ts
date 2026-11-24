@@ -6,10 +6,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { llmUsage, users, type WorkspaceInfo, type WorkspaceKind } from "@portal/core";
+import { AGENT_KINDS, llmUsage, users, type WorkspaceInfo, type WorkspaceKind } from "@portal/core";
 import { eq } from "drizzle-orm";
 import { userPaths } from "../src/workspaces/paths.ts";
-import { bearerSubprotocol, cookie, json, logged, request, waitFor, withGateway, type Gateway, type Reply } from "./harness.ts";
+import { ALL, bearerSubprotocol, cookie, json, logged, request, waitFor, withGateway, type Gateway, type Reply } from "./harness.ts";
 
 const start = (g: Gateway, userId: number, body?: unknown): Promise<Reply> => g.control("POST", `/control/workspaces/${userId}/start`, body);
 const erase = (g: Gateway, userId: number, kind: string, body?: unknown): Promise<Reply> =>
@@ -332,12 +332,12 @@ test("a gateway started without the fence stops the Online containers it finds; 
     await waitFor(() => manager.info(bob).ready, "bob's workspace to be adopted");
   }));
 
-for (const agent of ["qwen", "dsh"] as const) {
+for (const agent of AGENT_KINDS) {
   test(`${agent}: a page on another port of the host (the Online origin) gets nothing through to the Private agent, cookie or not`, () =>
-    withGateway({ env: { WORKSPACE_AGENTS: "qwen,dsh" } }, async (g) => {
+    withGateway(ALL, async (g) => {
       const { alice } = g.ids;
       await g.startReady(alice, agent, "private");
-      const upstream = agent === "dsh" ? g.runtime.dshFor(alice) : g.runtime.qwenFor(alice);
+      const upstream = { qwen: () => g.runtime.qwenFor(alice), dsh: () => g.runtime.dshFor(alice), opencode: () => g.runtime.opencodeFor(alice) }[agent]();
       const seen = upstream.requests.length;
       const fromOnline = { "sec-fetch-site": "same-site", referer: `${g.agentOrigin(alice, "online")}/` };
       // An image, a script, a no-cors or CORS fetch, a top-level navigation: the browser adds the portal's cookie to

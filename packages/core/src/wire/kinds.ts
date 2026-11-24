@@ -7,9 +7,9 @@ export const WORKSPACE_STATUSES = ["stopped", "starting", "running", "stopping",
 export type WorkspaceStatus = (typeof WORKSPACE_STATUSES)[number];
 
 /** The agents a workspace can run. A user's workspace runs one of them at a time. */
-export const AGENT_KINDS = ["qwen", "dsh"] as const;
+export const AGENT_KINDS = ["qwen", "dsh", "opencode"] as const;
 export type AgentKind = (typeof AGENT_KINDS)[number];
-export const AGENT_NAMES: Readonly<Record<AgentKind, string>> = { qwen: "Qwen Code", dsh: "DeepSeek Harness" };
+export const AGENT_NAMES: Readonly<Record<AgentKind, string>> = { qwen: "Qwen Code", dsh: "DeepSeek Harness", opencode: "OpenCode" };
 
 export function isAgentKind(value: unknown): value is AgentKind {
   return typeof value === "string" && (AGENT_KINDS as readonly string[]).includes(value);

@@ -155,8 +155,8 @@ async function handleRequest(deps: AgentDeps, req: IncomingMessage, res: ServerR
     url: new URL(`http://${upstream.host}:${upstream.port}${target}`),
     // A token agent's UI authenticates with that token: only requests that presented it get the container's
     // credential; the others (the page and its static assets) go through unauthorised, and the agent answers anything
-    // else with 401 itself. A cookie agent gets it on every request: the session and port checks authorise it.
-    headers: driver.requestHeaders(req.headers, upstream, { authorised: driver.browserAuth === "cookie" || presentsToken }),
+    // else with 401 itself. A session agent gets it on every request: the session and port checks authorise it.
+    headers: driver.requestHeaders(req.headers, upstream, { authorised: driver.browserAuth === "session" || presentsToken }),
     responseHeaders: (incoming) => workspaceResponseHeaders(incoming.headers, frame, incoming.statusCode),
     unreachable: (error) => {
       deps.log.warn("workspace did not answer", { userId, error });

@@ -1,8 +1,8 @@
-// The seam between the gateway and the agent harness a workspace runs (Qwen Code or DeepSeek Harness). Everything
-// else (the container, its network and limits, sessions, the proxy's access checks, busy/idle rules) is the same for
-// every agent; a driver supplies only what differs: how the container is started, how the gateway authenticates to
-// the agent's web server and which paths and sockets it has, how the gateway learns that the agent is up and whether
-// it is working, and where its releases come from.
+// The seam between the gateway and the agent harness a workspace runs (Qwen Code, DeepSeek Harness or OpenCode).
+// Everything else (the container, its network and limits, sessions, the proxy's access checks, busy/idle rules) is
+// the same for every agent; a driver supplies only what differs: how the container is started, how the gateway
+// authenticates to the agent's web server and which paths and sockets it has, how the gateway learns that the agent
+// is up and whether it is working, and where its releases come from.
 import crypto from "node:crypto";
 import http, { type IncomingHttpHeaders } from "node:http";
 import type { AgentKind, WorkspaceKind } from "@portal/core";
@@ -38,6 +38,12 @@ export const BROWSER_MCP = {
 /** How long one call of a browser or search tool may take. */
 export const BROWSER_TIMEOUT_MS = 120_000;
 export const SEARCH_TIMEOUT_MS = 60_000;
+/**
+ * An agent's own limits on a model request, where its settings take them: as long as Qwen Code's
+ * (generationConfig.timeout and streamIdleTimeoutMs in qwen-config/system-defaults.json), because a request may wait
+ * in the gateway's queue.
+ */
+export const LLM_TIMEOUT_MS = 3_600_000;
 
 /** Where a running agent listens, and the per-start credential the gateway uses with it. */
 export interface AgentEndpoint {
@@ -71,15 +77,16 @@ export interface AgentDriver {
   /**
    * How the browser's requests are authorised, on top of the portal session and the port's user, which the proxy
    * checks for every agent. "token": the agent's UI sends a bearer token; the browser holds a session-bound token
-   * (agentBrowserToken) that the gateway checks and swaps for the container's credential. "cookie": the agent's UI
-   * relies on a cookie; the gateway adds the container's credential to every request and the browser never holds it.
+   * (agentBrowserToken) that the gateway checks and swaps for the container's credential. "session": the agent's UI
+   * sends nothing of its own that the gateway could check (it relies on a cookie, or on the browser's HTTP sign-in);
+   * the gateway adds the container's credential to every request and the browser never holds it.
    */
-  readonly browserAuth: "token" | "cookie";
-  /** WebSocket paths the agent's UI uses; any other upgrade is refused. */
-  readonly socketPaths: ReadonlySet<string>;
+  readonly browserAuth: "token" | "session";
   /** Path prefixes the proxy refuses (canonical, lowercase): features that would hand out access to the container or that need the internet. */
   readonly blockedPrefixes: readonly string[];
 
+  /** A WebSocket path the agent's UI uses; an upgrade on any other is refused. */
+  isSocketPath(pathname: string): boolean;
   /** A request that means a person is using the workspace, as opposed to a poll or heartbeat. */
   isUserAction(method: string, pathname: string): boolean;
   /** A fresh random credential for one container start. */
@@ -104,7 +111,10 @@ export interface AgentDriver {
 }
 
 export interface AgentStatus {
-  /** A turn, a tool, a subagent, a background task or a pending approval is in progress. */
+  /**
+   * A turn, a tool, a subagent or a background task is in progress. A turn that only waits for the person (an
+   * approval, a question) is work for Qwen Code, which declines it in time, and none for the agents that leave it open.
+   */
   working: boolean;
   /** How long ago the agent last started or finished something, when it reports that; else null. */
   idleSinceMs: number | null;

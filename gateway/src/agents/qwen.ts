@@ -11,6 +11,7 @@ import { agentJson, generateCredential, type AgentDriver, type AgentEndpoint } f
 import { field, isRecord } from "../lib/json.ts";
 import { qwenSettingsFor } from "./qwen-settings.ts";
 
+const QWEN_SOCKET_PATHS: ReadonlySet<string> = new Set(["/terminal", "/acp", "/live/web"]);
 const MAX_HEALTH_BYTES = 64 * 1024;
 /** `/daemon/status` lists every capability of the daemon: about 107 KB in Qwen Code 0.27.0. */
 const MAX_STATUS_BYTES = 1024 * 1024;
@@ -74,9 +75,10 @@ export const qwenDriver: AgentDriver = {
   credentialEnv: "QWEN_SERVER_TOKEN",
   settingsMount: "/etc/workspace-portal/qwen",
   browserAuth: "token",
-  socketPaths: new Set(["/terminal", "/acp", "/live/web"]),
   // Device pairing would hand a browser the container's real token.
   blockedPrefixes: ["/web-shell/pairing"],
+
+  isSocketPath: (pathname) => QWEN_SOCKET_PATHS.has(pathname),
 
   // The Web Shell polls several endpoints and sends heartbeats while a tab is merely open.
   isUserAction(method, pathname) {

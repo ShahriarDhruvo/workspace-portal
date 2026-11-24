@@ -22,7 +22,7 @@ if online_enabled; then ONLINE_ON=true; fi
 declare -A KIND_NETWORK=([private]="$NETWORK" [online]="$ONLINE_NETWORK") KIND_UID_BASE=([private]="$UID_BASE" [online]="$ONLINE_UID_BASE")
 declare -A KIND_PREFIX=([private]=wp-ws- [online]=wp-wo-)
 # The port each agent listens on in a workspace, as its driver in gateway/src/agents/.
-declare -A AGENT_PORT=([qwen]=4170 [dsh]=3080)
+declare -A AGENT_PORT=([qwen]=4170 [dsh]=3080 [opencode]=4096)
 SERVICE_PORT=$(env_get SERVICE_PORT) CONTROL_PORT=$(env_get CONTROL_PORT) WEB_PORT=$(env_get WEB_PORT)
 # The portal's port on this host's addresses: behind deploy/tailscale-https.sh, 443 on Tailscale's.
 PORTAL_PORT=$WEB_PORT

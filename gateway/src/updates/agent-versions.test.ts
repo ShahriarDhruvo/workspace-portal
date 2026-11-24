@@ -7,7 +7,7 @@ import { AgentVersions, parseVersionsFile, withVersion } from "./agent-versions.
 import { loadConfig } from "../config.ts";
 import type { Logger } from "../lib/log.ts";
 
-const DEFAULTS = { qwen: "0.27.0", dsh: "0.2.2-rc.1" };
+const DEFAULTS = { qwen: "0.27.0", dsh: "0.2.2-rc.1", opencode: "2.4.1" };
 
 function setup(content?: string): { file: string; dir: string; errors: string[]; log: Logger } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-versions-"));

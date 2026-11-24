@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { AGENT_KINDS } from "@portal/core/wire";
 import {
   agentImageSchema,
   agentUpdateSchema,
@@ -124,8 +125,7 @@ test("agent images are named by exact versions only", () => {
 });
 
 test("a harness choice is one of the agent kinds", () => {
-  assert.deepEqual(harnessSchema.parse({ agent: "qwen" }), { agent: "qwen" });
-  assert.deepEqual(harnessSchema.parse({ agent: "dsh" }), { agent: "dsh" });
+  for (const agent of AGENT_KINDS) assert.deepEqual(harnessSchema.parse({ agent }), { agent });
   for (const agent of ["", "QWEN", "claude", null, undefined, 1]) {
     assert.equal(harnessSchema.safeParse({ agent }).success, false, String(agent));
   }

@@ -51,9 +51,9 @@ selinux_on() { command -v selinuxenabled >/dev/null && selinuxenabled; }
 
 # Per agent: its name and the .env key of its version, which is also the build argument of its Dockerfile stage.
 # Its CLI and its stage are named like the agent.
-AGENTS=(qwen dsh)
-declare -A AGENT_NAME=([qwen]="Qwen Code" [dsh]="DeepSeek Harness")
-declare -A AGENT_VERSION_KEY=([qwen]=QWEN_CODE_VERSION [dsh]=DSH_VERSION)
+AGENTS=(qwen dsh opencode)
+declare -A AGENT_NAME=([qwen]="Qwen Code" [dsh]="DeepSeek Harness" [opencode]="OpenCode")
+declare -A AGENT_VERSION_KEY=([qwen]=QWEN_CODE_VERSION [dsh]=DSH_VERSION [opencode]=OPENCODE_VERSION)
 known_agent() { [[ -n ${AGENT_NAME[${1:-?}]-} ]] || die "unknown agent \"$1\" (one of: ${AGENTS[*]})"; }
 
 # Sets ENABLED_AGENTS from WORKSPACE_AGENTS, read as the gateway does: in any case, empty items left out. Dies on
@@ -98,11 +98,12 @@ workspace_image() { # agent [version]
   printf 'workspace-portal/workspace:%s-%s' "$1" "${2:-$(agent_version "$1")}"
 }
 
-# Dies unless the agent in the image reports VERSION (asked offline).
+# Dies unless the agent in the image reports VERSION (asked offline, with a home it can write to, as the gateway
+# asks: OpenCode opens its log there even for this).
 check_workspace_image() { # agent version
   local image reported
   image=$(workspace_image "$1" "$2")
-  reported=$(docker run --rm --network none --entrypoint "$1" "$image" --version 2>/dev/null |
+  reported=$(docker run --rm --network none --tmpfs /tmp -e HOME=/tmp --entrypoint "$1" "$image" --version 2>/dev/null |
     grep -oE "$VERSION_PATTERN" | head -n 1) || true
   [[ $reported == "$2" ]] || die "$image reports ${AGENT_NAME[$1]} \"$reported\", expected $2"
 }

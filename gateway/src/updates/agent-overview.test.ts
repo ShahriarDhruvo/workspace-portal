@@ -124,6 +124,21 @@ test("offered: the 5 newest stable releases, no prerelease, nothing deprecated, 
   assert.deepEqual(latest, { version: "0.27.4", publishedAt: 8 * DAY, latest: true, notes: null });
 });
 
+test("offered: a package with other dist-tags on snapshot builds and a placeholder release (OpenCode) offers its stable releases", () => {
+  // As the registry reader leaves it: the snapshot builds are no versions, their dist-tags remain.
+  const opencode = releases({ reserved: "0.0.0-reserved", beta: "0.0.0-beta-19507", latest: "2.4.1", dev: "0.0.0-dev-1344" }, [
+    "0.0.0-reserved",
+    "2.2.0",
+    "2.3.0",
+    "2.3.1",
+    "2.3.2",
+    "2.4.0",
+    "2.4.1",
+  ]);
+  assert.deepEqual(versionsOf(offeredReleases(opencode, [])), ["2.4.1", "2.4.0", "2.3.2", "2.3.1", "2.3.0"]);
+  assert.deepEqual(versionsOf(offeredReleases(opencode, ["2.2.0"])), ["2.4.1", "2.4.0", "2.3.2", "2.3.1", "2.3.0", "2.2.0"]);
+});
+
 test("offered: a latest that is a prerelease is the stable one (DeepSeek Harness), filled up with earlier lines' newest", () => {
   const notes: ReleaseNotes = { title: "dsh v0.2.2-rc.1", url: "https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.1", publishedAt: 2 * DAY, body: "", breaking: false };
   const dsh = releases(DSH_TAGS, ["0.2.1-rc.5", "0.2.2-alpha.3", "0.2.2-rc.1", "0.2.2-rc.2", "0.2.2-rc.3"], { "0.2.2-rc.1": notes });

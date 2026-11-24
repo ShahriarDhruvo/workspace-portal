@@ -9,6 +9,8 @@ test("isVersion accepts npm versions and nothing that could leave an image tag o
   for (const bad of ["", "latest", "1.2", "v1.2.3", "1.2.3 ", "1.2.3\n", "1.2.3;rm", "1.2.3-a b", "../1.2.3", "1.2.3:x", "1.2.3-x/y", "1.2.3=4", `1.2.3-${"a".repeat(100)}`, 1, null]) {
     assert.equal(isVersion(bad), false, JSON.stringify(bad));
   }
+  // OpenCode's snapshot builds (a second hyphen) are no versions: neither offered nor installed.
+  for (const snapshot of ["0.0.0-beta-19507", "0.0.0-dev-1344"]) assert.equal(isVersion(snapshot), false, snapshot);
 });
 
 test("isStableVersion: X.Y.Z only, compared numerically", () => {

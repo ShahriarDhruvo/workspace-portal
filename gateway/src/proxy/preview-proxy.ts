@@ -2,7 +2,8 @@
 // host the browser can't reach, so the agent's web preview (Qwen Code's Web preview, trim-web-shell.mjs; DeepSeek
 // Harness's sidebar Browser, web-preview.mjs) opens `http://localhost:<n>` here instead: one port per user and kind,
 // the agent port + PREVIEW_PORT_OFFSET, so an app is a browser origin of its own, apart from the agent's (its page
-// can't read the agent UI's token or storage) and every other workspace's.
+// can't read the agent UI's token or storage) and every other workspace's. OpenCode has no web preview: a person
+// opens the address below in a tab.
 //
 // A request passes the agent ports' checks, then goes to the port of the workspace the person chose:
 // `/__portal/port/<n>/<path>` keeps n in a cookie of this port and redirects to /<path>; everything after goes to n,

@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { auditLog, type AgentUpdateJob, type AgentVersionsOverview } from "@portal/core";
-import { BOTH, json, withGateway, type Gateway, type Reply } from "./harness.ts";
+import { ALL, BOTH, json, withGateway, type Gateway, type Reply } from "./harness.ts";
 import { workspaceImage } from "../src/docker/image-names.ts";
 import { gate } from "./fakes.ts";
 
@@ -112,6 +112,56 @@ test("an update over the control API: the job, the new current version, and new 
     assert.equal(g.builder.images.has(workspaceImage("qwen", "0.27.0")), false);
     // A later start of alice's runs the current version.
     assert.equal((await g.startReady(alice)).agentVersion, "0.27.4");
+  }));
+
+test("OpenCode beside the others: its stable releases are offered, and an update writes its own version key", () =>
+  withGateway(ALL, async (g) => {
+    const { alice, admin } = g.ids;
+    const before = await overview(g);
+    assert.deepEqual(before.agents.map((agent) => agent.id), ["qwen", "dsh", "opencode"]);
+    const opencode = before.agents.find((agent) => agent.id === "opencode")!;
+    assert.deepEqual(
+      { ...opencode, installed: opencode.installed.map((image) => [image.version, image.current, image.inUse]) },
+      {
+        id: "opencode",
+        name: "OpenCode",
+        packageName: "@opencode/cli",
+        current: "2.4.1",
+        defaultVersion: "2.4.1",
+        latest: "2.4.1",
+        updateAvailable: false,
+        // The snapshot builds its other dist-tags name are not offered.
+        releases: [
+          { version: "2.4.1", publishedAt: null, latest: true, notes: null },
+          { version: "2.4.0", publishedAt: null, latest: false, notes: null },
+        ],
+        installed: [["2.4.1", true, 0]],
+        running: [],
+      },
+    );
+    // ...nor installed: a snapshot build is no version.
+    assert.deepEqual(failure(await update(g, "opencode", { version: "0.0.0-beta-19507", actorUserId: admin })), [400, "invalid_version"]);
+
+    g.registry.tags["@opencode/cli"]!.latest = "2.5.0";
+    const offered = (await overview(g, "?refresh=1")).agents.find((agent) => agent.id === "opencode")!;
+    assert.deepEqual([offered.latest, offered.updateAvailable], ["2.5.0", true]);
+    const started = await update(g, "opencode", { version: "2.5.0", actorUserId: admin });
+    assert.equal(started.status, 200, started.body);
+    const done = await finished(g);
+    assert.equal(done.phase, "succeeded", done.error ?? "");
+    assert.equal(done.log.at(-1), "opencode --version: 2.5.0");
+    assert.match(fs.readFileSync(g.config.agentVersionsFile, "utf8"), /^OPENCODE_VERSION=2\.5\.0$/m);
+    assert.deepEqual(
+      json<{ agents: Array<{ id: string; version: string }> }>(await g.control("GET", "/control/agents")).agents.map((a) => [a.id, a.version]),
+      [
+        ["qwen", "0.27.0"],
+        ["dsh", "0.2.2-rc.1"],
+        ["opencode", "2.5.0"],
+      ],
+    );
+    assert.deepEqual(agentAudits(g), [{ action: "agent_updated", actorUserId: admin, details: { agent: "opencode", from: "2.4.1", to: "2.5.0", rebuild: false } }]);
+    assert.equal((await g.startReady(alice, "opencode")).agentVersion, "2.5.0");
+    assert.equal(g.runtime.startsFor(alice)[0]!.options.image, workspaceImage("opencode", "2.5.0"));
   }));
 
 test("update requests that can't be met are refused with the documented errors", () =>

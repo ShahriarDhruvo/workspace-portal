@@ -3,8 +3,9 @@
 // users/<id>/              root:root 0711  one directory per workspace kind, nothing else
 //   private/ and online/   root:root 0711  the kind's own files; neither kind's container mounts the other's
 //     home/                uid:uid   0700  mounted at /home/user (each agent's state in its own
-//                                           dot-dir: ~/.qwen, ~/.dsh; chats, caches)
-//     workspace/           uid:uid   0700  mounted at /workspace (the user's files, for either agent)
+//                                           folders: ~/.qwen, ~/.dsh, OpenCode's under ~/.local/share,
+//                                           ~/.config and ~/.cache; chats, caches)
+//     workspace/           uid:uid   0700  mounted at /workspace (the user's files, for every agent)
 //     system/              root:root 0755  rendered by the gateway, mounted read-only:
 //       <agent>/                            that agent's settings (with this kind's service address)
 //       passwd, group

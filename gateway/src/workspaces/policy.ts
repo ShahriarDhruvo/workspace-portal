@@ -36,7 +36,7 @@ export function agentCountsAsWorking(agent: AgentState, now: number): boolean {
 }
 
 interface BusySignals {
-  /** The agent reports a turn in progress (generating, running a tool, waiting for approval). null: unknown. */
+  /** The agent reports work in progress (AgentStatus.working: generating, running a tool, a background task). null: unknown. */
   agentTask: boolean | null;
   /** An LLM request of this workspace is queued or in flight. */
   llmBusy: boolean;

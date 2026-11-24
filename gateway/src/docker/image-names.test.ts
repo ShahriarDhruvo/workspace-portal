@@ -25,7 +25,7 @@ test("parseWorkspaceImage reads the agent and version back, and nothing else", (
   ]) {
     assert.equal(parseWorkspaceImage(other), null, other);
   }
-  for (const [kind, version] of [["qwen", "0.28.0-preview.1"], ["dsh", "0.2.2-alpha.3"]] as const) {
+  for (const [kind, version] of [["qwen", "0.28.0-preview.1"], ["dsh", "0.2.2-alpha.3"], ["opencode", "2.4.1"]] as const) {
     assert.deepEqual(parseWorkspaceImage(workspaceImage(kind, version)), { kind, version });
   }
 });

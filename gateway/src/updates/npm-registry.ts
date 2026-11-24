@@ -4,7 +4,8 @@
 //
 // Publish times are only in the full document ("packument"; the abbreviated one npm install uses has none). Qwen
 // Code's is about 1.9 MB of JSON, 230 kB gzipped on the wire. A request that sends the last answer's ETag is answered
-// 304 without a body while nothing was published, so the release cache downloads it again only after a release.
+// 304 without a body while nothing was published, so the release cache downloads it again only after a release
+// (OpenCode publishes snapshot builds daily, so its document comes again about as often as it is asked for).
 import { failureReason, fetchBounded, FETCH_TIMEOUT_MS } from "../lib/bounded-body.ts";
 import { HttpError } from "../lib/http-util.ts";
 import { isRecord } from "../lib/json.ts";
@@ -43,8 +44,11 @@ export interface NpmRegistry {
 export const registryError = (message: string): HttpError => new HttpError(502, "registry_unreachable", message);
 
 const NPM_REGISTRY_URL = "https://registry.npmjs.org";
-/** Qwen Code's document is about 1.9 MB and grows by some 2.6 kB a version. */
-const MAX_PACKUMENT_BYTES = 32 * 1024 * 1024;
+/**
+ * Qwen Code's document is about 1.9 MB and grows by some 2.6 kB a version. OpenCode's lists every snapshot build:
+ * 4.3 MB three months after its first (0.6 MB on the wire), some 1.5 MB more each month.
+ */
+const MAX_PACKUMENT_BYTES = 64 * 1024 * 1024;
 
 export interface NpmRegistryOptions {
   fetch?: typeof fetch;

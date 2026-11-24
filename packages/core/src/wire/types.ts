@@ -116,7 +116,7 @@ export interface AgentRelease {
 export interface AgentVersionInfo {
   id: AgentKind;
   name: string;
-  /** "@qwen-code/qwen-code" | "@deepseek-ai/dsh" */
+  /** "@qwen-code/qwen-code" | "@deepseek-ai/dsh" | "@opencode/cli" */
   packageName: string;
   /** New workspaces start with this version. */
   current: string;

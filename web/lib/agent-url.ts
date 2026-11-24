@@ -13,7 +13,9 @@ export interface AgentFrame {
 /**
  * src for the workspace iframe, on the workspace's own port and the hostname the user typed (the session cookie is
  * host-scoped). Qwen Code takes the portal's theme (`?theme=`, which beats its saved one) and its session-bound token
- * in the fragment, which never reaches a server; DeepSeek Harness takes neither: the gateway injects its cookie.
+ * in the fragment, which never reaches a server; DeepSeek Harness and OpenCode take neither: the gateway adds their
+ * credential to every request, and each keeps the theme a person picks in it. OpenCode opens on its own start page:
+ * it has an address for a session and for a new session, but none that opens a folder.
  */
 export function agentFrameUrl(
   location: Pick<Location, "protocol" | "hostname">,
@@ -26,6 +28,7 @@ export function agentFrameUrl(
     case "qwen":
       return `${origin}/?theme=${theme}#token=${encodeURIComponent(frame.token)}`;
     case "dsh":
+    case "opencode":
       return `${origin}/`;
   }
 }

@@ -1,6 +1,6 @@
-// The portal's models, for agents that don't read Qwen Code's settings themselves (DeepSeek Harness). The admin
-// defines them once, in Qwen Code's system-defaults.json (modelProviders.openai[]); this reads the effective list from
-// the rendered Qwen settings, so every agent offers the same models with the same default.
+// The portal's models, for agents that don't read Qwen Code's settings themselves (DeepSeek Harness, OpenCode). The
+// admin defines them once, in Qwen Code's system-defaults.json (modelProviders.openai[]); this reads the effective
+// list from the rendered Qwen settings, so every agent offers the same models with the same default.
 import { isRecord } from "../lib/json.ts";
 import { asObject, type RenderedSettings } from "./qwen-settings.ts";
 

@@ -9,9 +9,10 @@ server and talking to a model you host. A user signs in and gets two workspaces,
   workspace. The admin can bar it per user; `ONLINE_WORKSPACES=off` turns it off for everyone.
 
 Each workspace has its own files (`/home/user`, `/workspace`) and runs the agent the user picks in Settings:
-Qwen Code or DeepSeek Harness. Web apps started in a workspace open in the browser on its preview port. With
-a key from the API page, a user's other software (an editor, a script) uses the same model through the portal.
-The admin manages users, watches usage and energy, updates the agents and the LLM engine, and reads the audit log.
+Qwen Code, DeepSeek Harness or OpenCode. Web apps started in a workspace open in the browser on its preview
+port. With a key from the API page, a user's other software (an editor, a script) uses the same model through
+the portal. The admin manages users, watches usage and energy, updates the agents and the LLM engine, and reads
+the audit log.
 
 ## What runs where
 
@@ -75,9 +76,9 @@ an agent's `*_VERSION`, a port, subnet, `*_GATEWAY_IP`, bridge, DNS server or th
 
 The models are not in `.env` but in two files in Qwen Code's settings format, in
 `$PORTAL_DATA_DIR/config/qwen`: `system-defaults.json` holds the models and the defaults users may change,
-`settings.json` what users cannot override. DeepSeek Harness takes its models from the same files. Every model
-`id` must be one the model server serves. Start from the copies in [`qwen-config/`](qwen-config); workspaces
-read the installed files at their next start.
+`settings.json` what users cannot override. DeepSeek Harness and OpenCode take their models from the same
+files. Every model `id` must be one the model server serves. Start from the copies in
+[`qwen-config/`](qwen-config); workspaces read the installed files at their next start.
 
 ```sh
 sudo bash deploy/qwen-config.sh install qwen-config/system-defaults.json qwen-config/settings.json
@@ -126,7 +127,7 @@ docker compose logs -f gateway     # services: web, gateway, searxng, reader
 docker compose down                # stops the portal; running workspaces stay up, the gateway adopts them
 docker compose up -d
 sudo bash deploy/verify-isolation.sh
-sudo bash deploy/update-image.sh qwen 0.28.0     # dsh: DeepSeek Harness
+sudo bash deploy/update-image.sh qwen 0.28.0     # dsh: DeepSeek Harness, opencode: OpenCode
 sudo bash deploy/update-image.sh --refresh       # rebuild the versions in use with fresh Debian packages
 ```
 
@@ -153,7 +154,9 @@ sudo bash deploy/uninstall.sh --purge-data    # deletes the data directory too
 ```
 
 A re-run of the installer rebuilds the images and restarts what changed. It keeps `.env`, adding the settings
-it lacks, the model settings and all data, and refuses while an update from Admin > Updates is running.
+it lacks, the model settings and all data, and refuses while an update from Admin > Updates is running. An agent
+the portal has gained since the install (OpenCode) stays off, because `WORKSPACE_AGENTS` in `.env` is kept: add
+`opencode` to it and run the installer again.
 
 ## LLM server: readings and engine updates
 

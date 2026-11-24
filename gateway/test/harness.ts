@@ -258,7 +258,7 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
     UPLOAD_LIMIT_MB: "1",
     AGENT_PORT_BASE: String(randomBase()),
     AGENT_PORT_COUNT: String(PORT_COUNT),
-    // A Qwen-only install unless a test enables both (a start without a choice then starts Qwen Code).
+    // A Qwen-only install unless a test enables more (a start without a choice then starts Qwen Code).
     WORKSPACE_AGENTS: "qwen",
     ...options.env,
   });
@@ -501,8 +501,10 @@ export async function upgradeStatus(g: Gateway, token: string, userId: number, t
   return (await request(g.agentPort(userId), { path: target, headers: { cookie: cookie(token), origin: g.agentOrigin(userId), ...handshake } })).status;
 }
 
-/** Both agents enabled. */
+/** Qwen Code and DeepSeek Harness enabled. */
 export const BOTH = { env: { WORKSPACE_AGENTS: "qwen,dsh" } } satisfies GatewayOptions;
+/** Every agent enabled. */
+export const ALL = { env: { WORKSPACE_AGENTS: "qwen,dsh,opencode" } } satisfies GatewayOptions;
 
 /** A gateway for `run`, closed after it. */
 export async function withGateway(options: GatewayOptions, run: (gateway: Gateway) => Promise<void>): Promise<void> {

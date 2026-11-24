@@ -168,7 +168,7 @@ test("every problem is reported at once", () => {
 test("WORKSPACE_AGENTS selects the agents; the version variables set their default versions", () => {
   const config = loadConfig({ ...secrets, WORKSPACE_AGENTS: " DSH , qwen,dsh ", DSH_VERSION: "0.3.0", QWEN_CODE_VERSION: "0.28.1-beta.2" });
   assert.deepEqual(config.workspace.agents, ["dsh", "qwen"], "in the admin's order, without repeats");
-  assert.deepEqual(config.workspace.defaultVersions, { dsh: "0.3.0", qwen: "0.28.1-beta.2" });
+  assert.deepEqual(config.workspace.defaultVersions, { dsh: "0.3.0", qwen: "0.28.1-beta.2", opencode: "2.4.1" });
   for (const kind of AGENT_KINDS) {
     const { versionKey } = driverFor(kind).release;
     assert.equal(loadConfig({ ...secrets, [versionKey]: "9.8.7" }).workspace.defaultVersions[kind], "9.8.7", `${kind}: the driver's versionKey is the env variable`);
@@ -176,9 +176,9 @@ test("WORKSPACE_AGENTS selects the agents; the version variables set their defau
   assert.deepEqual(loadConfig({ ...secrets, WORKSPACE_AGENTS: "qwen" }).workspace.agents, ["qwen"]);
 
   assert.deepEqual(problems({ ...secrets, WORKSPACE_AGENTS: "qwen,claude" }), [
-    'WORKSPACE_AGENTS must list one or more of qwen, dsh, comma-separated (got "qwen,claude")',
+    'WORKSPACE_AGENTS must list one or more of qwen, dsh, opencode, comma-separated (got "qwen,claude")',
   ]);
-  assert.deepEqual(problems({ ...secrets, WORKSPACE_AGENTS: " , " }), ['WORKSPACE_AGENTS must list one or more of qwen, dsh, comma-separated (got ",")']);
+  assert.deepEqual(problems({ ...secrets, WORKSPACE_AGENTS: " , " }), ['WORKSPACE_AGENTS must list one or more of qwen, dsh, opencode, comma-separated (got ",")']);
   // An image tag is built from it: nothing but a version.
   assert.deepEqual(problems({ ...secrets, DSH_VERSION: "latest; rm -rf" }), ['DSH_VERSION must be a version such as 0.27.0 (got "latest; rm -rf")']);
 });
@@ -232,7 +232,7 @@ test("the workspace port ranges must fit and must not overlap each other or the 
   assert.equal(problems({ ...secrets, AGENT_PORT_COUNT: "9007199254740991" })[1], "ONLINE_AGENT_PORT_BASE must be a TCP port (got 9007199254744092)", "a default it refuses is named too");
 });
 
-test("the gateway, both agents' web previews and the deploy scripts agree on where the preview ports are", () => {
+test("the gateway, Qwen Code's and DeepSeek Harness's web previews and the deploy scripts agree on where the preview ports are", () => {
   const source = (file: string): string => fs.readFileSync(new URL(`../../${file}`, import.meta.url), "utf8");
   assert.match(source("workspace-image/qwen/trim-web-shell.mjs"), new RegExp(`^const PREVIEW_PORT_OFFSET = ${PREVIEW_PORT_OFFSET};$`, "m"));
   assert.match(source("workspace-image/dsh/web-preview.mjs"), new RegExp(`^const PREVIEW_PORT_OFFSET = ${PREVIEW_PORT_OFFSET};$`, "m"));

@@ -20,7 +20,7 @@ search, so nothing competes with the model for memory.
 | | What it is | Reached |
 |---|---|---|
 | **A browser, or your own software** | | on your LAN, or on your tailnet over HTTPS |
-| **Portal server** | Workspace Portal: two sandboxed Qwen Code or DeepSeek Harness workspaces per person, Private and Online, with SearXNG search and a page reader, plus the model's API behind each person's own keys | from the browser, on port 3000 or 443 |
+| **Portal server** | Workspace Portal: two sandboxed Qwen Code, DeepSeek Harness or OpenCode workspaces per person, Private and Online, with SearXNG search and a page reader, plus the model's API behind each person's own keys | from the browser, on port 3000 or 443 |
 | **LLM server** | The Strix Halo machine: Gufo serving Qwen3.8-Flash-Next with vision | from the portal server only, on port 8080 |
 
 <details>
@@ -818,6 +818,7 @@ sudo bash deploy/install.sh
     Admin:      admin   (first sign-in: grep ^ADMIN_PASSWORD /home/YOUR_LOGIN/workspace-portal/.env; you choose a new one then)
     Agent:      Qwen Code 0.27.0
     Agent:      DeepSeek Harness 0.2.2-rc.1
+    Agent:      OpenCode 2.4.1
     Models:     /srv/workspace-portal/config/qwen (deploy/qwen-config.sh; used by every agent)
     Web:        web_search through the built-in SearXNG (http://127.0.0.1:8888); page reader on (read_page)
     Monitoring: this server: portal-hostd on http://127.0.0.1:9180; LLM server: not set up (hostd/README.md)
@@ -850,9 +851,9 @@ person chooses their own at the first sign-in.
 Each person has two workspaces with separate files, of which one runs at a time. **Private** has no internet
 access. **Online** also reaches public internet addresses, but never your LAN, the servers or another workspace. On
 Home, press **Start Private** or **Start Online**, confirm, then **Open workspace**. The agent is Qwen Code unless
-the person picks DeepSeek Harness under **Settings > Harness**, or the administrator does on the person's page under
-**Admin > Users**; a running workspace keeps its agent until it restarts. With **Plan mode** on, in the **+** menu
-under Qwen Code's input, the agent changes nothing and runs no command until its plan is approved.
+the person picks DeepSeek Harness or OpenCode under **Settings > Harness**, or the administrator does on the
+person's page under **Admin > Users**; a running workspace keeps its agent until it restarts. With **Plan mode** on,
+in the **+** menu under Qwen Code's input, the agent changes nothing and runs no command until its plan is approved.
 
 DeepSeek Harness runs as it ships, with its own workspaces, plugins and permission modes; a workspace leaves out
 only signing in to DeepSeek, its own web search (the portal's search replaces it) and opening folders in desktop
@@ -867,6 +868,25 @@ apart from Qwen Code's files; **Add workspace** opens any other folder. **Plugin
 plugins DeepSeek Harness comes with and, in an Online workspace, installs others from npm or GitHub. A plugin runs
 with the person's own access, so install only those you trust. Its **Browser** shows a web app running in the
 workspace, whoever started it: open `http://localhost:PORT`. Its dark theme takes the portal's blacks, as Qwen Code's.
+
+OpenCode (OpenCode 2, the `@opencode/cli` package) also runs as it ships; a workspace leaves out only other model
+providers, sharing a session, its own web fetch and search (the portal's search and page reader replace them),
+pairing another browser or machine with it, and updating itself. The projects in its sidebar are kept in the
+browser, so the first time in a browser choose **Add project**, then **Select folder** in the dialog, which opens
+at `/workspace`, where Qwen Code's files are. **New session** starts a session there; any other folder is added as
+a project the same way. The sessions are kept in the workspace: the start page lists them by day, for every
+project and in any browser, and searches them. Each session opens in a tab, and <kbd>Ctrl</kbd>+<kbd>&#96;</kbd>
+opens a terminal beside it. In a turn, a line such as **Used 1 Shell** opens its tool calls and the model's
+reasoning. A model's efforts are its variants in OpenCode's model picker.
+
+The agent changes files and runs commands in the workspace without asking. An `opencode.json` in a project's
+folder with `{"permissions": [{"action": "shell", "resource": "*", "effect": "ask"}]}` makes it ask before each
+command there. OpenCode has no web preview. Its agent looks at an app running in the workspace with the browser
+it has; to see the app yourself, open `http://PORTAL_IP:PREVIEW_PORT/__portal/port/PORT/` in a tab of its own.
+`PORT` is the port the app listens on. `PREVIEW_PORT` is the person's number plus 4100 for a Private workspace,
+plus 4300 for an Online one (the installer's `Previews` line gives the ranges); the number ends the address of
+the person's page under **Admin > Users**. Behind HTTPS ([step 12](#12-https-and-remote-access)) the address
+starts with `https://NAME.YOUR-TAILNET.ts.net` instead.
 
 #### The API, for your own software
 
@@ -1198,10 +1218,14 @@ workspaces keep running, and an open browser tab carries on without a reload.
   settings your `.env` lacks and changes none. It refuses to run while an update from **Admin > Updates** is in
   progress.
 - **Running workspaces** keep the image they started with and get the new one at their next start.
-- **The agents** stay at their versions. **Admin > Updates** shows the current and the latest release of Qwen Code
-  and DeepSeek Harness and updates either with one button. A version that does not take the portal's changes to it
-  fails to update and the current version stays; the failed update names the change that did not fit. From the
-  shell: `sudo bash deploy/update-image.sh qwen VERSION`, with `dsh` for DeepSeek Harness.
+- **The agents** stay at their versions. **Admin > Updates** shows the current and the latest release of each
+  enabled agent and updates it with one button. An update fails, and the current version stays, when the portal's
+  changes do not fit the new version or it does not pass the portal's check; the failed update names what did not
+  fit. From the shell: `sudo bash deploy/update-image.sh qwen VERSION`, with `dsh` for DeepSeek Harness and
+  `opencode` for OpenCode.
+- **A new agent** (OpenCode, for an install from before it) stays off, because the installer keeps
+  `WORKSPACE_AGENTS` in your `.env`: add `opencode` to it, as in `WORKSPACE_AGENTS=qwen,dsh,opencode`, and run the
+  installer again. It builds the agent's image, about 2 GB.
 - **portal-hostd on the LLM server** updates separately: `cd ~/workspace-portal && git pull --ff-only && sudo bash
   hostd/install.sh llm --portal PORTAL_IP` there. It keeps its token and restarts only if something changed.
 - **Chromium and the other system packages** inside the workspace images: `sudo bash deploy/update-image.sh
@@ -1231,7 +1255,7 @@ workspaces keep running, and an open browser tab carries on without a reload.
 | The installer in step 11 ends with `the stack did not become healthy` | One of the four containers did not come up. `sudo docker compose ps` names it and `sudo docker compose logs NAME` says why. Run the installer again afterwards. |
 | Portal chat: `404 model ... is not served` | The model name in `system-defaults.json` must be `qwen3.8-flash-next`, the name Gufo serves. |
 | An agent dies on its first tool call | `WORKSPACE_MEMORY` is too small. Qwen Code needs about 1.9 GB for a moment; use 2 GiB or more. |
-| The Web preview (DeepSeek Harness: Browser) stays blank | Type the app's own address, such as `http://localhost:3000`: the portal opens that port of the workspace. The app's server must listen on all addresses (`0.0.0.0`; Vite needs `--host`). In a Private workspace the preview loads nothing from other sites, so an app that takes scripts or fonts from a CDN stays incomplete there. Sites that forbid framing, Google among them, stay blank in any preview: use **Open externally**. |
+| The Web preview (DeepSeek Harness: Browser) stays blank | Type the app's own address, such as `http://localhost:3000`: the portal opens that port of the workspace. The app's server must listen on all addresses (`0.0.0.0`; Vite needs `--host`). In a Private workspace the preview loads nothing from other sites, so an app that takes scripts or fonts from a CDN stays incomplete there. Sites that forbid framing, Google among them, stay blank in any preview: use **Open externally**. OpenCode has no preview: the app opens in a tab of its own ([step 11](#11-workspace-portal)), and what this row says of the app's server holds there too. |
 | Agents report no search results | The answer names the engines that did not answer. They sit out for 10 to 60 minutes and come back by themselves. |
 | `read_page only opens pages you were shown` | The agent took the address from memory or made it up. Have it search first, paste the address into the chat, or change `READER_URL_POLICY` ([step 11](#settings)). |
 | `read_page`: `The site refused the request` | That site turns automated readers away. The agent has to use another source. |
@@ -1287,11 +1311,16 @@ fan service is running and that the vents have space on all sides. How each was 
   previous version back by itself.
 - More than the 9 hours of continuous load tests the model has served without a restart.
 - DeepSeek Harness under load. The stress runs used Qwen Code.
+- OpenCode on these servers, and OpenCode with the real model. Its image was built on a development machine and
+  run there as a workspace runs, behind the portal's gateway and in a browser, with a stand-in for the model. So
+  the times of [step 11](#11-workspace-portal) and of the isolation check are without its image, and nothing here
+  says how it handles a long conversation or an answer cut off at the model's limit, or what memory it needs.
 - The page reader under many agents at once. It was tested with one agent of each kind and with six pages at a
   time.
 - [Step 12](#12-https-and-remote-access) from its first line. Tailscale was already installed and signed in, so
-  only `tailscale-https.sh` ran, on and off. Over HTTPS the portal, both kinds of workspace, both agents and a web
-  preview were then used from a PC of the same tailnet, on the server's LAN and from another network.
+  only `tailscale-https.sh` ran, on and off. Over HTTPS the portal, both kinds of workspace, Qwen Code, DeepSeek
+  Harness and a web preview were then used from a PC of the same tailnet, on the server's LAN and from another
+  network.
 - The [API](#the-api-for-your-own-software) at the portal's LAN address, and an editor on it. The test portal
   answers over HTTPS only ([step 12](#12-https-and-remote-access)). There curl, the OpenAI libraries for Python
   (3.55.1) and Node (7.60.0) and Anthropic's for Python (2.10.0) used it with a key, and 56 of 61 different

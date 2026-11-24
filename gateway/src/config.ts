@@ -5,8 +5,8 @@ import { fileURLToPath } from "node:url";
 import { AGENT_KINDS, isAgentKind, isVersion, MIN_CONTROL_SECRET_LENGTH, type AgentKind, type WorkspaceKind } from "@portal/core";
 
 /**
- * A workspace's preview port is its agent port plus this. Fixed: both agents' web previews work it out too
- * (PREVIEW_PORT_OFFSET in workspace-image/qwen/trim-web-shell.mjs and workspace-image/dsh/web-preview.mjs).
+ * A workspace's preview port is its agent port plus this. Fixed: Qwen Code's and DeepSeek Harness's web previews work
+ * it out too (PREVIEW_PORT_OFFSET in workspace-image/qwen/trim-web-shell.mjs and workspace-image/dsh/web-preview.mjs).
  */
 export const PREVIEW_PORT_OFFSET = 1000;
 
@@ -312,14 +312,14 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     workspace: {
       agents: read(
         "WORKSPACE_AGENTS",
-        "qwen,dsh",
+        "qwen,dsh,opencode",
         (value) => {
           const items = value.split(",").map((item) => item.trim().toLowerCase()).filter(Boolean);
           return items.length > 0 && items.every(isAgentKind) ? [...new Set(items)] : undefined;
         },
         `list one or more of ${AGENT_KINDS.join(", ")}, comma-separated`,
       ),
-      defaultVersions: { qwen: version("QWEN_CODE_VERSION", "0.27.0"), dsh: version("DSH_VERSION", "0.2.2-rc.1") },
+      defaultVersions: { qwen: version("QWEN_CODE_VERSION", "0.27.0"), dsh: version("DSH_VERSION", "0.2.2-rc.1"), opencode: version("OPENCODE_VERSION", "2.4.1") },
       kinds: {
         private: {
           kind: "private",

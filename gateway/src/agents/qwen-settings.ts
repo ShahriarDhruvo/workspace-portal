@@ -167,7 +167,7 @@ export function renderQwenSettings(options: RenderOptions): RenderedSettings {
  * saves a pick to the user's own settings (model.reasoningEffort, user scope) and builds each new session from the
  * merged settings, so the effort goes into the system scope, which beats the user's: their pick lasts for that
  * session only. Each model that offers the effort also gets it as its defaultEffort, which the Web Shell shows as the
- * default and DeepSeek Harness starts its sessions with; a model without it keeps the admin's default. The
+ * default and DeepSeek Harness and OpenCode start their sessions with; a model without it keeps the admin's default. The
  * session-wide key (which also applies after a switch to another model) is set only when every model that lists
  * efforts offers this one.
  */

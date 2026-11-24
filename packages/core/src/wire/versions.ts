@@ -1,9 +1,10 @@
-// Agent versions as the portal handles them: npm versions of Qwen Code and DeepSeek Harness, which also name the
-// workspace images (workspace-portal/workspace:<agent>-<version>). One pattern for every place a version comes in (the
-// .env defaults, the selection file, the control API, the web app's forms, the npm registry's dist-tags), the same
-// expression as deploy/lib.sh valid_version: it admits nothing that could break out of an image tag, a build argument
-// or a KEY=VALUE line. Unanchored, it finds the version in an agent CLI's `--version` output (deploy/lib.sh
-// check_workspace_image greps for it too).
+// Agent versions as the portal handles them: npm versions of Qwen Code, DeepSeek Harness and OpenCode, which also
+// name the workspace images (workspace-portal/workspace:<agent>-<version>). One pattern for every place a version
+// comes in (the .env defaults, the selection file, the control API, the web app's forms, the npm registry's
+// dist-tags), the same expression as deploy/lib.sh valid_version: it admits nothing that could break out of an image
+// tag, a build argument or a KEY=VALUE line, and so none of OpenCode's snapshot builds ("0.0.0-beta-19507"), which
+// are neither offered nor installed. Unanchored, it finds the version in an agent CLI's `--version` output
+// (deploy/lib.sh check_workspace_image greps for it too).
 
 const VERSION_SYNTAX = String.raw`\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.]+)?`;
 const VERSION_PATTERN = new RegExp(`^${VERSION_SYNTAX}$`);

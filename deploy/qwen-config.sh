@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The Qwen Code settings every workspace starts with; DeepSeek Harness takes its models from them too.
+# The Qwen Code settings every workspace starts with; DeepSeek Harness and OpenCode take their models from them too.
 #   sudo bash deploy/qwen-config.sh install <file>...   checks and installs settings.json (overrides the users'
 #                                                       own settings) and/or system-defaults.json (the models, and
 #                                                       defaults users may change)

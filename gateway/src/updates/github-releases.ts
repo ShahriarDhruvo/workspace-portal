@@ -6,13 +6,17 @@ import { isVersion, type ReleaseNotes } from "@portal/core";
 
 /**
  * Releases asked for, newest first: GitHub's maximum for one request. Qwen Code's repository also publishes nightlies,
- * previews and other products, so it takes 100 to cover the versions offered and older ones still on the server.
+ * previews and other products, and OpenCode's the releases of OpenCode 1 and of its other programs, so it takes 100
+ * to cover the versions offered and older ones still on the server.
  */
 const PER_PAGE = 100;
 /** Notes longer than this are cut (the page links to the full notes). */
 const NOTES_CHARS = 12_000;
-/** 100 releases with long notes come to about 3 MB of JSON (Qwen Code's). */
-const MAX_BYTES = 8 * 1024 * 1024;
+/**
+ * 100 releases with long notes come to about 3 MB of JSON (Qwen Code's). OpenCode's come to 6 MB, nearly all of it
+ * the list of some 33 files attached to each release.
+ */
+const MAX_BYTES = 32 * 1024 * 1024;
 
 export interface GitHubRelease {
   /** The git tag, e.g. "v0.27.4" or "dsh-v0.2.2-rc.1". */

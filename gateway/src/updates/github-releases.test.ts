@@ -39,6 +39,8 @@ test("tagVersion: v1.2.3 and 1.2.3, or the package's own prefixed tags; another 
   assert.equal(tagVersion("dsh@0.2.2", "@deepseek-ai/dsh"), "0.2.2");
   assert.equal(tagVersion("@deepseek-ai/dsh@0.2.2", "@deepseek-ai/dsh"), "0.2.2");
   assert.equal(tagVersion("nightly", "@deepseek-ai/dsh"), null);
+  assert.equal(tagVersion("v2.4.1", "@opencode/cli"), "2.4.1");
+  assert.equal(tagVersion("process-daemon-v0.6.0", "@opencode/cli"), null);
 });
 
 test("list: anonymous, drafts left out, notes cut when long, only github.com links", async () => {
@@ -84,8 +86,8 @@ test("list: GitHub's refusals and odd repositories are a GitHubError", async () 
   await fails(repo, () => new Response("rate limited", { status: 403 }), "GitHub answered 403 for QwenLM/qwen-code's releases");
   await fails(repo, thrown(new TypeError("fetch failed")), "GitHub is unreachable (fetch failed)");
   await fails(repo, thrown(new DOMException("The operation was aborted due to timeout", "TimeoutError")), "GitHub is unreachable (no answer within 10 s)");
-  await fails(repo, () => new Response("x".repeat(8 * 1024 * 1024 + 1)), "GitHub's list of QwenLM/qwen-code's releases is too large");
-  const uncancellable = new ReadableStream({ pull: (stream) => stream.enqueue(new Uint8Array(8 * 1024 * 1024 + 1)), cancel: () => Promise.reject(new Error("cancel failed")) });
+  await fails(repo, () => new Response("x".repeat(32 * 1024 * 1024 + 1)), "GitHub's list of QwenLM/qwen-code's releases is too large");
+  const uncancellable = new ReadableStream({ pull: (stream) => stream.enqueue(new Uint8Array(32 * 1024 * 1024 + 1)), cancel: () => Promise.reject(new Error("cancel failed")) });
   await fails(repo, () => new Response(uncancellable), "GitHub's list of QwenLM/qwen-code's releases is too large");
   await fails(repo, () => new Response("<html>"), /^GitHub is unreachable \(Unexpected token .* is not valid JSON\)$/);
   await fails("../etc", () => Response.json([]), "../etc is not a GitHub repository (owner/name)");

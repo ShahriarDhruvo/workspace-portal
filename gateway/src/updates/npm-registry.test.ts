@@ -89,6 +89,23 @@ test("githubRepository reads every form of the repository field npm accepts", ()
   for (const [field, repo] of cases) assert.equal(githubRepository(field), repo, JSON.stringify(field));
 });
 
+test("readPackument leaves out what is no version here (OpenCode's snapshot builds); the dist-tags that name them stay", () => {
+  const read = readPackument({
+    "dist-tags": { latest: "2.4.1", beta: "0.0.0-beta-19507", dev: "0.0.0-dev-1344" },
+    versions: { "0.0.0-beta-19507": {}, "0.0.0-dev-1344": {}, "2.4.0": {}, "2.4.1": {} },
+    time: { "0.0.0-dev-1344": "2026-11-23T08:00:00.000Z", "2.4.1": "2026-11-21T10:00:00.000Z" },
+    repository: { type: "git", url: "git+https://github.com/anomalyco/opencode.git" },
+  });
+  assert.deepEqual(read, {
+    distTags: { latest: "2.4.1", beta: "0.0.0-beta-19507", dev: "0.0.0-dev-1344" },
+    versions: [
+      { version: "2.4.0", publishedAt: null, deprecated: false },
+      { version: "2.4.1", publishedAt: Date.parse("2026-11-21T10:00:00.000Z"), deprecated: false },
+    ],
+    githubRepo: "anomalyco/opencode",
+  });
+});
+
 test("readPackument refuses what isn't a package document, and ignores inherited keys", () => {
   assert.equal(readPackument(["latest"]), null);
   assert.equal(readPackument(null), null);

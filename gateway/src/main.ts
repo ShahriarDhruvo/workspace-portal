@@ -1,6 +1,6 @@
-// Workspace Portal gateway: owns the per-user agent containers (Qwen Code or DeepSeek Harness; a Private and an
-// Online workspace per user, one running at a time), proxies browsers to them (one port per user and kind), and
-// serves the LLM and web search to them (one service listener per kind, on that kind's network).
+// Workspace Portal gateway: owns the per-user agent containers (Qwen Code, DeepSeek Harness or OpenCode; a Private
+// and an Online workspace per user, one running at a time), proxies browsers to them (one port per user and kind),
+// and serves the LLM and web search to them (one service listener per kind, on that kind's network).
 // See docs/ARCHITECTURE.md.
 import type http from "node:http";
 import { openDatabase, WORKSPACE_KINDS, type WorkspaceKind } from "@portal/core";

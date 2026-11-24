@@ -1,5 +1,5 @@
 // In-process stand-ins for Docker (containers and images), the agents' web servers (Qwen Code's
-// `qwen serve`, DeepSeek Harness's `dsh web`), the LLM server and the npm registry.
+// `qwen serve`, DeepSeek Harness's `dsh web`, OpenCode's `opencode serve`), the LLM server and the npm registry.
 import assert from "node:assert/strict";
 import { createHash, createHmac } from "node:crypto";
 import fs from "node:fs";
@@ -8,7 +8,7 @@ import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { WebSocketServer } from "ws";
-import { openDatabase, type PortalDb } from "@portal/core";
+import { isVersion, openDatabase, type PortalDb } from "@portal/core";
 import type { AgentKind, EngineJob, EngineStatus, WorkspaceKind } from "@portal/core";
 import { driverFor } from "../src/agents/index.ts";
 import type { SettingsObject } from "../src/agents/qwen-settings.ts";
@@ -428,6 +428,154 @@ async function startFakeDsh(secret: string, options: { readyAfterMs: number; pin
   return fake;
 }
 
+export interface FakeOpencodeSession {
+  id: string;
+  /** It runs a turn: `GET /api/session/active` lists it. */
+  running?: boolean;
+  /** It ended after that list was made: its own routes answer 404. */
+  ended?: boolean;
+}
+
+export interface FakeOpencode {
+  host: string;
+  port: number;
+  /** The password it was started with (OPENCODE_PASSWORD). */
+  password: string;
+  /** Its sessions; tests change them to simulate the agent working. */
+  sessions: FakeOpencodeSession[];
+  /** Approvals and questions nobody has answered yet, by session. */
+  permissions: Array<{ sessionID: string }>;
+  forms: Array<{ sessionID: string }>;
+  /** Background jobs (`GET /api/experimental/job`): commands a turn left running, and every subagent. */
+  jobs: Array<{ kind: "shell" | "subagent"; status: "running" | "completed" }>;
+  /** While true, the API answers 503. */
+  apiFails: boolean;
+  /** The reads the gateway's status check makes (and a tab's own polls), as method-less targets: never in `requests`. */
+  polls: string[];
+  /** Every other request, with the status the fake answered. */
+  requests: Array<RecordedRequest & { status: number }>;
+  /** Accepted sockets. */
+  sockets: RecordedRequest[];
+  close(): Promise<void>;
+}
+
+/** What OpenCode's API answers the gateway's status check with, and an idle tab's own polling. */
+const OPENCODE_POLL = /^\/api\/(?:info|session\/active|session\/[^/]+\/(?:permission|form)|experimental\/job)$/;
+const OPENCODE_TERMINAL = /^\/api\/(?:experimental\/persistent-pty|pty)\/[^/]+\/connect$/;
+/** A remote machine's link: a socket OpenCode opens to anyone, without its password. */
+const OPENCODE_MACHINE_LINK = "/api/experimental/machine/link";
+
+/** Like OpenCode: its terminal routes take a request without an Origin, or with its own address (or localhost) as one. */
+function opencodeOriginAllowed(req: IncomingMessage): boolean {
+  const { origin, host } = req.headers;
+  return origin === undefined || origin === `http://${host}` || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+}
+
+async function startFakeOpencode(password: string, options: { readyAfterMs: number; pingIntervalMs: number; host: string }): Promise<FakeOpencode> {
+  const readyAt = Date.now() + options.readyAfterMs;
+  const authorization = `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`;
+  const tickets = new Set<string>();
+  const fake: FakeOpencode = {
+    host: options.host,
+    port: 0,
+    password,
+    sessions: [],
+    permissions: [],
+    forms: [],
+    jobs: [],
+    apiFails: false,
+    polls: [],
+    requests: [],
+    sockets: [],
+    async close() {
+      for (const client of wss.clients) client.terminate();
+      await closeServer(server);
+    },
+  };
+
+  const server = http.createServer((req, res) => {
+    const method = req.method ?? "GET";
+    const url = req.url ?? "/";
+    const { pathname } = new URL(url, "http://x");
+    // Like OpenCode: nothing listens until it has started.
+    if (Date.now() < readyAt) return void req.socket.destroy();
+    const authorised = req.headers.authorization === authorization;
+    if (method === "GET" && OPENCODE_POLL.test(pathname) && authorised) {
+      fake.polls.push(url);
+      if (fake.apiFails) return json(res, 503, { error: "unavailable" });
+      if (pathname === "/api/info") return json(res, 200, { version: "2.4.1", pid: 1, hostname: "workspace", urls: [`http://${fake.host}:${fake.port}`], paths: { tmp: "/tmp/opencode" } });
+      if (pathname === "/api/session/active") {
+        return json(res, 200, { data: Object.fromEntries(fake.sessions.filter((session) => session.running).map((session) => [session.id, { type: "running" }])) });
+      }
+      if (pathname === "/api/experimental/job") {
+        return json(res, 200, { data: fake.jobs.map((job, index) => ({ ...job, id: `job_${index}`, sessionID: "ses_a", time: { started: 1 } })) });
+      }
+      const [, , , sessionID, kind] = pathname.split("/");
+      if (!fake.sessions.some((session) => session.id === sessionID && !session.ended)) return json(res, 404, { _tag: "SessionNotFoundError", sessionID });
+      const pending = kind === "permission" ? fake.permissions : fake.forms;
+      return json(res, 200, { data: pending.filter((request) => request.sessionID === sessionID).map((request, index) => ({ id: `req_${index}`, sessionID: request.sessionID })) });
+    }
+    // Like OpenCode: its page is served to anyone, its API and the pairing links to nobody without the password.
+    const open = method === "GET" && pathname === "/";
+    const record = { method, url, headers: req.headers, status: authorised || open ? 200 : 401 };
+    fake.requests.push(record);
+    const answer = (status: number, body?: unknown): void => {
+      record.status = status;
+      if (body === undefined) res.writeHead(status).end();
+      else json(res, status, body);
+    };
+    if (open) return void res.writeHead(200, { "content-type": "text/html" }).end("<!doctype html><title>OpenCode</title>");
+    if (!authorised) {
+      return void res.writeHead(401, { "www-authenticate": 'Basic realm="Secure Area"', "content-type": "application/json" }).end(JSON.stringify({ _tag: "UnauthorizedError", message: "Authentication required" }));
+    }
+    req.resume();
+    if (method === "POST" && pathname === "/api/session") answer(200, { data: { id: "ses_1" } });
+    else if (method === "POST" && /^\/api\/session\/[^/]+\/prompt$/.test(pathname)) answer(200, { data: { id: "msg_1", type: "user" } });
+    else if (method === "POST" && /^\/api\/experimental\/session\/[^/]+\/terminal$/.test(pathname)) answer(200, { data: { id: "pty_persistent_1", status: "running" } });
+    else if (method === "POST" && /^\/api\/(?:experimental\/persistent-pty|pty)\/[^/]+\/connect-token$/.test(pathname)) {
+      // Like OpenCode: a ticket only for its own page's request.
+      if (req.headers["x-opencode-ticket"] !== "1" || !opencodeOriginAllowed(req)) return answer(403, { _tag: "ForbiddenError", message: "Invalid persistent PTY connect token request" });
+      const ticket = `ticket-${tickets.size + 1}`;
+      tickets.add(ticket);
+      answer(200, { data: { ticket, expires_in: 60 } });
+    } else if (method === "POST" && (/^\/api\/session\/[^/]+\/view$/.test(pathname) || pathname === "/api/worktree/refresh")) answer(204);
+    else if (method === "POST" && /^\/api\/rpc\/[^/]+\/[^/]+$/.test(pathname)) answer(200, { data: null });
+    // What the portal must never let a browser reach: a session of OpenCode's own for another browser or app.
+    else if (method === "POST" && pathname === "/api/pair") answer(200, { code: "pairing-code", expires_in: 300 });
+    else if (pathname.startsWith("/auth/connect/")) {
+      record.status = 302;
+      res.writeHead(302, { location: "/", "set-cookie": "opencode_session=paired; Path=/; HttpOnly" }).end();
+    } else if (pathname.startsWith("/api/experimental/machine")) answer(200, { data: [] });
+    else answer(404);
+  });
+
+  const wss = new WebSocketServer({ noServer: true });
+  server.on("upgrade", (req, socket, head) => {
+    const { pathname, searchParams } = new URL(req.url ?? "/", "http://x");
+    const ticket = searchParams.get("ticket");
+    let status: number | null = null;
+    if (pathname === OPENCODE_MACHINE_LINK) status = null;
+    else if (!OPENCODE_TERMINAL.test(pathname)) status = 404;
+    // Like OpenCode: the password or a ticket of its own, and a ticket that is given must be one.
+    else if (req.headers.authorization !== authorization && !(ticket !== null && tickets.has(ticket))) status = 401;
+    else if (!opencodeOriginAllowed(req) || (ticket !== null && !tickets.delete(ticket))) status = 403;
+    if (status !== null) {
+      socket.end(`HTTP/1.1 ${status} ${http.STATUS_CODES[status]}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
+      return;
+    }
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      fake.sockets.push({ method: req.method ?? "", url: req.url ?? "", headers: req.headers });
+      ws.send("hello from opencode");
+      ws.on("message", (data, isBinary) => ws.send(data, { binary: isBinary }));
+      const ping = setInterval(() => ws.ping(), options.pingIntervalMs);
+      ws.on("close", () => clearInterval(ping));
+    });
+  });
+
+  fake.port = await listenLocal(server, 0, options.host);
+  return fake;
+}
+
 interface FakeContainer {
   id: string;
   userId: number | null;
@@ -509,6 +657,12 @@ export class FakeRuntime implements ContainerRuntime {
     return server as FakeDsh;
   }
 
+  opencodeFor(userId: number): FakeOpencode {
+    const { agent, server } = this.containerFor(userId);
+    if (agent !== "opencode" || !server) throw new Error(`the workspace of user ${userId} has no fake opencode`);
+    return server as FakeOpencode;
+  }
+
   startsFor(userId: number): StartRecord[] {
     return this.starts.filter((start) => start.userId === userId);
   }
@@ -569,8 +723,7 @@ export class FakeRuntime implements ContainerRuntime {
 
     const ip = this.#freeIp(options.kind);
     const serverOptions = { readyAfterMs: this.readyAfterMs, pingIntervalMs: this.pingIntervalMs, host: ip };
-    const server =
-      options.agent === "qwen" ? await startFakeQwen(options.credential, serverOptions) : await startFakeDsh(options.credential, serverOptions);
+    const server = await { qwen: startFakeQwen, dsh: startFakeDsh, opencode: startFakeOpencode }[options.agent](options.credential, serverOptions);
     const id = `fake-${++this.#seq}`;
     const version = parseWorkspaceImage(options.image)?.version ?? null;
     this.containers.set(id, {
@@ -818,22 +971,24 @@ export class FakeRegistry implements NpmRegistry {
       nightly: "0.27.2-nightly.20261113.6f754be654",
     },
     "@deepseek-ai/dsh": { alpha: "0.2.2-alpha.3", latest: "0.2.2-rc.1", next: "0.2.2-rc.3" },
+    // Its other tags name snapshot builds, which are no versions to the portal.
+    "@opencode/cli": { latest: "2.4.1", beta: "0.0.0-beta-19507", dev: "0.0.0-dev-1344" },
   };
   /** Published versions besides the ones a dist-tag names. */
-  readonly published = new Set(["@qwen-code/qwen-code@0.27.0", "@qwen-code/qwen-code@0.26.0", "@deepseek-ai/dsh@0.2.1"]);
+  readonly published = new Set(["@qwen-code/qwen-code@0.27.0", "@qwen-code/qwen-code@0.26.0", "@deepseek-ai/dsh@0.2.1", "@opencode/cli@2.4.0"]);
   down = false;
   /** While set, answers wait for it. */
   gate: Promise<void> | null = null;
   readonly calls: string[] = [];
 
-  /** The package's dist-tags and versions (no publish times, no repository); never a 304. */
+  /** The package's dist-tags and versions as the real reader leaves them (no publish times, no repository); never a 304. */
   async packument(packageName: string): Promise<{ etag: string | null; package: NpmPackage }> {
     this.calls.push(`packument ${packageName}`);
     await this.gate;
     if (this.down) throw registryError("The npm registry is unreachable (fetch failed).");
     const tags = this.tags[packageName] ?? {};
     const others = [...this.published].filter((entry) => entry.startsWith(`${packageName}@`)).map((entry) => entry.slice(packageName.length + 1));
-    const versions = [...new Set([...Object.values(tags), ...others])].map((version) => ({ version, publishedAt: null, deprecated: false }));
+    const versions = [...new Set([...Object.values(tags), ...others])].filter(isVersion).map((version) => ({ version, publishedAt: null, deprecated: false }));
     return { etag: null, package: { distTags: { ...tags }, versions, githubRepo: null } };
   }
 

@@ -3,7 +3,7 @@
 //     keeps as a credentials record. The gateway generates that secret per start (DSH_COOKIE_SECRET; start-dsh stores
 //     it in a file under /tmp and drops it from the environment) and mints the cookie itself for every request it
 //     forwards. The browser never holds a dsh cookie: the proxy's session, port and Origin checks are what authorise
-//     it (browserAuth "cookie").
+//     it (browserAuth "session").
 //   * dsh binds cookies to the Host they were issued for and checks Origin against Host, so the gateway always
 //     presents Host localhost:3080 (a loopback name dsh trusts) and, when the browser sent an Origin (already checked
 //     to be the workspace's own), the matching Origin.
@@ -63,11 +63,12 @@ export const dshDriver: AgentDriver = {
   port: DSH_PORT,
   credentialEnv: "DSH_COOKIE_SECRET",
   settingsMount: "/etc/workspace-portal/dsh",
-  browserAuth: "cookie",
-  socketPaths: new Set([DSH_MUX_PATH]),
+  browserAuth: "session",
   // /connect trades a launch token for a session cookie (pairing another browser). OAuth sign-ins (DeepSeek account)
   // and opening apps on the host belong to plugins the image's lockdown disables; refusing them here as well costs nothing.
   blockedPrefixes: ["/connect", "/open-in-app", "/oauth"],
+
+  isSocketPath: (pathname) => pathname === DSH_MUX_PATH,
 
   // Prompts, approvals, model and settings changes. Terminal keystrokes come over the socket, where every message
   // counts (an idle tab sends none).

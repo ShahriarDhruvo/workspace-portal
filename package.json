@@ -2,7 +2,7 @@
   "name": "workspace-portal",
   "private": true,
   "version": "0.1.0",
-  "description": "A web portal on one server: each user gets AI coding workspaces (Qwen Code or DeepSeek Harness) in locked-down containers, driven by a model you host.",
+  "description": "A web portal on one server: each user gets AI coding workspaces (Qwen Code, DeepSeek Harness or OpenCode) in locked-down containers, driven by a model you host.",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",

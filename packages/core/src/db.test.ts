@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import Database from "better-sqlite3";
 import { openDatabase, openForOwnershipChange, migrate } from "./db.ts";
 import { MIGRATIONS } from "./migrations.ts";
 import { eq } from "drizzle-orm";
@@ -56,6 +57,52 @@ test("a workspace's agent and kind, and a user's Online permission, take only kn
   assert.throws(() => client.exec("UPDATE workspaces SET agent = 'other'"), /CHECK/);
   assert.throws(() => client.exec("UPDATE workspaces SET kind = 'public'"), /CHECK/);
   assert.throws(() => client.exec("UPDATE users SET online_allowed = 2"), /CHECK/);
+});
+
+test("the migration that admits OpenCode keeps every row, the other tables' rows and the indexes", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "portal-db-"));
+  const client = new Database(path.join(dir, "old.sqlite"));
+  client.pragma("foreign_keys = ON");
+  // A database as the release before OpenCode left it.
+  for (const sql of MIGRATIONS.slice(0, 2)) client.exec(sql);
+  client.pragma("user_version = 2");
+  client.exec(`
+    INSERT INTO users (username, first_name, last_name, password_hash, role, created_at, updated_at, agent, online_allowed)
+      VALUES ('root', 'R', 'R', 'x', 'admin', 1, 2, NULL, 1), ('ann', 'A', 'A', 'y', 'user', 3, 4, 'dsh', 0);
+    INSERT INTO sessions (id, user_id, acting_as_user_id, created_at, last_seen_at, expires_at) VALUES ('s', 1, 2, 0, 0, 9);
+    INSERT INTO workspaces (user_id, status, updated_at, agent, kind) VALUES (2, 'running', 5, 'qwen', 'online');
+    INSERT INTO workspace_sessions (user_id, kind, agent, started_at, ended_at, requests) VALUES (2, 'online', 'qwen', 6, NULL, 7), (2, 'private', 'dsh', 1, 2, 0);
+    INSERT INTO api_keys (user_id, name, token_hash, hint, created_at) VALUES (2, 'k', 'h', 'abcd', 0);
+    INSERT INTO llm_usage (user_id, day, requests) VALUES (2, '2026-11-01', 3);
+  `);
+
+  migrate(client);
+  assert.equal(client.pragma("user_version", { simple: true }), MIGRATIONS.length);
+  assert.deepEqual(client.pragma("foreign_key_check"), []);
+  assert.deepEqual(client.prepare("SELECT id, username, role, agent, online_allowed, created_at FROM users ORDER BY id").all(), [
+    { id: 1, username: "root", role: "admin", agent: null, online_allowed: 1, created_at: 1 },
+    { id: 2, username: "ann", role: "user", agent: "dsh", online_allowed: 0, created_at: 3 },
+  ]);
+  assert.deepEqual(client.prepare("SELECT user_id, status, agent, kind FROM workspaces").all(), [{ user_id: 2, status: "running", agent: "qwen", kind: "online" }]);
+  assert.deepEqual(client.prepare("SELECT kind, agent, started_at, ended_at, requests FROM workspace_sessions ORDER BY id").all(), [
+    { kind: "online", agent: "qwen", started_at: 6, ended_at: null, requests: 7 },
+    { kind: "private", agent: "dsh", started_at: 1, ended_at: 2, requests: 0 },
+  ]);
+  // Nothing that hangs on a user went with the column.
+  const count = (table: string): number => (client.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n;
+  for (const table of ["sessions", "api_keys", "llm_usage"]) assert.equal(count(table), 1, table);
+
+  for (const table of ["users", "workspaces", "workspace_sessions"]) {
+    client.exec(`UPDATE ${table} SET agent = 'opencode'`);
+    assert.throws(() => client.exec(`UPDATE ${table} SET agent = 'other'`), /CHECK/, table);
+    assert.deepEqual(client.prepare(`SELECT name FROM pragma_table_info('${table}') WHERE name LIKE 'agent%'`).all(), [{ name: "agent" }]);
+  }
+  // The rules the indexes keep still hold: one admin, one open session per user.
+  assert.throws(() => client.exec("UPDATE users SET role = 'admin' WHERE id = 2"), /UNIQUE/);
+  assert.throws(() => client.exec("INSERT INTO workspace_sessions (user_id, kind, started_at) VALUES (2, 'private', 9)"), /UNIQUE/);
+  client.exec("DELETE FROM users WHERE id = 2");
+  assert.equal(count("workspaces"), 0, "a user's rows still go with the user");
+  client.close();
 });
 
 test("one host_daily row per day and server", () => {

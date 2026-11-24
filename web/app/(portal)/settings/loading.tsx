@@ -18,9 +18,10 @@ export default function SettingsLoading() {
           </div>
         </SectionSkeleton>
         <SectionSkeleton description>
-          <div className="grid gap-2 sm:grid-cols-2">
-            <Skeleton className="h-10.5 rounded-lg" />
-            <Skeleton className="h-10.5 rounded-lg" />
+          <div className="grid gap-2 sm:grid-cols-3">
+            {[0, 1, 2].map((card) => (
+              <Skeleton key={card} className="h-10.5 rounded-lg sm:h-14.5" />
+            ))}
           </div>
         </SectionSkeleton>
         <SectionSkeleton footer={<ButtonSkeleton className="w-32" />}>

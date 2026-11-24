@@ -203,7 +203,7 @@ test("splitBearerSubprotocol takes the token out of the offer and keeps the othe
   assert.equal(splitBearerSubprotocol(`${subprotocol("first")}, ${subprotocol("second")}`).token, "second");
 });
 
-test("workspaceResponseHeaders strips cookies and framing denial, keeps encoding", () => {
+test("workspaceResponseHeaders strips cookies, framing denial and a request to sign in, keeps encoding", () => {
   const out = workspaceResponseHeaders(
     {
       "set-cookie": ["session=1; HttpOnly"],
@@ -214,7 +214,7 @@ test("workspaceResponseHeaders strips cookies and framing denial, keeps encoding
       "transfer-encoding": "chunked",
       connection: "keep-alive",
       "cache-control": "no-cache",
-      "www-authenticate": "Bearer",
+      "www-authenticate": 'Basic realm="Secure Area"',
     },
     { portal: "http://192.0.2.10:3000" },
   );
@@ -223,7 +223,6 @@ test("workspaceResponseHeaders strips cookies and framing denial, keeps encoding
     "content-encoding": "br",
     "content-type": "text/html",
     "cache-control": "no-cache",
-    "www-authenticate": "Bearer",
   });
   assert.equal(workspaceResponseHeaders({ "content-type": "text/css" }, { portal: "https://h" })["content-security-policy"], "frame-ancestors https://h");
   // Only the portal may frame a workspace: not another workspace's port or any other service on the host.

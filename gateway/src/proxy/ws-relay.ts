@@ -1,4 +1,4 @@
-// WebSocket relay for the agents' sockets (the driver's socketPaths). Both sides are terminated: the gateway connects
+// WebSocket relay for the agents' sockets (the driver's isSocketPath). Both sides are terminated: the gateway connects
 // to the workspace first and accepts the browser only once the workspace has accepted, so its answer (401/403/…) can
 // be passed back as a plain HTTP status. The driver puts the container's credential on the upstream handshake. For a
 // token agent the browser must present its session-bound token: browsers can't set headers on WebSockets, so the UI
@@ -50,7 +50,7 @@ export function createWsRelay(deps: AgentDeps): (req: IncomingMessage, socket: D
       return rejectUpgrade(socket, no.status, no.code, no.message, no.headers);
     }
     const driver = driverFor(upstream.agent);
-    if (!driver.socketPaths.has(splitTarget(req.url ?? "").pathname)) return rejectUpgrade(socket, 404, "not_found");
+    if (!driver.isSocketPath(splitTarget(req.url ?? "").pathname)) return rejectUpgrade(socket, 404, "not_found");
     if (driver.browserAuth === "token" && presented === null) return rejectUpgrade(socket, 401, INVALID_TOKEN.code, INVALID_TOKEN.message);
     // The socket's address in the workspace. No browser sends a target with a "#", and nothing connects to one.
     const address = URL.parse(`ws://${upstream.host}:${upstream.port}${req.url ?? "/"}`);

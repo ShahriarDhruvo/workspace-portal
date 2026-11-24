@@ -13,10 +13,12 @@ test("agentFrameUrl for Qwen Code keeps the typed host, uses the workspace's own
   );
 });
 
-test("agentFrameUrl for DeepSeek Harness is the root of the workspace's port: no token (dsh uses a cookie), no theme", () => {
-  for (const theme of ["dark", "light"] as const) {
-    const url = agentFrameUrl({ protocol: "http:", hostname: "portal.example.lan" }, { port: 3107, token: "abc_DEF-123" }, "dsh", theme);
-    assert.equal(url, "http://portal.example.lan:3107/");
-    assert.ok(!url.includes("abc_DEF-123"), "the session's workspace token stays out of the URL");
+test("agentFrameUrl for DeepSeek Harness and OpenCode is the root of the workspace's port: no token (the gateway adds their credential), no theme", () => {
+  for (const agent of ["dsh", "opencode"] as const) {
+    for (const theme of ["dark", "light"] as const) {
+      const url = agentFrameUrl({ protocol: "http:", hostname: "portal.example.lan" }, { port: 3107, token: "abc_DEF-123" }, agent, theme);
+      assert.equal(url, "http://portal.example.lan:3107/", agent);
+      assert.ok(!url.includes("abc_DEF-123"), "the session's workspace token stays out of the URL");
+    }
   }
 });

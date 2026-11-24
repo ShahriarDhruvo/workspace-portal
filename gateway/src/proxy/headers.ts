@@ -168,10 +168,14 @@ function responseHeaders(upstream: IncomingHttpHeaders, frame: FramePolicy, stat
   return out;
 }
 
-/** An agent's response headers as the browser gets them: no cookies, framing allowed for the portal only. */
+/**
+ * An agent's response headers as the browser gets them: no cookies, framing allowed for the portal only, and no
+ * request to sign in (the gateway signs in to the agent; a browser asked to would send a password with every request).
+ */
 export function workspaceResponseHeaders(upstream: IncomingHttpHeaders, frame: FramePolicy, status?: number): HeaderMap {
   const out = responseHeaders(upstream, frame, status, upstream["content-security-policy"]);
   delete out["set-cookie"];
+  delete out["www-authenticate"];
   return out;
 }
 

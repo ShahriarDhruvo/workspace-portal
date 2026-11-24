@@ -1,7 +1,8 @@
-# The workspace images, one target per agent: qwen (Qwen Code's Web Shell, port 4170) and dsh (DeepSeek Harness's
-# web UI, port 3080). deploy/lib.sh builds them, and the gateway for Admin > Updates. Both hold the same tools and a
-# headless Chromium for the Playwright MCP, and no account: a workspace runs as its user's own UID on a read-only
-# root, with that user's /home/user and /workspace mounted (gateway/src/docker/container-spec.ts).
+# The workspace images, one target per agent: qwen (Qwen Code's Web Shell, port 4170), dsh (DeepSeek Harness's web
+# UI, port 3080) and opencode (OpenCode's web UI, port 4096). deploy/lib.sh builds them, and the gateway for Admin >
+# Updates. All hold the same tools and a headless Chromium for the Playwright MCP, and no account: a workspace runs as
+# its user's own UID on a read-only root, with that user's /home/user and /workspace mounted
+# (gateway/src/docker/container-spec.ts).
 FROM docker.io/library/node:24-bookworm-slim@sha256:c0a93797ee78814ae6d32fcca2561fdbbe423149c3f5389aad32d86e9fd85bd4 AS base
 ARG PLAYWRIGHT_MCP_VERSION=0.0.84
 # While building only: npm's cache and logs go to /tmp, a tmpfs in every step that runs npm.
@@ -34,7 +35,7 @@ USER root
 # qwen/trim-web-shell.mjs trims the Web Shell in place, as it says: Qwen Code has no setting for it. When a change
 # no longer fits a Qwen Code version, it names the change and fails the build, as the dsh stage's checks do.
 # /etc/workspace-portal/qwen: where the gateway mounts settings.json and system-defaults.json.
-# The find, here and in the dsh stage: no setuid or setgid program stays in a workspace image.
+# The find, here and in the other stages: no setuid or setgid program stays in a workspace image.
 RUN --mount=type=tmpfs,target=/tmp --mount=type=bind,source=qwen/trim-web-shell.mjs,target=/mnt/trim-web-shell.mjs \
     npm install -g "@qwen-code/qwen-code@${QWEN_CODE_VERSION}" \
  && node /mnt/trim-web-shell.mjs "$(npm root -g)/@qwen-code/qwen-code" \
@@ -102,3 +103,36 @@ LABEL workspace-portal.agent="dsh"
 USER 65534:65534
 # Not under tini: start-dsh execs it once the cookie secret is out of the environment, so PID 1 never holds it.
 ENTRYPOINT ["/usr/local/bin/start-dsh"]
+
+FROM base AS opencode
+ARG OPENCODE_VERSION=2.4.1
+USER root
+# OpenCode is one program. npm installs each of its builds for this kind of machine (four for x64: for glibc and for
+# musl, with and without AVX2), and its package links the one this system and CPU run as `opencode`: the image is for
+# the host that builds it. The builds' own packages are then removed; the link keeps the chosen one.
+# HOME: its package starts it once, and it opens its log in its home even to say its version.
+# /etc/opencode: OpenCode's directory for managed settings, where the gateway mounts opencode.json.
+RUN --mount=type=tmpfs,target=/tmp \
+    HOME=/tmp npm install -g "@opencode/cli@${OPENCODE_VERSION}" \
+ && rm -rf "$(npm root -g)/@opencode/cli/node_modules" \
+ && HOME=/tmp opencode --version \
+ && mkdir -p /etc/opencode \
+ && find / -xdev -perm /6000 -type f -exec chmod a-s {} +
+# OPENCODE_DISABLE_AUTOUPDATE: it looks for no newer version, as the gateway's settings say too (`update`).
+# OPENCODE_DISABLE_MODELS_FETCH: its list of the world's models stays the one it ships with (a Private workspace
+#   could not fetch another); the portal's provider is the only one offered either way.
+ENV OPENCODE_DISABLE_AUTOUPDATE=1 \
+    OPENCODE_DISABLE_MODELS_FETCH=1
+# No file of OpenCode is edited, so nothing here can stop fitting it; what can change is how it reads the gateway's
+# settings and answers the gateway's requests. The build fails when it does, as check-serve.mjs says. The check has
+# no network, as a Private workspace has no route out: OpenCode has to start, take a turn and open a terminal there.
+RUN --network=none \
+    --mount=type=tmpfs,target=/tmp \
+    --mount=type=bind,source=opencode/check-serve.mjs,target=/mnt/check-serve.mjs \
+    --mount=type=bind,source=opencode/check-settings.json,target=/mnt/check-settings.json \
+    node /mnt/check-serve.mjs /mnt/check-settings.json
+COPY --chmod=0755 start-opencode.sh /usr/local/bin/start-opencode
+EXPOSE 4096
+LABEL workspace-portal.agent="opencode"
+USER 65534:65534
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/start-opencode"]

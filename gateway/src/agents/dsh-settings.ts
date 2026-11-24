@@ -6,7 +6,7 @@
 //
 // The file is JSON, which YAML 1.2 reads as it is: model names and ids come from the admin's file, and as JSON
 // strings they can never become YAML tags (dsh evaluates `!!js` tags as code).
-import { AgentConfigError, BROWSER_MCP, BROWSER_TIMEOUT_MS, LLM_KEY_ENV, SEARCH_TIMEOUT_MS } from "./driver.ts";
+import { AgentConfigError, BROWSER_MCP, BROWSER_TIMEOUT_MS, LLM_KEY_ENV, LLM_TIMEOUT_MS, SEARCH_TIMEOUT_MS } from "./driver.ts";
 import type { ModelCatalog, PortalModel } from "./models.ts";
 
 export const DSH_PATCH_FILE = "portal.patch.yml";
@@ -20,8 +20,6 @@ export const DSH_MIN_MESSAGE_BUDGET = 78_020;
 /** The smallest output cap worth offering when a model's cap has to shrink to fit that rule. */
 const DSH_MIN_OUTPUT_TOKENS = 4096;
 
-/** dsh's own timeouts, as long as Qwen Code's (generationConfig.timeout / streamIdleTimeoutMs). */
-const LLM_TIMEOUT_MS = 3_600_000;
 /** The provider name sessions see in the model picker. */
 const PROVIDER = "portal";
 

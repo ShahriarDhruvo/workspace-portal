@@ -145,7 +145,7 @@ export function unreachablePage(): string {
 export function previewUnchosenPage(): string {
   return render({
     title: "No app chosen",
-    text: "Open your app from the Web preview in your workspace: http://localhost followed by the port its server listens on, such as http://localhost:3000.",
+    text: "Open your app from the Web preview in your workspace: http://localhost followed by the port its server listens on, such as http://localhost:3000. In OpenCode, which has no Web preview, add the port to this address instead, as in /__portal/port/3000/.",
   });
 }
 
