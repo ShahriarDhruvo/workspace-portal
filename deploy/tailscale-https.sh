@@ -31,7 +31,7 @@ if [[ $# -eq 0 ]]; then
   tailscale_name >/dev/null || die "Tailscale gives this server no HTTPS name: it must run and be signed in, with MagicDNS and HTTPS certificates enabled for the tailnet"
   # First: Tailscale listens on these ports of its own address, which a listener on every address collides with.
   listen_on 127.0.0.1 true
-  log "Tailscale Serve: TCP 443, and the $(wc -w <<<"$ports") ports of the workspaces and their previews in $(port_ranges) (about a minute)"
+  log "Tailscale Serve: TCP 443, and the $(wc -w <<<"$ports") ports of the workspaces and their previews in $(port_ranges) (half a minute)"
   serve 443 "$(env_get WEB_PORT)"
   for port in $ports; do serve "$port" "$port"; done
 else

@@ -838,9 +838,10 @@ curl -s 'http://127.0.0.1:8888/search?q=fedora+linux&format=json' \
 grep ^ADMIN_PASSWORD .env
 ```
 
-**You should see** one `PASS` line per check and a last line with `failed 0`, after about 9 minutes on the 2-core
+**You should see** one `PASS` line per check and a last line with `failed 0`, after about 12 minutes on the 2-core
 test machine: most of that is waiting for connections that must fail. The count before it grows with the setup and
-with the workspaces people have used: `passed 389` on the test machine at the end of its tests. Then a line like
+with the workspaces people have used: `passed 492` on the test machine with the three agents and no workspace
+started yet. Then a line like
 `33 results, engines that failed: []`: an engine named in the brackets was turned away this time and comes back by
 itself.
 
@@ -1097,7 +1098,7 @@ switch off key expiry for this machine under Machines, or it drops out after 180
 cd ~/workspace-portal && sudo bash deploy/tailscale-https.sh
 ```
 
-**You should see**, after about a minute, the portal's new address as the last line:
+**You should see**, after about half a minute, the portal's new address as the last line:
 
 ```text
 Portal: https://NAME.YOUR-TAILNET.ts.net
@@ -1218,7 +1219,7 @@ sudo bash deploy/install.sh
 sudo bash deploy/verify-isolation.sh
 ```
 
-**You should see** `Workspace Portal is running.` within 2 minutes, and `failed 0` about 9 minutes later. Running
+**You should see** `Workspace Portal is running.` within 2 minutes, and `failed 0` about 12 minutes later. Running
 workspaces keep running, and an open browser tab carries on without a reload.
 
 <details>
@@ -1386,12 +1387,14 @@ fan service is running and that the vents have space on all sides. How each was 
 - DeepSeek Harness under load. The stress runs used Qwen Code.
 - OpenCode on these servers, and OpenCode with the real model. Its image was built on a development machine and
   run there as a workspace runs, behind the portal's gateway and in a browser, with a stand-in for the model. So
-  the times of [step 11](#11-workspace-portal) and of the isolation check are without its image, and nothing here
-  says how it handles a long conversation or an answer cut off at the model's limit, or what memory it needs.
-- A workspace of its own for every agent. The tests ran while a person's agents shared one Private and one Online
-  workspace, on other ports. So the times and the count of the isolation check, the minute of [step
-  12](#12-https-and-remote-access) and the update from that layout ([Update the portal](#update-the-portal)) are
-  not from a run with the workspaces as they are now.
+  the times of [step 11](#11-workspace-portal) are without its image, and nothing here says how it handles a long
+  conversation or an answer cut off at the model's limit, or what memory it needs.
+- A workspace of its own for every agent, in a browser. The portal server got that layout on November 24, 2026,
+  with every person's files deleted: the isolation check and the half minute of [step
+  12](#12-https-and-remote-access) are from that run, and a workspace of each agent was started, stopped and erased
+  through the gateway, without a browser. Not run: the agents' pages in a browser on the new ports, `tailscale-https.sh
+  off` on them, and the update from the old layout as [Update the portal](#update-the-portal) writes it (the server's
+  old ports were closed with `tailscale serve reset`, and nobody's files were moved).
 - The page reader under many agents at once. It was tested with one agent of each kind and with six pages at a
   time.
 - [Step 12](#12-https-and-remote-access) from its first line. Tailscale was already installed and signed in, so
