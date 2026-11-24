@@ -12,7 +12,7 @@ export interface WorkspaceStatusResponse extends WorkspaceInfo {
   /** The agents enabled on this install, in display order. */
   agents: AgentInfo[];
   /**
-   * The agent a start would launch: the workspace owner's choice in Settings while it is enabled, else the first
+   * The agent a start would launch: the workspace owner's choice (made on Home) while it is enabled, else the first
    * enabled agent; null when none is enabled.
    */
   nextAgent: AgentKind | null;

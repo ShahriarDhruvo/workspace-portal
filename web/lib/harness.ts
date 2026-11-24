@@ -1,14 +1,14 @@
 import "server-only";
 import { eq } from "drizzle-orm";
 import { refresh } from "next/cache";
-import { users, writeAudit, type StopReason, type User } from "@portal/core";
+import { users, writeAudit, type User } from "@portal/core";
 import { getDb } from "./db";
 import { gateway, toApiError } from "./gateway";
 import { harnessSchema, type ActionResult } from "./validation";
 import { restartKind } from "./workspace-stop";
 
-// A user's harness (users.agent) and the restart that starts it: Settings for one's own, a user's page for an
-// administrator's change of anyone's.
+// A user's harness (users.agent): Home for one's own, a user's page for an administrator's change of anyone's, and
+// from there the restart that starts it.
 
 /**
  * Saves the harness `user`'s workspace starts with, checked against the agents this install enables. Audited as
@@ -39,20 +39,15 @@ export async function saveHarnessOf(user: Pick<User, "id" | "agent">, agent: str
 }
 
 /**
- * "Restart now": stops `userId`'s running workspace and starts the same kind (Private or Online) again, with the
- * harness now saved. One that stopped since the page rendered stays stopped, with `stoppedMessage`: its owner
- * starts it from Home, choosing its kind there.
+ * "Restart now" on a user's page: stops `userId`'s running workspace and starts the same kind (Private or Online)
+ * again, with the harness now saved. One that stopped since the page rendered stays stopped, with `stoppedMessage`:
+ * its owner starts it from Home, choosing its kind there.
  */
-export async function restartWorkspaceOf(
-  userId: number,
-  reason: Extract<StopReason, "user" | "admin">,
-  actorUserId: number,
-  stoppedMessage: string,
-): Promise<ActionResult> {
+export async function restartWorkspaceOf(userId: number, actorUserId: number, stoppedMessage: string): Promise<ActionResult> {
   try {
     const kind = restartKind(await gateway.getWorkspace(userId));
     if (!kind) return { ok: false, message: stoppedMessage };
-    await gateway.stop(userId, reason, actorUserId);
+    await gateway.stop(userId, "admin", actorUserId);
     await gateway.start(userId, kind);
   } catch (error) {
     return { ok: false, message: toApiError(error).message };

@@ -170,7 +170,7 @@ async function loadHarnessTarget(userId: number): Promise<Target> {
   return loadUserById(id.data, session, { allowSelf: true });
 }
 
-/** Sets the harness a user's workspace starts with, as Settings does for one's own (lib/harness.ts). */
+/** Sets the harness a user's workspace starts with, as Home does for one's own (lib/harness.ts). */
 export async function setUserHarness(userId: number, agent: string): Promise<ActionResult> {
   const target = await loadHarnessTarget(userId);
   if ("error" in target) return { ok: false, message: target.error };
@@ -184,7 +184,7 @@ export async function setUserHarness(userId: number, agent: string): Promise<Act
 export async function restartUserWorkspace(userId: number): Promise<ActionResult> {
   const target = await loadHarnessTarget(userId);
   if ("error" in target) return { ok: false, message: target.error };
-  return restartWorkspaceOf(target.user.id, "admin", target.session.user.id, "The workspace has stopped since this page loaded.");
+  return restartWorkspaceOf(target.user.id, target.session.user.id, "The workspace has stopped since this page loaded.");
 }
 
 /** Switching it off also stops the user's Online workspace if it starts or runs (the confirmation says so). */

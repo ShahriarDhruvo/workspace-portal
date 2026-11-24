@@ -125,7 +125,7 @@ function UserRow({ user, isSelf, workspace, nextAgent }: UserRowProps) {
       </TableCell>
       <TableCell
         className={running ? "text-foreground" : "text-muted-foreground"}
-        title={running ? undefined : user.agent ? "Chosen in Settings; starts with the next Start" : "The default; starts with the next Start"}
+        title={running ? undefined : user.agent ? "Chosen for this user; starts with the next Start" : "The default; starts with the next Start"}
       >
         <span className="flex items-baseline gap-x-1.5">
           <span>{agent ?? "—"}</span>

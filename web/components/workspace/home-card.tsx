@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
-import { AGENT_NAMES, WORKSPACE_KIND_NAMES, type WorkspaceKind, type WorkspaceStatus } from "@portal/core/wire";
+import { AGENT_NAMES, WORKSPACE_KIND_NAMES, type AgentKind, type WorkspaceKind, type WorkspaceStatus } from "@portal/core/wire";
+import { saveHarness } from "@/lib/actions/settings";
 import { fetchJson, needsReauth, startWorkspace, stopWorkspace } from "@/lib/fetch-json";
 import { formatVersion, stopReasonText, workspaceState } from "@/lib/format";
 import type { WorkspaceStatusResponse } from "@/lib/api";
@@ -11,16 +12,19 @@ import type { ActionResult } from "@/lib/validation";
 import { initialKind, onlineAccessAfter, otherKind, startErrorText } from "@/lib/workspace-kind";
 import { stopWarnings } from "@/lib/workspace-stop";
 import { usePoll } from "@/components/common/use-poll";
+import { FormError } from "@/components/forms/form-error";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { ArrowRightIcon, StopIcon, WarningIcon } from "@/components/ui/icons";
 import { Spinner } from "@/components/ui/spinner";
+import { HarnessPicker, useHarnessChoice } from "./harness-picker";
 import { KindBadge } from "./kind-badge";
 import { KindPicker, StartWorkspaceButton, useKindChoice } from "./start-workspace";
 import { StopDialog } from "./stop-dialog";
 
 // Home's one focal point: the user's workspace, with the one thing to do next as the button in the card's corner.
+// Stopped, it asks what Start launches: Private or Online, and the harness when the install offers more than one.
 
 /**
  * The stop reasons worth a line on the card. Not the owner's own Stop or sign-out, and not an idle stop: the
@@ -52,10 +56,19 @@ export function HomeCard({ initial, initialError, idleTimeoutMinutes }: HomeCard
   const [confirmOpen, setConfirmOpen] = useState(false);
   const stopButton = useRef<HTMLButtonElement>(null);
   const choice = useKindChoice(info?.online ?? "off", info ? initialKind(info) : "private");
+  const harness = useHarnessChoice(info?.nextAgent ?? null, saveOwnHarness);
+
+  /** Saves the harness picked here; the card shows it as saved at once, not after the next poll. */
+  async function saveOwnHarness(agent: AgentKind): Promise<ActionResult> {
+    const result = await saveHarness(agent);
+    if (result.ok) setInfo((current) => (current ? { ...current, nextAgent: agent } : current));
+    return result;
+  }
 
   const status = info?.status ?? null;
   const settling = request !== null || status === "starting" || status === "stopping" || (status === "running" && !info?.ready);
-  usePoll<WorkspaceStatusResponse>("/api/workspace/status", settling ? 2_000 : 5_000, (result) => {
+  // Not while a harness is being saved: an answer from before the save would bring the earlier harness back.
+  usePoll<WorkspaceStatusResponse>(harness.saving ? null : "/api/workspace/status", settling ? 2_000 : 5_000, (result) => {
     if (result.ok) setInfo(result.data);
     setPollError(result.ok ? null : result.error.message);
   });
@@ -116,9 +129,9 @@ export function HomeCard({ initial, initialError, idleTimeoutMinutes }: HomeCard
 
   const active = status === "starting" || status === "running";
   const state = request === "start" ? workspaceState({ status: "starting", ready: false, busy: false }) : workspaceState(info);
-  // The harness of the running workspace; stopped, the one Start launches (the user's choice in Settings).
-  const agent = active ? info.agent : info.nextAgent;
-  const version = active ? info.agentVersion : info.agents.find((offered) => offered.id === info.nextAgent)?.version ?? null;
+  // The harness of the running workspace; stopped, the one Start launches (the user's choice in the card).
+  const agent = active ? info.agent : harness.value;
+  const version = active ? info.agentVersion : info.agents.find((offered) => offered.id === harness.value)?.version ?? null;
   const changesNextTime = active && info.nextAgent !== null && info.agent !== info.nextAgent;
   const stoppedBecause =
     status === "stopped" && info.stopReason !== null && NOTED_STOP_REASONS.has(info.stopReason)
@@ -133,6 +146,8 @@ export function HomeCard({ initial, initialError, idleTimeoutMinutes }: HomeCard
   const failed = status === "error" && request === null && error === null;
   const notes = failed || error || stoppedBecause || changesNextTime || pollError;
   const choosing = !(ready || starting || stopping);
+  // A start launches the saved harness, so not before the one just picked is saved.
+  const canStart = harness.value !== null && !harness.saving;
 
   return (
     <Card>
@@ -182,7 +197,7 @@ export function HomeCard({ initial, initialError, idleTimeoutMinutes }: HomeCard
               onSwitch={choice.onlineBlocked ? undefined : () => choice.choose(otherKind(choice.kind))}
               whose="your"
               retry={status === "error"}
-              disabled={info.nextAgent === null}
+              disabled={!canStart}
               onStart={start}
             />
           )}
@@ -210,7 +225,7 @@ export function HomeCard({ initial, initialError, idleTimeoutMinutes }: HomeCard
           ) : null}
           {stoppedBecause ? <p className="text-13 text-muted-foreground">Stopped {stoppedBecause}.</p> : null}
           {changesNextTime && info.nextAgent ? (
-            <p className="text-13 text-muted-foreground">{AGENT_NAMES[info.nextAgent]}, chosen in Settings, starts next time.</p>
+            <p className="text-13 text-muted-foreground">{AGENT_NAMES[info.nextAgent]} starts next time.</p>
           ) : null}
           {pollError ? (
             <p role="status" className="text-13 text-muted-foreground">
@@ -226,6 +241,10 @@ export function HomeCard({ initial, initialError, idleTimeoutMinutes }: HomeCard
               className="sm:grid-cols-2"
             />
           ) : null}
+          {choosing && harness.value !== null && info.agents.length > 1 ? (
+            <HarnessPicker agents={info.agents} value={harness.value} onValueChange={harness.choose} saving={harness.saving} />
+          ) : null}
+          {choosing && harness.error ? <FormError>{harness.error}</FormError> : null}
         </CardContent>
       ) : null}
       <CardFooter className="text-13 text-muted-foreground">Idle workspaces stop after {idleTimeoutMinutes} min.</CardFooter>

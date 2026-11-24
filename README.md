@@ -8,7 +8,7 @@ server and talking to a model you host. A user signs in and gets two workspaces,
 - **Online**: the same, plus the public internet over TCP. It never reaches the LAN, the servers or another
   workspace. The admin can bar it per user; `ONLINE_WORKSPACES=off` turns it off for everyone.
 
-Each workspace has its own files (`/home/user`, `/workspace`) and runs the agent the user picks in Settings:
+Each workspace has its own files (`/home/user`, `/workspace`) and runs the agent the user picks on Home:
 Qwen Code, DeepSeek Harness or OpenCode. Web apps started in a workspace open in the browser on its preview
 port. With a key from the API page, a user's other software (an editor, a script) uses the same model through
 the portal. The admin manages users, watches usage and energy, updates the agents and the LLM engine, and reads

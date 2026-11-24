@@ -454,7 +454,7 @@ export class WorkspaceManager {
    *   * Kind: one at a time. Asking for the other kind while one runs is refused (`kind_mismatch`); a start without a
    *     kind attaches to whichever runs, and starts Private when none does. Online needs ONLINE_WORKSPACES and the
    *     admin's permission.
-   *   * Agent: without one, the agent the user chose in Settings (users.agent) when it is enabled, else the first
+   *   * Agent: without one, the agent chosen for the user (users.agent, on Home) when it is enabled, else the first
    *     enabled one. One at a time too: asking for another one while it runs is refused; a start without an agent
    *     attaches to whatever runs.
    * Refused too while its data (or that kind's files) is being deleted. See StartAttempt for when capacity is decided.

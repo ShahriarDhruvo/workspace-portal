@@ -25,12 +25,12 @@ import { OnlineAccess } from "@/components/admin/online-access";
 import { OpenWorkspaceForm } from "@/components/admin/open-workspace-form";
 import { ProfileForm } from "@/components/admin/profile-form";
 import { UserDialogButton } from "@/components/admin/user-dialogs";
+import { UserHarness } from "@/components/admin/user-harness";
 import { UserAvatar } from "@/components/brand";
 import { FormError } from "@/components/forms/form-error";
 import { PageMain } from "@/components/layout/page-main";
 import { Section } from "@/components/layout/section";
 import { LocalTime } from "@/components/local-time";
-import { HarnessPicker } from "@/components/settings/harness-picker";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -191,7 +191,7 @@ export default async function UserPage({ params }: PageProps<"/admin/users/[id]"
                 <span className="font-mono text-12 text-muted-foreground">{formatVersion(enabled[0]!.version)}</span>
               </p>
             ) : (
-              <HarnessPicker
+              <UserHarness
                 agents={enabled}
                 chosen={chosen}
                 running={

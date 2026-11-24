@@ -131,7 +131,7 @@ export const onlineAccessSchema = z.object({
 /** Erasing one kind's files (the user page's "Erase Private files…" / "Erase Online files…"). */
 export const eraseFilesSchema = z.object({ userId: userIdSchema, kind: workspaceKindSchema });
 
-/** A harness choice in Settings: an agent kind. Whether this install enables it is the action's check. */
+/** A harness choice: an agent kind. Whether this install enables it is the action's check. */
 export const harnessSchema = z.object({ agent: agentKindSchema });
 
 /** Said for a missing or malformed version, empty included. */

@@ -9,7 +9,7 @@ import { BusyWarning } from "./busy-warning";
 interface StopDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** "stop": the user's Stop; "restart": "Restart now" of a harness choice (a stop, then a start with the new harness). */
+  /** "stop": the user's Stop; "restart": "Restart now" after a harness change (a stop, then a start with the new harness). */
   kind: "stop" | "restart";
   /** What the stop interrupts (lib/workspace-stop.ts); the dialog follows them while open. */
   warnings: StopWarnings;
@@ -27,7 +27,7 @@ const COPY = {
 } as const;
 
 /**
- * Confirms every stop (and restart) of the user's own workspace, and an administrator's restart of a user's, and says
+ * Confirms every stop of the user's own workspace, and an administrator's restart of a user's, and says
  * what it would interrupt: the agent's task, the workspace open in another tab or on another device (by its owner,
  * for an administrator), an administrator in it. Files are kept either way. Closes itself once done.
  */

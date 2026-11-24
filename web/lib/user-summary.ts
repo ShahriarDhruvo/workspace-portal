@@ -10,7 +10,7 @@ export interface UserSummary {
   role: User["role"];
   active: boolean;
   lastLoginAt: number | null;
-  /** The harness chosen in Settings; null: the install's default. */
+  /** The harness chosen for the user's workspace (on Home, or by an administrator); null: the install's default. */
   agent: AgentKind | null;
 }
 

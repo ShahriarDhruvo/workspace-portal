@@ -14,7 +14,7 @@ export interface StopWarnings {
 
 /**
  * What a stop would interrupt. `openHere`: the page asking has the workspace open itself (the workspace page,
- * whose own session is one of the owner connections); Home and Settings don't.
+ * whose own session is one of the owner connections); Home and a user's page don't.
  */
 export function stopWarnings(info: Pick<WorkspaceInfo, "busy" | "connections">, openHere: boolean): StopWarnings {
   return {
@@ -26,7 +26,7 @@ export function stopWarnings(info: Pick<WorkspaceInfo, "busy" | "connections">, 
 
 /**
  * The kind "Restart now" starts again: the one starting or running when the action runs, else none. A workspace
- * that stopped since Settings rendered stays stopped, so a restart never starts a kind the user didn't choose on
+ * that stopped since the page rendered stays stopped, so a restart never starts a kind the user didn't choose on
  * Home (Online among them).
  */
 export function restartKind(info: Pick<WorkspaceInfo, "status" | "kind">): WorkspaceKind | null {

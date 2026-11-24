@@ -14,9 +14,16 @@ export default function HomeLoading() {
             <Skeleton className="h-8 w-31" />
           </CardAction>
         </CardHeader>
-        <CardContent className="grid gap-2 sm:grid-cols-2">
-          <Skeleton className="h-21 rounded-lg sm:h-26" />
-          <Skeleton className="h-21 rounded-lg sm:h-26" />
+        <CardContent className="flex flex-col gap-3">
+          <div className="grid gap-2 sm:grid-cols-2">
+            <Skeleton className="h-21 rounded-lg sm:h-26" />
+            <Skeleton className="h-21 rounded-lg sm:h-26" />
+          </div>
+          <div className="grid gap-2 sm:grid-cols-3">
+            {[0, 1, 2].map((card) => (
+              <Skeleton key={card} className="h-10.5 rounded-lg sm:h-14.5" />
+            ))}
+          </div>
         </CardContent>
         <CardFooter>
           <Skeleton className="h-5 w-52" />
