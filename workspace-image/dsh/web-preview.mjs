@@ -42,19 +42,23 @@ const FUNCTION = /function parseBrowserAddress\(([\w$]+),\s*([\w$]+)\)\s*\{/g;
 const TARGET =
   /(kind:\s*([\w$]+)\.protocol\s*===\s*(["`])https:\3\s*\?\s*\3https\3\s*:\s*\3http\3,\s*url:\s*)\2\.href(,\s*title:\s*\2\.hostname)/g;
 
+/** The examples' page: a workspace's port, and the port of its web apps. */
+const PAGE_PORT = 12020;
+const PREVIEW_PORT = PAGE_PORT + PREVIEW_PORT_OFFSET;
+
 /** What the edited function must answer: [input, page origin, the target's url (null: refused)]. */
 const EXAMPLES = [
-  ["http://localhost:3000/app?x=1#top", "https://portal.lan:5101", "https://portal.lan:6101/__portal/port/3000/app?x=1#top"],
-  ["localhost:5173", "http://192.168.1.20:5102", "http://192.168.1.20:6102/__portal/port/5173/"],
-  ["127.0.0.1:8080/api", "https://portal.lan:5101", "https://portal.lan:6101/__portal/port/8080/api"],
-  ["http://0.0.0.0:4000", "https://portal.lan:5101", "https://portal.lan:6101/__portal/port/4000/"],
-  ["http://[::1]:9000/", "https://portal.lan:5101", "https://portal.lan:6101/__portal/port/9000/"],
-  ["https://example.com/docs", "https://portal.lan:5101", "https://example.com/docs"],
-  ["https://portal.lan:6101/__portal/port/3000/", "https://portal.lan:5101", "https://portal.lan:6101/__portal/port/3000/"],
+  ["http://localhost:3000/app?x=1#top", `https://portal.lan:${PAGE_PORT}`, `https://portal.lan:${PREVIEW_PORT}/__portal/port/3000/app?x=1#top`],
+  ["localhost:5173", `http://192.168.1.20:${PAGE_PORT}`, `http://192.168.1.20:${PREVIEW_PORT}/__portal/port/5173/`],
+  ["127.0.0.1:8080/api", `https://portal.lan:${PAGE_PORT}`, `https://portal.lan:${PREVIEW_PORT}/__portal/port/8080/api`],
+  ["http://0.0.0.0:4000", `https://portal.lan:${PAGE_PORT}`, `https://portal.lan:${PREVIEW_PORT}/__portal/port/4000/`],
+  ["http://[::1]:9000/", `https://portal.lan:${PAGE_PORT}`, `https://portal.lan:${PREVIEW_PORT}/__portal/port/9000/`],
+  ["https://example.com/docs", `https://portal.lan:${PAGE_PORT}`, "https://example.com/docs"],
+  [`https://portal.lan:${PREVIEW_PORT}/__portal/port/3000/`, `https://portal.lan:${PAGE_PORT}`, `https://portal.lan:${PREVIEW_PORT}/__portal/port/3000/`],
   // The portal itself at localhost (a test install): its preview port stays as it is.
-  ["http://localhost:6101/__portal/port/3000/", "http://localhost:5101", "http://localhost:6101/__portal/port/3000/"],
+  [`http://localhost:${PREVIEW_PORT}/__portal/port/3000/`, `http://localhost:${PAGE_PORT}`, `http://localhost:${PREVIEW_PORT}/__portal/port/3000/`],
   ["http://localhost:3000/", undefined, "http://localhost:3000/"],
-  ["https://portal.lan:5101/", "https://portal.lan:5101", null],
+  [`https://portal.lan:${PAGE_PORT}/`, `https://portal.lan:${PAGE_PORT}`, null],
 ];
 
 /** dsh-client-ui-sidebar-browser's client file, resolved the way dsh itself resolves its dependencies. */
