@@ -30,17 +30,13 @@ import { createWsRelay } from "./ws-relay.ts";
 
 /**
  * The path as a lenient router might see it: percent-decoded, backslashes and repeated slashes folded, dot segments
- * resolved, lower-cased. Used only to refuse an agent's blocked paths in any spelling.
+ * resolved, lower-cased. Used only to refuse an agent's blocked paths in any spelling. The blocked paths are ASCII,
+ * so each ASCII escape is decoded by itself: one that is no character ("%ff", a bare "%") leaves the others readable.
  */
 function canonicalPath(pathname: string): string {
   let path = pathname;
   for (let i = 0; i < 3; i++) {
-    let decoded: string;
-    try {
-      decoded = decodeURIComponent(path);
-    } catch {
-      break;
-    }
+    const decoded = path.replace(/%[0-7][0-9a-f]/gi, (escape) => String.fromCharCode(parseInt(escape.slice(1), 16)));
     if (decoded === path) break;
     path = decoded;
   }

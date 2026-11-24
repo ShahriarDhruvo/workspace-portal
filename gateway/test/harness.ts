@@ -491,6 +491,16 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
   return g;
 }
 
+/**
+ * The status a WebSocket handshake gets for a target exactly as written: a browser's WebSocket (and `openSocket`)
+ * tidies its address first and refuses one with a "#".
+ */
+export async function upgradeStatus(g: Gateway, token: string, userId: number, target: string, protocols: string[] = []): Promise<number> {
+  const handshake: Record<string, string> = { connection: "Upgrade", upgrade: "websocket", "sec-websocket-version": "13", "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==" };
+  if (protocols.length > 0) handshake["sec-websocket-protocol"] = protocols.join(", ");
+  return (await request(g.agentPort(userId), { path: target, headers: { cookie: cookie(token), origin: g.agentOrigin(userId), ...handshake } })).status;
+}
+
 /** Both agents enabled. */
 export const BOTH = { env: { WORKSPACE_AGENTS: "qwen,dsh" } } satisfies GatewayOptions;
 

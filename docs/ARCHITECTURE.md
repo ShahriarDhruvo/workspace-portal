@@ -234,10 +234,11 @@ Then, on an agent port (`agent-proxy.ts`):
 - Bodies above `UPLOAD_LIMIT_MB` end in 413 `payload_too_large`; an agent that does not answer, in 502
   `workspace_unreachable` and a check of the container.
 
-WebSockets (`ws-relay.ts`) exist only on the driver's socket paths. The gateway connects to the workspace
-first and accepts the browser once the workspace has accepted, so a refusal comes back as a plain HTTP status.
-It pings the browser every 20 s, drops it after two missed pongs, and pauses a sender while 4 MiB wait for the
-other side. A session that ended, or moved to another workspace, has its connections closed with code 4001.
+WebSockets (`ws-relay.ts`) exist only on the driver's socket paths; a target with a `#` is a 400. The gateway
+connects to the workspace first and accepts the browser once the workspace has accepted, so a refusal comes back
+as a plain HTTP status. It pings the browser every 20 s, drops it after two missed pongs, and pauses a sender
+while 4 MiB wait for the other side. A session that ended, or moved to another workspace, has its connections
+closed with code 4001.
 
 A preview port (`preview-proxy.ts`) passes the same five checks. `GET /__portal/port/<n>/<path>` stores n
 (1024 to 65535, never the agent's port) in a cookie of that preview port and redirects to the path; later

@@ -52,7 +52,10 @@ export function createWsRelay(deps: AgentDeps): (req: IncomingMessage, socket: D
     const driver = driverFor(upstream.agent);
     if (!driver.socketPaths.has(splitTarget(req.url ?? "").pathname)) return rejectUpgrade(socket, 404, "not_found");
     if (driver.browserAuth === "token" && presented === null) return rejectUpgrade(socket, 401, INVALID_TOKEN.code, INVALID_TOKEN.message);
-    connect(deps, server, req, socket, head, upstream, access.context, access.userId, protocols);
+    // The socket's address in the workspace. No browser sends a target with a "#", and nothing connects to one.
+    const address = URL.parse(`ws://${upstream.host}:${upstream.port}${req.url ?? "/"}`);
+    if (address === null || address.hash !== "") return rejectUpgrade(socket, 400, "bad_request");
+    connect(deps, server, req, socket, head, upstream, address, access.context, access.userId, protocols);
   };
 }
 
@@ -63,11 +66,12 @@ function connect(
   socket: Duplex,
   head: Buffer,
   upstream: Upstream,
+  address: URL,
   context: SessionContext,
   userId: number,
   protocols: string[],
 ): void {
-  const workspace = new WebSocket(`ws://${upstream.host}:${upstream.port}${req.url ?? "/"}`, protocols, {
+  const workspace = new WebSocket(address, protocols, {
     headers: driverFor(upstream.agent).requestHeaders(req.headers, upstream, { authorised: true, websocket: true }),
     perMessageDeflate: false,
     followRedirects: false,

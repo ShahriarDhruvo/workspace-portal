@@ -195,7 +195,7 @@ test("dsh: pairing, OAuth and open-in-app are refused in any spelling", () =>
     await g.startReady(alice, "dsh");
     const dsh = g.runtime.dshFor(alice);
     const before = dsh.requests.length;
-    for (const path of ["/connect", "/connect?code=1", "/CONNECT", "/%63onnect", "//connect", "/x/../connect", "/oauth/callback?code=1", "/open-in-app/vscode", "/open-in-app%2Fvscode"]) {
+    for (const path of ["/connect", "/connect?code=1", "/CONNECT", "/%63onnect", "//connect", "/x/../connect", "/oauth/callback?code=1", "/open-in-app/vscode", "/open-in-app%2Fvscode", "/%ff/../%63onnect"]) {
       const reply = await g.xhr(g.tokens.alice, alice, { path, bearer: null });
       assert.equal(reply.status, 403, path);
     }

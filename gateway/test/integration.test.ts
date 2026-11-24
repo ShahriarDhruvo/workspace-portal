@@ -27,6 +27,7 @@ import {
   MIN,
   request,
   startGateway,
+  upgradeStatus,
   waitFor,
   withGateway,
   type AgentSocket,
@@ -324,6 +325,8 @@ test("device pairing is not available through the portal", async () => {
     "/web-shell/./pairing", "/x/../web-shell/pairing", "/Web-Shell/Pairing", "//web-shell/pairing",
     "/web-shell//pairing", "/web-shell/%70airing", "/web-shell%2Fpairing", "/web-shell/%2e/pairing",
     "/web-shell/%252e/pairing", "/web-shell\\pairing",
+    // An escape that is no character must not keep the others from being read.
+    "/%ff/../web-shell/%70airing", "/%/../web-shell/pairing",
   ];
   for (const target of spellings) {
     for (const method of ["GET", "POST"]) {
@@ -475,6 +478,9 @@ test("WebSocket upgrades need this session's token for this workspace, and a Web
     assert.deepEqual(await g.openSocket(token, alice, { protocols }), { status: 401 }, protocols.join(", "));
   }
   assert.equal(qwen.sockets.length, accepted, "none reached the workspace");
+  // A target with a "#", which no browser sends and nothing can connect to, is refused like any bad request.
+  assert.equal(await upgradeStatus(g, token, alice, "/terminal?x#y", ["qwen-ws", bearerSubprotocol(g.browserToken(token, alice))]), 400);
+  assert.equal(qwen.sockets.length, accepted);
 
   for (const target of ["/acp", "/live/web?session=1"]) {
     const { socket, next } = opened(await g.openSocket(token, alice, { path: target }));
