@@ -28,6 +28,7 @@ import { LlmRequests, type FinishedLlmRequest } from "./monitor/llm-requests.ts"
 import type { Logger } from "./lib/log.ts";
 import { createNpmRegistry, type NpmRegistry } from "./updates/npm-registry.ts";
 import { createReaderBackend, withPageCache, type ReaderBackend } from "./service/reader.ts";
+import { createExaBackend } from "./service/exa-search.ts";
 import { createSearxngBackend, type SearchBackend } from "./service/search-mcp.ts";
 import { createServiceServer, type ServiceDeps } from "./service/service-api.ts";
 import { SessionCache } from "./proxy/session-cache.ts";
@@ -143,17 +144,7 @@ export function compose(
     pollMs: seams.enginePollMs,
   });
 
-  const search =
-    seams.search ??
-    createSearxngBackend({
-      baseUrl: config.search.url,
-      authorization: config.search.authorization,
-      timeoutMs: config.search.timeoutMs,
-      fallbackEngines: config.search.fallbackEngines,
-      fallbackBelow: config.search.fallbackBelow,
-      cacheMs: config.search.cacheMs,
-      onFallback: (use) => log.info("web search: fallback engines asked", { engines: config.search.fallbackEngines.join(","), ...use }),
-    });
+  const search = seams.search ?? searchBackend(config.search, log);
   const reader =
     seams.reader !== undefined
       ? seams.reader
@@ -180,4 +171,27 @@ export function compose(
     /** A service listener for one kind's network. */
     createServiceServer: (own: Pick<ServiceDeps, "kind" | "resolveCaller">) => createServiceServer({ ...own, config, db, manager, llm, requests, log, search, reader }),
   };
+}
+
+/** Exa answers within a second or two; past this, SearXNG is asked instead. */
+const EXA_TIMEOUT_MS = 10_000;
+
+/** web_search's source: SearXNG, and in front of it Exa when EXA_SEARCH is on. */
+export function searchBackend(search: Config["search"], log: Logger): SearchBackend {
+  const searxng = createSearxngBackend({
+    baseUrl: search.url,
+    authorization: search.authorization,
+    timeoutMs: search.timeoutMs,
+    fallbackEngines: search.fallbackEngines,
+    fallbackBelow: search.fallbackBelow,
+    cacheMs: search.cacheMs,
+    onFallback: (use) => log.info("web search: fallback engines asked", { engines: search.fallbackEngines.join(","), ...use }),
+  });
+  if (!search.exa) return searxng;
+  return createExaBackend({
+    fallback: searxng,
+    timeoutMs: EXA_TIMEOUT_MS,
+    cacheMs: search.cacheMs,
+    onFailure: ({ reason, pauseMs }) => log.warn("web search: Exa did not answer, SearXNG is asked instead", { reason, pauseMinutes: Math.round(pauseMs / 60_000) }),
+  });
 }

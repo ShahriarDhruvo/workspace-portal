@@ -107,6 +107,7 @@ test("values are parsed and normalised", () => {
     fallbackEngines: ["duckduckgo", "swisscows"],
     fallbackBelow: 5,
     cacheMs: 0,
+    exa: false,
   });
   assert.deepEqual(config.reader, {
     url: "http://127.0.0.1:4003",
@@ -121,6 +122,7 @@ test("values are parsed and normalised", () => {
   assert.equal(loadConfig({ ...secrets, READER_TRUSTED_HOSTS: "" }).reader.trustedHosts.length, DEFAULT_TRUSTED_HOSTS.split(",").length, "empty: the built-in list");
   assert.equal(loadConfig({ ...secrets, READER_URL: "off" }).reader.url, "", "off: no page reader");
   assert.deepEqual(loadConfig({ ...secrets, SEARCH_FALLBACK_ENGINES: "none" }).search.fallbackEngines, [], "none: no second try");
+  assert.deepEqual(["on", "off", ""].map((value) => loadConfig({ ...secrets, EXA_SEARCH: value }).search.exa), [true, false, false], "Exa is asked only when the setting says so");
   assert.equal(loadConfig({ ...secrets, SEARCH_FALLBACK_ENGINES: "" }).search.fallbackEngines.length, 4, "empty: the four spare engines of searxng/settings.yml");
   assert.equal(config.workspace.nanoCpus, 1.5e9);
   assert.equal(config.workspace.kinds.private.uidBase, 300_000);

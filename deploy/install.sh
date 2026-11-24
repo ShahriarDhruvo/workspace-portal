@@ -173,6 +173,7 @@ else
   SEARCH="$(searxng_url) (SEARXNG_URL in .env; the built-in SearXNG runs unused)"
   searxng_answers "$(searxng_url)" || warn "the SearXNG at $(searxng_url) (SEARXNG_URL in .env) is not answering: web_search will fail"
 fi
+! exa_enabled || SEARCH="Exa (EXA_SEARCH: searches leave this server for exa.ai), then $SEARCH"
 READER="on (read_page)"
 if env_is READER_URL off; then READER="off (READER_URL=off)"; fi
 ONLINE="on (ONLINE_WORKSPACES; Admin > Users switches it off per user)"

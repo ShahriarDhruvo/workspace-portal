@@ -72,8 +72,9 @@ test("notifications get 202; GET and DELETE get 405; unknown methods an RPC erro
 
 test("tools/list offers only web_search; tools/call runs it", async () => {
   await withServer(ok, async (url, calls) => {
-    const list = (await (await post(url, { jsonrpc: "2.0", id: 1, method: "tools/list" })).json()) as { result: { tools: Array<{ name: string }> } };
+    const list = (await (await post(url, { jsonrpc: "2.0", id: 1, method: "tools/list" })).json()) as { result: { tools: Array<{ name: string; description: string }> } };
     assert.deepEqual(list.result.tools.map((tool) => tool.name), ["web_search"]);
+    assert.match(list.result.tools[0]!.description, /^Search the web through the organization's private SearXNG instance\. Returns titles, URLs and short snippets\. This is the only internet access/);
     const call = (await (
       await post(url, { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "web_search", arguments: { query: " fedora 45 ", page: 2, time_range: "week" } } })
     ).json()) as { result: { content: Array<{ text: string }>; isError?: boolean } };
@@ -85,6 +86,17 @@ test("tools/list offers only web_search; tools/call runs it", async () => {
     };
     assert.equal(other.result.isError, true, "no other tools exist");
   });
+});
+
+test("the tool's description names where the backend sends a search", async () => {
+  const server = http.createServer((req, res) => void handleSearchMcp(req, res, { backend: { ...ok, through: "Exa, or SearXNG" }, limiter: createLimiter(1) }));
+  const port = await listenLocal(server);
+  try {
+    const list = (await (await post(`http://127.0.0.1:${port}/`, { jsonrpc: "2.0", id: 1, method: "tools/list" })).json()) as { result: { tools: Array<{ description: string }> } };
+    assert.match(list.result.tools[0]!.description, /^Search the web through Exa, or SearXNG\. Returns titles/);
+  } finally {
+    await closeServer(server);
+  }
 });
 
 test("bad arguments and backend failures come back as tool errors", async () => {

@@ -25,6 +25,7 @@ browser --(cookie portal_session)--> web app   WEB_BIND:WEB_PORT  <--(API key)--
 | Docker | `/var/run/docker.sock` | root in its container, with `CHOWN`, `DAC_OVERRIDE`, `FOWNER` only |
 | the LLM server | `LLM_UPSTREAM_URL` | `LLM_API_KEY` |
 | SearXNG, the page reader | `SEARXNG_URL`, `READER_URL` (loopback by default) | nothing, or `SEARXNG_AUTHORIZATION` |
+| Exa, when `EXA_SEARCH` is on | `https://mcp.exa.ai/mcp` | nothing: no account, no key |
 | portal-hostd on both servers | `HOSTD_PORTAL_URL`, `HOSTD_LLM_URL` | `HOSTD_PORTAL_TOKEN`, `HOSTD_LLM_TOKEN` |
 | npm, GitHub, the engine's image registry, EIA, Eurostat | the internet | nothing |
 
@@ -38,7 +39,7 @@ browser --(cookie portal_session)--> web app   WEB_BIND:WEB_PORT  <--(API key)--
 - An API key is a user's credential for the LLM and nothing else. The web app passes `/llm/api` on unread and
   the gateway checks the key, so the web app never vouches for such a caller with the control secret.
 - A workspace is untrusted. It holds no secret of the portal (`PORTAL_LLM_KEY` in it is a placeholder), and
-  what it sends is hostile input. So is what SearXNG and the page reader bring back from the internet.
+  what it sends is hostile input. So is what SearXNG, Exa and the page reader bring back from the internet.
 
 ## Repository map
 
@@ -283,6 +284,12 @@ traffic between containers. State is per listener: nothing carries between kinds
 - **`web_search`** asks SearXNG, and once more the `SEARCH_FALLBACK_ENGINES` by name when fewer than
   `SEARCH_FALLBACK_BELOW` results came back. **`read_page`** asks the reader for a page and hands the model
   `READER_PAGE_CHARS` at a time. Both are limited per workspace and cached for some minutes.
+- **Exa first** (`exa-search.ts`, `EXA_SEARCH=on`): one tool call to Exa's hosted MCP server, which takes it
+  without a handshake, an account or a key, at a limit Exa does not publish. Exa is asked what its tool can
+  answer as asked: the first page, with no time range and no language. SearXNG answers the rest, and every
+  search for ten minutes (or the time Exa names) after Exa refused, failed or sent an answer the gateway does not
+  read. The results come back in SearXNG's form, so the model's tool is the same. It is a setting because each
+  query Exa gets leaves the server for a company.
 - **URL policy** (`url-policy.ts`, `READER_URL_POLICY=shown`): `read_page` opens a URL the workspace was shown
   (a search result, a page it read, its conversation except the assistant's own messages) or one on a trusted
   host (`READER_TRUSTED_HOSTS`, else `DEFAULT_TRUSTED_HOSTS` in `config.ts`). The reason: a page can tell the

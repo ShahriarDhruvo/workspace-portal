@@ -125,6 +125,7 @@ async function main(log: Logger): Promise<void> {
           service: `${bridge}:${config.servicePort}`,
           llm: config.llm.upstreamUrl,
           search: config.search.url,
+          exa: config.search.exa ? "asked first" : "off",
           reader: config.reader.url || "off",
         }),
       (error: unknown) => {

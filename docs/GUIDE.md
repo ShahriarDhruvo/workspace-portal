@@ -1051,10 +1051,17 @@ are made from them.
 - **Other engines:** edit `searxng/settings.yml` in `~/workspace-portal`, keep `SEARCH_FALLBACK_ENGINES` in `.env`
   in step with the engines it marks `disabled: true`, and run the installer again. Engines that were tried and left
   out: [MEASUREMENTS.md](MEASUREMENTS.md#web-search).
+- **Exa first:** [Exa](https://exa.ai) is a search service made for AI agents. With `EXA_SEARCH=on` in `.env` it
+  answers a search before SearXNG does, without an account or a key. It is off unless you turn it on, because each
+  such search leaves your server for a company. Exa answers the first page of a plain search; a later page, a time
+  range or a language goes to SearXNG, and so does every search for ten minutes after Exa refused one or failed. Exa
+  does not say how many searches it takes without a key, and everyone on the portal shares that number, as they
+  share the server's address. The agents see one search tool either way.
 - **The page reader** returns the main text of a page or a PDF as markdown, 20,000 characters per call. There is no
   browser inside: pages that need JavaScript and sites that turn automated readers away cannot be read.
 - **What leaves your network:** a page read is one request to that site, a search sends the query to the search
-  engines, and both look names up at 1.1.1.1 and 9.9.9.9. When it starts, SearXNG also downloads a public list of
+  engines, and both look names up at 1.1.1.1 and 9.9.9.9. With `EXA_SEARCH=on` a search goes to `mcp.exa.ai`
+  first, from the gateway and with nothing but the query. When it starts, SearXNG also downloads a public list of
   tracking parameters (ClearURLs) that it strips from result links. Other resolvers: `READER_DNS_1`,
   `READER_DNS_2`, `SEARXNG_DNS_1` and `SEARXNG_DNS_2`, then the installer again. Both containers connect only to
   public addresses on ports 80 and 443, which the isolation check above tests.

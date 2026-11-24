@@ -47,6 +47,7 @@ env_is() { # key word...
 }
 
 online_enabled() { ! env_is ONLINE_WORKSPACES false off no 0; }
+exa_enabled() { env_is EXA_SEARCH true on yes 1; }
 selinux_on() { command -v selinuxenabled >/dev/null && selinuxenabled; }
 
 # Per agent: its name and the .env key of its version, which is also the build argument of its Dockerfile stage.

@@ -55,6 +55,8 @@ export interface SearchConfig {
   fallbackBelow: number;
   /** 0: no cache. */
   cacheMs: number;
+  /** Ask Exa first (exa-search.ts): each search it can answer leaves this server for Exa. */
+  exa: boolean;
 }
 
 /** A server's portal-hostd; url "": not set up. */
@@ -297,6 +299,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
       fallbackEngines: list("SEARCH_FALLBACK_ENGINES", "duckduckgo,swisscows,privacywall,mojeek", /^[A-Za-z0-9][A-Za-z0-9 ._-]*$/, "SearXNG engine names"),
       fallbackBelow: int("SEARCH_FALLBACK_BELOW", 3, 1),
       cacheMs: int("SEARCH_CACHE_MINUTES", 15, 0) * 60_000,
+      exa: bool("EXA_SEARCH", false),
     },
     reader: {
       url: text("READER_URL", "").toLowerCase() === "off" ? "" : url("READER_URL", ""),

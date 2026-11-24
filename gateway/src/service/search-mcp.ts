@@ -1,8 +1,8 @@
 // The web tools workspaces get: a minimal, stateless MCP server (streamable HTTP transport, JSON responses) with
 // `web_search`, answered from the configured SearXNG instance, and, when a page reader is configured, `read_page`
-// (reader.ts). Workspaces have no network access except the gateway: a search only ever sends a query to SEARXNG_URL,
-// and a page is fetched by the reader container, never by the gateway or the workspace, and only when the workspace
-// may open that URL (url-policy.ts).
+// (reader.ts). Workspaces have no network access except the gateway: a search only ever sends a query to SEARXNG_URL
+// (and before that to Exa, when EXA_SEARCH is on: exa-search.ts), and a page is fetched by the reader container, never
+// by the gateway or the workspace, and only when the workspace may open that URL (url-policy.ts).
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { HttpError, readJsonBody, sendJson } from "../lib/http-util.ts";
 import { askService, formatPage, parseReadArguments, ReadError, readPageTool, type ReaderBackend, type ReadRequest } from "./reader.ts";
@@ -14,21 +14,20 @@ const SERVER_INFO = { name: "workspace-portal-search", version: "1.1.0" };
 const BODY_LIMIT_BYTES = 64 * 1024;
 /** Messages in one JSON-RPC batch. Every answer is held in memory until the client has taken it. */
 const MAX_BATCH = 8;
-const MAX_RESULTS = 10;
+export const MAX_RESULTS = 10;
 const MAX_SNIPPET_CHARS = 500;
 const MAX_QUERY_CHARS = 400;
 const TIME_RANGES = ["day", "week", "month", "year"] as const;
 
-const SEARCH = "Search the web through the organization's private SearXNG instance. Returns titles, URLs and short snippets. ";
-const SEARCH_ONLY_DESCRIPTION =
-  `${SEARCH}This is the only internet access available: pages cannot be opened or downloaded, ` +
+const PRIVATE_SEARXNG = "the organization's private SearXNG instance";
+const SEARCH_ONLY =
+  "This is the only internet access available: pages cannot be opened or downloaded, " +
   "so rely on the snippets and refine the query (or ask for page 2) when they are not enough.";
-const SEARCH_AND_READ_DESCRIPTION = `${SEARCH}When a snippet is not enough, open the result with read_page, refine the query, or ask for page 2.`;
+const SEARCH_AND_READ = "When a snippet is not enough, open the result with read_page, refine the query, or ask for page 2.";
 
 const WEB_SEARCH_TOOL = {
   name: "web_search",
   title: "Web search",
-  description: SEARCH_ONLY_DESCRIPTION,
   inputSchema: {
     type: "object",
     properties: {
@@ -53,6 +52,8 @@ export interface SearchQuery {
 export interface SearchBackend {
   /** Runs one search; throws SearchError with a message meant for the model. */
   search(query: SearchQuery, signal: AbortSignal): Promise<string>;
+  /** Where its queries go, as the tool's description tells the model. Without it: the organization's private SearXNG instance. */
+  readonly through?: string;
 }
 
 export class SearchError extends Error {
@@ -104,8 +105,9 @@ export interface SearchMcpOptions {
 }
 
 function toolsFor(options: SearchMcpOptions): unknown[] {
-  if (!options.reader) return [WEB_SEARCH_TOOL];
-  return [{ ...WEB_SEARCH_TOOL, description: SEARCH_AND_READ_DESCRIPTION }, readPageTool(options.reader.pageChars)];
+  const search = `Search the web through ${options.backend.through ?? PRIVATE_SEARXNG}. Returns titles, URLs and short snippets.`;
+  if (!options.reader) return [{ ...WEB_SEARCH_TOOL, description: `${search} ${SEARCH_ONLY}` }];
+  return [{ ...WEB_SEARCH_TOOL, description: `${search} ${SEARCH_AND_READ}` }, readPageTool(options.reader.pageChars)];
 }
 
 /** Handles one HTTP request to the search MCP endpoint. */
@@ -312,9 +314,30 @@ interface SearxngOptions {
 
 const MAX_CACHED_SEARCHES = 256;
 
+/** Answers kept for `cacheMs` each, for the same search asked again; the oldest goes when there are too many. 0 keeps none. */
+export function createAnswerCache(cacheMs: number, now: () => number): { get(query: SearchQuery): string | null; set(query: SearchQuery, answer: string): void } {
+  const cache = new Map<string, { expires: number; text: string }>();
+  const keyOf = (query: SearchQuery): string => JSON.stringify([query.query.toLowerCase(), query.page, query.timeRange, query.language]);
+  return {
+    get(query) {
+      const key = keyOf(query);
+      const cached = cache.get(key);
+      if (cached === undefined) return null;
+      if (cached.expires > now()) return cached.text;
+      cache.delete(key);
+      return null;
+    },
+    set(query, answer) {
+      if (cacheMs <= 0) return;
+      cache.set(keyOf(query), { expires: now() + cacheMs, text: answer });
+      if (cache.size > MAX_CACHED_SEARCHES) cache.delete(cache.keys().next().value!);
+    },
+  };
+}
+
 export function createSearxngBackend(options: SearxngOptions): SearchBackend {
   const { now = Date.now, fallbackEngines = [], fallbackBelow = 3, cacheMs = 0 } = options;
-  const cache = new Map<string, { expires: number; text: string }>();
+  const cache = createAnswerCache(cacheMs, now);
 
   async function ask(query: SearchQuery, engines: readonly string[] | null, signal: AbortSignal): Promise<SearxngResponse> {
     const params = new URLSearchParams({ q: query.query, format: "json", pageno: String(query.page) });
@@ -340,12 +363,8 @@ export function createSearxngBackend(options: SearxngOptions): SearchBackend {
 
   return {
     async search(query, signal) {
-      const key = JSON.stringify([query.query.toLowerCase(), query.page, query.timeRange, query.language]);
-      const cached = cache.get(key);
-      if (cached) {
-        if (cached.expires > now()) return cached.text;
-        cache.delete(key);
-      }
+      const cached = cache.get(query);
+      if (cached !== null) return cached;
       let data = await ask(query, null, signal);
       if (fallbackEngines.length > 0 && usableResults(data).length < fallbackBelow) {
         const before = usableResults(data).length;
@@ -358,10 +377,7 @@ export function createSearxngBackend(options: SearxngOptions): SearchBackend {
         }
       }
       const answer = formatResults(query, data);
-      if (cacheMs > 0 && usableResults(data).length > 0) {
-        cache.set(key, { expires: now() + cacheMs, text: answer });
-        if (cache.size > MAX_CACHED_SEARCHES) cache.delete(cache.keys().next().value!);
-      }
+      if (usableResults(data).length > 0) cache.set(query, answer);
       return answer;
     },
   };

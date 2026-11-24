@@ -1,10 +1,11 @@
 // Service API for workspace containers, one server per workspace kind on the host's address on that kind's network
 // (Private: WORKSPACE_GATEWAY_IP:SERVICE_PORT, the only address a Private workspace can reach; Online:
 // ONLINE_GATEWAY_IP:SERVICE_PORT): the LLM proxy (to LLM_UPSTREAM_URL, with the real API key added) and the web MCP
-// server (web_search queries SEARXNG_URL; read_page asks the reader container at READER_URL). Callers are identified
-// by their source address, among the running containers of this server's kind only; containers run without
-// capabilities on networks without inter-container traffic, so they cannot spoof it. Each server keeps its own
-// per-workspace state (the URLs a workspace was shown, its search and read slots): none carries over to the other kind.
+// server (web_search queries SEARXNG_URL, after Exa when EXA_SEARCH is on; read_page asks the reader container at
+// READER_URL). Callers are identified by their source address, among the running containers of this server's kind
+// only; containers run without capabilities on networks without inter-container traffic, so they cannot spoof it.
+// Each server keeps its own per-workspace state (the URLs a workspace was shown, its search and read slots): none
+// carries over to the other kind.
 import type http from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { PortalDb, WorkspaceKind } from "@portal/core";
@@ -29,7 +30,7 @@ export interface ServiceDeps {
   /** Where each generation request reports its progress, for the admin's live view. */
   requests: LlmRequests;
   log: Logger;
-  /** Web search for the MCP tool (SearXNG in production). */
+  /** Web search for the MCP tool (in production SearXNG, behind Exa when that is on). */
   search: SearchBackend;
   /** The page reader for the read_page tool; without it only web_search is offered. */
   reader?: ReaderBackend | null;

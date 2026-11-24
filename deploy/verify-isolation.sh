@@ -433,9 +433,15 @@ else
   check "SearXNG allows the JSON format the gateway asks for" \
     '[[ $(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "http://127.0.0.1:$SEARXNG_PORT/search?q=&format=json") == 400 ]]'
   # What the gateway container was started with, against what .env says now.
-  gateway_searxng=""
-  [[ -z $GATEWAY_ID ]] || gateway_searxng=$(inspect "$GATEWAY_ID" '{{range .Config.Env}}{{println .}}{{end}}' | sed -n 's/^SEARXNG_URL=//p')
+  gateway_env=""
+  [[ -z $GATEWAY_ID ]] || gateway_env=$(inspect "$GATEWAY_ID" '{{range .Config.Env}}{{println .}}{{end}}')
+  gateway_searxng=$(sed -n 's/^SEARXNG_URL=//p' <<<"$gateway_env")
   check "the gateway searches through $(searxng_url), as .env says" '[[ ${gateway_searxng%/} == "$(searxng_url)" ]]'
+  # Exa first means that searches leave this server for a company: only when .env says so.
+  exa=off gateway_exa=off
+  ! exa_enabled || exa=on
+  ! grep -qiE '^EXA_SEARCH=(true|on|yes|1)$' <<<"$gateway_env" || gateway_exa=on
+  check "the gateway asks Exa before SearXNG: $exa, as .env says (EXA_SEARCH)" '[[ $gateway_exa == "$exa" ]]'
   if searxng_is_builtin; then
     config=$(curl -fsS --max-time 5 "http://127.0.0.1:$SEARXNG_PORT/config" || true)
     engines() { # all | enabled: the engines SearXNG has loaded, or those of them it asks on every search
