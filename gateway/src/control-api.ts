@@ -136,8 +136,8 @@ const ROUTES: Route[] = [
     handler: async (deps, req, [id]) => {
       const userId = userIdParam(id);
       const { agent, kind } = await jsonBody(req);
-      // Without an agent the user's own (Settings) starts; without a kind the start attaches to whichever kind runs,
-      // else starts Private (WorkspaceManager.requestStart). null counts as absent.
+      // Without an agent the user's own (chosen on Home) starts, without a kind Private; while one of the user's
+      // workspaces runs, what is left out is that one's (WorkspaceManager.requestStart). null counts as absent.
       const options = { agent: agent == null ? undefined : agentOf(agent), kind: kind == null ? undefined : kindOf(kind) };
       requireUser(deps.db, userId, "userId");
       return deps.manager.start(userId, options);
@@ -167,16 +167,18 @@ const ROUTES: Route[] = [
     },
   },
   {
-    // Admin's "Erase Private files…" / "Erase Online files…": that kind's home and workspace, left empty.
+    // Admin's "Erase files…": one workspace's home and workspace folders, left empty.
     method: "DELETE",
     pattern: /^\/control\/workspaces\/([^/]+)\/files$/,
     handler: async (deps, req, [id]) => {
       const userId = userIdParam(id);
-      const kind = kindOf(query(req).get("kind"));
+      const params = query(req);
+      const kind = kindOf(params.get("kind"));
+      const agent = agentOf(params.get("agent"));
       const actor = actorParam((await jsonBody(req)).actorUserId);
       requireUser(deps.db, userId, "userId");
       if (actor !== null) requireUser(deps.db, actor, "actorUserId");
-      await deps.manager.eraseFiles(userId, kind, actor);
+      await deps.manager.eraseFiles(userId, { agent, kind }, actor);
       return { ok: true };
     },
   },

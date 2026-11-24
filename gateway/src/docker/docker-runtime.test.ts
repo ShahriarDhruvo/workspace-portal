@@ -159,7 +159,7 @@ test("ensureNetwork refuses a differing network that containers use, and says ho
   const network = createdNetwork();
   network.Options!["com.docker.network.bridge.name"] = "docker1";
   network.IPAM!.Config![0]!.Subnet = "172.30.0.0/16";
-  network.Containers = { abc: { Name: "wp-ws-1", EndpointID: "e", MacAddress: "m", IPv4Address: "172.30.128.2/16", IPv6Address: "" } };
+  network.Containers = { abc: { Name: "wp-qwen-private-1", EndpointID: "e", MacAddress: "m", IPv4Address: "172.30.128.2/16", IPv6Address: "" } };
   const { calls, runtime } = fakeDocker(network);
   await assert.rejects(runtime.ensureNetwork("private"), {
     message:
@@ -200,39 +200,59 @@ function containerDocker(rows: unknown[] = []) {
   return { calls, created, runtime: new DockerRuntime(config, docker as unknown as Docker) };
 }
 
-test("a start removes whatever is left of either kind first, then creates its own kind's container", async () => {
+test("a start removes whatever is left of any of the user's workspaces first, then creates its own container", async () => {
   const { calls, created, runtime } = containerDocker();
-  const started = await runtime.startWorkspace(7, { kind: "online", agent: "qwen", credential: "c", image: "workspace-portal/workspace:qwen-0.27.0" });
-  assert.deepEqual(calls, ["remove wp-ws-7", "remove wp-wo-7", "create wp-wo-7"]);
+  const started = await runtime.startWorkspace(7, { ref: { agent: "qwen", kind: "online" }, credential: "c", image: "workspace-portal/workspace:qwen-0.27.0" });
+  assert.deepEqual(calls, [
+    "remove wp-qwen-private-7",
+    "remove wp-qwen-online-7",
+    "remove wp-dsh-private-7",
+    "remove wp-dsh-online-7",
+    "remove wp-opencode-private-7",
+    "remove wp-opencode-online-7",
+    "create wp-qwen-online-7",
+  ]);
   assert.equal(created[0]!.HostConfig!.NetworkMode, "workspace-portal-online");
-  assert.deepEqual(started, { id: "id-wp-wo-7", ip: "172.28.128.2", port: 4170 });
+  assert.deepEqual(started, { id: "id-wp-qwen-online-7", ip: "172.28.128.2", port: 4170 });
 });
 
-test("list reads each container's kind from its label, and its address on its own kind's network only", async () => {
-  const row = (id: string, labels: Record<string, string>, networks: Record<string, string>) => ({
-    Id: id,
+test("list reads a container's workspace from its labels and its name, and its address on its own kind's network only", async () => {
+  const row = (name: string, labels: Record<string, string>, networks: Record<string, string>) => ({
+    Id: name,
+    Names: [`/${name}`],
     Labels: { "workspace-portal.workspace": "1", "workspace-portal.user-id": "3", ...labels },
     State: "running",
     Image: "workspace-portal/workspace:qwen-0.27.0",
-    NetworkSettings: { Networks: Object.fromEntries(Object.entries(networks).map(([name, ip]) => [name, { IPAddress: ip }])) },
+    NetworkSettings: { Networks: Object.fromEntries(Object.entries(networks).map(([network, ip]) => [network, { IPAddress: ip }])) },
   });
+  const labels = (agent: string, kind: string) => ({ "workspace-portal.agent": agent, "workspace-portal.kind": kind });
   const { runtime } = containerDocker([
-    row("unlabelled", {}, { "workspace-portal-ws": "172.29.128.1" }),
-    row("private", { "workspace-portal.kind": "private" }, { "workspace-portal-ws": "172.29.128.2" }),
-    row("on", { "workspace-portal.kind": "online" }, { "workspace-portal-online": "172.28.128.2" }),
+    row("wp-qwen-private-3", labels("qwen", "private"), { "workspace-portal-ws": "172.29.128.2" }),
+    row("wp-dsh-online-3", labels("dsh", "online"), { "workspace-portal-online": "172.28.128.2" }),
     // An Online container somehow also on the Private network: only its Online address is its own.
-    row("both", { "workspace-portal.kind": "online" }, { "workspace-portal-ws": "172.29.128.9" }),
-    row("odd", { "workspace-portal.kind": "public" }, { "workspace-portal-ws": "172.29.128.3" }),
+    row("wp-opencode-online-3", labels("opencode", "online"), { "workspace-portal-ws": "172.29.128.9" }),
+    row("unlabelled", {}, { "workspace-portal-ws": "172.29.128.1" }),
+    row("wp-qwen-public-3", labels("qwen", "public"), { "workspace-portal-ws": "172.29.128.3" }),
+    row("wp-claude-private-3", labels("claude", "private"), { "workspace-portal-ws": "172.29.128.4" }),
+    // Not named as the workspace its labels give: another user's name, another agent's, the name from before each
+    // agent had its own workspace. Whatever it mounts and runs as, it is not that workspace's container.
+    row("wp-qwen-private-4", labels("qwen", "private"), { "workspace-portal-ws": "172.29.128.5" }),
+    row("wp-dsh-private-3", labels("qwen", "private"), { "workspace-portal-ws": "172.29.128.6" }),
+    row("wp-ws-3", labels("qwen", "private"), { "workspace-portal-ws": "172.29.128.7" }),
   ]);
   const listed = await runtime.list();
   assert.deepEqual(
-    listed.map(({ id, kind, ip }) => ({ id, kind, ip })),
+    listed.map(({ id, userId, ref, ip, port }) => ({ id, userId, ref, ip, port })),
     [
-      { id: "unlabelled", kind: null, ip: null },
-      { id: "private", kind: "private", ip: "172.29.128.2" },
-      { id: "on", kind: "online", ip: "172.28.128.2" },
-      { id: "both", kind: "online", ip: null },
-      { id: "odd", kind: null, ip: null },
+      { id: "wp-qwen-private-3", userId: 3, ref: { agent: "qwen", kind: "private" }, ip: "172.29.128.2", port: 4170 },
+      { id: "wp-dsh-online-3", userId: 3, ref: { agent: "dsh", kind: "online" }, ip: "172.28.128.2", port: 3080 },
+      { id: "wp-opencode-online-3", userId: 3, ref: { agent: "opencode", kind: "online" }, ip: null, port: 4096 },
+      { id: "unlabelled", userId: 3, ref: null, ip: null, port: null },
+      { id: "wp-qwen-public-3", userId: 3, ref: null, ip: null, port: null },
+      { id: "wp-claude-private-3", userId: 3, ref: null, ip: null, port: null },
+      { id: "wp-qwen-private-4", userId: 3, ref: null, ip: null, port: null },
+      { id: "wp-dsh-private-3", userId: 3, ref: null, ip: null, port: null },
+      { id: "wp-ws-3", userId: 3, ref: null, ip: null, port: null },
     ],
   );
 });

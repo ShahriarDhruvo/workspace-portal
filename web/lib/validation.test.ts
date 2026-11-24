@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { AGENT_KINDS } from "@portal/core/wire";
+import { AGENT_KINDS, WORKSPACE_REFS } from "@portal/core/wire";
 import {
   agentImageSchema,
   agentUpdateSchema,
@@ -146,11 +146,26 @@ test("a start names the kind, and only Private or Online", () => {
   assert.equal(fieldErrors(workspaceStartSchema.safeParse({ kind: "x" }).error!).kind, "Choose Private or Online.");
 });
 
-test("the Online permission and file erasing take a user id and a value or a kind", () => {
+test("the Online permission takes a user id and a value", () => {
   assert.deepEqual(onlineAccessSchema.parse({ userId: "7", allowed: "false" }), { userId: 7, allowed: false });
   assert.deepEqual(onlineAccessSchema.parse({ userId: "7", allowed: "true" }), { userId: 7, allowed: true });
   assert.equal(onlineAccessSchema.safeParse({ userId: "7", allowed: "yes" }).success, false);
-  assert.deepEqual(eraseFilesSchema.parse({ userId: "3", kind: "online" }), { userId: 3, kind: "online" });
-  assert.equal(eraseFilesSchema.safeParse({ userId: "3", kind: "all" }).success, false);
-  assert.equal(eraseFilesSchema.safeParse({ userId: "0", kind: "private" }).success, false);
+});
+
+test("file erasing takes a user id and one workspace: a kind and an agent, both required", () => {
+  for (const { agent, kind } of WORKSPACE_REFS) {
+    assert.deepEqual(eraseFilesSchema.parse({ userId: "3", kind, agent }), { userId: 3, kind, agent }, `${kind} ${agent}`);
+  }
+  // A form without a chosen workspace sends neither field: FormData.get answers null.
+  for (const fields of [
+    { kind: null, agent: null },
+    { kind: "online", agent: null },
+    { kind: null, agent: "qwen" },
+    { kind: "all", agent: "qwen" },
+    { kind: "online", agent: "all" },
+    { kind: "qwen", agent: "online" },
+  ]) {
+    assert.equal(eraseFilesSchema.safeParse({ userId: "3", ...fields }).success, false, `${JSON.stringify(fields)} is refused`);
+  }
+  assert.equal(eraseFilesSchema.safeParse({ userId: "0", kind: "private", agent: "qwen" }).success, false);
 });

@@ -20,7 +20,7 @@ search, so nothing competes with the model for memory.
 | | What it is | Reached |
 |---|---|---|
 | **A browser, or your own software** | | on your LAN, or on your tailnet over HTTPS |
-| **Portal server** | Workspace Portal: two sandboxed Qwen Code, DeepSeek Harness or OpenCode workspaces per person, Private and Online, with SearXNG search and a page reader, plus the model's API behind each person's own keys | from the browser, on port 3000 or 443 |
+| **Portal server** | Workspace Portal: sandboxed Qwen Code, DeepSeek Harness and OpenCode workspaces for each person, a Private and an Online one per agent, with SearXNG search and a page reader, plus the model's API behind each person's own keys | from the browser, on port 3000 or 443 |
 | **LLM server** | The Strix Halo machine: Gufo serving Qwen3.8-Flash-Next with vision | from the portal server only, on port 8080 |
 
 <details>
@@ -812,8 +812,8 @@ sudo bash deploy/install.sh
   Workspace Portal is running.
 
     Portal:     http://PORTAL_IP:3000
-    Workspaces: Private ports 3101-3299, Online ports 3301-3499 (one per user and kind)
-    Previews:   Private ports 4101-4299, Online ports 4301-4499 (the apps running in them)
+    Workspaces: ports 12020-13999 (each workspace has its own: one per user, agent and kind)
+    Previews:   ports 22020-23999 (the apps running in a workspace, 10000 above its port)
     Online:     on (ONLINE_WORKSPACES; Admin > Users switches it off per user)
     Admin:      admin   (first sign-in: grep ^ADMIN_PASSWORD /home/YOUR_LOGIN/workspace-portal/.env; you choose a new one then)
     Agent:      Qwen Code 0.27.0
@@ -848,12 +848,15 @@ Open `http://PORTAL_IP:3000`, sign in as `admin` with that password and choose a
 account for each person under **Admin > Users > New user**: the portal shows a temporary password once, and the
 person chooses their own at the first sign-in.
 
-Each person has two workspaces with separate files, of which one runs at a time. **Private** has no internet
-access. **Online** also reaches public internet addresses, but never your LAN, the servers or another workspace. On
-Home, press **Start Private** or **Start Online**, confirm, then **Open workspace**. The agent is Qwen Code unless
-the person picks DeepSeek Harness or OpenCode on Home, under Private and Online, or the administrator does on the
-person's page under **Admin > Users**; a running workspace keeps its agent until it restarts. With **Plan mode** on,
-in the **+** menu under Qwen Code's input, the agent changes nothing and runs no command until its plan is approved.
+Each person has a Private and an Online workspace for every agent, and one of them runs at a time. **Private** has
+no internet access. **Online** also reaches public internet addresses, but never your LAN, the servers or another
+workspace. On Home, press **Start Private** or **Start Online**, confirm, then **Open workspace**. The agent is
+Qwen Code unless the person picks DeepSeek Harness or OpenCode on Home, under Private and Online, or the
+administrator does on the person's page under **Admin > Users**. Every workspace has its own files and chats, so a
+switch to another agent is a switch to that agent's workspaces, Private and Online: what was made with the agent
+before stays in that agent's workspaces and is there again after switching back. A running workspace stays as it
+is until it is stopped; the picked agent's starts next time. With **Plan mode** on, in the **+** menu under Qwen
+Code's input, the agent changes nothing and runs no command until its plan is approved.
 
 DeepSeek Harness runs as it ships, with its own workspaces, plugins and permission modes; a workspace leaves out
 only signing in to DeepSeek, its own web search (the portal's search replaces it) and opening folders in desktop
@@ -863,8 +866,8 @@ where the model judges each action first and asks the person about any it would 
 default for new sessions. A new session also has **agent teamwork** on: the agent and the subagents it starts divide
 large tasks on a shared task board, which spends more tokens; **Enable agent teamwork**, in the menu of the session's
 model, switches it off for that session.
-Its first workspace is `Documents/deepseek-harness/default-workspace` in the person's home,
-apart from Qwen Code's files; **Add workspace** opens any other folder. **Plugins**, in its sidebar, switches on the
+Its first workspace is `Documents/deepseek-harness/default-workspace` in its home folder;
+**Add workspace** opens any other folder. **Plugins**, in its sidebar, switches on the
 plugins DeepSeek Harness comes with and, in an Online workspace, installs others from npm or GitHub. A plugin runs
 with the person's own access, so install only those you trust. Its **Browser** shows a web app running in the
 workspace, whoever started it: open `http://localhost:PORT`. Its dark theme takes the portal's blacks, as Qwen Code's.
@@ -873,7 +876,7 @@ OpenCode (OpenCode 2, the `@opencode/cli` package) also runs as it ships; a work
 providers, sharing a session, its own web fetch and search (the portal's search and page reader replace them),
 pairing another browser or machine with it, and updating itself. The projects in its sidebar are kept in the
 browser, so the first time in a browser choose **Add project**, then **Select folder** in the dialog, which opens
-at `/workspace`, where Qwen Code's files are. **New session** starts a session there; any other folder is added as
+at `/workspace`, the workspace's own folder. **New session** starts a session there; any other folder is added as
 a project the same way. The sessions are kept in the workspace: the start page lists them by day, for every
 project and in any browser, and searches them. Each session opens in a tab, and <kbd>Ctrl</kbd>+<kbd>&#96;</kbd>
 opens a terminal beside it. In a turn, a line such as **Used 1 Shell** opens its tool calls and the model's
@@ -883,10 +886,10 @@ The agent changes files and runs commands in the workspace without asking. An `o
 folder with `{"permissions": [{"action": "shell", "resource": "*", "effect": "ask"}]}` makes it ask before each
 command there. OpenCode has no web preview. Its agent looks at an app running in the workspace with the browser
 it has; to see the app yourself, open `http://PORTAL_IP:PREVIEW_PORT/__portal/port/PORT/` in a tab of its own.
-`PORT` is the port the app listens on. `PREVIEW_PORT` is the person's number plus 4100 for a Private workspace,
-plus 4300 for an Online one (the installer's `Previews` line gives the ranges); the number ends the address of
-the person's page under **Admin > Users**. Behind HTTPS ([step 12](#12-https-and-remote-access)) the address
-starts with `https://NAME.YOUR-TAILNET.ts.net` instead.
+`PORT` is the port the app listens on. `PREVIEW_PORT` is 20 times the person's number plus 22004 for OpenCode's
+Private workspace, plus 22005 for its Online one (22024 and 22025 for person 1; the installer's `Previews` line
+gives the range); the number ends the address of the person's page under **Admin > Users**. Behind HTTPS
+([step 12](#12-https-and-remote-access)) the address starts with `https://NAME.YOUR-TAILNET.ts.net` instead.
 
 #### The API, for your own software
 
@@ -1094,7 +1097,7 @@ switch off key expiry for this machine under Machines, or it drops out after 180
 cd ~/workspace-portal && sudo bash deploy/tailscale-https.sh
 ```
 
-**You should see**, after about half a minute, the portal's new address as the last line:
+**You should see**, after about a minute, the portal's new address as the last line:
 
 ```text
 Portal: https://NAME.YOUR-TAILNET.ts.net
@@ -1219,6 +1222,69 @@ sudo bash deploy/verify-isolation.sh
 workspaces keep running, and an open browser tab carries on without a reload.
 
 <details>
+<summary>From a portal where a person's agents shared their two workspaces</summary>
+
+Every agent now has its own Private and its own Online workspace for each person, with ports, user IDs and folders
+numbered anew. A portal installed before that (its `.env` has a line `ONLINE_AGENT_PORT_BASE=`) is updated once
+with the blocks below instead of the one above. People start with empty workspaces afterwards.
+
+First stop every workspace under **Admin > Users**: the new gateway removes any that the old one started. Then
+close the old ports, before the pull: the scripts of the old version know the ports it opened, and the new ones
+would look for the new ports.
+
+**Portal server**:
+
+```sh
+cd ~/workspace-portal && sudo bash -c 'source deploy/lib.sh && firewalld_rules remove'
+```
+
+**Portal server**, only if the portal is behind HTTPS ([step 12](#12-https-and-remote-access)):
+
+```sh
+cd ~/workspace-portal && sudo bash deploy/tailscale-https.sh off
+```
+
+**Portal server**:
+
+```sh
+cd ~/workspace-portal
+git pull --ff-only
+sed -i \
+  -e 's|^AGENT_PORT_BASE=.*|AGENT_PORT_BASE=12000|' \
+  -e 's|^AGENT_PORT_COUNT=.*|AGENT_PORT_COUNT=100|' \
+  -e '/^ONLINE_AGENT_PORT_BASE=/d' -e '/^ONLINE_UID_BASE=/d' .env
+sudo find /srv/workspace-portal/users -mindepth 2 -maxdepth 2 \( -name private -o -name online \) -exec rm -rf {} +
+sudo bash deploy/install.sh
+sudo bash deploy/verify-isolation.sh
+```
+
+**You should see** the installer's `Workspaces` line name ports 12020-13999, and `failed 0`. Behind HTTPS, run
+`sudo bash deploy/tailscale-https.sh` again afterwards.
+
+- **The `find` line deletes every person's old files and chats:** the folders `private` and `online` right under
+  `users/NUMBER`, which no workspace uses any more and which fail the isolation check while they are there.
+- **To keep a person's,** move them before that line into the workspace that is to have them, and give them to
+  its user ID: 200000 (`WORKSPACE_UID_BASE`), plus 20 times the person's number, plus 0 for Qwen Code's Private
+  workspace, 1 for its Online one, 2 and 3 for DeepSeek Harness's, 4 and 5 for OpenCode's. Here the old Private
+  workspace of person 7 becomes their Qwen Code Private one:
+
+  ```sh
+  sudo sh -c 'cd /srv/workspace-portal/users/7 && install -d -m 711 qwen qwen/private \
+    && mv private/home private/workspace qwen/private/ \
+    && chown -R 200140:200140 qwen/private/home qwen/private/workspace'
+  ```
+
+- **`AGENT_PORT_COUNT=100`** gives the people numbered 1 to 99 their ports. A person's number ends the address of
+  their page under **Admin > Users**: with one of 100 or more, set the count above the highest, 500 at most.
+- **Pulled before closing the old ports?** `sudo tailscale serve reset` unmaps everything this machine serves
+  through Tailscale, the old ports included. firewalld keeps its rules for them, where nothing listens any more:
+  3101-3299, 3301-3499, 4101-4299 and 4301-4499 with the settings of this guide. `sudo firewall-cmd --permanent
+  --list-rich-rules` shows them, and [step 3](#3-firewall)'s `--remove-rich-rule` takes one back. Then carry on
+  with the last block.
+
+</details>
+
+<details>
 <summary>What it keeps, and what it does not update</summary>
 
 - **Kept:** `.env`, the model settings, the accounts, every person's files and chat history. The installer adds the
@@ -1322,6 +1388,10 @@ fan service is running and that the vents have space on all sides. How each was 
   run there as a workspace runs, behind the portal's gateway and in a browser, with a stand-in for the model. So
   the times of [step 11](#11-workspace-portal) and of the isolation check are without its image, and nothing here
   says how it handles a long conversation or an answer cut off at the model's limit, or what memory it needs.
+- A workspace of its own for every agent. The tests ran while a person's agents shared one Private and one Online
+  workspace, on other ports. So the times and the count of the isolation check, the minute of [step
+  12](#12-https-and-remote-access) and the update from that layout ([Update the portal](#update-the-portal)) are
+  not from a run with the workspaces as they are now.
 - The page reader under many agents at once. It was tested with one agent of each kind and with six pages at a
   time.
 - [Step 12](#12-https-and-remote-access) from its first line. Tailscale was already installed and signed in, so

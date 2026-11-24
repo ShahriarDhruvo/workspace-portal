@@ -1,9 +1,10 @@
-// Workspace Portal gateway: owns the per-user agent containers (Qwen Code, DeepSeek Harness or OpenCode; a Private
-// and an Online workspace per user, one running at a time), proxies browsers to them (one port per user and kind),
-// and serves the LLM and web search to them (one service listener per kind, on that kind's network).
+// Workspace Portal gateway: owns the workspace containers (a user has a workspace per agent, Qwen Code, DeepSeek
+// Harness or OpenCode, and kind, Private or Online, with nothing in common, and one running at a time), proxies
+// browsers to them (one port per workspace), and serves the LLM and web search to them (one service listener per
+// kind, on that kind's network).
 // See docs/ARCHITECTURE.md.
 import type http from "node:http";
-import { openDatabase, WORKSPACE_KINDS, type WorkspaceKind } from "@portal/core";
+import { agentPortRange, openDatabase, WORKSPACE_KINDS, workspaceForAgentPort, type WorkspaceKind } from "@portal/core";
 import { AgentVersions } from "./updates/agent-versions.ts";
 import { AgentConfigError, driverFor } from "./agents/index.ts";
 import { compose } from "./compose.ts";
@@ -83,29 +84,23 @@ async function main(log: Logger): Promise<void> {
   const servers: http.Server[] = [control];
 
   await listen(control, { host: "127.0.0.1", port: config.controlPort });
-  // One port per user and kind: each workspace, and each of a user's two kinds, is its own browser origin, and so
-  // are the web apps running in it (its preview port, PREVIEW_PORT_OFFSET above). Online's ports listen even while
-  // Online is off (they answer that the workspace is stopped).
-  const portRanges: Record<string, string> = {};
-  const previewRanges: Record<string, string> = {};
-  for (const kind of WORKSPACE_KINDS) {
-    const firstPort = config.workspace.kinds[kind].agentPortBase + 1;
-    const lastPort = firstPort + config.agentPortCount - 2;
-    for (let port = firstPort; port <= lastPort; port++) {
-      const agent = createAgentServer();
-      await listen(agent, { host: config.agentBind, port });
-      servers.push(agent);
-      const preview = createPreviewServer();
-      await listen(preview, { host: config.agentBind, port: port + PREVIEW_PORT_OFFSET });
-      servers.push(preview);
-    }
-    portRanges[kind] = `${config.agentBind}:${firstPort}-${lastPort}`;
-    previewRanges[kind] = `${config.agentBind}:${firstPort + PREVIEW_PORT_OFFSET}-${lastPort + PREVIEW_PORT_OFFSET}`;
+  // One port per workspace: each is its own browser origin, and so are the web apps running in it (its preview port,
+  // PREVIEW_PORT_OFFSET above). A workspace's ports listen even while its agent is not enabled or Online is off (they
+  // answer that the workspace is stopped); the ports of a user's block that no workspace has stay closed.
+  const ports = agentPortRange(config.agentPortBase, config.agentPortCount);
+  for (let port = ports.first; port <= ports.last; port++) {
+    if (workspaceForAgentPort(config.agentPortBase, config.agentPortCount, port) === null) continue;
+    const agent = createAgentServer();
+    await listen(agent, { host: config.agentBind, port });
+    servers.push(agent);
+    const preview = createPreviewServer();
+    await listen(preview, { host: config.agentBind, port: port + PREVIEW_PORT_OFFSET });
+    servers.push(preview);
   }
   log.info("gateway listening", {
     control: `127.0.0.1:${config.controlPort}`,
-    workspaces: portRanges,
-    previews: previewRanges,
+    workspaces: `${config.agentBind}:${ports.first}-${ports.last}`,
+    previews: `${config.agentBind}:${ports.first + PREVIEW_PORT_OFFSET}-${ports.last + PREVIEW_PORT_OFFSET}`,
     agents: config.workspace.agents.map((agent) => versions.selection(agent).image),
     maxRunning: config.maxRunning,
     idleTimeoutMinutes: config.idleTimeoutMs / 60_000,

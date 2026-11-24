@@ -1,5 +1,5 @@
 // Human-readable audit log entries.
-import { AGENT_NAMES, isAgentKind, isWorkspaceKind, WORKSPACE_KIND_NAMES, type AuditAction } from "@portal/core";
+import { AGENT_NAMES, isAgentKind, isWorkspaceKind, WORKSPACE_KIND_NAMES, workspaceName, type AuditAction, type WorkspaceRef } from "@portal/core";
 
 const ACTION_LABELS: Record<AuditAction, string> = {
   login: "Signed in",
@@ -46,14 +46,14 @@ const DETAIL_LABELS: Record<string, string> = {
   lastName: "Last name",
   error: "Error",
   // Agent updates (written by the gateway) and image removals: agent, from/to or version, rebuild. A harness
-  // change (Settings) has from/to as agents.
+  // change (on Home) has from/to as agents.
   agent: "Agent",
   from: "From",
   to: "To",
   version: "Version",
   rebuild: "From scratch",
-  // LLM engine updates (written by the gateway) and image removals: from/to or version, rolledBack, digest. A
-  // workspace's start and erased files: kind (Private or Online).
+  // LLM engine updates (written by the gateway) and image removals: from/to or version, rolledBack, digest. A kind
+  // (Private or Online) without an agent beside it; with one, the two name a workspace (workspaceIn).
   kind: "Type",
   rolledBack: "Rolled back",
   digest: "Digest",
@@ -124,7 +124,19 @@ function formatDetail(key: string, value: unknown): string {
   return formatValue(value);
 }
 
-/** Renders the JSON `details` column as "Key: value · Key: value". */
+/**
+ * The workspace an entry is about: the gateway writes its agent and kind when one starts, stops or fails and when its
+ * files are erased. Null for other details (an agent update has no kind, a job's kind names no workspace).
+ */
+function workspaceIn(details: Record<string, unknown>): WorkspaceRef | null {
+  const { agent, kind } = details;
+  return isAgentKind(agent) && isWorkspaceKind(kind) ? { agent, kind } : null;
+}
+
+/**
+ * Renders the JSON `details` column as "Key: value · Key: value". A workspace's agent and kind read as one, its name
+ * ("Workspace: Online Qwen Code"), where the agent stands.
+ */
 export function formatAuditDetails(details: string | null): string {
   if (!details) return "";
   let parsed: unknown;
@@ -134,8 +146,14 @@ export function formatAuditDetails(details: string | null): string {
     return details;
   }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return formatValue(parsed);
-  return Object.entries(parsed as Record<string, unknown>)
-    .map(([key, value]) => `${DETAIL_LABELS[key] ?? humanize(key)}: ${formatDetail(key, value)}`)
+  const record = parsed as Record<string, unknown>;
+  const workspace = workspaceIn(record);
+  return Object.entries(record)
+    .flatMap(([key, value]) => {
+      if (workspace && key === "kind") return [];
+      if (workspace && key === "agent") return [`Workspace: ${workspaceName(workspace)}`];
+      return [`${DETAIL_LABELS[key] ?? humanize(key)}: ${formatDetail(key, value)}`];
+    })
     .join(" · ");
 }
 

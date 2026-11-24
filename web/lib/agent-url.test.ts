@@ -1,6 +1,23 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { agentFrameUrl } from "./agent-url.ts";
+import { WORKSPACE_REFS, workspaceName } from "@portal/core/wire";
+import { agentFrameUrl, frameOf, framesOf } from "./agent-url.ts";
+
+test("every workspace of a user has its own frame, and the lookup finds a workspace's own", () => {
+  const frames = framesOf((workspace) => ({ port: 12140 + WORKSPACE_REFS.indexOf(workspace), token: workspaceName(workspace) }));
+  assert.equal(frames.length, WORKSPACE_REFS.length);
+  assert.equal(new Set(frames.map((frame) => frame?.port)).size, WORKSPACE_REFS.length, "no two share a port");
+  for (const workspace of WORKSPACE_REFS) {
+    assert.equal(frameOf(frames, { ...workspace })?.token, workspaceName(workspace), "found by agent and kind, not by identity");
+  }
+  assert.deepEqual(frameOf(frames, { agent: "qwen", kind: "private" }), { port: 12140, token: "Private Qwen Code" });
+  assert.deepEqual(frameOf(frames, { agent: "opencode", kind: "online" }), { port: 12145, token: "Online OpenCode" });
+});
+
+test("a user without workspace ports has no frame for any workspace", () => {
+  const frames = framesOf(() => null);
+  for (const workspace of WORKSPACE_REFS) assert.equal(frameOf(frames, workspace), null);
+});
 
 test("agentFrameUrl for Qwen Code keeps the typed host, uses the workspace's own port, passes the theme and the token", () => {
   assert.equal(

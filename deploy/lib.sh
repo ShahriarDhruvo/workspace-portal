@@ -51,7 +51,8 @@ exa_enabled() { env_is EXA_SEARCH true on yes 1; }
 selinux_on() { command -v selinuxenabled >/dev/null && selinuxenabled; }
 
 # Per agent: its name and the .env key of its version, which is also the build argument of its Dockerfile stage.
-# Its CLI and its stage are named like the agent.
+# Its CLI and its stage are named like the agent. In the gateway's order (AGENT_KINDS in
+# packages/core/src/wire/kinds.ts; a gateway test compares them), which numbers the workspaces: append only.
 AGENTS=(qwen dsh opencode)
 declare -A AGENT_NAME=([qwen]="Qwen Code" [dsh]="DeepSeek Harness" [opencode]="OpenCode")
 declare -A AGENT_VERSION_KEY=([qwen]=QWEN_CODE_VERSION [dsh]=DSH_VERSION [opencode]=OPENCODE_VERSION)
@@ -237,27 +238,54 @@ never_reach() {
   } | ipv4_networks
 }
 
-# The UIDs of users 1 … AGENT_PORT_COUNT - 1 from the base in KEY: the /etc/subuid and /etc/subgid ranges that
-# overlap them. (Their owners could read those workspaces' files through a user namespace.)
-subid_overlaps() { # WORKSPACE_UID_BASE | ONLINE_UID_BASE
-  local base
-  base=$(env_get "$1")
-  awk -F: -v first="$((base + 1))" -v last="$((base + $(env_get AGENT_PORT_COUNT) - 1))" \
+# A workspace's number, as the gateway counts it (workspaceNumber in packages/core/src/wire/kinds.ts; a gateway test
+# compares WORKSPACE_BLOCK): user N's workspaces are numbered from N × WORKSPACE_BLOCK, agent by agent in the order
+# of AGENTS, each agent's Private before its Online. A workspace's port is AGENT_PORT_BASE + its number, its UID
+# WORKSPACE_UID_BASE + its number.
+WORKSPACE_BLOCK=20
+WORKSPACE_KINDS=(private online)
+workspace_number() { # user-id agent kind
+  local place=0 agent
+  for agent in "${AGENTS[@]}"; do
+    [[ $agent != "$2" ]] || break
+    place=$((place + ${#WORKSPACE_KINDS[@]}))
+  done
+  [[ $3 == private ]] || place=$((place + 1))
+  printf '%s' "$(($1 * WORKSPACE_BLOCK + place))"
+}
+
+# The UIDs of the workspaces of users 1 … AGENT_PORT_COUNT - 1: the /etc/subuid and /etc/subgid ranges that overlap
+# them. (Their owners could read those workspaces' files through a user namespace.)
+subid_overlaps() {
+  local base count
+  base=$(env_get WORKSPACE_UID_BASE) count=$(env_get AGENT_PORT_COUNT)
+  awk -F: -v first="$((base + WORKSPACE_BLOCK))" -v last="$((base + count * WORKSPACE_BLOCK - 1))" \
     '$2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ && $2 <= last && $2 + $3 - 1 >= first {
        printf " %s (%d-%d in %s)", $1, $2, $2 + $3 - 1, FILENAME }' /etc/subuid /etc/subgid 2>/dev/null || true
 }
 
-# FIRST-LAST of the four ranges browsers reach besides WEB_PORT: the Private and the Online workspaces, then each
-# kind's previews, PREVIEW_PORT_OFFSET above (the gateway's, in gateway/src/config.ts: a test compares the two).
-PREVIEW_PORT_OFFSET=1000
+# FIRST-LAST of the two ranges browsers reach besides WEB_PORT: the workspaces', then their previews',
+# PREVIEW_PORT_OFFSET above (the gateway's, in gateway/src/config.ts: a test compares the two).
+PREVIEW_PORT_OFFSET=10000
 port_ranges() {
-  local base count online
+  local base count first last
   base=$(env_get AGENT_PORT_BASE) count=$(env_get AGENT_PORT_COUNT)
-  online=$(env_get ONLINE_AGENT_PORT_BASE "$((base + count))")
-  for base in "$base" "$online" "$((base + PREVIEW_PORT_OFFSET))" "$((online + PREVIEW_PORT_OFFSET))"; do
-    printf '%s-%s ' "$((base + 1))" "$((base + count - 1))"
+  first=$((base + WORKSPACE_BLOCK)) last=$((base + count * WORKSPACE_BLOCK - 1))
+  printf '%s-%s %s-%s\n' "$first" "$last" "$((first + PREVIEW_PORT_OFFSET))" "$((last + PREVIEW_PORT_OFFSET))"
+}
+
+# Every port in those ranges that a workspace has, one per line: the workspaces' ports, then their previews'. The
+# rest of each user's block serves nothing.
+workspace_ports() {
+  local base count offset user place
+  base=$(env_get AGENT_PORT_BASE) count=$(env_get AGENT_PORT_COUNT)
+  for offset in 0 "$PREVIEW_PORT_OFFSET"; do
+    for ((user = 1; user < count; user++)); do
+      for ((place = 0; place < ${#AGENTS[@]} * ${#WORKSPACE_KINDS[@]}; place++)); do
+        echo "$((base + user * WORKSPACE_BLOCK + place + offset))"
+      done
+    done
   done
-  echo
 }
 
 # Who may reach those ports: FIREWALL_ALLOW_SOURCE, else the LAN of the default route and, with a tailscale0
@@ -272,8 +300,8 @@ portal_sources() {
   printf '%s' "$lan"
 }
 
-# Adds or removes the firewalld rich rules that open the portal's ports to portal_sources. Both kinds' ranges,
-# also with Online off: the gateway answers there that the workspace is stopped.
+# Adds or removes the firewalld rich rules that open the portal's ports to portal_sources. Every workspace's port,
+# also with Online off or an agent not enabled: the gateway answers there that the workspace is stopped.
 firewalld_rules() { # add | remove
   local source port rule refused=die
   [[ $1 == add ]] || refused=warn

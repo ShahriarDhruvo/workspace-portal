@@ -53,7 +53,7 @@ interface KindPickerProps {
   className?: string;
 }
 
-/** The user's two workspaces as radio cards. With Online unavailable its card is disabled and its line says why. */
+/** The two kinds as radio cards. With Online unavailable its card is disabled and its line says why. */
 export function KindPicker({ value, onValueChange, onlineBlocked, idPrefix, className }: KindPickerProps) {
   return (
     <RadioGroup

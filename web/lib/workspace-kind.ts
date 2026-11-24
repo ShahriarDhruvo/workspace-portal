@@ -1,14 +1,34 @@
-// The two kinds of workspace in the browser: which one a Start offers first, why Online can't be chosen, and what a
-// refused start says.
-import { WORKSPACE_KIND_NAMES, type ApiError, type OnlineAccess, type WorkspaceInfo, type WorkspaceKind, type WorkspaceStatus } from "@portal/core/wire";
+// A user's workspaces in the browser: which kind a Start offers first, why Online can't be chosen, which workspace
+// holds a container, and what a refused start says.
+import {
+  workspaceName,
+  workspaceOf,
+  type ApiError,
+  type OnlineAccess,
+  type WorkspaceInfo,
+  type WorkspaceKind,
+  type WorkspaceRef,
+  type WorkspaceStatus,
+} from "@portal/core/wire";
 
 export function otherKind(kind: WorkspaceKind): WorkspaceKind {
   return kind === "online" ? "private" : "online";
 }
 
-/** A container of that kind exists: starting, running or stopping. Its files can't be erased then. */
+/**
+ * A workspace's container exists: starting, running or stopping. Its files can't be erased then, and no other
+ * workspace of its user starts.
+ */
 export function hasContainer(status: WorkspaceStatus): boolean {
   return status === "starting" || status === "running" || status === "stopping";
+}
+
+/**
+ * The one of a user's workspaces whose container exists (hasContainer); null when none does: `agent` and `kind` then
+ * only name the workspace used last.
+ */
+export function runningWorkspace(info: Pick<WorkspaceInfo, "status" | "agent" | "kind">): WorkspaceRef | null {
+  return hasContainer(info.status) ? workspaceOf(info) : null;
 }
 
 const ONLINE_BLOCKED: Readonly<Record<Exclude<OnlineAccess, "allowed">, string>> = {
@@ -38,15 +58,16 @@ export function onlineAccessAfter(error: Pick<ApiError, "error">): Exclude<Onlin
 }
 
 /**
- * What a refused start says. `kind` is the one asked for; `whose` names the workspace's owner ("Your", "Ada
- * Lovelace's"). Anything else keeps the gateway's own message.
+ * What a refused start says. `whose` names the workspaces' owner ("Your", "Ada Lovelace's"); `running` is the one of
+ * them that holds a container now (runningWorkspace of a status read after the refusal), null when unknown. Anything
+ * the portal has no words for keeps the gateway's own message.
  */
-export function startErrorText(error: ApiError, kind: WorkspaceKind, whose: string): string {
+export function startErrorText(error: ApiError, whose: string, running: WorkspaceRef | null): string {
   switch (error.error) {
     case "capacity":
       return "All workspace slots are busy. Try again in a minute.";
-    case "kind_mismatch":
-      return `${whose} ${WORKSPACE_KIND_NAMES[otherKind(kind)]} workspace is running. Stop it before starting the ${WORKSPACE_KIND_NAMES[kind]} one.`;
+    case "another_running":
+      return running ? `${whose} ${workspaceName(running)} workspace is running. Stop it before starting another.` : error.message;
     default: {
       const online = onlineAccessAfter(error);
       return online ? ONLINE_BLOCKED[online] : error.message;

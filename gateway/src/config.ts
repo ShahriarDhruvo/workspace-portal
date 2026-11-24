@@ -2,15 +2,28 @@
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { AGENT_KINDS, isAgentKind, isVersion, MIN_CONTROL_SECRET_LENGTH, type AgentKind, type WorkspaceKind } from "@portal/core";
+import {
+  AGENT_KINDS,
+  agentPortRange,
+  isAgentKind,
+  isVersion,
+  MIN_CONTROL_SECRET_LENGTH,
+  WORKSPACE_BLOCK,
+  type AgentKind,
+  type WorkspaceKind,
+} from "@portal/core";
 
 /**
  * A workspace's preview port is its agent port plus this. Fixed: Qwen Code's and DeepSeek Harness's web previews work
- * it out too (PREVIEW_PORT_OFFSET in workspace-image/qwen/trim-web-shell.mjs and workspace-image/dsh/web-preview.mjs).
+ * it out too (PREVIEW_PORT_OFFSET in workspace-image/qwen/trim-web-shell.mjs and workspace-image/dsh/web-preview.mjs),
+ * and so does deploy/lib.sh.
  */
-export const PREVIEW_PORT_OFFSET = 1000;
+export const PREVIEW_PORT_OFFSET = 10_000;
 
-/** What one kind of workspace (Private, Online) has to itself. */
+/**
+ * What one kind of workspace (Private, Online) has to itself: its network. Every agent's workspace of the kind is on
+ * it, where no container reaches another.
+ */
 export interface KindConfig {
   kind: WorkspaceKind;
   network: string;
@@ -19,10 +32,6 @@ export interface KindConfig {
   gatewayIp: string;
   ipRange: string;
   bridge: string;
-  /** User N's workspace of this kind runs as UID and GID uidBase + N. */
-  uidBase: number;
-  /** User N's workspace is served on agentPortBase + N (1 <= N < agentPortCount), its web apps PREVIEW_PORT_OFFSET above. */
-  agentPortBase: number;
   /** Its containers' DNS servers; none for Private. */
   dns: readonly string[];
 }
@@ -33,6 +42,8 @@ export interface WorkspaceConfig {
   /** What a fresh install builds; updates/agent-versions.ts holds the versions in use. */
   defaultVersions: Readonly<Record<AgentKind, string>>;
   kinds: Record<WorkspaceKind, KindConfig>;
+  /** A workspace runs as UID and GID uidBase + its number (workspaceNumber): no two workspaces share an owner. */
+  uidBase: number;
   onlineEnabled: boolean;
   memoryBytes: number;
   nanoCpus: number;
@@ -108,6 +119,9 @@ export interface Config {
   /** What browsers reach the portal over. Over HTTPS it is on port 443, the workspaces on their own ports. */
   scheme: "http" | "https";
   agentBind: string;
+  /** A workspace is served on agentPortBase + its number (workspaceNumber), its web apps PREVIEW_PORT_OFFSET above. */
+  agentPortBase: number;
+  /** Users 1 … agentPortCount - 1 have workspace ports, and so workspaces. */
   agentPortCount: number;
   controlPort: number;
   servicePort: number;
@@ -150,6 +164,12 @@ const REASONING_EFFORTS = ["none", "low", "medium", "high", "xhigh", "max"];
 const MIN_UID_BASE = 100_000;
 /** and below systemd's foreign UID range (0x7FFE0000), whose files every user can access. */
 const UID_LIMIT = 2_147_352_576;
+
+/**
+ * The ports above 1023 that browsers refuse to open (the Fetch standard's "bad ports"): a workspace served on one
+ * could not be opened.
+ */
+const BROWSER_BLOCKED_PORTS: readonly number[] = [1719, 1720, 1723, 2049, 3659, 4045, 4190, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668, 6669, 6679, 6697, 10080];
 
 /** The IANA special-purpose IPv4 ranges: not the public internet. deploy/firewall.sh drops the same list (config.test.ts). */
 export const NOT_PUBLIC: readonly string[] = [
@@ -213,7 +233,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     problems.push(`${name} must ${must} (got "${value}")`);
     return parse(fallback) as T;
   }
-  /** The variable when `ok` accepts it. What it refuses is a problem and stands, for kindProblems to skip. */
+  /** The variable when `ok` accepts it. What it refuses is a problem and stands, for networkProblems to skip. */
   const checked = (name: string, fallback: string, ok: (value: string) => boolean, must: string): string => {
     const value = text(name, fallback);
     if (!ok(value)) problems.push(`${name} must ${must} (got "${value}")`);
@@ -268,8 +288,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   };
 
   const dataDir = read("PORTAL_DATA_DIR", "/srv/workspace-portal", (value) => (path.isAbsolute(value) ? path.resolve(value) : undefined), "be an absolute path");
-  const agentPortBase = port("AGENT_PORT_BASE", 3100);
-  const agentPortCount = int("AGENT_PORT_COUNT", 200, 2);
 
   const config: Config = {
     dataDir,
@@ -281,7 +299,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     webPort: port("WEB_PORT", 3000),
     scheme: bool("PORTAL_HTTPS", false) ? "https" : "http",
     agentBind: checked("AGENT_BIND", "0.0.0.0", (value) => net.isIP(value) !== 0, "be an IP address"),
-    agentPortCount,
+    agentPortBase: port("AGENT_PORT_BASE", 12_000),
+    agentPortCount: int("AGENT_PORT_COUNT", 100, 2),
     controlPort: port("CONTROL_PORT", 4002),
     servicePort: port("SERVICE_PORT", 4001),
     controlSecret: secret("GATEWAY_CONTROL_SECRET"),
@@ -331,8 +350,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
           gatewayIp: ipv4("WORKSPACE_GATEWAY_IP", "172.29.0.1"),
           ipRange: cidr("WORKSPACE_IP_RANGE", "172.29.128.0/17"),
           bridge: text("WORKSPACE_BRIDGE", "br-wportal"),
-          uidBase: int("WORKSPACE_UID_BASE", 200_000, MIN_UID_BASE),
-          agentPortBase,
           dns: [],
         },
         online: {
@@ -342,11 +359,10 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
           gatewayIp: ipv4("ONLINE_GATEWAY_IP", "172.28.0.1"),
           ipRange: cidr("ONLINE_IP_RANGE", "172.28.128.0/17"),
           bridge: text("ONLINE_BRIDGE", "br-wonline"),
-          uidBase: int("ONLINE_UID_BASE", 2_000_000_000, MIN_UID_BASE),
-          agentPortBase: port("ONLINE_AGENT_PORT_BASE", agentPortBase + agentPortCount),
           dns: [ipv4("ONLINE_DNS_1", "1.1.1.1"), ipv4("ONLINE_DNS_2", "9.9.9.9")],
         },
       },
+      uidBase: int("WORKSPACE_UID_BASE", 200_000, MIN_UID_BASE),
       onlineEnabled: bool("ONLINE_WORKSPACES", true),
       memoryBytes: byteSize("WORKSPACE_MEMORY", "3g"),
       nanoCpus: Math.round(number("WORKSPACE_CPUS", 4, (value) => Number.isFinite(value) && value > 0, "be a positive number") * 1e9),
@@ -373,78 +389,68 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   };
 
   if (/[\r\n]/.test(config.search.authorization)) problems.push("SEARXNG_AUTHORIZATION must be a single header value");
-  problems.push(...kindProblems(config));
+  problems.push(...numberingProblems(config), ...networkProblems(config));
   if (problems.length > 0) throw new ConfigError(problems);
   return config;
 }
 
 /**
- * What would let the two kinds, or a kind and the gateway's own ports, share something, and addresses outside
- * their subnet. Checked with ONLINE_WORKSPACES off too, so turning it on can't break isolation.
+ * What would leave a workspace without a usable port or UID. Every workspace has its number (workspaceNumber), so no
+ * setting can make two of them share a port or a UID: what can go wrong is where the ranges lie. The whole of each
+ * range counts, the numbers no workspace has yet included: they are the next agents'.
  */
-function kindProblems(config: Config): string[] {
+function numberingProblems(config: Config): string[] {
   const problems: string[] = [];
-  const count = config.agentPortCount;
-  const { private: priv, online } = config.workspace.kinds;
-  /** The ports, or UIDs, users 1 … count - 1 get from `base`. */
-  const span = (base: number): [number, number] => [base + 1, base + count - 1];
-  const overlaps = ([a1, a2]: [number, number], [b1, b2]: [number, number]): boolean => a1 <= b2 && b1 <= a2;
-  const ownPortIn = ([first, last]: [number, number]): boolean => [config.webPort, config.controlPort, config.servicePort].some((port) => port >= first && port <= last);
+  const { agentPortBase: base, agentPortCount: count } = config;
+  const ports = agentPortRange(base, count);
+  const previews = { first: ports.first + PREVIEW_PORT_OFFSET, last: ports.last + PREVIEW_PORT_OFFSET };
+  const span = (range: { first: number; last: number }): string => `${range.first}-${range.last}`;
+  const within = (port: number): boolean => [ports, previews].some((range) => port >= range.first && port <= range.last);
 
-  for (const { kind, agentPortBase, gatewayIp, ipRange, subnet, uidBase, dns } of [priv, online]) {
+  if (count * WORKSPACE_BLOCK > PREVIEW_PORT_OFFSET) {
+    problems.push(
+      `AGENT_PORT_COUNT must be at most ${PREVIEW_PORT_OFFSET / WORKSPACE_BLOCK}: each user has ${WORKSPACE_BLOCK} workspace ports, and their preview ports are ${PREVIEW_PORT_OFFSET} higher (got ${count})`,
+    );
+  } else if (previews.last > 65535) {
+    problems.push(
+      `the preview ports would end at ${previews.last}, past 65535: lower AGENT_PORT_BASE (${base}) or AGENT_PORT_COUNT (${count}); each user has ${WORKSPACE_BLOCK} workspace ports, and their preview ports are ${PREVIEW_PORT_OFFSET} higher`,
+    );
+  } else {
+    for (const [name, port] of Object.entries({ WEB_PORT: config.webPort, CONTROL_PORT: config.controlPort, SERVICE_PORT: config.servicePort })) {
+      if (within(port)) problems.push(`${name} (${port}) must lie outside the workspace ports (${span(ports)}) and their preview ports (${span(previews)}): move it, or AGENT_PORT_BASE`);
+    }
+    const refused = BROWSER_BLOCKED_PORTS.filter(within);
+    if (refused.length > 0) {
+      problems.push(
+        `browsers refuse to open port ${refused.join(", ")}, which AGENT_PORT_BASE (${base}) puts among the workspace ports (${span(ports)}) or their preview ports (${span(previews)}): choose another base, such as 12000`,
+      );
+    }
+  }
+  const lastUid = config.workspace.uidBase + count * WORKSPACE_BLOCK - 1;
+  if (lastUid >= UID_LIMIT) {
+    problems.push(`the workspaces' UIDs would end at ${lastUid}, past ${UID_LIMIT - 1}: lower WORKSPACE_UID_BASE (${config.workspace.uidBase}) or AGENT_PORT_COUNT (${count})`);
+  }
+  return problems;
+}
+
+/**
+ * What would let the two kinds share a network, and addresses outside their subnet. Checked with ONLINE_WORKSPACES
+ * off too, so turning it on can't break isolation.
+ */
+function networkProblems(config: Config): string[] {
+  const problems: string[] = [];
+  const { private: priv, online } = config.workspace.kinds;
+  for (const { kind, gatewayIp, ipRange, subnet, dns } of [priv, online]) {
     const prefix = kind === "private" ? "WORKSPACE" : "ONLINE";
-    const ports = kind === "private" ? "AGENT_PORT_BASE" : "ONLINE_AGENT_PORT_BASE";
-    if (uidBase + count - 1 >= UID_LIMIT) problems.push(`${prefix}_UID_BASE + AGENT_PORT_COUNT must stay below ${UID_LIMIT} (got ${uidBase} + ${count})`);
     dns.forEach((address, index) => {
       // The firewall drops every private address before it lets DNS through.
       if (net.isIPv4(address) && !isPublicIpv4(address)) {
         problems.push(`ONLINE_DNS_${index + 1} (${address}) must be a public resolver, such as 1.1.1.1 or 9.9.9.9: the Online workspaces may reach no private address`);
       }
     });
-    if (agentPortBase + count - 1 > 65535) {
-      problems.push(`${ports} + AGENT_PORT_COUNT must stay below 65536 (got ${agentPortBase} + ${count})`);
-    } else if (agentPortBase + PREVIEW_PORT_OFFSET + count - 1 > 65535) {
-      problems.push(`${ports} + ${PREVIEW_PORT_OFFSET} + AGENT_PORT_COUNT must stay below 65536: the preview ports are the workspace ports + ${PREVIEW_PORT_OFFSET} (got ${agentPortBase} + ${count})`);
-    }
-    const [first, last] = span(agentPortBase);
-    if (ownPortIn([first, last])) {
-      problems.push(`WEB_PORT, CONTROL_PORT and SERVICE_PORT must lie outside the workspace port range (${ports} + 1 … ${ports} + AGENT_PORT_COUNT - 1: ${first}-${last})`);
-    }
-    const [firstPreview, lastPreview] = span(agentPortBase + PREVIEW_PORT_OFFSET);
-    if (ownPortIn([firstPreview, lastPreview])) {
-      problems.push(`WEB_PORT, CONTROL_PORT and SERVICE_PORT must lie outside the preview port range (${ports} + ${PREVIEW_PORT_OFFSET} + 1 …: ${firstPreview}-${lastPreview})`);
-    }
     const [own, range] = [parseCidr(subnet), parseCidr(ipRange)];
     if (own && !own.has(gatewayIp)) problems.push(`${prefix}_GATEWAY_IP (${gatewayIp}) must lie inside ${prefix}_SUBNET (${subnet})`);
     if (own && range && (range.bits < own.bits || !own.has(range.address))) problems.push(`${prefix}_IP_RANGE (${ipRange}) must lie inside ${prefix}_SUBNET (${subnet})`);
-  }
-  const ranges = [
-    { name: "the Private workspace ports", span: span(priv.agentPortBase) },
-    { name: "the Online workspace ports", span: span(online.agentPortBase) },
-    { name: "the Private preview ports", span: span(priv.agentPortBase + PREVIEW_PORT_OFFSET) },
-    { name: "the Online preview ports", span: span(online.agentPortBase + PREVIEW_PORT_OFFSET) },
-  ];
-  for (let i = 0; i < ranges.length; i++) {
-    for (let j = i + 1; j < ranges.length; j++) {
-      // The two workspace ranges are reported below, with what to change; the preview ranges then overlap as well.
-      if ((i === 0 && j === 1) || (i === 2 && j === 3)) continue;
-      const [a, b] = [ranges[i]!, ranges[j]!];
-      if (overlaps(a.span, b.span)) {
-        problems.push(
-          `${a.name} (${a.span.join("-")}) and ${b.name} (${b.span.join("-")}) overlap: each needs ports of its own (the preview ports are the workspace ports + ${PREVIEW_PORT_OFFSET}; set AGENT_PORT_BASE, ONLINE_AGENT_PORT_BASE or AGENT_PORT_COUNT so they don't meet)`,
-        );
-      }
-    }
-  }
-  if (overlaps(span(priv.agentPortBase), span(online.agentPortBase))) {
-    problems.push(
-      `the Private and Online workspace port ranges overlap (AGENT_PORT_BASE ${priv.agentPortBase}, ONLINE_AGENT_PORT_BASE ${online.agentPortBase}, AGENT_PORT_COUNT ${count}): each kind needs ports of its own`,
-    );
-  }
-  if (overlaps(span(priv.uidBase), span(online.uidBase))) {
-    problems.push(
-      `the Private and Online workspace UID ranges overlap (WORKSPACE_UID_BASE ${priv.uidBase}, ONLINE_UID_BASE ${online.uidBase}, AGENT_PORT_COUNT ${count}): the bases must be at least AGENT_PORT_COUNT apart`,
-    );
   }
   if (priv.network === online.network) problems.push(`WORKSPACE_NETWORK and ONLINE_NETWORK must differ (both "${priv.network}")`);
   if (priv.bridge === online.bridge) problems.push(`WORKSPACE_BRIDGE and ONLINE_BRIDGE must differ (both "${priv.bridge}")`);

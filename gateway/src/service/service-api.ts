@@ -4,11 +4,12 @@
 // server (web_search queries SEARXNG_URL, after Exa when EXA_SEARCH is on; read_page asks the reader container at
 // READER_URL). Callers are identified by their source address, among the running containers of this server's kind
 // only; containers run without capabilities on networks without inter-container traffic, so they cannot spoof it.
-// Each server keeps its own per-workspace state (the URLs a workspace was shown, its search and read slots): none
-// carries over to the other kind.
+// This API is all that workspaces have in common, and what it keeps is kept apart: the URLs a workspace was shown
+// are that workspace's alone (not its user's other agents'), the search and read slots each user's, and each
+// server's state its own: none carries over to the other kind.
 import type http from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { PortalDb, WorkspaceKind } from "@portal/core";
+import { workspaceNumber, type PortalDb, type WorkspaceKind, type WorkspaceRef } from "@portal/core";
 import type { Config } from "../config.ts";
 import { createStreamingServer, remoteAddress, sendError, splitTarget } from "../lib/http-util.ts";
 import { isPlainPath, proxyLlm, sendLlmError } from "./llm-proxy.ts";
@@ -34,9 +35,11 @@ export interface ServiceDeps {
   search: SearchBackend;
   /** The page reader for the read_page tool; without it only web_search is offered. */
   reader?: ReaderBackend | null;
-  /** Maps a source address to a user id. Defaults to the addresses of running workspace containers of `kind`. */
-  resolveCaller?: (address: string) => number | null;
+  /** The workspace calling from a source address. Defaults to the running workspace containers of `kind`. */
+  resolveCaller?: CallerResolver;
 }
+
+type CallerResolver = (address: string) => { userId: number; ref: WorkspaceRef } | null;
 
 const LLM_PREFIX = "/llm/v1/";
 const MCP_PATH = "/mcp/search";
@@ -67,12 +70,12 @@ const NOT_SHOWN =
   "read_page only opens pages you were shown: a URL from web_search results, from a page you already read, or from the " +
   "conversation, plus well-known documentation and code sites. Find this page with web_search first, then open the result.";
 
-/** Per-workspace state of the web tools. */
+/** The web tools' state: per user, and for what a workspace was shown per workspace (`workspace`: its number). */
 interface WebTools {
-  /** Concurrent searches per workspace, so one runaway agent can't flood the search engines. */
+  /** Concurrent searches per user, so one runaway agent can't flood the search engines. */
   searchLimiter(userId: number): Limiter;
   /** The page reader as this workspace may use it; undefined when there is none. */
-  reader(userId: number): PageReader | undefined;
+  reader(userId: number, workspace: number): PageReader | undefined;
   shown: ShownUrls;
   /** True when workspaces may only read pages they were shown, so the gateway has to know what that is. */
   tracksShown: boolean;
@@ -90,14 +93,14 @@ function createWebTools(deps: ServiceDeps): WebTools {
   const { reader: settings } = deps.config;
   const backend = deps.reader ?? null;
   // Kept for more workspaces than can run at once; one that was dropped is shown its conversation again by its next LLM request.
-  const shown = new ShownUrls({ users: Math.max(16, deps.config.maxRunning * 4) });
+  const shown = new ShownUrls({ workspaces: Math.max(16, deps.config.maxRunning * 4) });
   const readLimiter = perUser(settings.maxConcurrentPerUser);
   const tracksShown = backend !== null && settings.policy === "shown";
   return {
     searchLimiter: perUser(deps.config.search.maxConcurrentPerUser),
     shown,
     tracksShown,
-    reader(userId) {
+    reader(userId, workspace) {
       if (backend === null) return undefined;
       return {
         backend,
@@ -110,7 +113,7 @@ function createWebTools(deps: ServiceDeps): WebTools {
           if (url === null || host === null) return { refusal: "That is not a valid http(s) URL." };
           if (!tracksShown) return { url, redirectHosts: null };
           // A URL the workspace was shown says nothing the model chose, wherever it leads. It is requested as it was shown.
-          const asShown = shown.find(userId, url);
+          const asShown = shown.find(workspace, url);
           if (asShown !== null) return { url: asShown, redirectHosts: null };
           // On a trusted site the model may have written the URL itself: it must not be passed on elsewhere.
           if (hostTrusted(host, settings.trustedHosts)) return { url, redirectHosts: settings.trustedHosts };
@@ -127,7 +130,7 @@ function createWebTools(deps: ServiceDeps): WebTools {
 }
 
 export function createServiceServer(deps: ServiceDeps): http.Server {
-  const resolveCaller = deps.resolveCaller ?? ((address: string) => deps.manager.userIdForIp(deps.kind, address));
+  const resolveCaller = deps.resolveCaller ?? ((address: string) => deps.manager.workspaceForIp(deps.kind, address));
   const web = createWebTools(deps);
   const server = createStreamingServer(deps.log, "service", (req, res) => handle(deps, resolveCaller, web, req, res));
   const open = new Map<string, number>();
@@ -147,13 +150,15 @@ export function createServiceServer(deps: ServiceDeps): http.Server {
 
 async function handle(
   deps: ServiceDeps,
-  resolveCaller: (address: string) => number | null,
+  resolveCaller: CallerResolver,
   web: WebTools,
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
-  const userId = resolveCaller(remoteAddress(req));
-  if (userId === null) return sendError(res, 403, "forbidden", "Unknown caller.");
+  const caller = resolveCaller(remoteAddress(req));
+  if (caller === null) return sendError(res, 403, "forbidden", "Unknown caller.");
+  const { userId } = caller;
+  const workspace = workspaceNumber(userId, caller.ref);
   const target = req.url ?? "";
   if (!target.startsWith("/")) return sendError(res, 400, "bad_request", "Unsupported request target.");
   const { pathname, search } = splitTarget(target);
@@ -161,8 +166,8 @@ async function handle(
     return handleSearchMcp(req, res, {
       backend: deps.search,
       limiter: web.searchLimiter(userId),
-      reader: web.reader(userId),
-      onShown: web.tracksShown ? (urls) => web.shown.add(userId, urls) : undefined,
+      reader: web.reader(userId, workspace),
+      onShown: web.tracksShown ? (urls) => web.shown.add(workspace, urls) : undefined,
       onCall: (query) => {
         deps.manager.noteAgentActivity(userId);
         deps.log.info("web search", { userId, chars: query.query.length, page: query.page });
@@ -181,7 +186,7 @@ async function handle(
     deps.manager.noteAgentActivity(userId);
     // What the model is shown in a request (the user's messages, tool output) it may then open with read_page. The
     // body has arrived in full before the model can answer, let alone call a tool.
-    const collector = method === "POST" && web.tracksShown ? shownUrlCollector((urls) => web.shown.add(userId, urls)) : null;
+    const collector = method === "POST" && web.tracksShown ? shownUrlCollector((urls) => web.shown.add(workspace, urls)) : null;
     if (collector) {
       req.once("end", () => {
         try {

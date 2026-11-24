@@ -1,17 +1,21 @@
-// WorkspaceManager: every user's workspace, kept in memory and mirrored to the `workspaces` table. A user has two
-// workspaces, Private and Online (WORKSPACE_KINDS), and one container at a time: the entry follows whichever kind
-// runs (or ran last), with the agent and the agent version chosen at its start. Online needs ONLINE_WORKSPACES on,
-// the admin's permission (users.online_allowed) and the host firewall that fences the Online network in (fence.ts):
-// without it, Online workspaces are refused and stopped. The decisions (busy, idle, what to stop or evict) are pure
-// functions in policy.ts.
+// WorkspaceManager: every user's workspaces, kept in memory and mirrored to the `workspaces` table. A user has a
+// workspace for every agent and kind (WORKSPACE_REFS), each with files, a UID, a container and ports that are no
+// other's, and one container at a time: the entry follows whichever of the user's workspaces runs (or ran last),
+// with the agent version chosen at its start. Online needs ONLINE_WORKSPACES on, the admin's permission
+// (users.online_allowed) and the host firewall that fences the Online network in (fence.ts): without it, Online
+// workspaces are refused and stopped. The decisions (busy, idle, what to stop or evict) are pure functions in
+// policy.ts.
 //
 // When a workspace stops: never while its agent is working. Otherwise when nobody has used it for
 // IDLE_TIMEOUT_MINUTES, or soon after the last session using it has ended (sign-out, expiry).
 import { eq } from "drizzle-orm";
 import {
   countSessionsUsingWorkspace,
+  hasWorkspacePorts,
+  sameWorkspace,
   users,
-  WORKSPACE_KIND_NAMES,
+  workspaceName,
+  workspaceOf,
   workspaces,
   writeAudit,
   type AgentKind,
@@ -21,6 +25,7 @@ import {
   type PortalDb,
   type WorkspaceInfo,
   type WorkspaceKind,
+  type WorkspaceRef,
   type WorkspaceStatus,
 } from "@portal/core";
 import type { AgentVersions } from "../updates/agent-versions.ts";
@@ -37,11 +42,11 @@ import type { SessionLog } from "../monitor/session-log.ts";
 import { assessActivity, averageCores, chooseEviction, idleMs, reapVerdict, type ActivityAssessment, type AgentState, type ReapVerdict } from "./policy.ts";
 import { READY_TIMEOUT_MS, waitForReady, type ReadyResult } from "./readiness.ts";
 import { WorkspaceImageMissingError, type ContainerRuntime, type ContainerState, type ContainerSummary } from "../docker/runtime.ts";
-import { eraseKindFiles, prepareWorkspaceFiles, removeUserData, workspaceOwner } from "./paths.ts";
+import { eraseWorkspaceFiles, prepareWorkspaceFiles, removeUserData, workspaceOwner } from "./paths.ts";
 
-/** The workspace's data (or, `erasing`, that kind's files) is being deleted: it can't be started meanwhile. */
-const beingDeleted = (erasing: WorkspaceKind | null = null): HttpError =>
-  new HttpError(409, "deleting", erasing === null ? "This workspace is being deleted." : `The ${WORKSPACE_KIND_NAMES[erasing]} workspace's files are being erased.`);
+/** The user's data (or, `erasing`, that workspace's files) is being deleted: it can't be started meanwhile. */
+const beingDeleted = (erasing: WorkspaceRef | null = null): HttpError =>
+  new HttpError(409, "deleting", erasing === null ? "This workspace is being deleted." : `The ${workspaceName(erasing)} workspace's files are being erased.`);
 
 /** `firewall`: the host firewall's fence is not loaded (fence.ts); otherwise ONLINE_WORKSPACES is off. */
 const onlineDisabled = (firewall = false): HttpError =>
@@ -53,8 +58,8 @@ const onlineDisabled = (firewall = false): HttpError =>
       : "Online workspaces are turned off on this portal.",
   );
 
-const workspaceRunning = (kind: WorkspaceKind): HttpError =>
-  new HttpError(409, "workspace_running", `The ${WORKSPACE_KIND_NAMES[kind]} workspace is running. Stop it before erasing its files.`);
+const workspaceRunning = (ref: WorkspaceRef): HttpError =>
+  new HttpError(409, "workspace_running", `The ${workspaceName(ref)} workspace is running. Stop it before erasing its files.`);
 
 /** The agent asked for is not enabled on this install (WORKSPACE_AGENTS). */
 export const agentUnavailable = (agent: AgentKind): HttpError => new HttpError(400, "agent_unavailable", `${driverFor(agent).name} is not available on this portal.`);
@@ -72,11 +77,8 @@ interface StartOptions {
  */
 type StartAttempt = { ok: true; done: Promise<WorkspaceInfo> } | { ok: false; error: HttpError };
 
-/** Where to send a browser's requests: the agent, its address, and the credential that authenticates the gateway to it. */
-export interface Upstream extends AgentEndpoint {
-  agent: AgentKind;
-  kind: WorkspaceKind;
-}
+/** Where to send a browser's requests: the workspace, its agent's address, and the credential that authenticates the gateway to it. */
+export interface Upstream extends AgentEndpoint, WorkspaceRef {}
 
 interface WorkspaceManagerOptions {
   config: Config;
@@ -112,9 +114,9 @@ interface Entry {
   containerId: string | null;
   /** A container that should be gone but whose removal failed (a failed stop or start). Reconcile retries the removal and never adopts it. */
   leftoverContainerId: string | null;
-  /** Of the current container, or of the last one; null if it never ran one. */
+  /** With `kind`, which of the user's workspaces the current container is, or the last one was (workspaceOf); null if it never ran one. */
   agent: AgentKind | null;
-  /** Of the current container, or of the last one ("private" if it never ran one). */
+  /** "private" if it never ran one. */
   kind: WorkspaceKind;
   version: string | null;
   ip: string | null;
@@ -142,8 +144,8 @@ interface Entry {
   stopping: Promise<WorkspaceInfo> | null;
   /** In-flight deletion of the user's data; starts are refused meanwhile. */
   deleting: Promise<void> | null;
-  /** In-flight erasure of one kind's files; starts of that kind are refused meanwhile. */
-  erasing: { kind: WorkspaceKind; done: Promise<void> } | null;
+  /** In-flight erasure of one workspace's files; its starts are refused meanwhile. */
+  erasing: { ref: WorkspaceRef; done: Promise<void> } | null;
   readiness: AbortController | null;
   activityDirty: boolean;
 }
@@ -151,6 +153,12 @@ interface Entry {
 /** Holds a container and counts against the cap. */
 function isActive(entry: Entry): boolean {
   return entry.status === "starting" || entry.status === "running";
+}
+
+/** Whether the entry's container is, or its last one was, this workspace's. */
+function isWorkspace(entry: Entry, ref: WorkspaceRef): boolean {
+  const own = workspaceOf(entry);
+  return own !== null && sameWorkspace(own, ref);
 }
 
 /** Type-checked in-place update of an entry. */
@@ -178,7 +186,7 @@ const NO_CONTAINER = {
   stopPending: false,
 } satisfies Partial<Entry>;
 
-/** A user's workspace before its first start. */
+/** A user's entry before the first start of any workspace. */
 function newEntry(userId: number): Entry {
   return {
     ...NO_CONTAINER,
@@ -396,22 +404,23 @@ export class WorkspaceManager {
   }
 
   /**
-   * The proxy target of a ready workspace of this kind, or null while it is not ready, or while the user's other
-   * kind is what runs: a kind's port only ever reaches that kind's container.
+   * The proxy target of this workspace when it is ready, or null while it is not, or while another of the user's
+   * workspaces is what runs: a workspace's port only ever reaches that workspace's container.
    */
-  upstream(userId: number, kind: WorkspaceKind): Upstream | null {
+  upstream(userId: number, ref: WorkspaceRef): Upstream | null {
     const entry = this.#entries.get(userId);
-    const endpoint = entry && entry.kind === kind && entry.status === "running" && entry.ready ? endpointOf(entry) : null;
-    return endpoint && entry?.agent ? { ...endpoint, agent: entry.agent, kind } : null;
+    const endpoint = entry && isWorkspace(entry, ref) && entry.status === "running" && entry.ready ? endpointOf(entry) : null;
+    return endpoint && { ...endpoint, ...ref };
   }
 
   /**
-   * The user whose workspace container of this kind has this address (service API caller identity). Only that
+   * The workspace whose container has this address on this kind's network (service API caller identity). Only that
    * kind's containers count: each kind's service listener is on its own network and knows nobody from the other.
    */
-  userIdForIp(kind: WorkspaceKind, ip: string): number | null {
+  workspaceForIp(kind: WorkspaceKind, ip: string): { userId: number; ref: WorkspaceRef } | null {
     for (const entry of this.#entries.values()) {
-      if (isActive(entry) && entry.kind === kind && entry.ip === ip) return entry.userId;
+      const ref = workspaceOf(entry);
+      if (ref !== null && isActive(entry) && ref.kind === kind && entry.ip === ip) return { userId: entry.userId, ref };
     }
     return null;
   }
@@ -450,44 +459,41 @@ export class WorkspaceManager {
   }
 
   /**
-   * Starts the user's workspace of `kind` with `agent` unless one is already starting or running.
-   *   * Kind: one at a time. Asking for the other kind while one runs is refused (`kind_mismatch`); a start without a
-   *     kind attaches to whichever runs, and starts Private when none does. Online needs ONLINE_WORKSPACES and the
+   * Starts one of the user's workspaces unless one is already starting or running.
+   *   * Which: the one of `agent` and `kind`. Without a kind, Private; without an agent, the one chosen for the user
+   *     (users.agent, on Home) when it is enabled, else the first enabled one. Online needs ONLINE_WORKSPACES and the
    *     admin's permission.
-   *   * Agent: without one, the agent chosen for the user (users.agent, on Home) when it is enabled, else the first
-   *     enabled one. One at a time too: asking for another one while it runs is refused; a start without an agent
-   *     attaches to whatever runs.
-   * Refused too while its data (or that kind's files) is being deleted. See StartAttempt for when capacity is decided.
+   *   * One at a time: while one of the user's workspaces is starting or running, what a start leaves out is that
+   *     one's, so it attaches; one that names another agent or kind is refused (`another_running`).
+   * Refused too while the user's data (or that workspace's files) is being deleted. See StartAttempt for when
+   * capacity is decided.
    */
   requestStart(userId: number, options: StartOptions = {}): StartAttempt {
-    const { agent, kind: requested } = options;
     const refuse = (status: number, code: string, message: string): StartAttempt => ({ ok: false, error: new HttpError(status, code, message) });
-    if (!this.#hasWorkspacePort(userId)) {
+    if (!hasWorkspacePorts(this.#config.agentPortCount, userId)) {
       return refuse(409, "no_workspace_port", `User ${userId} has no workspace port: this portal serves workspaces for user ids 1 to ${this.#config.agentPortCount - 1} (AGENT_PORT_COUNT).`);
     }
     const existing = this.#entries.get(userId);
     if (existing?.deleting) return { ok: false, error: beingDeleted() };
     if (existing?.stopping) return { ok: true, done: existing.stopping.then(() => this.start(userId, options)) };
-    if (existing && (existing.starting || isActive(existing)) && existing.agent !== null) {
-      if (requested !== undefined && requested !== existing.kind) {
-        return refuse(409, "kind_mismatch", `Your ${WORKSPACE_KIND_NAMES[existing.kind]} workspace is running. Stop it to start the ${WORKSPACE_KIND_NAMES[requested]} one.`);
-      }
-      if (agent !== undefined && agent !== existing.agent) {
-        return refuse(409, "agent_mismatch", `${driverFor(existing.agent).name} is already running in this workspace. Stop it to switch.`);
+    const current = existing && (existing.starting || isActive(existing)) ? workspaceOf(existing) : null;
+    if (existing && current) {
+      if (!sameWorkspace({ agent: options.agent ?? current.agent, kind: options.kind ?? current.kind }, current)) {
+        const asked = this.#workspaceFor(userId, options);
+        return refuse(409, "another_running", `Your ${workspaceName(current)} workspace is running. Stop it to start the ${workspaceName(asked)} one.`);
       }
       // Someone is using it again: a stop that waited for the agent to finish is off.
       existing.stopPending = false;
       return { ok: true, done: existing.starting ?? Promise.resolve(this.info(userId)) };
     }
 
-    const kind = requested ?? "private";
-    if (kind === "online") {
+    const ref = this.#workspaceFor(userId, options);
+    if (ref.kind === "online") {
       const refusal = this.#onlineRefusal(userId);
       if (refusal) return { ok: false, error: refusal };
     }
-    if (existing?.erasing?.kind === kind) return { ok: false, error: beingDeleted(kind) };
-    const chosen = agent ?? this.#preferredAgent(userId);
-    if (!this.#config.workspace.agents.includes(chosen)) return { ok: false, error: agentUnavailable(chosen) };
+    if (existing?.erasing && sameWorkspace(existing.erasing.ref, ref)) return { ok: false, error: beingDeleted(ref) };
+    if (!this.#config.workspace.agents.includes(ref.agent)) return { ok: false, error: agentUnavailable(ref.agent) };
 
     const eviction = this.#makeRoom(userId);
     if (eviction === false) return refuse(409, "capacity", `All ${this.#config.maxRunning} workspace slots are in use and none has been idle long enough to make room.`);
@@ -497,23 +503,22 @@ export class WorkspaceManager {
     this.#persist(entry, {
       ...NO_CONTAINER,
       status: "starting",
-      agent: chosen,
-      kind,
+      ...ref,
       startedAt: now,
       lastActivityAt: now,
       lastUserActivityAt: now,
       stopReason: null,
       lastError: null,
     });
-    return { ok: true, done: inFlight(this.#launch(entry, eviction), (flight) => (entry.starting = flight)) };
+    return { ok: true, done: inFlight(this.#launch(entry, ref, eviction), (flight) => (entry.starting = flight)) };
   }
 
-  /** User ids 1 … AGENT_PORT_COUNT - 1 have workspace ports (and UIDs clear of the other kind's); no other id runs one. */
-  #hasWorkspacePort(userId: number): boolean {
-    return Number.isInteger(userId) && userId >= 1 && userId < this.#config.agentPortCount;
+  /** The workspace a start means while none of the user's runs: Private without a kind, the preferred agent's without an agent. */
+  #workspaceFor(userId: number, { agent, kind }: StartOptions): WorkspaceRef {
+    return { agent: agent ?? this.#preferredAgent(userId), kind: kind ?? "private" };
   }
 
-  /** The agent a start without one uses: the user's choice (Settings) if enabled, else the first enabled agent. */
+  /** The agent a start without one uses: the user's choice (on Home) if enabled, else the first enabled agent. */
   #preferredAgent(userId: number): AgentKind {
     const enabled = this.#config.workspace.agents;
     const chosen = this.#db.select({ agent: users.agent }).from(users).where(eq(users.id, userId)).get()?.agent ?? null;
@@ -546,10 +551,9 @@ export class WorkspaceManager {
     return victim !== null && this.stop(victim, "capacity");
   }
 
-  async #launch(entry: Entry, eviction: Promise<WorkspaceInfo> | null): Promise<WorkspaceInfo> {
-    const { userId, kind } = entry;
-    const agent = entry.agent!;
-    const driver = driverFor(agent);
+  async #launch(entry: Entry, ref: WorkspaceRef, eviction: Promise<WorkspaceInfo> | null): Promise<WorkspaceInfo> {
+    const { userId } = entry;
+    const { agent, kind } = ref;
     try {
       if (eviction) {
         // Wait for the evicted container to go before starting another (memory headroom).
@@ -557,16 +561,16 @@ export class WorkspaceManager {
         // A stop that arrived meanwhile: nothing to start.
         if (entry.status !== "starting") return this.info(userId);
       }
-      // A container a failed stop left behind (of either kind) goes first.
+      // A container a failed stop left behind (whichever workspace's) goes first.
       await this.#removeLeftover(entry);
       if (entry.status !== "starting") return this.info(userId);
-      prepareWorkspaceFiles(this.#config, userId, kind, agent);
-      const credential = driver.generateCredential();
+      prepareWorkspaceFiles(this.#config, userId, ref);
+      const credential = driverFor(agent).generateCredential();
       const { version, image } = this.#versions.selection(agent);
       // The fence once more, as late as it gets: an Online container runs only inside it.
       if (kind === "online" && (await this.#updateFence()) !== "loaded") throw onlineDisabled(true);
       if (entry.status !== "starting") return this.info(userId);
-      const container = await this.#runtime.startWorkspace(userId, { kind, agent, credential, image });
+      const container = await this.#runtime.startWorkspace(userId, { ref, credential, image });
       // startWorkspace removed every earlier container of this user, a leftover included.
       patch(entry, { containerId: container.id, ip: container.ip, port: container.port, credential, version, leftoverContainerId: null });
       // A stop that arrived meanwhile waits for this start and then removes the container.
@@ -646,8 +650,8 @@ export class WorkspaceManager {
     const { userId, containerId } = entry;
     entry.readiness?.abort();
     this.#persist(entry, { ...NO_CONTAINER, status: "error", stoppedAt: this.#now(), stopReason: "error", lastError: message });
-    this.#audit("workspace_error", userId, { error: firstLine(message), kind: entry.kind });
-    this.#log.error("workspace failed to start", { userId, kind: entry.kind, error: firstLine(message) });
+    this.#audit("workspace_error", userId, { error: firstLine(message), ...workspaceOf(entry) });
+    this.#log.error("workspace failed to start", { userId, ...workspaceOf(entry), error: firstLine(message) });
     this.#connections.closeWorkspace(userId, CLOSE_INTERNAL_ERROR, "workspace failed");
     if (containerId) {
       await this.#runtime.removeContainer(containerId).catch((error: unknown) => {
@@ -685,9 +689,9 @@ export class WorkspaceManager {
   }
 
   /**
-   * Stops the workspace and deletes everything it stored (user deletion). Starts are refused until
-   * it is done, a start queued behind the stop included. Rejects with `stop_failed`, deleting nothing,
-   * when the container can't be removed.
+   * Stops the user's workspace and deletes everything all of them stored (user deletion). Starts are
+   * refused until it is done, a start queued behind the stop included. Rejects with `stop_failed`,
+   * deleting nothing, when the container can't be removed.
    */
   deleteData(userId: number): Promise<void> {
     const existing = this.#entries.get(userId);
@@ -716,38 +720,39 @@ export class WorkspaceManager {
   }
 
   /**
-   * Empties one kind's home and workspace folders (Admin's "Erase files"), audited `workspace_files_erased` with the
-   * kind. Refused (`workspace_running`) while that kind is starting, running or stopping, or while Docker still has a
-   * container of that kind for the user (one a failed stop left behind and that can't be removed), and (`deleting`)
-   * while the user's data is being deleted; starts of that kind are refused until it is done. The other kind's files
-   * are untouched, and it may run meanwhile.
+   * Empties one workspace's home and workspace folders (Admin's "Erase files"), audited `workspace_files_erased` with
+   * its kind and agent. Refused (`workspace_running`) while that workspace is starting, running or stopping, or while
+   * Docker still has a container of it (one a failed stop left behind and that can't be removed), and (`deleting`)
+   * while the user's data is being deleted; its starts are refused until it is done. The user's other workspaces are
+   * untouched, and one of them may run meanwhile.
    */
-  async eraseFiles(userId: number, kind: WorkspaceKind, actorUserId: number | null = null): Promise<void> {
+  async eraseFiles(userId: number, ref: WorkspaceRef, actorUserId: number | null = null): Promise<void> {
     const existing = this.#entries.get(userId);
     if (existing?.deleting) throw beingDeleted();
     if (existing?.erasing) {
-      if (existing.erasing.kind === kind) return existing.erasing.done;
+      if (sameWorkspace(existing.erasing.ref, ref)) return existing.erasing.done;
       await existing.erasing.done.catch(() => undefined);
     }
     const entry = existing ?? this.#createEntry(userId);
-    if (entry.kind === kind && (entry.starting || entry.stopping || isActive(entry) || entry.status === "stopping")) {
-      throw workspaceRunning(kind);
+    if (isWorkspace(entry, ref) && (entry.starting || entry.stopping || isActive(entry) || entry.status === "stopping")) {
+      throw workspaceRunning(ref);
     }
     const done = (async () => {
-      // A container a failed stop left behind may still mount the folders, whichever kind the entry shows now (the
-      // other kind's failed start leaves it in place), so it goes first; if it can't, nothing is erased.
+      // A container a failed stop left behind may be this workspace's and still mount the folders, whichever
+      // workspace the entry shows now (another one's failed start leaves it in place), so it goes first; if it
+      // can't, nothing is erased.
       await this.#removeLeftover(entry).catch((error: unknown) => {
-        this.#log.warn("could not remove a workspace container left behind by a failed stop; its files are not erased", { userId, kind, error });
-        throw workspaceRunning(kind);
+        this.#log.warn("could not remove a workspace container left behind by a failed stop; its files are not erased", { userId, ...ref, error });
+        throw workspaceRunning(ref);
       });
-      // And Docker itself must have no container of that kind for the user (none of a kind it can't tell, either).
+      // And Docker itself must have no container of that workspace (none of the user's that it can't tell, either).
       const containers = await this.#runtime.list();
-      if (containers.some((container) => container.userId === userId && (container.kind === kind || container.kind === null))) {
-        throw workspaceRunning(kind);
+      if (containers.some((container) => container.userId === userId && (container.ref === null || sameWorkspace(container.ref, ref)))) {
+        throw workspaceRunning(ref);
       }
-      await eraseKindFiles(this.#config.dataDir, userId, kind, workspaceOwner(this.#config, userId, kind));
+      await eraseWorkspaceFiles(this.#config.dataDir, userId, ref, workspaceOwner(this.#config, userId, ref));
     })();
-    entry.erasing = { kind, done };
+    entry.erasing = { ref, done };
     try {
       await done;
     } finally {
@@ -755,8 +760,8 @@ export class WorkspaceManager {
       // An entry made only to hold `erasing` goes again, unless a start or a deletion has used it meanwhile.
       if (existing === undefined && entry.startedAt === null && !entry.starting && !entry.deleting && this.#entries.get(userId) === entry) this.#entries.delete(userId);
     }
-    this.#audit("workspace_files_erased", userId, { kind }, actorUserId);
-    this.#log.info("workspace files erased", { userId, kind, actorUserId });
+    this.#audit("workspace_files_erased", userId, ref, actorUserId);
+    this.#log.info("workspace files erased", { userId, ...ref, actorUserId });
   }
 
   /**
@@ -784,15 +789,15 @@ export class WorkspaceManager {
       const message = `could not stop the workspace container: ${errorMessage(error)}`;
       // The container may still run: reconcile retries the removal, and never adopts it.
       this.#persist(entry, { ...NO_CONTAINER, status: "error", stoppedAt: this.#now(), lastError: message, leftoverContainerId: containerId });
-      this.#audit("workspace_error", userId, { reason, error: message, kind: entry.kind }, actorUserId);
+      this.#audit("workspace_error", userId, { reason, error: message, ...workspaceOf(entry) }, actorUserId);
       this.#log.error("workspace stop failed", { userId, containerId, error });
       return this.info(userId);
     }
 
     this.#persist(entry, { ...NO_CONTAINER, status: "stopped", stoppedAt: this.#now(), stopReason: reason, lastError });
-    if (lastError) this.#audit("workspace_error", userId, { reason, error: firstLine(lastError), kind: entry.kind });
-    else if (containerId) this.#audit("workspace_stopped", userId, { reason, kind: entry.kind }, actorUserId);
-    this.#log.info("workspace stopped", { userId, kind: entry.kind, reason });
+    if (lastError) this.#audit("workspace_error", userId, { reason, error: firstLine(lastError), ...workspaceOf(entry) });
+    else if (containerId) this.#audit("workspace_stopped", userId, { reason, ...workspaceOf(entry) }, actorUserId);
+    this.#log.info("workspace stopped", { userId, ...workspaceOf(entry), reason });
     return this.info(userId);
   }
 
@@ -946,9 +951,9 @@ export class WorkspaceManager {
         );
         continue;
       }
-      const refusal = container.kind === "online" ? this.#onlineRefusal(container.userId!) : null;
-      if (entry && container.running && !isActive(entry) && refusal) {
-        await this.#stopRefused(entry, container.id, refusal);
+      const refusal = entry && container.ref?.kind === "online" ? this.#onlineRefusal(entry.userId) : null;
+      if (entry && container.ref && container.running && !isActive(entry) && refusal) {
+        await this.#stopRefused(entry, container.id, container.ref, refusal);
         continue;
       }
       if (entry && container.running && !isActive(entry) && (await this.#adopt(entry, container))) {
@@ -972,7 +977,7 @@ export class WorkspaceManager {
    * An Online container found running that may not run (ONLINE_WORKSPACES is off, or the admin barred the user since):
    * stopped, not adopted, and recorded as stopped for that reason.
    */
-  async #stopRefused(entry: Entry, containerId: string, refusal: HttpError): Promise<void> {
+  async #stopRefused(entry: Entry, containerId: string, ref: WorkspaceRef, refusal: HttpError): Promise<void> {
     const reason = refusal.code;
     this.#log.info("stopping an Online workspace that may not run", { userId: entry.userId, containerId, reason });
     try {
@@ -981,19 +986,20 @@ export class WorkspaceManager {
       this.#log.warn("could not stop an Online workspace that may not run; reconcile retries", { userId: entry.userId, containerId, error });
       return;
     }
-    this.#persist(entry, { ...NO_CONTAINER, kind: "online", status: "stopped", stoppedAt: this.#now(), stopReason: reason, lastError: null });
-    this.#audit("workspace_stopped", entry.userId, { reason, kind: "online" });
+    this.#persist(entry, { ...NO_CONTAINER, ...ref, status: "stopped", stoppedAt: this.#now(), stopReason: reason, lastError: null });
+    this.#audit("workspace_stopped", entry.userId, { reason, ...ref });
   }
 
   /** Tracks a container that was already running (gateway restart); readiness is checked again. */
   async #adopt(entry: Entry, container: ContainerSummary): Promise<boolean> {
-    if (!container.ip || container.agent === null || container.kind === null || container.port === null) return false;
-    if (!this.#hasWorkspacePort(entry.userId)) {
-      // AGENT_PORT_COUNT went down since it started: no port reaches it, and its UID may be the other kind's now.
+    const { ref } = container;
+    if (!container.ip || ref === null || container.port === null) return false;
+    if (!hasWorkspacePorts(this.#config.agentPortCount, entry.userId)) {
+      // AGENT_PORT_COUNT went down since it started: no port reaches it.
       this.#log.warn("not adopting a workspace container of a user without a workspace port (AGENT_PORT_COUNT)", { userId: entry.userId, containerId: container.id });
       return false;
     }
-    const credential = await this.#runtime.credential(container.id, container.agent).catch(() => null);
+    const credential = await this.#runtime.credential(container.id, ref.agent).catch(() => null);
     if (!credential) {
       this.#log.warn("cannot adopt workspace container: its credential is unknown", { userId: entry.userId, containerId: container.id });
       if (!entry.starting && !entry.stopping && !isActive(entry)) {
@@ -1006,8 +1012,7 @@ export class WorkspaceManager {
     patch(entry, {
       ...NO_CONTAINER,
       status: "starting",
-      agent: container.agent,
-      kind: container.kind,
+      ...ref,
       version: container.version,
       containerId: container.id,
       ip: container.ip,
@@ -1021,7 +1026,7 @@ export class WorkspaceManager {
     });
     this.#claimIp(entry);
     this.#persist(entry);
-    this.#log.info("adopted running workspace container", { userId: entry.userId, kind: container.kind, agent: container.agent, containerId: container.id });
+    this.#log.info("adopted running workspace container", { userId: entry.userId, ...ref, containerId: container.id });
     this.#watchReadiness(entry);
     return true;
   }
@@ -1048,7 +1053,8 @@ export class WorkspaceManager {
     // A stopped workspace keeps the id of a container whose removal failed, so a restarted gateway
     // removes it too instead of adopting it.
     const containerId = entry.containerId ?? entry.leftoverContainerId;
-    const container = { containerId, containerName: containerId ? containerName(userId, kind) : null };
+    const ref = workspaceOf(entry);
+    const container = { containerId, containerName: containerId && ref ? containerName(userId, ref) : null };
     const row = { ...container, ip, status, agent, kind, startedAt, stoppedAt, lastActivityAt, stopReason, lastError, updatedAt: this.#now() };
     try {
       this.#db.insert(workspaces).values({ userId, ...row }).onConflictDoUpdate({ target: workspaces.userId, set: row }).run();

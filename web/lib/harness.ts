@@ -11,9 +11,10 @@ import { restartKind } from "./workspace-stop";
 // from there the restart that starts it.
 
 /**
- * Saves the harness `user`'s workspace starts with, checked against the agents this install enables. Audited as
- * `agent_preference_changed` by `actorUserId` with the stored values (from null: never chosen), and with the user as
- * its target when the actor is someone else. A running workspace keeps its agent until it starts again.
+ * Saves the harness whose workspace `user`'s next Start launches, checked against the agents this install enables.
+ * Audited as `agent_preference_changed` by `actorUserId` with the stored values (from null: never chosen), and with
+ * the user as its target when the actor is someone else. The workspace that runs is not touched: the choice counts
+ * from the next Start.
  */
 export async function saveHarnessOf(user: Pick<User, "id" | "agent">, agent: string, actorUserId: number): Promise<ActionResult> {
   const parsed = harnessSchema.safeParse({ agent });
@@ -39,9 +40,9 @@ export async function saveHarnessOf(user: Pick<User, "id" | "agent">, agent: str
 }
 
 /**
- * "Restart now" on a user's page: stops `userId`'s running workspace and starts the same kind (Private or Online)
- * again, with the harness now saved. One that stopped since the page rendered stays stopped, with `stoppedMessage`:
- * its owner starts it from Home, choosing its kind there.
+ * "Restart now" on a user's page: stops `userId`'s running workspace and starts the one of the same kind (Private or
+ * Online) that the harness now saved has. One that stopped since the page rendered stays stopped, with
+ * `stoppedMessage`: its owner starts one from Home, choosing its kind there.
  */
 export async function restartWorkspaceOf(userId: number, actorUserId: number, stoppedMessage: string): Promise<ActionResult> {
   try {

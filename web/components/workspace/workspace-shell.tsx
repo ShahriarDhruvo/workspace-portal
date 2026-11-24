@@ -3,13 +3,13 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useReducer, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { AGENT_NAMES, WORKSPACE_KIND_NAMES, type ApiError, type OnlineAccess, type WorkspaceKind, type WorkspaceStatus } from "@portal/core/wire";
-import { agentFrameUrl, type AgentFrame } from "@/lib/agent-url";
-import { needsReauth, startWorkspace, stopWorkspace } from "@/lib/fetch-json";
+import { AGENT_NAMES, WORKSPACE_KIND_NAMES, workspaceOf, type ApiError, type OnlineAccess, type WorkspaceKind, type WorkspaceStatus } from "@portal/core/wire";
+import { agentFrameUrl, frameOf, type AgentFrames } from "@/lib/agent-url";
+import { needsReauth, startRefusal, startWorkspace, stopWorkspace } from "@/lib/fetch-json";
 import { stopReasonText, workspaceState, type WorkspaceState } from "@/lib/format";
 import type { WorkspaceStatusResponse } from "@/lib/api";
 import type { ActionResult } from "@/lib/validation";
-import { hasContainer, initialKind, onlineAccessAfter, otherKind, startErrorText } from "@/lib/workspace-kind";
+import { hasContainer, initialKind, onlineAccessAfter, otherKind } from "@/lib/workspace-kind";
 import { stopWarnings } from "@/lib/workspace-stop";
 import { PortalMark } from "@/components/brand";
 import { HOME_LINK, portalLinks } from "@/components/layout/portal-links";
@@ -40,8 +40,11 @@ interface WorkspaceShellProps {
   viewer: Viewer;
   /** Whose workspace this page shows; the gateway routes by the session's target, which must match. */
   target: { id: number; name: string; isViewer: boolean };
-  /** Each kind's iframe port and token; null when the user id is outside AGENT_PORT_COUNT (the page explains it). */
-  frames: Readonly<Record<WorkspaceKind, AgentFrame | null>>;
+  /**
+   * The iframe port and token of each of the target's workspaces; null when the user id is outside AGENT_PORT_COUNT
+   * (the page explains it).
+   */
+  frames: AgentFrames;
   idleTimeoutMinutes: number;
   /** Rendered above the top bar (the red-tinted "viewing" banner for admins). */
   banner?: ReactNode;
@@ -250,15 +253,15 @@ export function WorkspaceShell({ viewer, target, frames, idleTimeoutMinutes, ban
   const switched = phase.kind === "switched";
   const pill = pillOf(phase, state);
   const running = info?.status === "starting" || info?.status === "running" ? info : null;
-  const runningAgent = running?.agent ?? null;
-  // The iframe is the running kind's: its own port, so its own browser origin.
-  const frame = running ? frames[running.kind] : null;
+  // The iframe is the running workspace's: its own port, so its own browser origin.
+  const workspace = running ? workspaceOf(running) : null;
+  const frame = workspace ? frameOf(frames, workspace) : null;
   // The kind in the bar while a container is there (or a start was just asked for).
   const shownKind = switched ? null : state.starting ? state.startedKind : info && hasContainer(info.status) ? info.kind : null;
   // Needs window.location, so it is only known in the browser (null while server rendering).
   const agentUrl = useSyncExternalStore(
     noopSubscribe,
-    () => (frame && runningAgent ? agentFrameUrl(window.location, frame, runningAgent, theme) : null),
+    () => (frame && workspace ? agentFrameUrl(window.location, frame, workspace.agent, theme) : null),
     () => null,
   );
   const adminConnected = target.isViewer && (info?.connections.admin ?? 0) > 0;
@@ -282,8 +285,9 @@ export function WorkspaceShell({ viewer, target, frames, idleTimeoutMinutes, ban
     if (result.ok) dispatch({ type: "startSucceeded", info: result.data });
     else if (needsReauth(result)) router.refresh();
     else {
-      const error = { ...result.error, message: startErrorText(result.error, kind, whoseOf(target)) };
-      dispatch({ type: "startFailed", error, online: onlineAccessAfter(result.error) });
+      const refusal = await startRefusal(result.error, whoseOf(target));
+      dispatch({ type: "startFailed", error: { ...result.error, message: refusal.message }, online: onlineAccessAfter(result.error) });
+      if (refusal.info) dispatch({ type: "status", info: refusal.info });
     }
   }
 
@@ -450,9 +454,9 @@ export function WorkspaceShell({ viewer, target, frames, idleTimeoutMinutes, ban
           ) : null}
           <ThemeToggle />
           <BarMenu viewer={viewer} trigger="avatar">
-            {runningAgent ? (
+            {workspace ? (
               <DropdownMenuLabel>
-                Harness: <span className="text-foreground">{AGENT_NAMES[runningAgent]}</span>
+                Harness: <span className="text-foreground">{AGENT_NAMES[workspace.agent]}</span>
               </DropdownMenuLabel>
             ) : null}
             {adminConnected ? (
@@ -462,7 +466,7 @@ export function WorkspaceShell({ viewer, target, frames, idleTimeoutMinutes, ban
                 {ADMIN_CONNECTED}
               </DropdownMenuLabel>
             ) : null}
-            {runningAgent || adminConnected ? <DropdownMenuSeparator /> : null}
+            {workspace || adminConnected ? <DropdownMenuSeparator /> : null}
             <NavMenuItems links={[HOME_LINK, ...portalLinks(viewer.isAdmin)]} />
           </BarMenu>
         </div>

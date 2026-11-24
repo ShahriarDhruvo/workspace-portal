@@ -13,7 +13,9 @@ require_root
 [[ -f $ENV_FILE ]] || die "install the portal first: sudo bash deploy/install.sh"
 no_console_update "then run this again"
 
-ports=$(for range in $(port_ranges); do seq "${range%-*}" "${range#*-}"; done)
+# Each workspace's port and its preview's, not their whole ranges: Tailscale is asked port by port, and the rest of
+# a user's block serves nothing.
+ports=$(workspace_ports)
 # Behind Tailscale the ports listen on this host only, and the portal knows that browsers use HTTPS.
 listen_on() { # address, HTTPS
   env_set WEB_BIND "$1"
@@ -29,7 +31,7 @@ if [[ $# -eq 0 ]]; then
   tailscale_name >/dev/null || die "Tailscale gives this server no HTTPS name: it must run and be signed in, with MagicDNS and HTTPS certificates enabled for the tailnet"
   # First: Tailscale listens on these ports of its own address, which a listener on every address collides with.
   listen_on 127.0.0.1 true
-  log "Tailscale Serve: TCP 443 $(port_ranges)(half a minute)"
+  log "Tailscale Serve: TCP 443, and the $(wc -w <<<"$ports") ports of the workspaces and their previews in $(port_ranges) (about a minute)"
   serve 443 "$(env_get WEB_PORT)"
   for port in $ports; do serve "$port" "$port"; done
 else

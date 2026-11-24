@@ -12,8 +12,8 @@ browser --(cookie portal_session)--> web app   WEB_BIND:WEB_PORT  <--(API key)--
    |                                    | Bearer GATEWAY_CONTROL_SECRET; under /llm/api the caller's API key
    |                                    v
    |                                 gateway   127.0.0.1:CONTROL_PORT       control API, LLM API
-   +--(same cookie)----------------> gateway   AGENT_BIND: agent ports      one per user and kind
-   +--(same cookie)----------------> gateway   AGENT_BIND: preview ports    agent port + 1000
+   +--(same cookie)----------------> gateway   AGENT_BIND: agent ports      one per user, agent and kind
+   +--(same cookie)----------------> gateway   AGENT_BIND: preview ports    agent port + 10000
                                        |  ^
        container address, agent port,  |  |  <kind's gateway IP>:SERVICE_PORT    service API;
        the credential of this start    v  |  the caller is known by its source address
@@ -79,19 +79,27 @@ control secret; creates the admin account when there is none) and `web/scripts/r
 | Listener | Address | Defined in |
 |---|---|---|
 | web app | `WEB_BIND:WEB_PORT` | `docker-compose.yml` |
-| agent port of user N | `AGENT_BIND`, `AGENT_PORT_BASE + N` Private, `ONLINE_AGENT_PORT_BASE + N` Online | `agent-origin.ts` in core |
-| preview port | agent port + `PREVIEW_PORT_OFFSET` (1000) | `gateway/src/config.ts` |
+| agent port of a workspace | `AGENT_BIND`, `AGENT_PORT_BASE` + the workspace's number | `agent-origin.ts` in core |
+| preview port | agent port + `PREVIEW_PORT_OFFSET` (10000) | `gateway/src/config.ts` |
 | control API, LLM API | `127.0.0.1:CONTROL_PORT` | `gateway/src/main.ts` |
 | service API | `WORKSPACE_GATEWAY_IP:SERVICE_PORT`, `ONLINE_GATEWAY_IP:SERVICE_PORT` | `gateway/src/main.ts` |
 | agent in a container | Qwen Code 4170, DeepSeek Harness 3080, OpenCode 4096 | the drivers |
 | SearXNG, page reader | `127.0.0.1:SEARXNG_PORT`, `127.0.0.1:READER_PORT`, container port 8080 | `docker-compose.yml` |
 
-A port is a browser origin. Each workspace has its own, so one workspace's page cannot read another's storage
-or token, and a user's Online workspace cannot read the Private one's. Web apps get the preview port for the
-same reason: an app's page is not the agent's origin. User ids 1 to `AGENT_PORT_COUNT - 1` have ports; any
-other id gets 409 `no_workspace_port`. The offset is fixed because the Web Shell trim, dsh's web preview and
-`deploy/lib.sh` hold the same number; `config.test.ts` compares them. Online's ports listen even with
-`ONLINE_WORKSPACES=off`.
+A workspace is one agent in one kind for one user, and has a number (`workspaceNumber` in `wire/kinds.ts`):
+the user id × `WORKSPACE_BLOCK` (20), plus its place among the user's, agent by agent in the order of
+`AGENT_KINDS`, each agent's Private before its Online. Its port is `AGENT_PORT_BASE` plus the number, its UID
+`WORKSPACE_UID_BASE` plus the number. User 1 has 20 to 25: with the defaults, ports 12020 to 12025 and
+previews 22020 to 22025. The rest of a block is for agents to come, and its ports stay closed. Neither a port
+nor a UID moves when an agent is added or `AGENT_PORT_COUNT` changes, which is why `AGENT_KINDS` is
+append-only. `deploy/lib.sh` counts the same way (`workspace_number`); `config.test.ts` compares the two.
+
+A port is a browser origin. Each workspace has its own, so what one workspace's page keeps in the browser
+(storage, a cache, a service worker, its token) is no other's, the same user's other agents and other kind
+included. Web apps get the preview port for the same reason: an app's page is not the agent's origin. User
+ids 1 to `AGENT_PORT_COUNT - 1` have ports; any other id gets 409 `no_workspace_port`. The offset is fixed
+because the Web Shell trim, dsh's web preview and `deploy/lib.sh` hold the same number; `config.test.ts`
+compares them. A workspace's ports listen even while its agent is not enabled or `ONLINE_WORKSPACES` is off.
 A service listener waits up to 60 s for its bridge address; the gateway exits if it never appears.
 
 Neither process speaks TLS. For HTTPS, `deploy/tailscale-https.sh` has Tailscale Serve end TLS on port 443 for
@@ -108,18 +116,21 @@ PORTAL_DATA_DIR/                    root 0755
   config/qwen/                      root 0700; settings.json, system-defaults.json, 0600
   config/agent-versions.env         root 0600; the agent versions in use
   users/<id>/                       root 0711, as users/ itself
-    private/, online/               root 0711
-      home/        -> /home/user    the workspace's UID, 0700
-      workspace/   -> /workspace    the workspace's UID, 0700
-      system/                       root 0755; rendered at every start, mounted read-only:
-                                    <agent>/ (its settings), passwd, group
+    <agent>/                        root 0711
+      private/, online/             root 0711; one workspace each
+        home/        -> /home/user  the workspace's UID, 0700
+        workspace/   -> /workspace  the workspace's UID, 0700
+        system/                     root 0755; rendered at every start, mounted read-only:
+                                    settings/ (the agent's), passwd, group
 ```
 
-The workspace's UID is the kind's base (`WORKSPACE_UID_BASE`, `ONLINE_UID_BASE`) plus the user id, so no two
-workspaces share an owner, a user's two kinds included. The bases must clear `/etc/subuid` and `/etc/subgid`:
-an account with such a range could enter those UIDs through a user namespace. The installer creates the top
-level, `gateway/src/workspaces/paths.ts` the rest. Database files the gateway creates as root go to the owner
-of `db/` (`packages/core/src/db.ts`): the web app's account owns the database.
+A workspace's UID and GID are `WORKSPACE_UID_BASE` plus its number, so no two workspaces share an owner, two
+of one user included, and a workspace owns nothing outside its own `home/` and `workspace/`. The range, from
+the base + 20 to the base + 20 × `AGENT_PORT_COUNT` - 1, must clear `/etc/subuid` and `/etc/subgid`: an
+account with such a range could enter those UIDs through a user namespace. The base is for good, because the
+files on disk belong to those UIDs. The installer creates the top level, `gateway/src/workspaces/paths.ts`
+the rest. Database files the gateway creates as root go to the owner of `db/` (`packages/core/src/db.ts`):
+the web app's account owns the database.
 
 ## Database
 
@@ -160,18 +171,21 @@ the control API drops the entry on stop, release, delete and disconnect.
 Each start generates the agent's credential (32 random bytes, `generateCredential`), which only the container
 and the gateway hold. A driver declares one of two ways to let the browser's agent UI through (`browserAuth`):
 
-- **token** (Qwen Code): the web app puts `agentBrowserToken(secret, session id, user id, kind)`, an HMAC, in
-  the iframe's URL fragment. The Web Shell presents it as a bearer token, or on a WebSocket as the subprotocol
-  `qwen-bearer.<base64url>`. The gateway recomputes it and swaps it for the container's credential. The token
-  is useless without the session cookie and ends with the session.
+- **token** (Qwen Code): the web app puts `agentBrowserToken(secret, session id, user id, workspace)`, an HMAC,
+  in the iframe's URL fragment. The Web Shell presents it as a bearer token, or on a WebSocket as the
+  subprotocol `qwen-bearer.<base64url>`. The gateway recomputes it and swaps it for the container's credential.
+  The token is one session's for one workspace: useless without the session cookie, refused on every other
+  workspace's port, the same user's included, and it ends with the session.
 - **session** (DeepSeek Harness, OpenCode): the browser presents nothing more, and the gateway adds the
   credential to every request it forwards. For dsh it mints the cookie dsh expects, signed with the container's
   credential and valid for 10 minutes; for OpenCode the credential is the password of its HTTP sign-in.
 
 ## Workspace lifecycle
 
-`gateway/src/workspaces/manager.ts` keeps one entry per user in memory and mirrors it to `workspaces`;
-`policy.ts` holds the decisions as pure functions. A user has one container at most.
+A user has a workspace for every agent and kind (`WORKSPACE_REFS` in `wire/kinds.ts`: six with three agents),
+and one container at most: one of a user's workspaces runs at a time. `gateway/src/workspaces/manager.ts` keeps
+one entry per user in memory, which names the workspace that runs or ran last (`agent` and `kind` in
+`WorkspaceInfo`), and mirrors it to `workspaces`; `policy.ts` holds the decisions as pure functions.
 
 | Status | Meaning |
 |---|---|
@@ -182,14 +196,16 @@ and the gateway hold. A driver declares one of two ways to let the browser's age
 | `error` | the start failed, or the container could not be stopped; `lastError` says which |
 
 - **Start** happens only when the web app asks, or on "Try again" (below). No other request to a workspace
-  port starts one, so an open tab's reconnect loop cannot wake a stopped workspace. Without a kind, a start
-  attaches to what runs, else starts Private; without an agent it takes `users.agent` if enabled, else the
-  first of `WORKSPACE_AGENTS`. Online needs `ONLINE_WORKSPACES`, the fence and `users.online_allowed`.
+  port starts one, so an open tab's reconnect loop cannot wake a stopped workspace. A start names a workspace:
+  without a kind Private, without an agent `users.agent` if enabled, else the first of `WORKSPACE_AGENTS`.
+  While one of the user's workspaces is starting or running, a start of another is refused (409
+  `another_running`), and what a start leaves out is the running one's, so it attaches. Online needs
+  `ONLINE_WORKSPACES`, the fence and `users.online_allowed`.
 - **Capacity**: at `MAX_RUNNING_WORKSPACES` a start evicts the ready workspace that has been idle longest, if
   idle for more than 5 minutes and not the requester's; otherwise 409 `capacity`.
-- **Launch**: prepare the folders and settings, generate the credential, create the container (an earlier one
-  of the user goes first), then probe readiness for up to 90 s. A failed start leaves `error`, the container's
-  last log lines in `lastError`, and no container.
+- **Launch**: prepare the workspace's folders and settings, generate the credential, create the container (an
+  earlier one of the user, whichever workspace's, goes first), then probe readiness for up to 90 s. A failed
+  start leaves `error`, the container's last log lines in `lastError`, and no container.
 - **Release** (a session ended) stops a workspace no session uses any more: at once, or when its work is done
   (`stopPending`). **Attach** (a session arrived) clears `stopPending` and starts nothing.
 - **Reap**, every 60 s, in this order: an Online workspace that lost its permission stops, working or not; a
@@ -204,13 +220,16 @@ and the gateway hold. A driver declares one of two ways to let the browser's age
   that run a turn on one route, for every project folder, and its background jobs on another; a subagent is a
   session of its own, which its approvals are asked in, and the session that started it does not run while it
   waits for it.
-- **Reconcile**, at start and every 5 minutes: running containers of known users are adopted (kind, agent and
-  version from their labels, the credential from their environment) and probed again; containers nobody owns
-  or with unknown labels are removed; Online containers that may not run are stopped. A container's exit is
+- **Reconcile**, at start and every 5 minutes: running containers of known users are adopted (agent, kind and
+  version from their labels, the credential from their environment) and probed again; Online containers that
+  may not run are stopped. A container with unknown labels, or not named as its labels say
+  (`wp-<agent>-<kind>-<user id>`), is nobody's and is removed, as is one of an unknown user or of a user id
+  without a port: the gateway creates none like it, so nothing about it can be relied on. A container's exit is
   noticed within 15 s, or at once when a forwarded request fails.
-- **Erase files** empties one kind's `home/` and `workspace/` and is refused while that kind runs. **Delete
-  data** waits for an erase under way, stops the workspace and removes `users/<id>/` and the row; if the stop
-  fails nothing is deleted.
+- **Erase files** empties one workspace's `home/` and `workspace/`. It is refused while that workspace is
+  starting, running or stopping, and touches no other: another of the user's may run meanwhile. **Delete data**
+  waits for an erase under way, stops the workspace and removes `users/<id>/`, every workspace's files, and the
+  row; if the stop fails nothing is deleted.
 
 The gateway's shutdown leaves the containers running, which lets it restart without ending anyone's work. Stop
 reasons in `workspaces.stop_reason` and the audit log: `admin`, `user`, `deactivated`, `deleted` (from the web
@@ -220,7 +239,8 @@ app), `logout`, `idle`, `capacity`, `online_disabled`, `online_not_allowed`, `er
 
 Every request to a workspace port passes `checkAgentAccess` (`gateway/src/proxy/agent-access.ts`) first:
 
-1. The `Host` header parses (400 `bad_request`), and the local port names a user and a kind (404 `not_found`).
+1. The `Host` header parses (400 `bad_request`), and the local port names a workspace: a user, an agent and a
+   kind (404 `not_found`).
 2. An `Origin`, when sent, is exactly this host and port (403 `forbidden_origin`).
 3. `Sec-Fetch-Site: cross-site` may only GET or HEAD, and no upgrade (403 `forbidden_cross_site`).
 4. `Sec-Fetch-Site: same-site` may only navigate an iframe with GET or HEAD; on a preview port also a tab (403
@@ -230,10 +250,12 @@ Every request to a workspace port passes `checkAgentAccess` (`gateway/src/proxy/
 
 Then, on an agent port (`agent-proxy.ts`):
 
-- An `Authorization` header must carry this session's browser token, whatever the agent (401 `invalid_token`).
-- Only the port's own kind is reached. Otherwise: 409 `kind_mismatch` while the other kind runs, else 503
-  `workspace_starting`, `workspace_error` or `workspace_stopped`. Navigations get a page; after a failure or
-  at the cap it offers "Try again" (`POST /__portal/start`), which starts this port's kind.
+- An `Authorization` header must carry this session's browser token for this workspace, whatever the agent (401
+  `invalid_token`).
+- Only the port's own workspace is reached. Otherwise: 409 `another_running` while another of the user's
+  workspaces is starting, running or stopping, else 503 `workspace_starting`, `workspace_error` or
+  `workspace_stopped`. Navigations get a page; after a failure or at the cap it offers "Try again" (`POST
+  /__portal/start`), which starts this port's workspace: its agent and its kind.
 - A driver's blocked paths (pairing a phone, another browser or a remote machine; OAuth sign-ins) are refused in
   every spelling (403 `not_available`).
 - Going in, the gateway removes hop-by-hop headers, `Host`, `Cookie`, `Origin`, `Authorization`, `Expect`,
@@ -265,7 +287,9 @@ person's browser must not carry out data the workspace itself cannot send.
 One listener per kind on that kind's bridge address (`gateway/src/service/service-api.ts`). The caller is the
 workspace whose container has the source address, among the running containers of that kind; any other address
 gets 403 `forbidden`. A workspace cannot forge the address: it has no capabilities, and its network carries no
-traffic between containers. State is per listener: nothing carries between kinds.
+traffic between containers. This API is all that a user's workspaces have in common, and what it remembers of
+one, the URLs it was shown, is kept by the workspace's number: no other workspace may open a page on that
+account, the same user's included. State is per listener: nothing carries between kinds.
 
 | Route | Does |
 |---|---|
@@ -283,7 +307,7 @@ traffic between containers. State is per listener: nothing carries between kinds
   one what the engine's closing `timings` say. Prompts and answers are not stored.
 - **`web_search`** asks SearXNG, and once more the `SEARCH_FALLBACK_ENGINES` by name when fewer than
   `SEARCH_FALLBACK_BELOW` results came back. **`read_page`** asks the reader for a page and hands the model
-  `READER_PAGE_CHARS` at a time. Both are limited per workspace and cached for some minutes.
+  `READER_PAGE_CHARS` at a time. Both are limited per user and cached for some minutes.
 - **Exa first** (`exa-search.ts`, `EXA_SEARCH=on`): one tool call to Exa's hosted MCP server, which takes it
   without a handshake, an account or a key, at a limit Exa does not publish. Exa is asked what its tool can
   answer as asked: the first page, with no time range and no language. SearXNG answers the rest, and every
@@ -361,15 +385,17 @@ client --(key)--> web app  app/llm/api/[[...path]]/route.ts
 | DELETE | `/control/engine/images/:digest` | `{ ok: true }` | 400 `invalid_digest`; 409 `engine_job_running`; hostd's own 404 and 409 codes; 502 `hostd_failed`; 503 `engine_unavailable` |
 | GET | `/control/workspaces` | `{ workspaces: WorkspaceInfo[] }` | |
 | GET | `/control/workspaces/:userId` | `WorkspaceInfo`; `stopped` for a user without a row | |
-| POST | `/control/workspaces/:userId/start` | `{ agent?, kind? }`, `WorkspaceInfo` once the container exists | 400 `unknown_agent`, `unknown_kind`, `agent_unavailable`; 403 `online_not_allowed`; 404 `user_not_found`; 409 `no_workspace_port`, `deleting`, `kind_mismatch`, `agent_mismatch`, `online_disabled`, `capacity`; 500 `start_failed` |
+| POST | `/control/workspaces/:userId/start` | `{ agent?, kind? }`, `WorkspaceInfo` once the container exists | 400 `unknown_agent`, `unknown_kind`, `agent_unavailable`; 403 `online_not_allowed`; 404 `user_not_found`; 409 `no_workspace_port`, `deleting`, `another_running`, `online_disabled`, `capacity`; 500 `start_failed` |
 | POST | `/control/workspaces/:userId/stop` | `{ reason?, actorUserId? }`, `WorkspaceInfo`; reason defaults to `admin` | 400 `invalid_reason` |
 | POST | `/control/workspaces/:userId/attach` | `WorkspaceInfo` | |
 | POST | `/control/workspaces/:userId/release` | `WorkspaceInfo` | |
-| DELETE | `/control/workspaces/:userId/files?kind=` | `{ actorUserId? }`, `{ ok: true }` | 400 `unknown_kind`; 404 `user_not_found`; 409 `workspace_running`, `deleting` |
+| DELETE | `/control/workspaces/:userId/files?kind=&agent=` | `{ actorUserId? }`, `{ ok: true }`: one workspace's files erased | 400 `unknown_kind`, `unknown_agent`; 404 `user_not_found`; 409 `workspace_running`, `deleting` |
 | DELETE | `/control/workspaces/:userId/data` | `{ ok: true }` | 500 `stop_failed` |
 | POST | `/control/sessions/:sessionId/disconnect` | `{ closed }`: connections closed | |
 
-`reason` is one of `STOP_REASONS` in `wire/kinds.ts`. A `null` `agent` or `kind` counts as absent.
+`reason` is one of `STOP_REASONS` in `wire/kinds.ts`. In a start's body a `null` `agent` or `kind` counts as
+absent; `files` needs both. A `WorkspaceInfo` is a user's: its `agent` and `kind` name the workspace that runs,
+or ran last.
 
 ## Wire contract
 
@@ -383,7 +409,7 @@ to `types.ts` first: the gateway and the web app compile against it.
 ## Agent settings rendering
 
 The admin writes Qwen Code settings (`config/qwen/`, JSON with comments); the gateway renders each workspace's
-own copy at every start into `system/<agent>/`, mounted read-only. What the renderers guarantee:
+own copy at every start into its `system/settings/`, mounted read-only. What the renderers guarantee:
 
 - **Models** are the `modelProviders.openai` entries: `system-defaults.json` must hold at least one with an
   `id`, and a list in `settings.json` replaces it. Every entry gets the service API's `/llm/v1` as `baseUrl`
@@ -499,7 +525,8 @@ These parts of `gateway/src/monitor/` run all the time:
 | Guarantee | Enforced by |
 |---|---|
 | A workspace has no privilege | `container-spec.ts`: own UID, read-only root, all capabilities dropped, `no-new-privileges`, limits; images without setuid programs |
-| It sees only its own files | binds of its kind's `home/` and `workspace/`; folders 0700 per UID |
+| It sees only its own files | binds of its own `home/`, `workspace/` and `system/` files alone; folders 0700, each workspace's under its own UID |
+| A user's agents and kinds have nothing in common but the service API | per workspace: folders, UID, container, browser origin (its two ports) and browser token; the service API keeps what a workspace was shown by its number |
 | It talks to no other container | Docker networks with inter-container traffic off; the firewall's `never` set |
 | Private reaches only the service port | an `internal` Docker network; nftables drops everything else from its bridge |
 | Online reaches that, DNS on two resolvers and public IPv4 over TCP | nftables `online_to_host`, `online_out`, `online_in` |
@@ -507,6 +534,10 @@ These parts of `gateway/src/monitor/` run all the time:
 | The rules are there whenever a container runs, and nothing reopens a drop | a systemd unit Docker requires, ordered before it; base chains at priority `filter - 10`, where a drop is final |
 | Online never runs without the rules | the fence probe, below |
 | SearXNG and the reader reach the public web only | their own bridges and chains: DNS, TCP 80 and 443 |
+
+The origin belongs in that row because a browser gives storage, caches and service workers to an origin, not to
+a page: an agent's page that registers a service worker, as OpenCode's does, would otherwise answer for every
+agent served on its port.
 
 `deploy/firewall.sh` builds the table `inet workspace_portal` and loads it in one transaction. It matches each
 bridge by name and by subnet. Its `not_public` set must equal `NOT_PUBLIC` in `gateway/src/config.ts`;
@@ -530,8 +561,10 @@ copies every setting `.env` lacks from it, the deploy scripts fall back to it (`
 and `config.test.ts` holds the defaults built into `gateway/src/config.ts` to it. Readers: the gateway
 (`config.ts`), the web app (`web/lib/config.ts`: the data directory, ports, the secret, `SESSION_*`,
 `IDLE_TIMEOUT_MINUTES`, `ADMIN_*`), the reader (the limits `.env.example` calls its own), SearXNG
-(`SEARXNG_SECRET`) and the deploy scripts. `loadConfig` checks relations as well as values: port ranges that
-overlap, UID ranges, subnets, resolvers.
+(`SEARXNG_SECRET`) and the deploy scripts. `loadConfig` checks relations as well as values: the workspaces'
+ports and UIDs (`numberingProblems`: ranges that do not fit, that hold `WEB_PORT`, `CONTROL_PORT` or
+`SERVICE_PORT`, or that would serve a workspace on a port browsers refuse to open), subnets and resolvers
+(`networkProblems`). The installer checks the stack's ports against the ranges first, before it builds.
 
 ## Testing
 
@@ -539,7 +572,7 @@ overlap, UID ranges, subnets, resolvers.
 
 | Suite | Covers |
 |---|---|
-| `packages/core/src/**/*.test.ts` | opening and migrating the database, the version syntax |
+| `packages/core/src/**/*.test.ts` | opening and migrating the database, the version syntax, a workspace's number, port and token |
 | `gateway/src/**/*.test.ts` | each module beside its source: policy, headers, URL policy, settings, specs, updaters |
 | `gateway/test/*.test.ts` | the whole gateway through its real listeners |
 | `web/lib/**/*.test.ts` | the web app's pure logic, the wire contract's import rule, its fallbacks against `.env.example` |

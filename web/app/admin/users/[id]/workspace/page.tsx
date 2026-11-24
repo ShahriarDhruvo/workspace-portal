@@ -4,7 +4,7 @@ import { notFound, redirect } from "next/navigation";
 import { eq } from "drizzle-orm";
 import { displayName, users } from "@portal/core";
 import { config } from "@/lib/config";
-import { workspaceFrame } from "@/lib/workspace-frame";
+import { workspaceFrames } from "@/lib/workspace-frame";
 import { getDb } from "@/lib/db";
 import { initials } from "@/lib/format";
 import { requireAdmin } from "@/lib/session";
@@ -64,7 +64,7 @@ export default async function ViewWorkspacePage({ params }: PageProps<"/admin/us
     <WorkspaceShell
       viewer={{ name: viewerName, initials: viewerInitials, isAdmin: true }}
       target={{ id: user.id, name, isViewer: false }}
-      frames={{ private: workspaceFrame(session, "private"), online: workspaceFrame(session, "online") }}
+      frames={workspaceFrames(session)}
       idleTimeoutMinutes={config.idleTimeoutMinutes}
       banner={<ViewingBanner>Viewing {name}&apos;s workspace</ViewingBanner>}
     />

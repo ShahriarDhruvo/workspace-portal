@@ -1,6 +1,6 @@
 // ContainerRuntime backed by the Docker Engine API (dockerode, /var/run/docker.sock or DOCKER_HOST).
 import Docker from "dockerode";
-import { compareVersions, isAgentKind, isVersion, isWorkspaceKind, WORKSPACE_KINDS, type AgentKind, type WorkspaceKind } from "@portal/core";
+import { compareVersions, isAgentKind, isVersion, isWorkspaceKind, WORKSPACE_REFS, type AgentKind, type WorkspaceKind, type WorkspaceRef } from "@portal/core";
 import { driverFor } from "../agents/index.ts";
 import type { Config, KindConfig } from "../config.ts";
 import { errorMessage } from "../lib/log.ts";
@@ -73,22 +73,21 @@ export class DockerRuntime implements ContainerRuntime {
   }
 
   async startWorkspace(userId: number, options: WorkspaceStartOptions): Promise<StartedContainer> {
-    const driver = driverFor(options.agent);
-    // Whatever is left of either kind goes first: a user never has two containers.
-    for (const kind of WORKSPACE_KINDS) await this.removeContainer(containerName(userId, kind));
+    // Whatever is left of any of the user's workspaces goes first: a user never has two containers.
+    for (const ref of WORKSPACE_REFS) await this.removeContainer(containerName(userId, ref));
     let container: Docker.Container;
     try {
-      container = await this.#docker.createContainer(workspaceContainerOptions(this.#config, userId, driver, options));
+      container = await this.#docker.createContainer(workspaceContainerOptions(this.#config, userId, options));
     } catch (error) {
       throw statusCode(error) === 404 && /no such image/i.test(engineMessage(error)) ? new WorkspaceImageMissingError(options.image) : error;
     }
     try {
       await container.start();
       const info = await container.inspect();
-      const network = this.#config.workspace.kinds[options.kind].network;
+      const network = this.#config.workspace.kinds[options.ref.kind].network;
       const ip = info.NetworkSettings.Networks[network]?.IPAddress;
       if (!ip) throw new Error(`workspace container has no address on network ${network}`);
-      return { id: container.id, ip, port: driver.port };
+      return { id: container.id, ip, port: driverFor(options.ref.agent).port };
     } catch (error) {
       await this.removeContainer(container.id).catch(() => undefined);
       throw error;
@@ -114,20 +113,21 @@ export class DockerRuntime implements ContainerRuntime {
   async list(): Promise<ContainerSummary[]> {
     const rows = await this.#docker.listContainers({ all: true, filters: { label: [`${WORKSPACE_LABEL}=1`] } });
     return rows.map((row) => {
-      const { [AGENT_LABEL]: agentLabel, [KIND_LABEL]: kindLabel, [VERSION_LABEL]: version } = row.Labels;
-      const userId = Number(row.Labels[USER_ID_LABEL]);
-      const agent = isAgentKind(agentLabel) ? agentLabel : null;
-      const kind = isWorkspaceKind(kindLabel) ? kindLabel : null;
+      const { [AGENT_LABEL]: agent, [KIND_LABEL]: kind, [VERSION_LABEL]: version } = row.Labels;
+      const label = Number(row.Labels[USER_ID_LABEL]);
+      const userId = Number.isSafeInteger(label) && label > 0 ? label : null;
+      const labelled: WorkspaceRef | null = isAgentKind(agent) && isWorkspaceKind(kind) ? { agent, kind } : null;
+      // Docker lists a name with a leading slash.
+      const ref = userId !== null && labelled !== null && row.Names.includes(`/${containerName(userId, labelled)}`) ? labelled : null;
       // Only the address on its own kind's network counts: that is where the gateway knows it from.
-      const network = kind === null ? null : this.#config.workspace.kinds[kind].network;
+      const network = ref === null ? null : this.#config.workspace.kinds[ref.kind].network;
       return {
         id: row.Id,
-        userId: Number.isSafeInteger(userId) && userId > 0 ? userId : null,
-        kind,
-        agent,
+        userId,
+        ref,
         running: row.State === "running",
         ip: (network !== null && row.NetworkSettings.Networks[network]?.IPAddress) || null,
-        port: agent === null ? null : driverFor(agent).port,
+        port: ref === null ? null : driverFor(ref.agent).port,
         version: isVersion(version) ? version : null,
       };
     });

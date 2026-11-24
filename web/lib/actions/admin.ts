@@ -3,7 +3,7 @@
 import { eq } from "drizzle-orm";
 import { refresh, revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { displayName, sessions, users, WORKSPACE_KIND_NAMES, writeAudit, type SessionContext, type User } from "@portal/core";
+import { displayName, sessions, users, workspaceName, writeAudit, type SessionContext, type User } from "@portal/core";
 import { getDb } from "../db";
 import { attachWorkspaceInBackground, endSessionsInBackground, gateway, logFailure, releaseInBackground, toApiError } from "../gateway";
 import { restartWorkspaceOf, saveHarnessOf } from "../harness";
@@ -170,7 +170,7 @@ async function loadHarnessTarget(userId: number): Promise<Target> {
   return loadUserById(id.data, session, { allowSelf: true });
 }
 
-/** Sets the harness a user's workspace starts with, as Home does for one's own (lib/harness.ts). */
+/** Sets the harness whose workspace a user's next Start launches, as Home does for one's own (lib/harness.ts). */
 export async function setUserHarness(userId: number, agent: string): Promise<ActionResult> {
   const target = await loadHarnessTarget(userId);
   if ("error" in target) return { ok: false, message: target.error };
@@ -178,8 +178,9 @@ export async function setUserHarness(userId: number, agent: string): Promise<Act
 }
 
 /**
- * "Restart now" on a user's page: their running workspace again, with the harness now saved. The page warns first
- * when their agent is working or they have it open. One that stopped since the page rendered stays stopped.
+ * "Restart now" on a user's page: their running workspace stops and the saved harness's starts, of the same kind. The
+ * page warns first when their agent is working or they have it open. One that stopped since the page rendered stays
+ * stopped.
  */
 export async function restartUserWorkspace(userId: number): Promise<ActionResult> {
   const target = await loadHarnessTarget(userId);
@@ -227,25 +228,25 @@ export async function setOnlineAccess(_previous: ActionState, formData: FormData
 }
 
 /**
- * Erases one kind's files: that workspace's home and workspace folders, left empty. The gateway refuses while that
- * kind is starting, running or stopping, and writes the `workspace_files_erased` audit entry.
+ * Erases the files of one of a user's workspaces: its home and workspace folders, left empty. The gateway refuses
+ * while that workspace is starting, running or stopping, and writes the `workspace_files_erased` audit entry.
  */
 export async function eraseWorkspaceFiles(_previous: ActionState, formData: FormData): Promise<ActionState> {
   const session = await requireAdmin();
-  const parsed = eraseFilesSchema.safeParse({ userId: formData.get("userId"), kind: formData.get("kind") });
+  const parsed = eraseFilesSchema.safeParse({ userId: formData.get("userId"), kind: formData.get("kind"), agent: formData.get("agent") });
   if (!parsed.success) return { status: "error", message: "Unknown user or workspace." };
-  const target = loadUserById(parsed.data.userId, session, { allowSelf: true });
+  const { userId, ...workspace } = parsed.data;
+  const target = loadUserById(userId, session, { allowSelf: true });
   if ("error" in target) return { status: "error", message: target.error };
-  const { kind } = parsed.data;
   try {
-    await gateway.eraseFiles(target.user.id, kind, session.user.id);
+    await gateway.eraseFiles(target.user.id, workspace, session.user.id);
   } catch (error) {
     const problem = toApiError(error);
     return {
       status: "error",
       message:
         problem.error === "workspace_running"
-          ? `The ${WORKSPACE_KIND_NAMES[kind]} workspace is running. Stop it first.`
+          ? `The ${workspaceName(workspace)} workspace is running. Stop it first.`
           : problem.message,
     };
   }

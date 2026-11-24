@@ -5,7 +5,7 @@ import { LLM_API_BODY_BYTES } from "./lib/limits.ts";
 const repoRoot = path.join(import.meta.dirname, "..");
 
 const securityHeaders = [
-  // The portal itself is never framed; only the workspace ports (one per user and kind, served by the gateway) are.
+  // The portal itself is never framed; only the workspace ports (one per workspace, served by the gateway) are.
   { key: "X-Frame-Options", value: "DENY" },
   { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
   { key: "X-Content-Type-Options", value: "nosniff" },

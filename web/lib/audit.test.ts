@@ -79,12 +79,34 @@ test("LLM engine updates, failures and image removals", () => {
   );
 });
 
-test("workspace kinds and the Online permission read as words", () => {
+test("a workspace's start, stop, error and erased files name the workspace: its kind and agent as one", () => {
   assert.equal(auditActionLabel("workspace_files_erased", true), "Erased workspace files");
-  assert.equal(auditActionLabel("user_online_access_changed", true), "Changed Online access");
-  assert.equal(formatAuditDetails(JSON.stringify({ kind: "online", agent: "qwen" })), "Type: Online · Agent: Qwen Code");
-  assert.equal(formatAuditDetails(JSON.stringify({ kind: "private" })), "Type: Private");
+  assert.equal(formatAuditDetails(JSON.stringify({ kind: "online", agent: "qwen" })), "Workspace: Online Qwen Code");
+  assert.equal(
+    formatAuditDetails(JSON.stringify({ agent: "opencode", version: "2.0.3", kind: "private" })),
+    "Workspace: Private OpenCode · Version: 2.0.3",
+    "the name stands where the agent stood",
+  );
+  assert.equal(
+    formatAuditDetails(JSON.stringify({ reason: "idle", kind: "online", agent: "dsh" })),
+    "Reason: idle · Workspace: Online DeepSeek Harness",
+  );
+  assert.equal(
+    formatAuditDetails(JSON.stringify({ kind: "private", agent: "dsh", error: "The agent did not answer" })),
+    "Workspace: Private DeepSeek Harness · Error: The agent did not answer",
+  );
+  assert.equal(formatAuditDetails(JSON.stringify({ kind: "private" })), "Type: Private", "a kind without an agent");
   assert.equal(formatAuditDetails(JSON.stringify({ kind: "rollback" })), "Type: rollback", "a kind that names no workspace, as it is");
+  assert.equal(
+    formatAuditDetails(JSON.stringify({ agent: "qwen", kind: "rollback" })),
+    "Agent: Qwen Code · Type: rollback",
+    "an agent beside such a kind stays an agent",
+  );
+  assert.equal(formatAuditDetails(JSON.stringify({ agent: "claude", kind: "online" })), "Agent: claude · Type: Online", "an unknown agent names no workspace");
+});
+
+test("the Online permission reads as words", () => {
+  assert.equal(auditActionLabel("user_online_access_changed", true), "Changed Online access");
   assert.equal(formatAuditDetails(JSON.stringify({ allowed: false })), "Allowed: no");
   assert.equal(formatAuditDetails(JSON.stringify({ username: "bob", onlineAllowed: true })), "Username: bob · Online workspace: yes");
 });

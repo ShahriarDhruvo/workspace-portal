@@ -1,21 +1,19 @@
-// Per-user directories under PORTAL_DATA_DIR and small file helpers.
+// Each workspace's directories under PORTAL_DATA_DIR and small file helpers.
 //
-// users/<id>/              root:root 0711  one directory per workspace kind, nothing else
-//   private/ and online/   root:root 0711  the kind's own files; neither kind's container mounts the other's
-//     home/                uid:uid   0700  mounted at /home/user (each agent's state in its own
-//                                           folders: ~/.qwen, ~/.dsh, OpenCode's under ~/.local/share,
-//                                           ~/.config and ~/.cache; chats, caches)
-//     workspace/           uid:uid   0700  mounted at /workspace (the user's files, for every agent)
-//     system/              root:root 0755  rendered by the gateway, mounted read-only:
-//       <agent>/                            that agent's settings (with this kind's service address)
-//       passwd, group
+// users/<id>/                root:root 0711  one directory per agent, nothing else
+//   <agent>/                 root:root 0711  one directory per kind, nothing else
+//     private/ and online/   root:root 0711  one workspace's own files; no other workspace's container mounts them
+//       home/                uid:uid   0700  mounted at /home/user (the agent's state: chats, caches, sign-ins)
+//       workspace/           uid:uid   0700  mounted at /workspace (the user's files)
+//       system/              root:root 0755  rendered by the gateway, mounted read-only:
+//         settings/                           the agent's settings (with the kind's service address)
+//         passwd, group
 //
-// uid is the kind's UID base + user id (WORKSPACE_UID_BASE for Private, ONLINE_UID_BASE for Online), so no two
-// workspaces share an owner, not even one user's two kinds, and a workspace never owns anything outside its own
-// home and workspace.
+// uid is WORKSPACE_UID_BASE + the workspace's number (workspaceNumber), so no two workspaces share an owner, not
+// even two of one user, and a workspace never owns anything outside its own home and workspace.
 import fs from "node:fs";
 import path from "node:path";
-import type { AgentKind, WorkspaceKind } from "@portal/core";
+import { workspaceNumber, type WorkspaceRef } from "@portal/core";
 import { driverFor } from "../agents/index.ts";
 import type { Config } from "../config.ts";
 
@@ -24,46 +22,45 @@ interface FileOwner {
   gid: number;
 }
 
-/** users/<id>: everything of both of the user's workspaces. */
+/** users/<id>: everything of all of the user's workspaces. */
 export function userRoot(dataDir: string, userId: number): string {
   return path.join(dataDir, "users", String(userId));
 }
 
-export function userPaths(dataDir: string, userId: number, kind: WorkspaceKind) {
-  const root = path.join(userRoot(dataDir, userId), kind);
+export function workspacePaths(dataDir: string, userId: number, ref: WorkspaceRef) {
+  const root = path.join(userRoot(dataDir, userId), ref.agent, ref.kind);
   const system = path.join(root, "system");
   return {
     root,
     home: path.join(root, "home"),
     workspace: path.join(root, "workspace"),
     system,
-    agentSettings: (agent: AgentKind) => path.join(system, agent),
+    settings: path.join(system, "settings"),
     passwd: path.join(system, "passwd"),
     group: path.join(system, "group"),
   };
 }
 
-/** The account a workspace of a kind runs as. */
-export function workspaceOwner(config: Config, userId: number, kind: WorkspaceKind): FileOwner {
-  const id = config.workspace.kinds[kind].uidBase + userId;
+/** The account a workspace runs as, and no other workspace does. */
+export function workspaceOwner(config: Config, userId: number, ref: WorkspaceRef): FileOwner {
+  const id = config.workspace.uidBase + workspaceNumber(userId, ref);
   return { uid: id, gid: id };
 }
 
 /**
- * Everything a workspace container of `kind` mounts, ready before it is created. The read-only files are rendered at
- * every start, so changed admin settings apply on restart. Throws AgentConfigError for unusable settings.
+ * Everything a workspace's container mounts, ready before it is created. The read-only files are rendered at every
+ * start, so changed admin settings apply on restart. Throws AgentConfigError for unusable settings.
  */
-export function prepareWorkspaceFiles(config: Config, userId: number, kind: WorkspaceKind, agent: AgentKind): void {
-  const paths = userPaths(config.dataDir, userId, kind);
-  const owner = workspaceOwner(config, userId, kind);
+export function prepareWorkspaceFiles(config: Config, userId: number, ref: WorkspaceRef): void {
+  const paths = workspacePaths(config.dataDir, userId, ref);
+  const owner = workspaceOwner(config, userId, ref);
   // Rendered first: invalid settings fail the start before anything is written.
-  const files = driverFor(agent).renderSettings(config, kind);
-  ensureDir(path.dirname(paths.root), 0o711);
-  ensureDir(paths.root, 0o711);
+  const files = driverFor(ref.agent).renderSettings(config, ref.kind);
+  for (const dir of [userRoot(config.dataDir, userId), path.dirname(paths.root), paths.root]) ensureDir(dir, 0o711);
   ensureDir(paths.system, 0o755);
-  ensureDir(paths.agentSettings(agent), 0o755);
+  ensureDir(paths.settings, 0o755);
   for (const dir of [paths.home, paths.workspace]) ensureDir(dir, 0o700, owner);
-  for (const [name, content] of Object.entries(files)) writeFileAtomic(path.join(paths.agentSettings(agent), name), content);
+  for (const [name, content] of Object.entries(files)) writeFileAtomic(path.join(paths.settings, name), content);
   writeFileAtomic(
     paths.passwd,
     `root:x:0:0:root:/root:/usr/sbin/nologin\nnobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin\nuser:x:${owner.uid}:${owner.gid}:Workspace user:/home/user:/bin/bash\n`,
@@ -71,9 +68,9 @@ export function prepareWorkspaceFiles(config: Config, userId: number, kind: Work
   writeFileAtomic(paths.group, `root:x:0:\nnogroup:x:65534:\nuser:x:${owner.gid}:\n`);
 }
 
-/** Empties one kind's home and workspace (Admin's "Erase files"); the caller makes sure that kind has no container. */
-export async function eraseKindFiles(dataDir: string, userId: number, kind: WorkspaceKind, owner: FileOwner): Promise<void> {
-  const paths = userPaths(dataDir, userId, kind);
+/** Empties one workspace's home and workspace (Admin's "Erase files"); the caller makes sure it has no container. */
+export async function eraseWorkspaceFiles(dataDir: string, userId: number, ref: WorkspaceRef, owner: FileOwner): Promise<void> {
+  const paths = workspacePaths(dataDir, userId, ref);
   for (const dir of [paths.home, paths.workspace]) await removeTree(dir);
   if (!fs.existsSync(paths.root)) return;
   for (const dir of [paths.home, paths.workspace]) ensureDir(dir, 0o700, owner);
@@ -88,7 +85,7 @@ function ensureDir(dir: string, mode: number, owner: FileOwner = { uid: 0, gid: 
   if ((stat.mode & 0o7777) !== mode) fs.chmodSync(dir, mode);
 }
 
-/** Deletes everything both of the user's workspaces ever stored (user deletion). */
+/** Deletes everything the user's workspaces ever stored (user deletion). */
 export function removeUserData(dataDir: string, userId: number): Promise<void> {
   return removeTree(userRoot(dataDir, userId));
 }

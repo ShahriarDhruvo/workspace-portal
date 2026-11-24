@@ -21,7 +21,7 @@ import { spawnSync } from "node:child_process";
  * The gateway serves a workspace's web apps on its agent port + this (gateway/src/config.ts, PREVIEW_PORT_OFFSET;
  * a gateway test checks the two agree).
  */
-const PREVIEW_PORT_OFFSET = 1000;
+const PREVIEW_PORT_OFFSET = 10000;
 
 /** Marks the edit; also how a second run knows the work is done. */
 const MARKER = "/* workspace-portal: web preview */";

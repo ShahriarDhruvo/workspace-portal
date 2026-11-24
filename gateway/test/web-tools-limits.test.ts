@@ -70,6 +70,35 @@ test("hanging up does not free a workspace's read slot while its download goes o
   });
 });
 
+test("the read slots are a user's, not a workspace's: another of their workspaces gets none of its own while downloads go on", async () => {
+  let started = 0;
+  const slow: ReaderBackend = {
+    read: (url) =>
+      new Promise((resolve) => {
+        started++;
+        setTimeout(() => resolve({ url, kind: "html", title: "", text: "x", truncated: false, note: "" }), 400);
+      }),
+  };
+  await withGateway({ env: { WORKSPACE_AGENTS: "qwen,dsh", READER_URL: "http://127.0.0.1:9", READER_URL_POLICY: "any", READER_MAX_CONCURRENT_PER_USER: "2" }, reader: slow }, async (gw) => {
+    type Read = { result: { isError?: boolean; content: Array<{ text: string }> } };
+    gw.caller.userId = gw.ids.alice;
+    const downloads = [0, 1].map((index) => mcp(gw, readCall(`https://slow-site.net/${index}`)));
+    await wait(50);
+    // A download outlives its workspace (see above), so her next workspace may ask while the last one's still run.
+    gw.caller.workspace = { agent: "dsh" };
+    const refused = json<Read>(await mcp(gw, readCall("https://slow-site.net/2")));
+    assert.equal(refused.result.isError, true);
+    assert.match(refused.result.content[0]!.text, /^Too many pages are being read at once/);
+    assert.equal(started, 2, "no third download for her");
+    gw.caller.userId = gw.ids.bob;
+    assert.equal(json<Read>(await mcp(gw, readCall("https://slow-site.net/3"))).result.isError, undefined, "another user has slots of their own");
+
+    await Promise.all(downloads);
+    gw.caller.userId = gw.ids.alice;
+    assert.equal(json<Read>(await mcp(gw, readCall("https://slow-site.net/4"))).result.isError, undefined, "the slots come back when the downloads end");
+  });
+});
+
 test("a batch is at most 8 messages, and one address has at most 128 connections open", async () => {
   const text = "All work and no play makes Jack a dull boy.\n".repeat(9000);
   const gw = await startGateway({ env: { READER_URL: "http://127.0.0.1:9", READER_URL_POLICY: "any" }, reader: withPageCache({ read: async (url) => ({ url, kind: "html", title: "", text, truncated: false, note: "" }) }, { ttlMs: 900_000 }) });

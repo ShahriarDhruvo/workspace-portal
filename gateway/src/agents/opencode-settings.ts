@@ -1,4 +1,4 @@
-// OpenCode's per-user settings: opencode.json, rendered before every start and mounted read-only at /etc/opencode,
+// OpenCode's settings in a workspace: opencode.json, rendered before every start and mounted read-only at /etc/opencode,
 // OpenCode's directory for managed settings. What that file names wins over a person's own settings
 // (~/.config/opencode) and over any project's opencode.json; everything it leaves out stays theirs (agents, commands,
 // their own MCP servers, permissions for other tools). So it holds only what the portal depends on: the models (from

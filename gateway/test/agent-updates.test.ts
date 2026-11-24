@@ -40,7 +40,7 @@ const finished = (g: Gateway): Promise<AgentUpdateJob> => pollJob(g, (job) => jo
 test("an update over the control API: the job, the new current version, and new starts use its image", () =>
   withGateway(BOTH, async (g) => {
     const { alice, bob, admin } = g.ids;
-    await g.startReady(alice, "qwen");
+    await g.startReady(alice, { agent: "qwen" });
     assert.equal(g.info(alice).agentVersion, "0.27.0");
 
     const before = await overview(g);
@@ -89,7 +89,7 @@ test("an update over the control API: the job, the new current version, and new 
 
     // Running workspaces keep their image; the next start uses the new one.
     assert.equal(g.info(alice).agentVersion, "0.27.0");
-    const info = await g.startReady(bob, "qwen");
+    const info = await g.startReady(bob, { agent: "qwen" });
     assert.equal(info.agentVersion, "0.27.4");
     assert.equal(g.runtime.startsFor(bob)[0]!.options.image, workspaceImage("qwen", "0.27.4"));
     const after = (await overview(g)).agents.find((agent) => agent.id === "qwen")!;
@@ -160,7 +160,7 @@ test("OpenCode beside the others: its stable releases are offered, and an update
       ],
     );
     assert.deepEqual(agentAudits(g), [{ action: "agent_updated", actorUserId: admin, details: { agent: "opencode", from: "2.4.1", to: "2.5.0", rebuild: false } }]);
-    assert.equal((await g.startReady(alice, "opencode")).agentVersion, "2.5.0");
+    assert.equal((await g.startReady(alice, { agent: "opencode" })).agentVersion, "2.5.0");
     assert.equal(g.runtime.startsFor(alice)[0]!.options.image, workspaceImage("opencode", "2.5.0"));
   }));
 
@@ -228,7 +228,7 @@ test("one job at a time; it can be cancelled, and a cancelled or failed job leav
       "0.2.2-rc.1",
     );
     assert.equal(fs.existsSync(g.config.agentVersionsFile), false, "nothing saved");
-    const started = await g.startReady(g.ids.alice, "dsh");
+    const started = await g.startReady(g.ids.alice, { agent: "dsh" });
     assert.equal(started.agentVersion, "0.2.2-rc.1");
     assert.equal(g.runtime.startsFor(g.ids.alice)[0]!.options.image, workspaceImage("dsh", "0.2.2-rc.1"));
     assert.deepEqual(agentAudits(g), [
@@ -257,7 +257,7 @@ test("rolling back to an image still on the server needs neither the registry no
     assert.deepEqual([done.phase, done.error], ["succeeded", null]);
     assert.equal(g.builder.builds.length, 0);
     assert.equal(g.versions.current("qwen"), "0.26.0");
-    assert.equal((await g.startReady(g.ids.alice, "qwen")).agentVersion, "0.26.0");
+    assert.equal((await g.startReady(g.ids.alice, { agent: "qwen" })).agentVersion, "0.26.0");
     // A rebuild of it does need both.
     assert.deepEqual(failure(await update(g, "qwen", { version: "0.26.0", rebuild: true })), [502, "registry_unreachable"]);
   }));
@@ -286,9 +286,9 @@ test("the admin's choice survives a restart; adopted containers report the versi
       ["0.26.0", "0.27.0"],
       ["0.2.2-rc.1", "0.2.2-rc.1"],
     ]);
-    await g.startReady(alice, "qwen");
+    await g.startReady(alice, { agent: "qwen" });
     assert.equal(g.runtime.startsFor(alice)[0]!.options.image, workspaceImage("qwen", "0.26.0"));
-    await g.startReady(bob, "dsh");
+    await g.startReady(bob, { agent: "dsh" });
     // Both images' tags moved since (a rebuild; docker shows an image id then): the version label still says.
     const aliceContainer = g.runtime.containers.get(g.workspaceRow(alice)!.containerId!)!;
     aliceContainer.image = "sha256:4567cdef";

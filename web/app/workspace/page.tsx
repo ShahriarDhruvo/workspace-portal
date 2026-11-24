@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { displayName } from "@portal/core";
 import { config } from "@/lib/config";
-import { workspaceFrame } from "@/lib/workspace-frame";
+import { workspaceFrames } from "@/lib/workspace-frame";
 import { initials } from "@/lib/format";
 import { requireUser } from "@/lib/session";
 import { ViewingBanner } from "@/components/workspace/viewing-banner";
@@ -17,7 +17,7 @@ export default async function WorkspacePage() {
     <WorkspaceShell
       viewer={{ name: displayName(user), initials: initials(user.firstName, user.lastName), isAdmin: user.role === "admin" }}
       target={{ id: target.id, name: targetName, isViewer: !actingAs }}
-      frames={{ private: workspaceFrame(session, "private"), online: workspaceFrame(session, "online") }}
+      frames={workspaceFrames(session)}
       idleTimeoutMinutes={config.idleTimeoutMinutes}
       banner={actingAs ? <ViewingBanner>You are viewing {targetName}&apos;s workspace</ViewingBanner> : undefined}
     />

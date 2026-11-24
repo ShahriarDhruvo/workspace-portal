@@ -128,8 +128,8 @@ export const onlineAccessSchema = z.object({
   allowed: z.enum(["true", "false"]).transform((value) => value === "true"),
 });
 
-/** Erasing one kind's files (the user page's "Erase Private files…" / "Erase Online files…"). */
-export const eraseFilesSchema = z.object({ userId: userIdSchema, kind: workspaceKindSchema });
+/** Erasing one workspace's files (the user page's "Erase files…"): whose, and which of their workspaces. */
+export const eraseFilesSchema = z.object({ userId: userIdSchema, kind: workspaceKindSchema, agent: agentKindSchema });
 
 /** A harness choice: an agent kind. Whether this install enables it is the action's check. */
 export const harnessSchema = z.object({ agent: agentKindSchema });

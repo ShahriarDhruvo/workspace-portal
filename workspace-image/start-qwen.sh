@@ -4,7 +4,7 @@
 # never see the token. Refuses to run as root.
 set -eu
 if [ "$(id -u)" = "0" ]; then
-  echo "start-qwen: refusing to run as root; the gateway runs workspaces as the user's UID" >&2
+  echo "start-qwen: refusing to run as root; the gateway runs each workspace as a UID of its own" >&2
   exit 1
 fi
 : "${QWEN_SERVER_TOKEN:?QWEN_SERVER_TOKEN is not set}"

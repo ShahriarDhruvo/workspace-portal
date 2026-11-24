@@ -1,13 +1,30 @@
 // The workspace iframe's address.
-import type { AgentKind } from "@portal/core";
+import { WORKSPACE_REFS, workspaceIndex, type AgentKind, type WorkspaceRef } from "@portal/core/wire";
 import type { Theme } from "./theme.ts";
 
-/** What the server tells the page about the workspace it shows (see lib/workspace-frame.ts). */
+/** What the server tells the page about a workspace it may show (see lib/workspace-frame.ts). */
 export interface AgentFrame {
-  /** The gateway port serving this workspace: each user's workspace has its own, so its own origin. */
+  /** The gateway port serving this workspace: every workspace has its own, so its own origin. */
   port: number;
   /** This session's token for this workspace (useless without the session cookie). Only Qwen Code's page uses it. */
   token: string;
+}
+
+/**
+ * The frame of each of one user's workspaces, at the workspace's index (workspaceIndex): the page shows the one that
+ * runs, which only the gateway's status names. Null for a user id outside AGENT_PORT_COUNT, whose workspaces have no
+ * port.
+ */
+export type AgentFrames = readonly (AgentFrame | null)[];
+
+/** Every workspace's frame as `frame` gives it, for frameOf to read. */
+export function framesOf(frame: (workspace: WorkspaceRef) => AgentFrame | null): AgentFrames {
+  return WORKSPACE_REFS.map((workspace) => frame(workspace));
+}
+
+/** One workspace's frame among its user's. */
+export function frameOf(frames: AgentFrames, workspace: WorkspaceRef): AgentFrame | null {
+  return frames[workspaceIndex(workspace)] ?? null;
 }
 
 /**

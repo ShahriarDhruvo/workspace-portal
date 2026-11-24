@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
-import { AGENT_KINDS } from "@portal/core";
+import { AGENT_KINDS, agentPortFor, agentPortRange, WORKSPACE_BLOCK, WORKSPACE_KINDS, WORKSPACE_REFS, workspaceNumber } from "@portal/core";
 import { driverFor } from "./agents/index.ts";
 import { ConfigError, DEFAULT_TRUSTED_HOSTS, isPublicIpv4, loadConfig, MIB, NOT_PUBLIC, parseByteSize, PREVIEW_PORT_OFFSET } from "./config.ts";
 
@@ -69,7 +69,7 @@ test("values are parsed and normalised", () => {
   const config = loadConfig({
     ...secrets,
     PORTAL_DATA_DIR: "/data/portal/",
-    AGENT_PORT_BASE: "5000",
+    AGENT_PORT_BASE: "7000",
     AGENT_PORT_COUNT: "10",
     LLM_UPSTREAM_URL: "http://llm.internal:8000/",
     SEARXNG_URL: "https://search.internal/searx/",
@@ -88,7 +88,6 @@ test("values are parsed and normalised", () => {
     READER_MAX_CONCURRENT_PER_USER: "1",
     WORKSPACE_CPUS: "1.5",
     WORKSPACE_UID_BASE: "300000",
-    ONLINE_UID_BASE: "400000",
     WORKSPACE_TMP: "256m",
     WORKSPACE_BROWSER: "off",
     IDLE_TIMEOUT_MINUTES: "5",
@@ -96,8 +95,7 @@ test("values are parsed and normalised", () => {
   });
   assert.equal(config.dataDir, "/data/portal");
   assert.equal(config.qwenConfigDir, "/data/portal/config/qwen");
-  assert.deepEqual([config.workspace.kinds.private.agentPortBase, config.agentPortCount], [5000, 10]);
-  assert.equal(config.workspace.kinds.online.agentPortBase, 5010, "Online's ports follow Private's by default");
+  assert.deepEqual([config.agentPortBase, config.agentPortCount], [7000, 10]);
   assert.equal(config.llm.upstreamUrl, "http://llm.internal:8000");
   assert.deepEqual(config.search, {
     url: "https://search.internal/searx",
@@ -125,8 +123,7 @@ test("values are parsed and normalised", () => {
   assert.deepEqual(["on", "off", ""].map((value) => loadConfig({ ...secrets, EXA_SEARCH: value }).search.exa), [true, false, false], "Exa is asked only when the setting says so");
   assert.equal(loadConfig({ ...secrets, SEARCH_FALLBACK_ENGINES: "" }).search.fallbackEngines.length, 4, "empty: the four spare engines of searxng/settings.yml");
   assert.equal(config.workspace.nanoCpus, 1.5e9);
-  assert.equal(config.workspace.kinds.private.uidBase, 300_000);
-  assert.equal(config.workspace.kinds.online.uidBase, 400_000);
+  assert.equal(config.workspace.uidBase, 300_000);
   assert.equal(config.workspace.tmpBytes, 256 * MIB);
   assert.equal(config.workspace.browser, false);
   assert.equal(config.idleTimeoutMs, 5 * 60_000);
@@ -191,47 +188,48 @@ test("SEARXNG_AUTHORIZATION must be one header value", () => {
   ]);
 });
 
-test("the workspace port ranges must fit and must not overlap each other or the gateway's other ports", () => {
-  assert.deepEqual(problems({ ...secrets, AGENT_PORT_BASE: "65400", AGENT_PORT_COUNT: "200", ONLINE_AGENT_PORT_BASE: "5000" }), [
-    "AGENT_PORT_BASE + AGENT_PORT_COUNT must stay below 65536 (got 65400 + 200)",
-  ]);
-  assert.deepEqual(problems({ ...secrets, ONLINE_AGENT_PORT_BASE: "65400" }), ["ONLINE_AGENT_PORT_BASE + AGENT_PORT_COUNT must stay below 65536 (got 65400 + 200)"]);
-  // The preview ports are the workspace ports + PREVIEW_PORT_OFFSET: they must fit too.
-  assert.deepEqual(problems({ ...secrets, AGENT_PORT_BASE: "64400", AGENT_PORT_COUNT: "200", ONLINE_AGENT_PORT_BASE: "5000" }), [
-    "AGENT_PORT_BASE + 1000 + AGENT_PORT_COUNT must stay below 65536: the preview ports are the workspace ports + 1000 (got 64400 + 200)",
-  ]);
-  const edge = loadConfig({ ...secrets, AGENT_PORT_BASE: "64336", AGENT_PORT_COUNT: "200", ONLINE_AGENT_PORT_BASE: "5000" });
-  assert.equal(edge.workspace.kinds.private.agentPortBase, 64336, "the last preview port is 65535");
+test("the workspace ports and their previews must fit, and keep clear of the gateway's other ports", () => {
+  // By default 20 ports for each of users 1-99, and their previews 10000 higher.
+  const defaults = loadConfig(secrets);
+  assert.deepEqual([defaults.agentPortBase, defaults.agentPortCount], [12_000, 100]);
 
-  const overlap = (key: string, first: number, last: number): string =>
-    `WEB_PORT, CONTROL_PORT and SERVICE_PORT must lie outside the workspace port range (${key} + 1 … ${key} + AGENT_PORT_COUNT - 1: ${first}-${last})`;
-  for (const [name, port] of [["WEB_PORT", "3101"], ["CONTROL_PORT", "3299"], ["SERVICE_PORT", "3150"]] as const) {
-    assert.deepEqual(problems({ ...secrets, [name]: port }), [overlap("AGENT_PORT_BASE", 3101, 3299)], `${name}=${port}`);
-  }
-  for (const [name, port] of [["WEB_PORT", "3301"], ["SERVICE_PORT", "3499"]] as const) {
-    assert.deepEqual(problems({ ...secrets, [name]: port }), [overlap("ONLINE_AGENT_PORT_BASE", 3301, 3499)], `${name}=${port}`);
-  }
-  for (const [name, port] of [["WEB_PORT", "4101"], ["CONTROL_PORT", "4499"]] as const) {
-    assert.equal(problems({ ...secrets, [name]: port }).length, 1, `${name}=${port}: a preview port`);
-    assert.match(problems({ ...secrets, [name]: port })[0]!, /must lie outside the preview port range/);
-  }
-  // A preview range must not meet a workspace range either: Online's workspace ports where Private's previews are.
-  assert.deepEqual(problems({ ...secrets, ONLINE_AGENT_PORT_BASE: "4150" }), [
-    "the Online workspace ports (4151-4349) and the Private preview ports (4101-4299) overlap: each needs ports of its own (the preview ports are the workspace ports + 1000; set AGENT_PORT_BASE, ONLINE_AGENT_PORT_BASE or AGENT_PORT_COUNT so they don't meet)",
+  assert.deepEqual(problems({ ...secrets, AGENT_PORT_COUNT: "501" }), [
+    "AGENT_PORT_COUNT must be at most 500: each user has 20 workspace ports, and their preview ports are 10000 higher (got 501)",
   ]);
-  // The base itself and base + count are not workspace ports.
-  const edges = loadConfig({ ...secrets, WEB_PORT: "3100", CONTROL_PORT: "3300" });
-  assert.deepEqual([edges.webPort, edges.controlPort], [3100, 3300]);
+  assert.equal(loadConfig({ ...secrets, AGENT_PORT_COUNT: "500" }).agentPortCount, 500, "the last workspace port is the one before the first preview port");
+  assert.deepEqual(problems({ ...secrets, AGENT_PORT_BASE: "53537" }), [
+    "the preview ports would end at 65536, past 65535: lower AGENT_PORT_BASE (53537) or AGENT_PORT_COUNT (100); each user has 20 workspace ports, and their preview ports are 10000 higher",
+  ]);
+  assert.equal(loadConfig({ ...secrets, AGENT_PORT_BASE: "53536" }).agentPortBase, 53_536, "the last preview port is 65535");
 
-  // A port says the user and the kind: the two ranges must not share one.
-  const sharing =
-    "the Private and Online workspace port ranges overlap (AGENT_PORT_BASE 3100, ONLINE_AGENT_PORT_BASE 3250, AGENT_PORT_COUNT 200): each kind needs ports of its own";
-  assert.deepEqual(problems({ ...secrets, ONLINE_AGENT_PORT_BASE: "3250" }), [sharing]);
-  assert.deepEqual(problems({ ...secrets, ONLINE_AGENT_PORT_BASE: "3298" }).length, 1, "one shared port is one too many");
-  assert.equal(loadConfig({ ...secrets, ONLINE_AGENT_PORT_BASE: "3299" }).workspace.kinds.online.agentPortBase, 3299, "the ranges may touch");
-  assert.equal(loadConfig({ ...secrets, ONLINE_AGENT_PORT_BASE: "2700" }).workspace.kinds.online.agentPortBase, 2700, "Online's may lie below Private's");
-  assert.equal(loadConfig({ ...secrets, AGENT_PORT_COUNT: "50" }).workspace.kinds.online.agentPortBase, 3150, "by default right after Private's");
-  assert.equal(problems({ ...secrets, AGENT_PORT_COUNT: "9007199254740991" })[1], "ONLINE_AGENT_PORT_BASE must be a TCP port (got 9007199254744092)", "a default it refuses is named too");
+  const inside = (name: string, port: number): string =>
+    `${name} (${port}) must lie outside the workspace ports (12020-13999) and their preview ports (22020-23999): move it, or AGENT_PORT_BASE`;
+  for (const [name, port] of [["WEB_PORT", 12_020], ["CONTROL_PORT", 13_999], ["SERVICE_PORT", 22_020], ["WEB_PORT", 23_999]] as const) {
+    assert.deepEqual(problems({ ...secrets, [name]: String(port) }), [inside(name, port)]);
+  }
+  // A port no workspace has yet is the next agent's.
+  assert.deepEqual(problems({ ...secrets, CONTROL_PORT: "12039" }), [inside("CONTROL_PORT", 12_039)]);
+  assert.deepEqual(problems({ ...secrets, WEB_PORT: "13000", SERVICE_PORT: "23000" }), [inside("WEB_PORT", 13_000), inside("SERVICE_PORT", 23_000)]);
+  // The base itself and the first ports after it are nobody's (there is no user 0), nor is what follows each range.
+  const edges = loadConfig({ ...secrets, WEB_PORT: "12000", CONTROL_PORT: "12019", SERVICE_PORT: "14000" });
+  assert.deepEqual([edges.webPort, edges.controlPort, edges.servicePort], [12_000, 12_019, 14_000]);
+});
+
+test("a workspace is never served on a port that browsers refuse to open", () => {
+  assert.deepEqual(problems({ ...secrets, AGENT_PORT_BASE: "5900", AGENT_PORT_COUNT: "10" }), [
+    "browsers refuse to open port 6000, which AGENT_PORT_BASE (5900) puts among the workspace ports (5920-6099) or their preview ports (15920-16099): choose another base, such as 12000",
+  ]);
+  // A preview port counts as much: 10080 is one of them.
+  assert.deepEqual(problems({ ...secrets, AGENT_PORT_BASE: "50", AGENT_PORT_COUNT: "2", WEB_PORT: "3000" }), [
+    "browsers refuse to open port 10080, which AGENT_PORT_BASE (50) puts among the workspace ports (70-89) or their preview ports (10070-10089): choose another base, such as 12000",
+  ]);
+  // What an install from before every workspace had its own port has in its .env: its own ports are in the way too.
+  assert.deepEqual(problems({ ...secrets, AGENT_PORT_BASE: "3100", AGENT_PORT_COUNT: "200" }), [
+    "CONTROL_PORT (4002) must lie outside the workspace ports (3120-7099) and their preview ports (13120-17099): move it, or AGENT_PORT_BASE",
+    "SERVICE_PORT (4001) must lie outside the workspace ports (3120-7099) and their preview ports (13120-17099): move it, or AGENT_PORT_BASE",
+    "browsers refuse to open port 3659, 4045, 4190, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668, 6669, 6679, 6697, which AGENT_PORT_BASE (3100) puts among the workspace ports (3120-7099) or their preview ports (13120-17099): choose another base, such as 12000",
+  ]);
+  for (const count of ["2", "100", "500"]) assert.doesNotThrow(() => loadConfig({ ...secrets, AGENT_PORT_COUNT: count }), `the default base suits AGENT_PORT_COUNT=${count}`);
 });
 
 test("the gateway, Qwen Code's and DeepSeek Harness's web previews and the deploy scripts agree on where the preview ports are", () => {
@@ -241,11 +239,31 @@ test("the gateway, Qwen Code's and DeepSeek Harness's web previews and the deplo
   assert.match(source("deploy/lib.sh"), new RegExp(`^PREVIEW_PORT_OFFSET=${PREVIEW_PORT_OFFSET}$`, "m"));
 });
 
-test("each kind has a network, bridge, subnet and UID range of its own", () => {
-  assert.deepEqual(problems({ ...secrets, ONLINE_UID_BASE: "200150" }), [
-    "the Private and Online workspace UID ranges overlap (WORKSPACE_UID_BASE 200000, ONLINE_UID_BASE 200150, AGENT_PORT_COUNT 200): the bases must be at least AGENT_PORT_COUNT apart",
-  ]);
-  assert.equal(loadConfig({ ...secrets, ONLINE_UID_BASE: "200199" }).workspace.kinds.online.uidBase, 200_199, "no UID in common");
+test("the deploy scripts number a workspace as the gateway does", () => {
+  const lib = fileURLToPath(new URL("../../deploy/lib.sh", import.meta.url));
+  const bash = (script: string): string => execFileSync("bash", ["-c", `source "$1"; ${script}`, "bash", lib], { encoding: "utf8" }).trim();
+  assert.equal(bash('echo "$WORKSPACE_BLOCK"'), String(WORKSPACE_BLOCK));
+  assert.deepEqual(bash('echo "${AGENTS[@]}"').split(" "), [...AGENT_KINDS], "the agents, in the order that numbers their workspaces");
+  assert.deepEqual(bash('echo "${WORKSPACE_KINDS[@]}"').split(" "), [...WORKSPACE_KINDS]);
+  for (const userId of [1, 7, 99]) {
+    const numbers = bash(WORKSPACE_REFS.map((ref) => `workspace_number ${userId} ${ref.agent} ${ref.kind}; echo`).join("; ")).split("\n").map(Number);
+    assert.deepEqual(numbers, WORKSPACE_REFS.map((ref) => workspaceNumber(userId, ref)), `user ${userId}`);
+  }
+  // .env.example's settings: every port a workspace or its preview has, and the two ranges they lie in.
+  const env = fileURLToPath(new URL("../../.env.example", import.meta.url));
+  const config = loadConfig(secrets);
+  const served: number[] = [];
+  for (const offset of [0, PREVIEW_PORT_OFFSET]) {
+    for (let userId = 1; userId < config.agentPortCount; userId++) {
+      for (const ref of WORKSPACE_REFS) served.push(agentPortFor(config.agentPortBase, config.agentPortCount, userId, ref)! + offset);
+    }
+  }
+  assert.deepEqual(bash(`ENV_FILE=${JSON.stringify(env)}; workspace_ports`).split("\n").map(Number), served);
+  const { first, last } = agentPortRange(config.agentPortBase, config.agentPortCount);
+  assert.equal(bash(`ENV_FILE=${JSON.stringify(env)}; port_ranges`), `${first}-${last} ${first + PREVIEW_PORT_OFFSET}-${last + PREVIEW_PORT_OFFSET}`);
+});
+
+test("each kind has a network, bridge and subnet of its own", () => {
   assert.deepEqual(problems({ ...secrets, ONLINE_NETWORK: "workspace-portal-ws" }), ['WORKSPACE_NETWORK and ONLINE_NETWORK must differ (both "workspace-portal-ws")']);
   assert.deepEqual(problems({ ...secrets, ONLINE_BRIDGE: "br-wportal" }), ['WORKSPACE_BRIDGE and ONLINE_BRIDGE must differ (both "br-wportal")']);
   assert.deepEqual(problems({ ...secrets, ONLINE_SUBNET: "172.29.128.0/24", ONLINE_GATEWAY_IP: "172.29.128.1", ONLINE_IP_RANGE: "172.29.128.128/25" }), [
@@ -260,7 +278,7 @@ test("each kind has a network, bridge, subnet and UID range of its own", () => {
   assert.deepEqual(problems({ ...secrets, ONLINE_DNS_1: "one.one.one.one" }), ['ONLINE_DNS_1 must be an IPv4 address (got "one.one.one.one")']);
 });
 
-test("the Online workspaces' resolvers must be public; the UIDs stay below systemd's foreign range", () => {
+test("the Online workspaces' resolvers must be public; the workspaces' UIDs stay below systemd's foreign range", () => {
   for (const address of ["192.168.1.1", "10.0.0.53", "100.100.100.100", "127.0.0.53", "172.29.0.1", "169.254.169.253", "0.0.0.0"]) {
     assert.deepEqual(
       problems({ ...secrets, ONLINE_DNS_2: address }),
@@ -269,10 +287,12 @@ test("the Online workspaces' resolvers must be public; the UIDs stay below syste
     );
   }
   assert.deepEqual(loadConfig({ ...secrets, ONLINE_DNS_1: "8.8.8.8", ONLINE_DNS_2: "208.67.222.222" }).workspace.kinds.online.dns, ["8.8.8.8", "208.67.222.222"]);
-  // 2147352576 = 0x7FFE0000, where systemd's foreign UID range begins.
-  assert.deepEqual(problems({ ...secrets, ONLINE_UID_BASE: "2147352377" }), ["ONLINE_UID_BASE + AGENT_PORT_COUNT must stay below 2147352576 (got 2147352377 + 200)"]);
-  assert.equal(loadConfig({ ...secrets, ONLINE_UID_BASE: "2147352376" }).workspace.kinds.online.uidBase, 2_147_352_376, "the last UID is 2147352575");
-  assert.deepEqual(problems({ ...secrets, WORKSPACE_UID_BASE: "4294967000" }), ["WORKSPACE_UID_BASE + AGENT_PORT_COUNT must stay below 2147352576 (got 4294967000 + 200)"]);
+  // 2147352576 = 0x7FFE0000, where systemd's foreign UID range begins. Each of the 100 users has 20 UIDs.
+  assert.deepEqual(problems({ ...secrets, WORKSPACE_UID_BASE: "2147350577" }), [
+    "the workspaces' UIDs would end at 2147352576, past 2147352575: lower WORKSPACE_UID_BASE (2147350577) or AGENT_PORT_COUNT (100)",
+  ]);
+  assert.equal(loadConfig({ ...secrets, WORKSPACE_UID_BASE: "2147350576" }).workspace.uidBase, 2_147_350_576, "the last UID is 2147352575");
+  assert.equal(loadConfig(secrets).workspace.uidBase, 200_000);
 });
 
 test("NOT_PUBLIC is the firewall's not_public set; isPublicIpv4 is its complement", () => {
@@ -289,7 +309,7 @@ test("ONLINE_WORKSPACES switches Online workspaces off for the whole portal; its
   assert.equal(loadConfig({ ...secrets, ONLINE_WORKSPACES: "on" }).workspace.onlineEnabled, true);
   assert.equal(loadConfig({ ...secrets, ONLINE_WORKSPACES: "" }).workspace.onlineEnabled, true, "empty: on");
   assert.deepEqual(problems({ ...secrets, ONLINE_WORKSPACES: "maybe" }), ['ONLINE_WORKSPACES must be true or false (got "maybe")']);
-  assert.deepEqual(problems({ ...secrets, ONLINE_WORKSPACES: "off", ONLINE_AGENT_PORT_BASE: "3200" }).length, 1, "so turning it on later can't break isolation");
+  assert.deepEqual(problems({ ...secrets, ONLINE_WORKSPACES: "off", ONLINE_NETWORK: "workspace-portal-ws" }).length, 1, "so turning it on later can't break isolation");
 });
 
 test("portal-hostd: a token sets a host up; the portal's address defaults to this machine, the LLM server's is required", () => {

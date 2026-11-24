@@ -6,9 +6,13 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import WebSocket, { WebSocketServer } from "ws";
-import { hashSessionToken } from "@portal/core";
-import { cookie, json, NAVIGATE, request, startGateway, type Gateway, type Reply } from "./harness.ts";
+import { hashSessionToken, type WorkspaceRef } from "@portal/core";
+import { BOTH, cookie, json, NAVIGATE, request, startGateway, withGateway, type Gateway, type Reply, type WorkspaceChoice } from "./harness.ts";
 import { previewCookieName } from "../src/proxy/preview-proxy.ts";
+
+const QWEN_PRIVATE: WorkspaceRef = { agent: "qwen", kind: "private" };
+const QWEN_ONLINE: WorkspaceRef = { agent: "qwen", kind: "online" };
+const DSH_PRIVATE: WorkspaceRef = { agent: "dsh", kind: "private" };
 
 interface Seen {
   method: string;
@@ -55,24 +59,37 @@ async function startApp(host: string): Promise<{ port: number; seen: Seen[]; soc
   };
 }
 
-function previewNavigate(g: Gateway, token: string | null, userId: number, path: string, extra: Record<string, string> = {}, kind: "private" | "online" = "private"): Promise<Reply> {
+function previewNavigate(g: Gateway, token: string | null, userId: number, path: string, extra: Record<string, string> = {}, workspace: WorkspaceChoice = {}): Promise<Reply> {
   const headers: Record<string, string> = { ...NAVIGATE, ...extra };
   if (token) headers.cookie = [cookie(token), extra.cookie].filter(Boolean).join("; ");
-  return request(g.previewPort(userId, kind), { path, headers });
+  return request(g.previewPort(userId, workspace), { path, headers });
 }
 
-/** Chooses `port` on the user's preview port; returns the cookie pair the browser keeps. */
-async function choose(g: Gateway, token: string, userId: number, port: number | string, kind: "private" | "online" = "private"): Promise<string> {
-  const reply = await previewNavigate(g, token, userId, `/__portal/port/${port}/`, {}, kind);
+/** Chooses `port` on a workspace's preview port; returns the cookie pair the browser keeps. */
+async function choose(g: Gateway, token: string, userId: number, port: number | string, workspace: WorkspaceChoice = {}): Promise<string> {
+  const reply = await previewNavigate(g, token, userId, `/__portal/port/${port}/`, {}, workspace);
   assert.equal(reply.status, 303, reply.body);
   return String(reply.headers["set-cookie"]?.[0]).split(";")[0]!;
+}
+
+/** A WebSocket to a workspace's preview port, as a page does it: the open socket, or the status it was refused with. */
+function openSocket(g: Gateway, userId: number, headers: Record<string, string>, workspace: WorkspaceChoice = {}): Promise<WebSocket | number> {
+  return new Promise((resolve) => {
+    const socket = new WebSocket(`ws://127.0.0.1:${g.previewPort(userId, workspace)}/live?room=1`, { headers });
+    socket.once("open", () => resolve(socket));
+    socket.once("unexpected-response", (_req, res) => {
+      res.resume();
+      resolve(res.statusCode!);
+    });
+    socket.once("error", () => undefined);
+  });
 }
 
 async function withApp(run: (g: Gateway, app: Awaited<ReturnType<typeof startApp>>, alice: number) => Promise<void>, env: Record<string, string> = {}): Promise<void> {
   const g = await startGateway({ env });
   const alice = g.ids.alice;
   await g.startReady(alice);
-  const app = await startApp(g.manager.upstream(alice, "private")!.host);
+  const app = await startApp(g.manager.upstream(alice, QWEN_PRIVATE)!.host);
   try {
     await run(g, app, alice);
   } finally {
@@ -92,7 +109,7 @@ test("choosing a port: a cookie of this preview port, then a redirect to the pat
       assert.equal((await previewNavigate(g, g.tokens.alice, alice, path)).headers.location, "/", path);
     }
     // Not a port, a privileged one, or the agent's own: refused.
-    const agentPort = g.manager.upstream(alice, "private")!.port;
+    const agentPort = g.manager.upstream(alice, QWEN_PRIVATE)!.port;
     for (const port of ["80", "0", "70000", "abc", "", String(agentPort)]) {
       const page = await previewNavigate(g, g.tokens.alice, alice, `/__portal/port/${port}/`);
       assert.equal(page.status, 400, port);
@@ -174,16 +191,17 @@ test("an Online workspace's app is not confined to its origin (it may load from 
   const g = await startGateway();
   try {
     const alice = g.ids.alice;
-    await g.startReady(alice, undefined, "online");
-    const app = await startApp(g.manager.upstream(alice, "online")!.host);
+    await g.startReady(alice, QWEN_ONLINE);
+    const app = await startApp(g.manager.upstream(alice, QWEN_ONLINE)!.host);
     try {
-      const chosen = await choose(g, g.tokens.alice, alice, app.port, "online");
-      const page = await previewNavigate(g, g.tokens.alice, alice, "/", { cookie: chosen }, "online");
+      const chosen = await choose(g, g.tokens.alice, alice, app.port, QWEN_ONLINE);
+      const page = await previewNavigate(g, g.tokens.alice, alice, "/", { cookie: chosen }, QWEN_ONLINE);
       assert.equal(page.status, 200);
       assert.equal(String(page.headers["content-security-policy"]).split(", ").length, 1);
       // Her Private preview port doesn't reach the Online workspace (its own cookie, too, is the Online port's).
       const other = await previewNavigate(g, g.tokens.alice, alice, "/", { cookie: chosen });
       assert.equal(other.status, 409);
+      assert.ok(other.body.includes("<h1>Your Online Qwen Code workspace is running, not this one</h1>"), other.body);
     } finally {
       await app.close();
     }
@@ -241,23 +259,61 @@ test("no app chosen, nothing listening, a stopped workspace: a page for page loa
     await g.manager.stop(alice, "test");
     const stopped = await previewNavigate(g, g.tokens.alice, alice, "/", { cookie: chosen });
     assert.equal(stopped.status, 503);
-    assert.match(stopped.body, /workspace is stopped/);
+    assert.match(stopped.body, /<h1>Your Private Qwen Code workspace is stopped<\/h1>/);
+  }));
+
+test("a harness's preview port never serves another harness's apps: another_running for a page, a fetch and a socket", () =>
+  withApp(async (g, app, alice) => {
+    // Qwen Code runs, with the app. On DeepSeek Harness's preview port a page of hers has chosen that app's port.
+    const chosen = await choose(g, g.tokens.alice, alice, app.port, DSH_PRIVATE);
+    const port = g.previewPort(alice, DSH_PRIVATE);
+    assert.equal(port, g.agentPort(alice, DSH_PRIVATE) + 10_000);
+    assert.equal(chosen, `${previewCookieName(port)}=${app.port}`);
+    const cookies = `${cookie(g.tokens.alice)}; ${chosen}`;
+
+    const page = await previewNavigate(g, g.tokens.alice, alice, "/", { cookie: chosen }, DSH_PRIVATE);
+    assert.equal(page.status, 409);
+    assert.ok(page.body.includes("<h1>Your Private Qwen Code workspace is running, not this one</h1>"), page.body);
+    const fetched = await request(port, { path: "/api", headers: { cookie: cookies, "sec-fetch-site": "same-origin", "sec-fetch-mode": "cors" } });
+    assert.deepEqual([fetched.status, json(fetched)], [
+      409,
+      { error: "another_running", message: "Your Private Qwen Code workspace is running, not this one (Private DeepSeek Harness)." },
+    ]);
+    assert.equal(await openSocket(g, alice, { origin: `http://127.0.0.1:${port}`, cookie: cookies }, DSH_PRIVATE), 409);
+
+    // Nor is what was chosen there chosen on Qwen Code's own preview port: the cookie is its port's.
+    const own = await previewNavigate(g, g.tokens.alice, alice, "/", { cookie: chosen });
+    assert.equal(own.status, 404);
+    assert.match(own.body, /No app chosen/);
+    assert.deepEqual([app.seen.length, app.sockets.length], [0, 0], "nothing reached the app");
+  }, BOTH.env));
+
+test("Try again on a preview port starts that port's workspace, not the agent a start from the portal would run", () =>
+  withGateway(BOTH, async (g) => {
+    const { alice } = g.ids;
+    const port = g.previewPort(alice, DSH_PRIVATE);
+    const stopped = await previewNavigate(g, g.tokens.alice, alice, "/", {}, DSH_PRIVATE);
+    assert.equal(stopped.status, 503);
+    assert.match(stopped.body, /<h1>Your Private DeepSeek Harness workspace is stopped<\/h1>/);
+    assert.equal(g.runtime.starts.length, 0, "a page load starts nothing");
+
+    // She has chosen no agent: the portal would start Qwen Code, the first enabled one.
+    const retry = await request(port, {
+      method: "POST",
+      path: "/__portal/start",
+      headers: { cookie: cookie(g.tokens.alice), origin: `http://127.0.0.1:${port}`, "sec-fetch-site": "same-origin" },
+    });
+    assert.deepEqual([retry.status, retry.headers.location], [303, "/"]);
+    await g.waitReady(alice);
+    assert.deepEqual(g.runtime.startsFor(alice).map((record) => record.options.ref), [DSH_PRIVATE]);
+    assert.equal(g.manager.upstream(alice, QWEN_PRIVATE), null);
   }));
 
 test("WebSockets reach the chosen app as a local browser's, after the same checks, and close with the session", () =>
   withApp(async (g, app, alice) => {
     const chosen = await choose(g, g.tokens.alice, alice, app.port);
     const origin = `http://127.0.0.1:${g.previewPort(alice)}`;
-    const open = (headers: Record<string, string>): Promise<WebSocket | number> =>
-      new Promise((resolve) => {
-        const socket = new WebSocket(`ws://127.0.0.1:${g.previewPort(alice)}/live?room=1`, { headers });
-        socket.once("open", () => resolve(socket));
-        socket.once("unexpected-response", (_req, res) => {
-          res.resume();
-          resolve(res.statusCode!);
-        });
-        socket.once("error", () => undefined);
-      });
+    const open = (headers: Record<string, string>): Promise<WebSocket | number> => openSocket(g, alice, headers);
     const socket = await open({ origin, cookie: `${cookie(g.tokens.alice)}; ${chosen}` });
     assert.ok(socket instanceof WebSocket);
     const echo = new Promise<string>((resolve) => socket.once("message", (data) => resolve(String(data))));

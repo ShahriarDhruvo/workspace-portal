@@ -5,7 +5,8 @@ import { workspaceStartSchema } from "@/lib/validation";
 export const dynamic = "force-dynamic";
 
 /**
- * Starts the session's workspace of the confirmed kind (body `{ kind }`) and answers as soon as the container is up.
+ * Starts the session's workspace of the confirmed kind (body `{ kind }`), the one of its owner's harness, and answers
+ * as soon as the container is up.
  * A Route Handler rather than a Server Action: actions run one at a time per page, and the start can take up to 30 s
  * when the gateway first has to evict an idle workspace.
  */

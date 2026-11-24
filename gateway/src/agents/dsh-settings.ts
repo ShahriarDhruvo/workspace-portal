@@ -1,4 +1,4 @@
-// DeepSeek Harness's per-user settings: portal.patch.yml, rendered before every start and mounted read-only at
+// DeepSeek Harness's settings in a workspace: portal.patch.yml, rendered before every start and mounted read-only at
 // /etc/workspace-portal/dsh. It holds only what the gateway knows: the models (from Qwen Code's system-defaults.json,
 // see models.ts), all reached through the gateway, and the gateway's search MCP server (plus the headless browser).
 // Everything that locks dsh down (no DeepSeek account, no web tools, no plugin installs, no telemetry, one workspace)

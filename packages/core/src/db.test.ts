@@ -226,30 +226,6 @@ test("readCookie parses a header", () => {
   assert.equal(readCookie(undefined, "x"), null);
 });
 
-test("agent ports map users to ports and back within the range", async () => {
-  const { agentPortFor, userIdForAgentPort } = await import("./agent-origin.ts");
-  assert.equal(agentPortFor(3100, 200, 7), 3107);
-  assert.equal(agentPortFor(3100, 200, 0), null);
-  assert.equal(agentPortFor(3100, 200, 200), null);
-  assert.equal(userIdForAgentPort(3100, 200, 3107), 7);
-  assert.equal(userIdForAgentPort(3100, 200, 3100), null);
-  assert.equal(userIdForAgentPort(3100, 200, 3300), null);
-});
-
-test("agent browser tokens are bound to the session and the workspace", async () => {
-  const { agentBrowserToken, tokensEqual } = await import("./agent-origin.ts");
-  const token = agentBrowserToken("s".repeat(32), "session-a", 7, "private");
-  assert.match(token, /^[A-Za-z0-9_-]{43}$/);
-  assert.equal(token, agentBrowserToken("s".repeat(32), "session-a", 7, "private"));
-  assert.notEqual(token, agentBrowserToken("s".repeat(32), "session-b", 7, "private"));
-  assert.notEqual(token, agentBrowserToken("s".repeat(32), "session-a", 8, "private"));
-  assert.notEqual(token, agentBrowserToken("t".repeat(32), "session-a", 7, "private"));
-  // A user's two kinds are separate origins with separate tokens.
-  assert.notEqual(token, agentBrowserToken("s".repeat(32), "session-a", 7, "online"));
-  assert.ok(tokensEqual(token, token));
-  assert.ok(!tokensEqual(token, token.slice(1)));
-});
-
 test("ownership changes refuse symlinks, hard links and non-files", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "portal-chown-"));
   const file = path.join(dir, "portal.sqlite");

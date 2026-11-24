@@ -69,7 +69,7 @@ const STYLE_HOOKS = [
  * The gateway serves a workspace's web apps on its agent port + this (gateway/src/config.ts, PREVIEW_PORT_OFFSET;
  * a gateway test checks the two agree).
  */
-const PREVIEW_PORT_OFFSET = 1000;
+const PREVIEW_PORT_OFFSET = 10000;
 
 /**
  * The Web preview's address, as the person's browser can reach it: a loopback address of the workspace becomes

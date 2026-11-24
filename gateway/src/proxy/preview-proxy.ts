@@ -1,6 +1,6 @@
 // The preview ports: the web apps running in a workspace, as the person's browser sees them. A workspace runs on a
 // host the browser can't reach, so the agent's web preview (Qwen Code's Web preview, trim-web-shell.mjs; DeepSeek
-// Harness's sidebar Browser, web-preview.mjs) opens `http://localhost:<n>` here instead: one port per user and kind,
+// Harness's sidebar Browser, web-preview.mjs) opens `http://localhost:<n>` here instead: one port per workspace,
 // the agent port + PREVIEW_PORT_OFFSET, so an app is a browser origin of its own, apart from the agent's (its page
 // can't read the agent UI's token or storage) and every other workspace's. OpenCode has no web preview: a person
 // opens the address below in a tab.
@@ -8,7 +8,8 @@
 // A request passes the agent ports' checks, then goes to the port of the workspace the person chose:
 // `/__portal/port/<n>/<path>` keeps n in a cookie of this port and redirects to /<path>; everything after goes to n,
 // WebSockets included. The app sees a browser on its own machine and none of the portal's cookies; a Private
-// workspace's app is confined to this origin, as the workspace is to its host. Nothing here starts a workspace.
+// workspace's app is confined to this origin, as the workspace is to its host. As on the agent ports, loading a page
+// starts nothing: only "Try again" (a POST) starts this port's workspace.
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { checkAgentAccess, unavailable, type AgentDeps } from "./agent-access.ts";
@@ -59,15 +60,15 @@ function originOf(deps: AgentDeps, host: HostParts, previewPort: number): string
 async function handleRequest(deps: AgentDeps, req: IncomingMessage, res: ServerResponse): Promise<void> {
   const admitted = admit(deps, req, res, "preview");
   if (!admitted) return;
-  const { method, target, navigation, frame, host, userId, kind } = admitted;
+  const { method, target, navigation, frame, host, userId, ref } = admitted;
   const previewPort = req.socket.localPort ?? 0;
   const { pathname, search } = splitTarget(target);
-  // Only this kind's container: while the other kind runs, nothing here reaches it.
-  const upstream = deps.manager.upstream(userId, kind);
+  // Only this workspace's container: while another of the user's runs, nothing here reaches it.
+  const upstream = deps.manager.upstream(userId, ref);
 
   if (pathname.startsWith(PORTAL_PATH_PREFIX)) {
     // "Try again" as on the agent port, its pages framed by the portal alone.
-    if (pathname === START_PATH) return handlePortalPath(deps, req, res, userId, kind, { portal: frame.portal }, pathname);
+    if (pathname === START_PATH) return handlePortalPath(deps, req, res, userId, ref, { portal: frame.portal }, pathname);
     if (!pathname.startsWith(PORT_PATH)) return sendError(res, 404, "not_found", "Not found.");
     if (method !== "GET" && method !== "HEAD") return sendError(res, 405, "method_not_allowed", "Use GET.", { allow: "GET, HEAD" });
     // /__portal/port/<n>[/<path>]: serve n from now on, from /<path>.
@@ -91,7 +92,7 @@ async function handleRequest(deps: AgentDeps, req: IncomingMessage, res: ServerR
     return;
   }
 
-  if (!upstream) return handleUnavailable(deps, res, userId, kind, navigation, frame);
+  if (!upstream) return handleUnavailable(deps, res, userId, ref, navigation, frame);
   const port = chosenPort(req, upstream);
   if (port === null) {
     if (navigation) return sendPage(res, 404, previewUnchosenPage(), frame);
@@ -103,7 +104,7 @@ async function handleRequest(deps: AgentDeps, req: IncomingMessage, res: ServerR
   await relay(deps, req, res, admitted, {
     url: new URL(`http://${upstream.host}:${port}${target}`),
     headers: previewRequestHeaders(req.headers, origin, port),
-    responseHeaders: (incoming) => previewResponseHeaders(incoming.headers, { frame, port, privateOrigin: kind === "private" ? origin : null }, incoming.statusCode),
+    responseHeaders: (incoming) => previewResponseHeaders(incoming.headers, { frame, port, privateOrigin: ref.kind === "private" ? origin : null }, incoming.statusCode),
     unreachable: () => ({ page: previewUnreachablePage(port), code: "app_unreachable", message: `Nothing in the workspace answers on port ${port}.` }),
   });
 }
@@ -118,10 +119,10 @@ function handleUpgrade(deps: AgentDeps, req: IncomingMessage, socket: Duplex, he
   if (req.method !== "GET") return rejectUpgrade(socket, 400, "bad_request");
   const access = checkAgentAccess(req, deps, true, "preview");
   if (!access.ok) return rejectUpgrade(socket, access.status, access.code, access.message);
-  const { host, context, userId, kind } = access;
-  const upstream = deps.manager.upstream(userId, kind);
+  const { host, context, userId, ref } = access;
+  const upstream = deps.manager.upstream(userId, ref);
   if (!upstream) {
-    const no = unavailable(deps.manager.info(userId), kind);
+    const no = unavailable(deps.manager.info(userId), ref);
     return rejectUpgrade(socket, no.status, no.code, no.message);
   }
   const port = chosenPort(req, upstream);

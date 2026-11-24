@@ -15,7 +15,7 @@ interface UserHarnessProps {
   agents: AgentInfo[];
   /** The harness the user's workspace starts with now: the saved choice, or the first enabled agent. */
   chosen: AgentKind;
-  /** The user's running (or starting) workspace, to tell when it runs another harness; null when stopped or unknown. */
+  /** The user's running (or starting) workspace, to tell when it is another harness's; null when stopped or unknown. */
   running: Pick<WorkspaceInfo, "agent" | "busy" | "connections"> | null;
   /** The id of the card's heading, which names the choice. */
   labelledBy: string;
@@ -23,9 +23,9 @@ interface UserHarnessProps {
 }
 
 /**
- * The harness choice of a user's page, for an administrator (people choose their own on Home). A running workspace
- * keeps its harness until it starts again; the card says so and offers "Restart now", which confirms first (the
- * restart runs in the dialog).
+ * The harness choice of a user's page, for an administrator (people choose their own on Home). A change leaves the
+ * workspace that runs as it is, and the chosen harness's starts next time; the card says so and offers "Restart now",
+ * which confirms first (the restart runs in the dialog).
  */
 export function UserHarness({ agents, chosen, running, labelledBy, owner }: UserHarnessProps) {
   const harness = useHarnessChoice(chosen, (agent) => setUserHarness(owner.id, agent));
@@ -56,7 +56,7 @@ export function UserHarness({ agents, chosen, running, labelledBy, owner }: User
       {differs && running?.agent ? (
         <Alert role="status">
           <AlertTitle>
-            {owner.name}&apos;s workspace is running {AGENT_NAMES[running.agent]}.
+            {owner.name}&apos;s {AGENT_NAMES[running.agent]} workspace is running.
           </AlertTitle>
           <AlertDescription>{AGENT_NAMES[harness.value]} starts next time.</AlertDescription>
           <div className="mt-2">
@@ -75,7 +75,7 @@ export function UserHarness({ agents, chosen, running, labelledBy, owner }: User
       ) : restarted ? (
         <p role="status" className="flex items-center gap-1.5 text-13 text-success">
           <CheckIcon className="shrink-0" />
-          {owner.name}&apos;s workspace restarted with {AGENT_NAMES[restarted]}.
+          {owner.name}&apos;s {AGENT_NAMES[restarted]} workspace started.
         </p>
       ) : null}
       {running ? (

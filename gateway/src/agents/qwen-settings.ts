@@ -1,4 +1,4 @@
-// Qwen Code's settings files, rendered per user before every start: the admin's settings.json and system-defaults.json
+// Qwen Code's settings files, rendered per workspace before every start: the admin's settings.json and system-defaults.json
 // (from PORTAL_DATA_DIR/config/qwen), with the keys the portal depends on forced on top. The models listed in
 // system-defaults.json are the portal's model list for every agent.
 import fs from "node:fs";

@@ -7,7 +7,7 @@
 set -eu
 
 if [ "$(id -u)" = "0" ]; then
-  echo "start-dsh: refusing to run as root; the gateway runs workspaces as the user's UID" >&2
+  echo "start-dsh: refusing to run as root; the gateway runs each workspace as a UID of its own" >&2
   exit 1
 fi
 : "${DSH_HOME:?DSH_HOME is not set}"

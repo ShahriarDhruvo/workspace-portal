@@ -1,6 +1,6 @@
 // What WorkspaceManager needs from a container engine. DockerRuntime implements it for real;
 // the integration tests use an in-process fake.
-import type { AgentKind, WorkspaceKind } from "@portal/core";
+import type { AgentKind, WorkspaceRef } from "@portal/core";
 import type { WorkspaceStartOptions } from "./container-spec.ts";
 
 export interface StartedContainer {
@@ -11,16 +11,19 @@ export interface StartedContainer {
   port: number;
 }
 
-/** userId, kind, agent and version are the container's labels: null when one is missing or names nothing known. */
+/** userId, ref and version are the container's labels: null when one is missing or names nothing known. */
 export interface ContainerSummary {
   id: string;
   userId: number | null;
-  kind: WorkspaceKind | null;
-  agent: AgentKind | null;
+  /**
+   * The workspace it is: its agent and kind labels. Null too when the container is not named as that workspace's
+   * is (containerName): it is not one the gateway would have created, so nothing about it can be relied on.
+   */
+  ref: WorkspaceRef | null;
   running: boolean;
   /** Its address on its own kind's network. */
   ip: string | null;
-  /** The agent's port; null when the agent is unknown. */
+  /** The agent's port; null when the workspace is unknown. */
   port: number | null;
   version: string | null;
 }
@@ -49,7 +52,7 @@ export class WorkspaceImageMissingError extends Error {
 }
 
 export interface ContainerRuntime {
-  /** Removes any stale container of this user, of either kind, then creates and starts a new one of `options.kind`. */
+  /** Removes any stale container of this user, whichever workspace's, then creates and starts `options.ref`'s. */
   startWorkspace(userId: number, options: WorkspaceStartOptions): Promise<StartedContainer>;
   /** The credential a running container's agent was started with; null if unknown or gone. */
   credential(id: string, agent: AgentKind): Promise<string | null>;

@@ -1,16 +1,16 @@
-// Docker objects the gateway creates: per-user workspace containers (one per kind: Private wp-ws-<id>, Online
-// wp-wo-<id>, never both at once) and the two workspace networks.
+// Docker objects the gateway creates: the workspace containers (one per workspace, wp-<agent>-<kind>-<user id>; of a
+// user's, one at a time) and the two workspace networks.
 //
-// A workspace container gets as little as possible: a UID no other workspace (not even the same user's other kind)
-// and no host account shares, nothing mounted that another workspace or the other kind also sees, and its kind's
-// network (workspaceNetworkOptions). That is the same whichever agent and kind it runs: the driver adds only its
-// port, environment and settings, the kind only its network, DNS, UID and mounts.
+// A workspace container gets as little as possible: a UID no other workspace (not even another of the same user)
+// and no host account shares, nothing mounted that another workspace also sees, and its kind's network
+// (workspaceNetworkOptions). That is the same whichever workspace it is: the agent's driver adds only its port,
+// environment and settings, the kind only its network and DNS.
 import type Docker from "dockerode";
-import type { AgentKind, WorkspaceKind } from "@portal/core";
-import { LLM_KEY_ENV, type AgentDriver } from "../agents/index.ts";
+import type { WorkspaceRef } from "@portal/core";
+import { driverFor, LLM_KEY_ENV } from "../agents/index.ts";
 import { MIB, type Config, type KindConfig } from "../config.ts";
 import { parseWorkspaceImage } from "./image-names.ts";
-import { userPaths, workspaceOwner } from "../workspaces/paths.ts";
+import { workspaceOwner, workspacePaths } from "../workspaces/paths.ts";
 
 export const WORKSPACE_LABEL = "workspace-portal.workspace";
 export const USER_ID_LABEL = "workspace-portal.user-id";
@@ -24,32 +24,28 @@ const SWAP_HEADROOM_BYTES = 512 * MIB;
 /** Makes workspaces the OOM killer's first choice, so the LLM server survives a memory shortage. */
 const OOM_SCORE_ADJ = 500;
 
-export function containerName(userId: number, kind: WorkspaceKind): string {
-  return `${kind === "online" ? "wp-wo" : "wp-ws"}-${userId}`;
+export function containerName(userId: number, ref: WorkspaceRef): string {
+  return `wp-${ref.agent}-${ref.kind}-${userId}`;
 }
 
 export interface WorkspaceStartOptions {
-  kind: WorkspaceKind;
-  agent: AgentKind;
+  /** Which of the user's workspaces. */
+  ref: WorkspaceRef;
   /** The agent's credential (driver.credentialEnv); new for every start. */
   credential: string;
   /** The image of the agent's current version (workspace-portal/workspace:<agent>-<version>). */
   image: string;
 }
 
-export function workspaceContainerOptions(
-  config: Config,
-  userId: number,
-  driver: AgentDriver,
-  { kind, credential, image }: Pick<WorkspaceStartOptions, "kind" | "credential" | "image">,
-): Docker.ContainerCreateOptions {
+export function workspaceContainerOptions(config: Config, userId: number, { ref, credential, image }: WorkspaceStartOptions): Docker.ContainerCreateOptions {
   const ws = config.workspace;
-  const own = ws.kinds[kind];
-  const paths = userPaths(config.dataDir, userId, kind);
-  const owner = workspaceOwner(config, userId, kind);
+  const own = ws.kinds[ref.kind];
+  const driver = driverFor(ref.agent);
+  const paths = workspacePaths(config.dataDir, userId, ref);
+  const owner = workspaceOwner(config, userId, ref);
   const version = parseWorkspaceImage(image)?.version;
   return {
-    name: containerName(userId, kind),
+    name: containerName(userId, ref),
     Hostname: "workspace",
     Image: image,
     User: `${owner.uid}:${owner.gid}`,
@@ -57,8 +53,8 @@ export function workspaceContainerOptions(
     Labels: {
       [WORKSPACE_LABEL]: "1",
       [USER_ID_LABEL]: String(userId),
-      [KIND_LABEL]: kind,
-      [AGENT_LABEL]: driver.kind,
+      [KIND_LABEL]: ref.kind,
+      [AGENT_LABEL]: ref.agent,
       ...(version ? { [VERSION_LABEL]: version } : {}),
     },
     Env: [
@@ -74,7 +70,7 @@ export function workspaceContainerOptions(
       Binds: [
         `${paths.home}:/home/user`,
         `${paths.workspace}:/workspace`,
-        `${paths.agentSettings(driver.kind)}:${driver.settingsMount}:ro`,
+        `${paths.settings}:${driver.settingsMount}:ro`,
         `${paths.passwd}:/etc/passwd:ro`,
         `${paths.group}:/etc/group:ro`,
       ],

@@ -72,7 +72,7 @@ export interface AgentDriver {
   readonly port: number;
   /** Env var carrying the per-start credential; read back when adopting a running container. */
   readonly credentialEnv: string;
-  /** Mount point of the per-user settings directory rendered by renderSettings (read-only). */
+  /** Mount point of the workspace's settings directory, rendered by renderSettings (read-only). */
   readonly settingsMount: string;
   /**
    * How the browser's requests are authorised, on top of the portal session and the port's user, which the proxy

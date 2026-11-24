@@ -1,7 +1,7 @@
 # The workspace images, one target per agent: qwen (Qwen Code's Web Shell, port 4170), dsh (DeepSeek Harness's web
 # UI, port 3080) and opencode (OpenCode's web UI, port 4096). deploy/lib.sh builds them, and the gateway for Admin >
 # Updates. All hold the same tools and a headless Chromium for the Playwright MCP, and no account: a workspace runs as
-# its user's own UID on a read-only root, with that user's /home/user and /workspace mounted
+# a UID of its own on a read-only root, with its own /home/user and /workspace mounted
 # (gateway/src/docker/container-spec.ts).
 FROM docker.io/library/node:24-bookworm-slim@sha256:c0a93797ee78814ae6d32fcca2561fdbbe423149c3f5389aad32d86e9fd85bd4 AS base
 ARG PLAYWRIGHT_MCP_VERSION=0.0.84

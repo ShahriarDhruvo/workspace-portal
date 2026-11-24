@@ -8,11 +8,11 @@ import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { WebSocketServer } from "ws";
-import { isVersion, openDatabase, type PortalDb } from "@portal/core";
-import type { AgentKind, EngineJob, EngineStatus, WorkspaceKind } from "@portal/core";
+import { isVersion, openDatabase, WORKSPACE_REFS, type PortalDb } from "@portal/core";
+import type { AgentKind, EngineJob, EngineStatus, WorkspaceKind, WorkspaceRef } from "@portal/core";
 import { driverFor } from "../src/agents/index.ts";
 import type { SettingsObject } from "../src/agents/qwen-settings.ts";
-import type { WorkspaceStartOptions } from "../src/docker/container-spec.ts";
+import { containerName, type WorkspaceStartOptions } from "../src/docker/container-spec.ts";
 import {
   BuildError,
   imageInUse,
@@ -30,7 +30,7 @@ import type { EngineHost } from "../src/updates/engine-updater.ts";
 import { HostdError, type MeterReading } from "../src/monitor/hostd.ts";
 import { parseWorkspaceImage, STAGING_REPOSITORY, workspaceImage } from "../src/docker/image-names.ts";
 import { registryError, type NpmPackage, type NpmRegistry } from "../src/updates/npm-registry.ts";
-import { userPaths } from "../src/workspaces/paths.ts";
+import { workspacePaths } from "../src/workspaces/paths.ts";
 import type { ContainerRuntime, ContainerSample, ContainerState, ContainerSummary, StartedContainer } from "../src/docker/runtime.ts";
 import type { Logger } from "../src/lib/log.ts";
 
@@ -578,6 +578,9 @@ async function startFakeOpencode(password: string, options: { readyAfterMs: numb
 
 interface FakeContainer {
   id: string;
+  /** Its name: a workspace's (containerName) when the gateway created it. */
+  name: string;
+  /** The user id label. */
   userId: number | null;
   /** The agent label. */
   agent: AgentKind;
@@ -617,7 +620,9 @@ export interface StartRecord {
 /**
  * "Starts" a workspace by launching the fake agent server it asks for, with the credential the
  * gateway chose. Like Docker, it gives each running container its own address (127.0.0.2,
- * 127.0.0.3, …) and hands a freed address to the next container.
+ * 127.0.0.3, …) and hands a freed address to the next container. Like DockerRuntime, it knows a
+ * workspace's container by its name (containerName): a start removes the user's containers by their
+ * names, and `list` takes the labels' word only on a container named for them.
  */
 export class FakeRuntime implements ContainerRuntime {
   readonly containers = new Map<string, FakeContainer>();
@@ -674,11 +679,11 @@ export class FakeRuntime implements ContainerRuntime {
       .sort((a, b) => a - b);
   }
 
-  /** A container the gateway does not know about (as if left behind by someone else). */
+  /** A container the gateway does not know about (as if left behind by someone else), under a name of its own. */
   addOrphan(userId: number | null, kind: WorkspaceKind | null = "private"): string {
     const id = `orphan-${++this.#seq}`;
     const image = workspaceImage("qwen", "0.27.0");
-    this.containers.set(id, { id, userId, agent: "qwen", kind, image, version: "0.27.0", ip: null, running: true, exitCode: null, credential: null, server: null });
+    this.containers.set(id, { id, name: id, userId, agent: "qwen", kind, image, version: "0.27.0", ip: null, running: true, exitCode: null, credential: null, server: null });
     return id;
   }
 
@@ -701,8 +706,10 @@ export class FakeRuntime implements ContainerRuntime {
   }
 
   async startWorkspace(userId: number, options: WorkspaceStartOptions): Promise<StartedContainer> {
+    const { ref } = options;
+    const names = WORKSPACE_REFS.map((workspace) => containerName(userId, workspace));
     for (const container of [...this.containers.values()]) {
-      if (container.userId === userId) await this.removeContainer(container.id);
+      if (names.includes(container.name)) await this.removeContainer(container.id);
     }
     if (this.failNextStart) {
       const error = this.failNextStart;
@@ -710,27 +717,27 @@ export class FakeRuntime implements ContainerRuntime {
       throw error;
     }
     // Docker would bind-mount these; the gateway must have rendered them before the start.
-    const paths = userPaths(this.#dataDir, userId, options.kind);
+    const paths = workspacePaths(this.#dataDir, userId, ref);
     const read = (file: string): string => {
       if (!fs.existsSync(file)) throw new Error(`the gateway did not render ${file} before starting the container`);
       return fs.readFileSync(file, "utf8");
     };
-    const settingsDir = paths.agentSettings(options.agent);
-    if (!fs.existsSync(settingsDir)) throw new Error(`the gateway did not render ${settingsDir} before starting the container`);
-    const files = Object.fromEntries(fs.readdirSync(settingsDir).map((name) => [name, read(path.join(settingsDir, name))]));
+    if (!fs.existsSync(paths.settings)) throw new Error(`the gateway did not render ${paths.settings} before starting the container`);
+    const files = Object.fromEntries(fs.readdirSync(paths.settings).map((name) => [name, read(path.join(paths.settings, name))]));
     read(paths.passwd);
     read(paths.group);
 
-    const ip = this.#freeIp(options.kind);
+    const ip = this.#freeIp(ref.kind);
     const serverOptions = { readyAfterMs: this.readyAfterMs, pingIntervalMs: this.pingIntervalMs, host: ip };
-    const server = await { qwen: startFakeQwen, dsh: startFakeDsh, opencode: startFakeOpencode }[options.agent](options.credential, serverOptions);
+    const server = await { qwen: startFakeQwen, dsh: startFakeDsh, opencode: startFakeOpencode }[ref.agent](options.credential, serverOptions);
     const id = `fake-${++this.#seq}`;
     const version = parseWorkspaceImage(options.image)?.version ?? null;
     this.containers.set(id, {
       id,
+      name: containerName(userId, ref),
       userId,
-      agent: options.agent,
-      kind: options.kind,
+      agent: ref.agent,
+      kind: ref.kind,
       image: options.image,
       version,
       ip,
@@ -739,7 +746,7 @@ export class FakeRuntime implements ContainerRuntime {
       credential: options.credential,
       server,
     });
-    const parsed = (name: string): SettingsObject | null => (options.agent === "qwen" ? (JSON.parse(files[name]!) as SettingsObject) : null);
+    const parsed = (name: string): SettingsObject | null => (ref.agent === "qwen" ? (JSON.parse(files[name]!) as SettingsObject) : null);
     this.starts.push({ userId, containerId: id, options: { ...options }, files, settings: parsed("settings.json"), systemDefaults: parsed("system-defaults.json") });
     return { id, ip, port: server.port };
   }
@@ -775,16 +782,20 @@ export class FakeRuntime implements ContainerRuntime {
   }
 
   async list(): Promise<ContainerSummary[]> {
-    return [...this.containers.values()].map((c) => ({
-      id: c.id,
-      userId: c.userId,
-      agent: c.agent,
-      kind: c.kind,
-      running: c.running,
-      ip: c.ip,
-      port: c.server?.port ?? 1,
-      version: c.version,
-    }));
+    return [...this.containers.values()].map((c) => {
+      // As DockerRuntime reports it: the labels name a workspace only on a container named as that workspace's is.
+      // Its address and port are reported all the same, so that not adopting it can't hinge on their absence.
+      const labelled: WorkspaceRef | null = c.kind === null ? null : { agent: c.agent, kind: c.kind };
+      return {
+        id: c.id,
+        userId: c.userId,
+        ref: c.userId !== null && labelled !== null && c.name === containerName(c.userId, labelled) ? labelled : null,
+        running: c.running,
+        ip: c.ip,
+        port: c.server?.port ?? 1,
+        version: c.version,
+      };
+    });
   }
 
   async logsTail(id: string): Promise<string> {

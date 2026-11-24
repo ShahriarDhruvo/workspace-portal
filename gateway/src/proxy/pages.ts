@@ -1,12 +1,13 @@
 // The gateway's own pages, shown inside the portal's iframe instead of the agent's UI
-// while a workspace is starting, stopped or failing, or while the user's other kind runs. Same dark look as the
-// Web Shell and the portal. Nothing here starts a workspace by being loaded: a stopped one is started from the
-// portal, where the kind is chosen; only "Try again" after a failure (a POST) starts that port's kind again.
-import { WORKSPACE_KIND_NAMES, type WorkspaceKind } from "@portal/core";
+// while a workspace is starting, stopped or failing, or while another of the user's workspaces runs. Same dark look
+// as the Web Shell and the portal. Nothing here starts a workspace by being loaded: a stopped one is started from the
+// portal, where the kind and the agent are chosen; only "Try again" after a failure (a POST) starts that port's
+// workspace again.
+import { workspaceName, type WorkspaceRef } from "@portal/core";
 
 /** Agent-port paths under this prefix belong to the gateway and are never proxied to the workspace. */
 export const PORTAL_PATH_PREFIX = "/__portal/";
-/** POST target of the "Try again" buttons: starts that port's kind of the workspace, then redirects to /. */
+/** POST target of the "Try again" buttons: starts that port's workspace, then redirects to /. */
 export const START_PATH = `${PORTAL_PATH_PREFIX}start`;
 /**
  * A preview port's entry: `/__portal/port/<n>/<path>` serves the workspace's port n from now on, starting at
@@ -78,9 +79,9 @@ function render(options: PageOptions): string {
 
 const RETRY_FORM = `<form method="post" action="${START_PATH}"><button class="button" type="submit">Try again</button></form>`;
 
-export function startingPage(kind: WorkspaceKind): string {
+export function startingPage(ref: WorkspaceRef): string {
   return render({
-    title: `Starting your ${WORKSPACE_KIND_NAMES[kind]} workspace…`,
+    title: `Starting your ${workspaceName(ref)} workspace…`,
     text: "This usually takes a few seconds. The page reloads by itself.",
     spinner: true,
     refreshSeconds: 2,
@@ -108,19 +109,19 @@ export function capacityPage(maxRunning: number): string {
 const portalLink = (portalUrl: string): string => `<a class="button" href="${escapeHtml(portalUrl)}" target="_top">Go to the portal</a>`;
 
 /** A stopped workspace's port: it is started from the portal, where its kind is chosen and confirmed. */
-export function stoppedPage(kind: WorkspaceKind, portalUrl: string): string {
+export function stoppedPage(ref: WorkspaceRef, portalUrl: string): string {
   return render({
-    title: `Your ${WORKSPACE_KIND_NAMES[kind]} workspace is stopped`,
+    title: `Your ${workspaceName(ref)} workspace is stopped`,
     text: "Start it from the portal to continue where you left off.",
     action: portalLink(portalUrl),
   });
 }
 
-/** One kind's port while the user's other kind runs: only one runs at a time, and this port never reaches it. */
-export function otherKindPage(running: WorkspaceKind, kind: WorkspaceKind, portalUrl: string): string {
+/** A workspace's port while another of the user's workspaces runs: only one runs at a time, and this port never reaches it. */
+export function anotherRunningPage(running: WorkspaceRef, ref: WorkspaceRef, portalUrl: string): string {
   return render({
-    title: `Your ${WORKSPACE_KIND_NAMES[running]} workspace is running, not this one`,
-    text: `Only one of your workspaces runs at a time. Stop the ${WORKSPACE_KIND_NAMES[running]} one in the portal to start the ${WORKSPACE_KIND_NAMES[kind]} one.`,
+    title: `Your ${workspaceName(running)} workspace is running, not this one`,
+    text: `Only one of your workspaces runs at a time. Stop the ${workspaceName(running)} one in the portal to start the ${workspaceName(ref)} one.`,
     action: portalLink(portalUrl),
   });
 }

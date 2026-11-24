@@ -114,29 +114,33 @@ export function hostTrusted(host: string, trusted: readonly string[]): boolean {
 
 interface ShownLimits {
   /** URLs remembered per workspace; the oldest go first. */
-  urlsPerUser?: number;
+  urlsPerWorkspace?: number;
   /** Characters of URLs remembered per workspace. */
-  charsPerUser?: number;
+  charsPerWorkspace?: number;
   /** Workspaces remembered; the one unused for longest goes first (its next LLM request shows it its conversation again). */
-  users?: number;
+  workspaces?: number;
 }
 
-/** The URLs each workspace has been shown. Bounded in every direction: what goes in is chosen by pages and workspaces. */
+/**
+ * The URLs each workspace has been shown, by the workspace's number (workspaceNumber): what one was shown, no other
+ * may open on that account, not even another of the same user. Bounded in every direction: what goes in is chosen
+ * by pages and workspaces.
+ */
 export class ShownUrls {
-  readonly #byUser = new Map<number, { urls: Set<string>; chars: number }>();
-  readonly #urlsPerUser: number;
-  readonly #charsPerUser: number;
-  readonly #users: number;
+  readonly #byWorkspace = new Map<number, { urls: Set<string>; chars: number }>();
+  readonly #urlsPerWorkspace: number;
+  readonly #charsPerWorkspace: number;
+  readonly #workspaces: number;
 
   constructor(limits: ShownLimits = {}) {
-    this.#urlsPerUser = limits.urlsPerUser ?? 20_000;
-    this.#charsPerUser = limits.charsPerUser ?? 2_000_000;
-    this.#users = limits.users ?? 64;
+    this.#urlsPerWorkspace = limits.urlsPerWorkspace ?? 20_000;
+    this.#charsPerWorkspace = limits.charsPerWorkspace ?? 2_000_000;
+    this.#workspaces = limits.workspaces ?? 64;
   }
 
-  add(userId: number, urls: Iterable<string>): void {
-    const entry = this.#touch(userId) ?? { urls: new Set<string>(), chars: 0 };
-    this.#byUser.set(userId, entry);
+  add(workspace: number, urls: Iterable<string>): void {
+    const entry = this.#touch(workspace) ?? { urls: new Set<string>(), chars: 0 };
+    this.#byWorkspace.set(workspace, entry);
     for (const url of urls) {
       const canonical = canonicalUrl(url);
       if (canonical === null) continue;
@@ -145,30 +149,30 @@ export class ShownUrls {
       entry.chars += canonical.length;
     }
     for (const oldest of entry.urls) {
-      if (entry.urls.size <= this.#urlsPerUser && entry.chars <= this.#charsPerUser) break;
+      if (entry.urls.size <= this.#urlsPerWorkspace && entry.chars <= this.#charsPerWorkspace) break;
       entry.urls.delete(oldest);
       entry.chars -= oldest.length;
     }
-    for (const idle of this.#byUser.keys()) {
-      if (this.#byUser.size <= this.#users) break;
-      if (idle !== userId) this.#byUser.delete(idle);
+    for (const idle of this.#byWorkspace.keys()) {
+      if (this.#byWorkspace.size <= this.#workspaces) break;
+      if (idle !== workspace) this.#byWorkspace.delete(idle);
     }
   }
 
   /** The URL to request for `url` when the workspace was shown that page: the spelling it was shown. Null otherwise. */
-  find(userId: number, url: string): string | null {
+  find(workspace: number, url: string): string | null {
     const canonical = canonicalUrl(url);
-    const entry = canonical === null ? undefined : this.#touch(userId);
+    const entry = canonical === null ? undefined : this.#touch(workspace);
     if (canonical === null || !entry) return null;
     return spellings(canonical).find((form) => entry.urls.has(form)) ?? null;
   }
 
   /** The workspace's entry, moved to the recently used end. */
-  #touch(userId: number): { urls: Set<string>; chars: number } | undefined {
-    const entry = this.#byUser.get(userId);
+  #touch(workspace: number): { urls: Set<string>; chars: number } | undefined {
+    const entry = this.#byWorkspace.get(workspace);
     if (entry) {
-      this.#byUser.delete(userId);
-      this.#byUser.set(userId, entry);
+      this.#byWorkspace.delete(workspace);
+      this.#byWorkspace.set(workspace, entry);
     }
     return entry;
   }

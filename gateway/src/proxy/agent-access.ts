@@ -1,10 +1,10 @@
 // The checks every request to a workspace's ports (HTTP and WebSocket) passes before anything else. The port, not the
-// session, says which workspace a request is for (the user and the kind). It gets through only with a sane Host, an
-// Origin that is exactly this port's (or none) and a portal session whose current workspace is this one (an admin must
-// have opened it from the admin console). The preview ports (the agent port + PREVIEW_PORT_OFFSET) pass the same
-// checks, where a same-site page load may also open the preview in a tab of its own.
+// session, says which workspace a request is for (the user, the agent and the kind). It gets through only with a sane
+// Host, an Origin that is exactly this port's (or none) and a portal session that is using this user's workspaces (an
+// admin must have opened them from the admin console). The preview ports (the agent port + PREVIEW_PORT_OFFSET) pass
+// the same checks, where a same-site page load may also open the preview in a tab of its own.
 import type { IncomingMessage } from "node:http";
-import { agentBrowserToken, userIdForAgentPort, WORKSPACE_KIND_NAMES, WORKSPACE_KINDS, type SessionContext, type WorkspaceKind, type WorkspaceStatus } from "@portal/core";
+import { agentBrowserToken, sameWorkspace, workspaceForAgentPort, workspaceName, workspaceOf, type SessionContext, type WorkspaceInfo, type WorkspaceRef } from "@portal/core";
 import { PREVIEW_PORT_OFFSET, type Config } from "../config.ts";
 import type { ConnectionRegistry } from "./connections.ts";
 import { originMatchesHost, parseHostHeader, rejectsCrossSite, rejectsSameSite, type HostParts } from "./headers.ts";
@@ -25,10 +25,10 @@ export type AgentAccess =
       ok: true;
       host: HostParts;
       context: SessionContext;
-      /** Whose workspace this port serves, and which of that user's two. */
+      /** Whose workspace this port serves, and which of that user's. */
       userId: number;
-      kind: WorkspaceKind;
-      /** The token this session's browser must present for this workspace and kind. */
+      ref: WorkspaceRef;
+      /** The token this session's browser must present for this workspace. */
       browserToken: string;
     }
   | { ok: false; status: 400 | 401 | 403 | 404; code: string; message: string; host: HostParts | null };
@@ -36,19 +36,24 @@ export type AgentAccess =
 /** 401 for a request whose workspace token is not this session's token for this workspace. */
 export const INVALID_TOKEN = { code: "invalid_token", message: "Reload the portal page to reconnect to your workspace." } as const;
 
+/** Why a request can't reach its workspace's container; `running` is the user's workspace that holds one instead. */
+export type Unavailable = { message: string; headers: Record<string, string> } & (
+  | { status: 409; code: "another_running"; running: WorkspaceRef }
+  | { status: 503; code: "workspace_starting" | "workspace_error" | "workspace_stopped" }
+);
+
 /**
- * Why a request can't reach this kind's container: 409 while the user's other kind is starting, running or stopping
- * (only one runs at a time), else 503. Nothing here starts the workspace: an open tab's reconnect loop must not wake it.
+ * Why a request can't reach this workspace's container: 409 while another of the user's workspaces is starting,
+ * running or stopping (only one runs at a time), else 503. Nothing here starts the workspace: an open tab's
+ * reconnect loop must not wake it.
  */
-export function unavailable(
-  info: { status: WorkspaceStatus; kind: WorkspaceKind },
-  kind: WorkspaceKind,
-): { status: 409 | 503; code: string; message: string; headers: Record<string, string> } {
-  const names = WORKSPACE_KIND_NAMES;
-  if (info.kind !== kind && ["starting", "running", "stopping"].includes(info.status)) {
-    return { status: 409, code: "kind_mismatch", message: `Your ${names[info.kind]} workspace is running, not this one (${names[kind]}).`, headers: {} };
+export function unavailable(info: Pick<WorkspaceInfo, "status" | "agent" | "kind">, ref: WorkspaceRef): Unavailable {
+  const current = workspaceOf(info);
+  const own = current !== null && sameWorkspace(current, ref);
+  if (current !== null && !own && ["starting", "running", "stopping"].includes(info.status)) {
+    return { status: 409, code: "another_running", running: current, message: `Your ${workspaceName(current)} workspace is running, not this one (${workspaceName(ref)}).`, headers: {} };
   }
-  const status = info.kind === kind ? info.status : "stopped";
+  const status = own ? info.status : "stopped";
   if (status === "starting" || status === "running") {
     return { status: 503, code: "workspace_starting", message: "The workspace is starting.", headers: { "retry-after": "2" } };
   }
@@ -71,12 +76,9 @@ export function checkAgentAccess(
   const no = (status: 400 | 401 | 403 | 404, code: string, message: string): AgentAccess => ({ ok: false, status, code, message, host });
   if (!host) return no(400, "bad_request", "Missing or invalid Host header.");
   const agentPort = (req.socket.localPort ?? NaN) - (surface === "preview" ? PREVIEW_PORT_OFFSET : 0);
-  const [workspace] = WORKSPACE_KINDS.flatMap((kind) => {
-    const userId = userIdForAgentPort(config.workspace.kinds[kind].agentPortBase, config.agentPortCount, agentPort);
-    return userId === null ? [] : [{ userId, kind }];
-  });
+  const workspace = workspaceForAgentPort(config.agentPortBase, config.agentPortCount, agentPort);
   if (!workspace) return no(404, "not_found", "No workspace here.");
-  const { userId, kind } = workspace;
+  const { userId, ref } = workspace;
   const { origin } = req.headers;
   if (origin !== undefined && !originMatchesHost(origin, host)) return no(403, "forbidden_origin", "Cross-origin requests are not allowed.");
   if (rejectsCrossSite(method, req.headers, upgrade)) return no(403, "forbidden_cross_site", "Cross-site requests are not allowed.");
@@ -86,5 +88,5 @@ export function checkAgentAccess(
   const context = deps.sessions.fromCookieHeader(req.headers.cookie);
   if (!context) return no(401, "unauthenticated", "You are signed out.");
   if (context.target.id !== userId) return no(403, "other_workspace", "This session is not using this workspace.");
-  return { ok: true, host, context, userId, kind, browserToken: agentBrowserToken(config.controlSecret, context.session.id, userId, kind) };
+  return { ok: true, host, context, userId, ref, browserToken: agentBrowserToken(config.controlSecret, context.session.id, userId, ref) };
 }

@@ -14,6 +14,7 @@ import type {
   StopReason,
   WorkspaceInfo,
   WorkspaceKind,
+  WorkspaceRef,
 } from "@portal/core";
 import { config } from "./config";
 import type { DeletedSessions } from "./session-store";
@@ -104,8 +105,9 @@ export const gateway = {
   listWorkspaces: async () => (await call<{ workspaces: WorkspaceInfo[] }>("GET", "/control/workspaces")).workspaces,
   getWorkspace: (userId: number, timeoutMs?: number) => call<WorkspaceInfo>("GET", `/control/workspaces/${userId}`, { timeoutMs }),
   /**
-   * Returns once the `kind` container is started (status "starting"); poll getWorkspace until ready. One of that kind
-   * already starting or running just returns its state and calls off a pending stop.
+   * Starts the user's workspace of `kind`, the one of the harness chosen for them, and returns once its container is
+   * started (status "starting"); poll getWorkspace until ready. That workspace already starting or running just
+   * returns its state and calls off a pending stop; another of the user's is a 409 `another_running`.
    */
   start: (userId: number, kind: WorkspaceKind) =>
     call<WorkspaceInfo>("POST", `/control/workspaces/${userId}/start`, { body: { kind }, timeoutMs: START_TIMEOUT_MS }),
@@ -124,11 +126,11 @@ export const gateway = {
   disconnect: (sessionId: string) =>
     call<{ closed: number }>("POST", `/control/sessions/${encodeURIComponent(sessionId)}/disconnect`),
   /**
-   * Erases one kind's files (its home and workspace folders, left empty): 409 `workspace_running` while that kind
-   * is starting, running or stopping. The gateway writes the `workspace_files_erased` audit entry.
+   * Erases one workspace's files (its home and workspace folders, left empty): 409 `workspace_running` while that
+   * workspace is starting, running or stopping. The gateway writes the `workspace_files_erased` audit entry.
    */
-  eraseFiles: (userId: number, kind: WorkspaceKind, actorUserId: number) =>
-    call<{ ok: true }>("DELETE", `/control/workspaces/${userId}/files?kind=${kind}`, {
+  eraseFiles: (userId: number, workspace: WorkspaceRef, actorUserId: number) =>
+    call<{ ok: true }>("DELETE", `/control/workspaces/${userId}/files?kind=${workspace.kind}&agent=${workspace.agent}`, {
       body: { actorUserId },
       timeoutMs: STOP_TIMEOUT_MS,
     }),

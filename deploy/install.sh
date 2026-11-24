@@ -52,10 +52,21 @@ mapfile -t FIREWALL_ENV < <(
   echo "NEVER_REACH=$NEVER_REACH"
 )
 env "${FIREWALL_ENV[@]}" bash deploy/firewall.sh check || die "the firewall rules do not load with the settings in .env (see above)"
-for key in WORKSPACE_UID_BASE ONLINE_UID_BASE; do
-  overlaps=$(subid_overlaps "$key")
-  [[ -z $overlaps ]] || die "the workspace UIDs of $key overlap the ranges of:$overlaps. Those accounts could read workspace files: set $key in .env to a free range"
+overlaps=$(subid_overlaps)
+[[ -z $overlaps ]] || die "the workspace UIDs (WORKSPACE_UID_BASE in .env) overlap the ranges of:$overlaps. Those accounts could read workspace files: set WORKSPACE_UID_BASE to a free range"
+# A port of the stack among the workspaces': the gateway refuses to start with one of its own there
+# (numberingProblems in gateway/src/config.ts), and the reader's or SearXNG's there is one a workspace needs. (A
+# value that is no number is docker compose's or the gateway's to report.)
+read -r WORKSPACE_PORTS PREVIEW_PORTS < <(port_ranges)
+inside=""
+for key in WEB_PORT CONTROL_PORT SERVICE_PORT SEARXNG_PORT READER_PORT; do
+  port=$(env_get "$key")
+  [[ $port =~ ^[0-9]+$ ]] || continue
+  for range in "$WORKSPACE_PORTS" "$PREVIEW_PORTS"; do
+    ((10#$port < ${range%-*} || 10#$port > ${range#*-})) || inside+=" $key ($port)"
+  done
 done
+[[ -z $inside ]] || die "in .env:$inside must lie outside the workspaces' ports ($WORKSPACE_PORTS) and their previews' ($PREVIEW_PORTS). AGENT_PORT_BASE and AGENT_PORT_COUNT give those ranges: set them as .env.example does ($(env_value .env.example AGENT_PORT_BASE) and $(env_value .env.example AGENT_PORT_COUNT)) or to another free range, then run this again. Behind deploy/tailscale-https.sh, a change of these ports has that script run with \"off\" before it and again after it. An install from before every agent had its own workspaces: see \"Update and uninstall\" in README.md"
 # A program holding a loopback port of the stack would stop it halfway through its start.
 for service in searxng reader; do
   port=$(env_get "${service^^}_PORT")
@@ -133,8 +144,7 @@ systemctl enable --quiet workspace-portal-firewall.service
 systemctl reload-or-restart workspace-portal-firewall.service
 
 WEB_PORT=$(env_get WEB_PORT)
-read -r AGENT_PORTS ONLINE_AGENT_PORTS PREVIEW_PORTS ONLINE_PREVIEW_PORTS < <(port_ranges)
-PORTS="$WEB_PORT $AGENT_PORTS $ONLINE_AGENT_PORTS $PREVIEW_PORTS $ONLINE_PREVIEW_PORTS"
+PORTS="$WEB_PORT $WORKSPACE_PORTS $PREVIEW_PORTS"
 if systemctl is-active --quiet firewalld; then
   sources=$(portal_sources)
   [[ -n $sources ]] || warn "firewalld: no LAN found: set FIREWALL_ALLOW_SOURCE in .env and run this again"
@@ -184,8 +194,8 @@ cat <<DONE
   Workspace Portal is running.
 
     Portal:     $(portal_url)
-    Workspaces: Private ports $AGENT_PORTS, Online ports $ONLINE_AGENT_PORTS (one per user and kind)
-    Previews:   Private ports $PREVIEW_PORTS, Online ports $ONLINE_PREVIEW_PORTS (the apps running in them)
+    Workspaces: ports $WORKSPACE_PORTS (each workspace has its own: one per user, agent and kind)
+    Previews:   ports $PREVIEW_PORTS (the apps running in a workspace, $PREVIEW_PORT_OFFSET above its port)
     Online:     $ONLINE
     Admin:      $(env_get ADMIN_USERNAME)   (first sign-in: grep ^ADMIN_PASSWORD $ENV_FILE; you choose a new one then)
 $(for agent in "${ENABLED_AGENTS[@]}"; do printf '    Agent:      %s %s\n' "${AGENT_NAME[$agent]}" "$(agent_version "$agent")"; done)

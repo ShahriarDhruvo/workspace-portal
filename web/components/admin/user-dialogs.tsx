@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useEffectEvent, useRef, useState, type ReactNode, type RefObject } from "react";
+import { AGENT_NAMES, sameWorkspace, WORKSPACE_KIND_NAMES, WORKSPACE_REFS, type WorkspaceRef } from "@portal/core/wire";
 import {
   deleteUser,
   eraseWorkspaceFiles,
@@ -26,12 +27,15 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { Field, FieldContent, FieldDescription, FieldLabel, FieldTitle } from "@/components/ui/field";
+import { GlobeIcon, LockIcon } from "@/components/ui/icons";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { BusyWarning } from "@/components/workspace/busy-warning";
 
 // The admin's actions on one user (stop the workspace, reset the password, deactivate, activate, delete, erase one
-// kind's files, turn Online off while it runs), each as a confirmation dialog bound to its server action. A dialog
-// closes itself once its action succeeds, except a password reset, which shows the new temporary password once.
-// Deleting asks for the username first.
+// workspace's files, turn Online off while it runs), each as a confirmation dialog bound to its server action. A
+// dialog closes itself once its action succeeds, except a password reset, which shows the new temporary password
+// once. Deleting asks for the username first, erasing for the workspace.
 
 export type UserDialogKind =
   | "stop"
@@ -39,8 +43,7 @@ export type UserDialogKind =
   | "deactivate"
   | "activate"
   | "delete"
-  | "erasePrivate"
-  | "eraseOnline"
+  | "erase"
   | "onlineOff";
 
 export interface DialogUser {
@@ -49,6 +52,8 @@ export interface DialogUser {
   username: string;
   /** The user's agent is working right now (the dialogs that stop the workspace at once warn). */
   busy?: boolean;
+  /** The one of the user's workspaces that is starting, running or stopping: its files can't be erased. */
+  running?: WorkspaceRef | null;
 }
 
 const TITLES: Record<UserDialogKind, string> = {
@@ -57,8 +62,7 @@ const TITLES: Record<UserDialogKind, string> = {
   deactivate: "Deactivate user?",
   activate: "Activate user?",
   delete: "Delete user?",
-  erasePrivate: "Erase Private files?",
-  eraseOnline: "Erase Online files?",
+  erase: "Erase workspace files?",
   onlineOff: "Turn off Online workspace?",
 };
 
@@ -215,27 +219,8 @@ function UserDialogBody({ kind, user, onDone }: { kind: UserDialogKind; user: Di
       );
     case "delete":
       return <DeleteUserForm user={user} whose={whose} onDone={onDone} />;
-    case "erasePrivate":
-    case "eraseOnline": {
-      const [erased, kept] = kind === "erasePrivate" ? ["Private", "Online"] : ["Online", "Private"];
-      return (
-        <ActionForm
-          user={user}
-          action={eraseWorkspaceFiles}
-          onDone={onDone}
-          danger
-          confirmLabel="Erase files"
-          pendingLabel="Erasing…"
-          fields={<input type="hidden" name="kind" value={erased.toLowerCase()} />}
-          description={
-            <p>
-              This permanently erases every file in {whose} {erased} workspace, its home folder included. The {kept}{" "}
-              workspace is not touched. This can&apos;t be undone.
-            </p>
-          }
-        />
-      );
-    }
+    case "erase":
+      return <EraseFilesForm user={user} whose={whose} onDone={onDone} />;
     case "onlineOff":
       return (
         <ActionForm
@@ -283,7 +268,7 @@ function DeleteUserForm({ user, whose, onDone }: { user: DialogUser; whose: Reac
               <BusyWarning whose={whose} effect="Deleting the user ends it mid-way." />
             </p>
           ) : null}
-          <p>This permanently deletes {whose} account and every file in their workspace. This can&apos;t be undone.</p>
+          <p>This permanently deletes {whose} account and every file in their workspaces. This can&apos;t be undone.</p>
         </>
       }
       fields={
@@ -297,6 +282,82 @@ function DeleteUserForm({ user, whose, onDone }: { user: DialogUser; whose: Reac
           value={typed}
           onChange={(event) => setTyped(event.target.value)}
         />
+      }
+    />
+  );
+}
+
+/** A workspace as a radio value, and in its radio's id. */
+function radioValue(workspace: WorkspaceRef): string {
+  return `${workspace.agent}-${workspace.kind}`;
+}
+
+/**
+ * Erasing empties one workspace, so the button stays disabled until one is chosen: a radio card for each the user
+ * has, an agent's two side by side. The one that is starting, running or stopping can't be chosen (the gateway
+ * refuses it) and says so. Two columns on a phone too: the dialog doesn't scroll, and six cards in one column are
+ * taller than a small screen.
+ */
+function EraseFilesForm({ user, whose, onDone }: { user: DialogUser; whose: ReactNode; onDone: () => void }) {
+  const [chosen, setChosen] = useState<WorkspaceRef | null>(null);
+  return (
+    <ActionForm
+      user={user}
+      action={eraseWorkspaceFiles}
+      onDone={onDone}
+      danger
+      confirmLabel="Erase files"
+      pendingLabel="Erasing…"
+      blocked={chosen === null}
+      description={
+        <p>
+          This permanently erases every file in the workspace you choose, its home folder included. {whose} other
+          workspaces are not touched. This can&apos;t be undone.
+        </p>
+      }
+      fields={
+        <>
+          <RadioGroup
+            value={chosen ? radioValue(chosen) : null}
+            onValueChange={(next) => {
+              // Only a card's value: React resets the form after the action, which the group reports as no choice,
+              // and a refused erase keeps its choice beside the reason.
+              const workspace = WORKSPACE_REFS.find((candidate) => radioValue(candidate) === next);
+              if (workspace) setChosen(workspace);
+            }}
+            aria-label="Workspace to erase"
+            className="grid-cols-2"
+          >
+            {WORKSPACE_REFS.map((workspace) => {
+              const value = radioValue(workspace);
+              const Icon = workspace.kind === "online" ? GlobeIcon : LockIcon;
+              const running = user.running ? sameWorkspace(workspace, user.running) : false;
+              return (
+                <FieldLabel key={value} htmlFor={`erase-${value}`}>
+                  <Field orientation="horizontal" data-disabled={running ? true : undefined}>
+                    <FieldContent>
+                      <FieldTitle>{AGENT_NAMES[workspace.agent]}</FieldTitle>
+                      <FieldDescription className="text-13">
+                        <span className="flex items-center gap-1.5 group-data-[disabled=true]/field:opacity-50">
+                          <Icon className="size-3.5 shrink-0" />
+                          {WORKSPACE_KIND_NAMES[workspace.kind]}
+                        </span>
+                        {running ? "Running. Stop it first." : null}
+                      </FieldDescription>
+                    </FieldContent>
+                    <RadioGroupItem value={value} id={`erase-${value}`} disabled={running} />
+                  </Field>
+                </FieldLabel>
+              );
+            })}
+          </RadioGroup>
+          {chosen ? (
+            <>
+              <input type="hidden" name="agent" value={chosen.agent} />
+              <input type="hidden" name="kind" value={chosen.kind} />
+            </>
+          ) : null}
+        </>
       }
     />
   );

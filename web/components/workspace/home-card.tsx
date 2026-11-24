@@ -5,11 +5,11 @@ import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import { AGENT_NAMES, WORKSPACE_KIND_NAMES, type AgentKind, type WorkspaceKind, type WorkspaceStatus } from "@portal/core/wire";
 import { saveHarness } from "@/lib/actions/settings";
-import { fetchJson, needsReauth, startWorkspace, stopWorkspace } from "@/lib/fetch-json";
+import { needsReauth, startRefusal, startWorkspace, stopWorkspace } from "@/lib/fetch-json";
 import { formatVersion, stopReasonText, workspaceState } from "@/lib/format";
 import type { WorkspaceStatusResponse } from "@/lib/api";
 import type { ActionResult } from "@/lib/validation";
-import { initialKind, onlineAccessAfter, otherKind, startErrorText } from "@/lib/workspace-kind";
+import { initialKind, onlineAccessAfter, otherKind } from "@/lib/workspace-kind";
 import { stopWarnings } from "@/lib/workspace-stop";
 import { usePoll } from "@/components/common/use-poll";
 import { FormError } from "@/components/forms/form-error";
@@ -50,7 +50,7 @@ export function HomeCard({ initial, initialError, idleTimeoutMinutes }: HomeCard
   const [startedKind, setStartedKind] = useState<WorkspaceKind>("private");
   /**
    * Why the last Start or Stop failed, and the workspace's status then: it shows while the workspace stays in that
-   * status (the other kind running, all slots busy) and goes once that changes (stopped by the administrator).
+   * status (another one running, all slots busy) and goes once that changes (stopped by the administrator).
    */
   const [actionError, setActionError] = useState<{ message: string; status: WorkspaceStatus | null } | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -92,10 +92,10 @@ export function HomeCard({ initial, initialError, idleTimeoutMinutes }: HomeCard
     // Refused for Online access: the picker shows Online unavailable at once, not after the next poll.
     const online = onlineAccessAfter(result.error);
     if (online) setInfo((current) => (current ? { ...current, online } : current));
-    // The refusal may come from a change elsewhere (the other kind started in another tab): show it now.
-    const fresh = await fetchJson<WorkspaceStatusResponse>("/api/workspace/status");
-    if (fresh.ok) setInfo(fresh.data);
-    setActionError({ message: startErrorText(result.error, kind, "Your"), status: fresh.ok ? fresh.data.status : status });
+    // The refusal may come from a change elsewhere (another workspace started in another tab): show it now.
+    const refusal = await startRefusal(result.error, "Your");
+    if (refusal.info) setInfo(refusal.info);
+    setActionError({ message: refusal.message, status: refusal.info?.status ?? status });
   }
 
   async function stop(): Promise<ActionResult> {

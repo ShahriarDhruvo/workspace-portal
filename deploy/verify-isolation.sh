@@ -15,19 +15,20 @@ load_enabled_agents
 NETWORK=$(env_get WORKSPACE_NETWORK) BRIDGE=$(env_get WORKSPACE_BRIDGE) SUBNET=$(env_get WORKSPACE_SUBNET)
 GW=$(env_get WORKSPACE_GATEWAY_IP) UID_BASE=$(env_get WORKSPACE_UID_BASE)
 ONLINE_NETWORK=$(env_get ONLINE_NETWORK) ONLINE_BRIDGE=$(env_get ONLINE_BRIDGE) ONLINE_SUBNET=$(env_get ONLINE_SUBNET)
-ONLINE_GW=$(env_get ONLINE_GATEWAY_IP) ONLINE_RANGE=$(env_get ONLINE_IP_RANGE) ONLINE_UID_BASE=$(env_get ONLINE_UID_BASE)
+ONLINE_GW=$(env_get ONLINE_GATEWAY_IP) ONLINE_RANGE=$(env_get ONLINE_IP_RANGE)
 ONLINE_DNS_1=$(env_get ONLINE_DNS_1) ONLINE_DNS_2=$(env_get ONLINE_DNS_2)
 ONLINE_ON=false
 if online_enabled; then ONLINE_ON=true; fi
-declare -A KIND_NETWORK=([private]="$NETWORK" [online]="$ONLINE_NETWORK") KIND_UID_BASE=([private]="$UID_BASE" [online]="$ONLINE_UID_BASE")
-declare -A KIND_PREFIX=([private]=wp-ws- [online]=wp-wo-)
+declare -A KIND_NETWORK=([private]="$NETWORK" [online]="$ONLINE_NETWORK")
 # The port each agent listens on in a workspace, as its driver in gateway/src/agents/.
 declare -A AGENT_PORT=([qwen]=4170 [dsh]=3080 [opencode]=4096)
 SERVICE_PORT=$(env_get SERVICE_PORT) CONTROL_PORT=$(env_get CONTROL_PORT) WEB_PORT=$(env_get WEB_PORT)
 # The portal's port on this host's addresses: behind deploy/tailscale-https.sh, 443 on Tailscale's.
 PORTAL_PORT=$WEB_PORT
 ! env_is PORTAL_HTTPS true || PORTAL_PORT=443
-read -r AGENT_PORTS ONLINE_AGENT_PORTS PREVIEW_PORTS ONLINE_PREVIEW_PORTS < <(port_ranges)
+# The workspace ports the probes try, each with its preview's: user 1's Private and Online workspace of the first agent.
+PRIVATE_PORT=$(($(env_get AGENT_PORT_BASE) + $(workspace_number 1 "${AGENTS[0]}" private)))
+ONLINE_PORT=$(($(env_get AGENT_PORT_BASE) + $(workspace_number 1 "${AGENTS[0]}" online)))
 DATA_DIR=$(env_get PORTAL_DATA_DIR)
 ROUTER=$(routers | head -n 1)
 HOST_ADDRESSES=$(ip -4 -o addr show | awk '$4 !~ /^127\./ {sub("/.*", "", $4); print $4}')
@@ -95,10 +96,8 @@ print(" ".join(str(n) for n in wanted if not any(n.subnet_of(l) for l in loaded)
 check "firewall set never covers this host's networks and the servers the portal talks to ($never_now)${never_missing:+; missing: $never_missing: run sudo bash deploy/install.sh}" '[[ -n $never_now && -z $never_missing ]]'
 resolvers=$(bad_resolvers "$never_now")
 check "the resolvers of the Online workspaces, the reader and SearXNG are public, outside the never set${resolvers:+ (not:$resolvers)}" '[[ -z $resolvers ]]'
-for key in WORKSPACE_UID_BASE ONLINE_UID_BASE; do
-  overlaps=$(subid_overlaps "$key")
-  check "no /etc/subuid or /etc/subgid range overlaps the workspace UIDs of $key${overlaps:+ (overlapping:$overlaps)}" '[[ -z $overlaps ]]'
-done
+overlaps=$(subid_overlaps)
+check "no /etc/subuid or /etc/subgid range overlaps the workspace UIDs (WORKSPACE_UID_BASE)${overlaps:+ (overlapping:$overlaps)}" '[[ -z $overlaps ]]'
 
 # The Online network is a NAT bridge. Its firewall chains are loaded whether or not Online is on.
 if ! $ONLINE_ON; then
@@ -132,22 +131,25 @@ for id in $running; do
   label() { inspect "$id" "{{index .Config.Labels \"workspace-portal.$1\"}}"; }
   name=$(inspect "$id" '{{.Name}}') user_id=$(label user-id) agent=$(label agent) kind=$(label kind)
   name=${name#/}
-  if [[ -z ${KIND_PREFIX[${kind:-?}]-} || ! $user_id =~ ^[1-9][0-9]*$ ]]; then
-    bad "$name is a user's Private or Online workspace (labels workspace-portal.kind=$kind, user-id=$user_id)"
+  if [[ ! $user_id =~ ^[1-9][0-9]*$ || -z ${AGENT_NAME[${agent:-?}]-} || -z ${KIND_NETWORK[${kind:-?}]-} ]]; then
+    bad "$name is a user's workspace of a known agent, Private or Online (labels workspace-portal.user-id=$user_id, agent=$agent, kind=$kind)"
     continue
   fi
-  own_network=${KIND_NETWORK[$kind]} own_uid=$((KIND_UID_BASE[$kind] + user_id))
-  check "$name is user $user_id's only running workspace (one kind at a time)" '[[ $seen_users != *" $user_id "* ]]'
+  own_network=${KIND_NETWORK[$kind]} own_uid=$((UID_BASE + $(workspace_number "$user_id" "$agent" "$kind")))
+  own_dir=$DATA_DIR/users/$user_id/$agent/$kind
+  check "$name is user $user_id's only running workspace (one of a user's at a time)" '[[ $seen_users != *" $user_id "* ]]'
   seen_users+="$user_id "
-  check "$name is the $kind workspace of user $user_id (${KIND_PREFIX[$kind]}$user_id)" '[[ $name == "${KIND_PREFIX[$kind]}$user_id" ]]'
-  check "$name runs a known agent ($agent)" '[[ -n ${AGENT_NAME[${agent:-?}]-} ]]'
-  check "$name runs as its own $kind UID ($own_uid)" '[[ $(inspect "$id" "{{.Config.User}}") == "$own_uid:$own_uid" ]]'
+  check "$name is named as its labels say: user $user_id's ${kind^} ${AGENT_NAME[$agent]} workspace (wp-$agent-$kind-$user_id)" '[[ $name == "wp-$agent-$kind-$user_id" ]]'
+  check "$name runs as its workspace's own UID ($own_uid)" '[[ $(inspect "$id" "{{.Config.User}}") == "$own_uid:$own_uid" ]]'
   check "$name: read-only root, all capabilities dropped, no-new-privileges, not privileged" \
     '[[ $(inspect "$id" "{{.HostConfig.ReadonlyRootfs}} {{.HostConfig.CapDrop}} {{.HostConfig.SecurityOpt}} {{.HostConfig.Privileged}}") == "true [ALL] [no-new-privileges:true] false" ]]'
   check "$name: only on $own_network, no published ports" \
     '[[ $(inspect "$id" "{{.HostConfig.NetworkMode}} {{len .HostConfig.PortBindings}} {{len .NetworkSettings.Networks}}") == "$own_network 0 1" ]]'
-  foreign=$(inspect "$id" '{{range .Mounts}}{{println .Source}}{{end}}' | grep -v -e '^$' -e "^$DATA_DIR/users/$user_id/$kind/" || true)
-  check "$name mounts only its own user's $kind folders" '[[ -z $foreign ]]'
+  mounts=$(inspect "$id" '{{range .Mounts}}{{println .Source .Destination}}{{end}}')
+  check "$name mounts its own home and workspace folders (users/$user_id/$agent/$kind)" \
+    'grep -qxF "$own_dir/home /home/user" <<<"$mounts" && grep -qxF "$own_dir/workspace /workspace" <<<"$mounts"'
+  foreign=$(awk -v own="$own_dir/" 'NF && index($0, own) != 1' <<<"$mounts")
+  check "$name mounts nothing from outside users/$user_id/$agent/$kind: no other workspace's folder, user $user_id's other agents and kinds included${foreign:+ (also: ${foreign//$'\n'/, })}" '[[ -z $foreign ]]'
   if [[ $kind == online ]]; then
     check "$name resolves names only through $ONLINE_DNS_1 and $ONLINE_DNS_2" '[[ $(inspect "$id" "{{.HostConfig.Dns}}") == "[$ONLINE_DNS_1 $ONLINE_DNS_2]" ]]'
     check "$name runs while Online workspaces are on (ONLINE_WORKSPACES)" '$ONLINE_ON'
@@ -155,8 +157,14 @@ for id in $running; do
 done
 
 echo "== workspace folders"
-# Ownership is the access model: root's folders hold each kind's, which only that kind's UID may enter.
+# Ownership is the access model: root's folders hold each workspace's, which only that workspace's UID may enter.
 owner_mode() { stat -c '%u:%g %a' "$1" 2>/dev/null || echo missing; }
+# What a folder holds besides the names given, as " name name".
+strangers() { # folder name...
+  local known=() name
+  for name in "${@:2}"; do known+=(! -name "$name"); done
+  find "$1" -mindepth 1 -maxdepth 1 "${known[@]}" -printf ' %f'
+}
 check "users/ is root's, mode 0711" '[[ $(owner_mode "$DATA_DIR/users") == "0:0 711" ]]'
 for dir in "$DATA_DIR"/users/*; do
   [[ -e $dir ]] || continue
@@ -166,22 +174,36 @@ for dir in "$DATA_DIR"/users/*; do
     continue
   fi
   check "users/$user_id is root's, mode 0711" '[[ $(owner_mode "$dir") == "0:0 711" ]]'
-  others=$(find "$dir" -mindepth 1 -maxdepth 1 ! -name private ! -name online -printf ' %f')
-  check "users/$user_id holds nothing but private/ and online/${others:+ (also:$others)}" '[[ -z $others ]]'
-  for kind in private online; do
-    [[ -e $dir/$kind ]] || continue
-    uid=$((KIND_UID_BASE[$kind] + user_id))
-    check "users/$user_id/$kind is root's, mode 0711" '[[ $(owner_mode "$dir/$kind") == "0:0 711" ]]'
-    for sub in home workspace; do
-      [[ ! -e $dir/$kind/$sub ]] || check "users/$user_id/$kind/$sub belongs to the $kind UID $uid alone, mode 0700" '[[ $(owner_mode "$dir/$kind/$sub") == "$uid:$uid 700" ]]'
+  others=$(strangers "$dir" "${AGENTS[@]}")
+  check "users/$user_id holds nothing but a folder per agent (${AGENTS[*]})${others:+ (also:$others)}" '[[ -z $others ]]'
+  for agent in "${AGENTS[@]}"; do
+    [[ -e $dir/$agent ]] || continue
+    check "users/$user_id/$agent is root's, mode 0711" '[[ $(owner_mode "$dir/$agent") == "0:0 711" ]]'
+    others=$(strangers "$dir/$agent" "${WORKSPACE_KINDS[@]}")
+    check "users/$user_id/$agent holds nothing but private/ and online/${others:+ (also:$others)}" '[[ -z $others ]]'
+    for kind in "${WORKSPACE_KINDS[@]}"; do
+      folder=users/$user_id/$agent/$kind
+      [[ -e $DATA_DIR/$folder ]] || continue
+      uid=$((UID_BASE + $(workspace_number "$user_id" "$agent" "$kind")))
+      check "$folder is root's, mode 0711" '[[ $(owner_mode "$DATA_DIR/$folder") == "0:0 711" ]]'
+      for sub in home workspace; do
+        [[ ! -e $DATA_DIR/$folder/$sub ]] || check "$folder/$sub belongs to its workspace's UID $uid alone, mode 0700" '[[ $(owner_mode "$DATA_DIR/$folder/$sub") == "$uid:$uid 700" ]]'
+      done
+      [[ ! -e $DATA_DIR/$folder/system ]] || check "$folder/system is root's, mode 0755" '[[ $(owner_mode "$DATA_DIR/$folder/system") == "0:0 755" ]]'
     done
-    [[ ! -e $dir/$kind/system ]] || check "users/$user_id/$kind/system is root's, mode 0755" '[[ $(owner_mode "$dir/$kind/system") == "0:0 755" ]]'
   done
 done
+# Whatever the folders are called: a UID with folders in two places would be two workspaces' owner. (find stops at
+# what is not root's, so it reads no name in a workspace's own folders.)
+shared=$(find "$DATA_DIR/users" -mindepth 1 -maxdepth 4 ! -uid 0 -prune -printf '%U\t%P\n' 2>/dev/null | awk -F'\t' '
+  { sub("/[^/]*$", "", $2) }
+  !seen[$1, $2]++ { places[$1] = places[$1] " users/" $2; count[$1]++ }
+  END { for (uid in count) if (count[uid] > 1) printf " %s (%s)", uid, substr(places[uid], 2) }' || true)
+check "no UID owns folders of two workspaces${shared:+ (shared:$shared)}" '[[ -z $shared ]]'
 
 # "address port label" of TCP targets no workspace of either kind may reach.
 closed=("$GW 22 host SSH via the bridge" "$GW $WEB_PORT the portal via the bridge" "$GW $CONTROL_PORT the gateway control API"
-  "$GW ${AGENT_PORTS%-*} a workspace port via the bridge" "$GW ${PREVIEW_PORTS%-*} a preview port via the bridge"
+  "$GW $PRIVATE_PORT a workspace port via the bridge" "$GW $((PRIVATE_PORT + PREVIEW_PORT_OFFSET)) a preview port via the bridge"
   "1.1.1.1 443 the internet" "8.8.8.8 53 public DNS over TCP" "$GW $READER_PORT the page reader via the bridge")
 for address in $HOST_ADDRESSES; do
   [[ $address == "$GW" ]] || closed+=("$address 22 SSH on host address $address" "$address $PORTAL_PORT the portal on host address $address")
@@ -224,8 +246,8 @@ workspace_peers() { # network
 mapfile -t private_peers < <(workspace_peers "$NETWORK")
 mapfile -t online_peers < <(workspace_peers "$ONLINE_NETWORK")
 closed+=("${private_peers[@]/%/ another workspace}")
-private_closed=("$ONLINE_GW $SERVICE_PORT the Online service listener" "$GW ${ONLINE_AGENT_PORTS%-*} an Online workspace port via the bridge"
-  "$GW ${ONLINE_PREVIEW_PORTS%-*} an Online preview port via the bridge" "${online_peers[@]/%/ an Online workspace}")
+private_closed=("$ONLINE_GW $SERVICE_PORT the Online service listener" "$GW $ONLINE_PORT an Online workspace port via the bridge"
+  "$GW $((ONLINE_PORT + PREVIEW_PORT_OFFSET)) an Online preview port via the bridge" "${online_peers[@]/%/ an Online workspace}")
 
 # Runs in a throwaway workspace container (KIND private or online) and inside the reader and SearXNG (KIND inside):
 # what KIND must and must not reach, and what the container runs with.
@@ -306,15 +328,15 @@ other_resolver() { # settings-prefix
 }
 NAME="wp-isolation-probe-$$"
 trap 'docker rm -f "$NAME" >/dev/null 2>&1 || true' EXIT
-# The probe as a workspace of a kind runs, from every enabled agent's image: that kind's network, a UID in its range
-# that no user has, the same restrictions.
-workspace_probe() { # kind network uid-base [docker run options...]
-  local kind=$1 network=$2 uid=$(($3 + 99999)) agent image
-  shift 3
+# The probe as a workspace of a kind runs, from every enabled agent's image: that kind's network, the same
+# restrictions, and a UID no workspace has (WORKSPACE_UID_BASE itself: the workspaces' begin a block above it).
+workspace_probe() { # kind network [docker run options...]
+  local kind=$1 network=$2 agent image
+  shift 2
   for agent in "${ENABLED_AGENTS[@]}"; do
     image=$(workspace_image "$agent")
     echo "-- from the ${AGENT_NAME[$agent]} image ($image), as ${kind^} workspaces run"
-    tally "$image" "$(docker run --rm --pull never --name "$NAME" --network "$network" --user "$uid:$uid" \
+    tally "$image" "$(docker run --rm --pull never --name "$NAME" --network "$network" --user "$UID_BASE:$UID_BASE" \
       --read-only --tmpfs /tmp:rw,nosuid,nodev,size=16m --cap-drop ALL --security-opt no-new-privileges \
       --pids-limit 128 --memory 256m -e KIND="$kind" -e SERVICE_PORT="$SERVICE_PORT" -e ROUTER="$ROUTER" "$@" \
       --entrypoint python3 "$image" -I -c "$PROBE" 2>&1 || true)"
@@ -322,7 +344,7 @@ workspace_probe() { # kind network uid-base [docker run options...]
 }
 
 echo "== reachability from a Private workspace"
-workspace_probe private "$NETWORK" "$UID_BASE" -e GW="$GW" -e OPEN="$GW $SERVICE_PORT the gateway service port (model and search)" \
+workspace_probe private "$NETWORK" -e GW="$GW" -e OPEN="$GW $SERVICE_PORT the gateway service port (model and search)" \
   -e CLOSED="$(printf '%s\n' "${closed[@]}" "${private_closed[@]}")"
 
 echo "== reachability from an Online workspace"
@@ -335,17 +357,17 @@ else
   # too), and the host's ports on the Online bridge, the Private listener and the other Online workspaces.
   online_closed=("$GW $SERVICE_PORT the Private service listener" "$ONLINE_GW 22 host SSH via the Online bridge"
     "$ONLINE_GW $WEB_PORT the portal via the Online bridge" "$ONLINE_GW $CONTROL_PORT the gateway control API via the Online bridge"
-    "$ONLINE_GW ${AGENT_PORTS%-*} a Private workspace port via the Online bridge"
-    "$ONLINE_GW ${ONLINE_AGENT_PORTS%-*} an Online workspace port via the Online bridge"
-    "$ONLINE_GW ${PREVIEW_PORTS%-*} a Private preview port via the Online bridge"
-    "$ONLINE_GW ${ONLINE_PREVIEW_PORTS%-*} an Online preview port via the Online bridge"
+    "$ONLINE_GW $PRIVATE_PORT a Private workspace port via the Online bridge"
+    "$ONLINE_GW $ONLINE_PORT an Online workspace port via the Online bridge"
+    "$ONLINE_GW $((PRIVATE_PORT + PREVIEW_PORT_OFFSET)) a Private preview port via the Online bridge"
+    "$ONLINE_GW $((ONLINE_PORT + PREVIEW_PORT_OFFSET)) an Online preview port via the Online bridge"
     "$ONLINE_GW $READER_PORT the page reader via the Online bridge" "$ONLINE_GW $SEARXNG_PORT SearXNG via the Online bridge"
     "${online_peers[@]/%/ another Online workspace}")
   for target in "${closed[@]}"; do
     [[ $target == *"the internet" || $target == *"public DNS over TCP" ]] || online_closed+=("$target")
   done
   for target in "${host_local[@]}"; do online_closed+=("$ONLINE_GW $target via the Online bridge"); done
-  workspace_probe online "$ONLINE_NETWORK" "$ONLINE_UID_BASE" --dns "$ONLINE_DNS_1" --dns "$ONLINE_DNS_2" --dns-search . \
+  workspace_probe online "$ONLINE_NETWORK" --dns "$ONLINE_DNS_1" --dns "$ONLINE_DNS_2" --dns-search . \
     -e GW="$ONLINE_GW" -e DNS_1="$ONLINE_DNS_1" -e OTHER_DNS="$(other_resolver ONLINE_DNS)" -e CLOSED="$(printf '%s\n' "${online_closed[@]}")" \
     -e OPEN="$(printf '%s\n' "$ONLINE_GW $SERVICE_PORT its gateway service port (model and search)" "1.1.1.1 443 the public internet" \
       "1.1.1.1 853 a public port other than 80 and 443" "github.com 22 a public host by name, on another port")"

@@ -43,10 +43,10 @@ export function createWsRelay(deps: AgentDeps): (req: IncomingMessage, socket: D
     if (presented !== null && !tokensEqual(presented, access.browserToken)) {
       return rejectUpgrade(socket, 401, INVALID_TOKEN.code, INVALID_TOKEN.message);
     }
-    // Only this port's kind: while the user's other kind runs, no socket here reaches it.
-    const upstream = deps.manager.upstream(access.userId, access.kind);
+    // Only this port's workspace: while another of the user's runs, no socket here reaches it.
+    const upstream = deps.manager.upstream(access.userId, access.ref);
     if (!upstream) {
-      const no = unavailable(deps.manager.info(access.userId), access.kind);
+      const no = unavailable(deps.manager.info(access.userId), access.ref);
       return rejectUpgrade(socket, no.status, no.code, no.message, no.headers);
     }
     const driver = driverFor(upstream.agent);

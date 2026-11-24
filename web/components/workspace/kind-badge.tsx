@@ -3,7 +3,7 @@ import { Badge } from "@/components/ui/badge";
 import { GlobeIcon, LockIcon } from "@/components/ui/icons";
 
 /**
- * Which of the user's two workspaces runs. `compact` (the workspace bar): only the icon on phones, the name kept for
+ * The kind of the workspace that runs. `compact` (the workspace bar): only the icon on phones, the name kept for
  * screen readers.
  */
 export function KindBadge({ kind, compact = false }: { kind: WorkspaceKind; compact?: boolean }) {

@@ -38,18 +38,15 @@ function controlSecret(): string {
 }
 
 const dataDir = text("PORTAL_DATA_DIR", "/srv/workspace-portal");
-const agentPortBase = positiveInt("AGENT_PORT_BASE", 3100);
-const agentPortCount = positiveInt("AGENT_PORT_COUNT", 200);
 
 export const config = {
   dbFile: path.join(dataDir, "db", "portal.sqlite"),
   /**
-   * User N's Private workspace is served by the gateway on port agentPortBase + N, the Online one on
-   * onlineAgentPortBase + N: every workspace (and each of a user's two kinds) is its own browser origin.
+   * The gateway serves every workspace on a port of its own, agentPortBase + the workspace's number (agentPortFor in
+   * @portal/core), for user ids below agentPortCount: each workspace is its own browser origin.
    */
-  agentPortBase,
-  onlineAgentPortBase: positiveInt("ONLINE_AGENT_PORT_BASE", agentPortBase + agentPortCount),
-  agentPortCount,
+  agentPortBase: positiveInt("AGENT_PORT_BASE", 12000),
+  agentPortCount: positiveInt("AGENT_PORT_COUNT", 100),
   /** The gateway control API on 127.0.0.1. */
   controlPort: positiveInt("CONTROL_PORT", 4002),
   get controlSecret(): string {

@@ -1,26 +1,27 @@
 # Workspace Portal
 
 A self-hosted portal that gives every user a coding agent in the browser, running in a container on your own
-server and talking to a model you host. A user signs in and gets two workspaces, of which one runs at a time:
+server and talking to a model you host. A user signs in, picks an agent on Home (Qwen Code, DeepSeek Harness
+or OpenCode) and starts its workspace, of one of two kinds:
 
 - **Private**: no route off the portal server. The agent reaches the model, web search and the page reader
   through the gateway, and nothing else.
 - **Online**: the same, plus the public internet over TCP. It never reaches the LAN, the servers or another
   workspace. The admin can bar it per user; `ONLINE_WORKSPACES=off` turns it off for everyone.
 
-Each workspace has its own files (`/home/user`, `/workspace`) and runs the agent the user picks on Home:
-Qwen Code, DeepSeek Harness or OpenCode. Web apps started in a workspace open in the browser on its preview
-port. With a key from the API page, a user's other software (an editor, a script) uses the same model through
-the portal. The admin manages users, watches usage and energy, updates the agents and the LLM engine, and reads
-the audit log.
+Every agent has a Private and an Online workspace of its own for each user, and each workspace has its own
+files (`/home/user`, `/workspace`) and chats: nothing is shared between them, and one of a user's workspaces
+runs at a time. Web apps started in a workspace open in the browser on its preview port. With a key from the
+API page, a user's other software (an editor, a script) uses the same model through the portal. The admin
+manages users, watches usage and energy, updates the agents and the LLM engine, and reads the audit log.
 
 ## What runs where
 
 | Where | What | Address (defaults) |
 |---|---|---|
 | Portal server | web app: sign-in, Home, API, Settings, admin pages; the LLM API under `/llm/api` | `:3000` |
-| | gateway: agent ports, one per user and kind | `:3101-3299` Private, `:3301-3499` Online |
-| | gateway: preview ports (agent port + 1000) | `:4101-4299`, `:4301-4499` |
+| | gateway: agent ports, one per user, agent and kind | `:12020-13999`, a block of 20 per user |
+| | gateway: preview ports (agent port + 10000) | `:22020-23999` |
 | | gateway: control API, for the web app | `127.0.0.1:4002` |
 | | gateway: service API, for workspaces (model, search, reader) | `172.29.0.1:4001`, `172.28.0.1:4001` |
 | | one container per running workspace | a Docker network per kind |
@@ -37,7 +38,7 @@ the audit log.
 - An OpenAI-compatible model server the portal server can reach.
 - firewalld is optional: the installer opens the portal's ports in it when it is active, and names them for
   another firewall. SELinux can stay enforcing: the installer labels the data directory for containers.
-- The workspace UIDs (`WORKSPACE_UID_BASE`, `ONLINE_UID_BASE`) must lie outside every range in `/etc/subuid`
+- The workspace UIDs (20 per user from `WORKSPACE_UID_BASE`) must lie outside every range in `/etc/subuid`
   and `/etc/subgid`; the installer checks.
 
 ## Install
@@ -141,9 +142,10 @@ from it, or with `update-image.sh`, which restarts the gateway and runs the isol
 stack. Running workspaces keep their image until they stop.
 
 Back up `.env` and the data directory (`PORTAL_DATA_DIR`): `db/` is the SQLite database (accounts, sessions,
-API keys, audit log, usage, energy), `users/<id>/private` and `users/<id>/online` are the workspace files, `config/`
-holds the model settings and the agent versions in use. Stop the stack for a consistent copy of `db/`, and
-keep numeric owners and modes: each workspace's files belong to a UID of its own.
+API keys, audit log, usage, energy), `users/<id>/<agent>/private` and `users/<id>/<agent>/online` are the
+workspace files (`<agent>` is `qwen`, `dsh` or `opencode`), `config/` holds the model settings and the agent
+versions in use. Stop the stack for a consistent copy of `db/`, and keep numeric owners and modes: each
+workspace's files belong to a UID of its own.
 
 ## Update and uninstall
 
@@ -158,6 +160,25 @@ it lacks, the model settings and all data, and refuses while an update from Admi
 the portal has gained since the install (OpenCode) stays off, because `WORKSPACE_AGENTS` in `.env` is kept: add
 `opencode` to it and run the installer again.
 
+An install from before every agent had its own workspaces (its `.env` has `ONLINE_AGENT_PORT_BASE`) updates
+once in another way, because the ports, the UIDs and the folders are numbered anew. People start with empty
+workspaces afterwards.
+
+1. Stop every workspace: the new gateway removes any that the old one started.
+2. Close the old ports before `git pull`, because the old scripts know them and the new ones would look for
+   the new ports: with firewalld, `sudo bash -c 'source deploy/lib.sh && firewalld_rules remove'`; behind
+   HTTPS, `sudo bash deploy/tailscale-https.sh off`. After the pull instead: `sudo tailscale serve reset`
+   unmaps everything this machine serves through Tailscale, and firewalld's rules for the old ports stay
+   until taken out by hand (`firewall-cmd --permanent --list-rich-rules` shows them).
+3. `git pull`, then in `.env` set `AGENT_PORT_BASE=12000` and `AGENT_PORT_COUNT` above the highest user id
+   (`.env.example` has 100), and delete `ONLINE_AGENT_PORT_BASE` and `ONLINE_UID_BASE`, which nothing reads.
+4. Delete the old folders `users/<id>/private` and `users/<id>/online` in the data directory, after saving
+   what is to be kept: no workspace uses them, and `verify-isolation.sh` fails while they are there.
+5. `sudo bash deploy/install.sh`, and behind HTTPS `sudo bash deploy/tailscale-https.sh` again.
+
+[docs/GUIDE.md](docs/GUIDE.md#update-the-portal) has these steps as commands, and how to move a person's old
+files into one of the new workspaces.
+
 ## LLM server: readings and engine updates
 
 `sudo bash hostd/install.sh llm --portal <portal IPv4>` on the LLM server installs portal-hostd and prints
@@ -171,8 +192,9 @@ step by step from a fresh Fedora, the model download included.
 ## Security model
 
 - **A workspace** is a container that runs as a UID of its own on a read-only root, with no capabilities, no
-  privilege escalation, limits on memory, CPU and processes, and only its own folders mounted. It holds no
-  secret of the portal: the model's key stays in the gateway.
+  privilege escalation, limits on memory, CPU and processes, and only its own folders mounted. No two
+  workspaces share a UID, a folder, a port or a browser token, one user's included. It holds no secret of the
+  portal: the model's key stays in the gateway.
 - **The firewall** is loaded before Docker starts. A Private workspace reaches the gateway's service port and
   nothing else. An Online workspace also reaches public IPv4 addresses over TCP, and never a private address,
   this host, its router or the servers `.env` names. SearXNG and the page reader reach the public web only.

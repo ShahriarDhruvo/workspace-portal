@@ -9,7 +9,10 @@ import { BusyWarning } from "./busy-warning";
 interface StopDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** "stop": the user's Stop; "restart": "Restart now" after a harness change (a stop, then a start with the new harness). */
+  /**
+   * "stop": the user's Stop; "restart": "Restart now" after a harness change (a stop, then a start of the new
+   * harness's workspace).
+   */
   kind: "stop" | "restart";
   /** What the stop interrupts (lib/workspace-stop.ts); the dialog follows them while open. */
   warnings: StopWarnings;

@@ -53,7 +53,7 @@ test("hostTrusted matches a site and its subdomains, not look-alikes", () => {
 });
 
 test("ShownUrls remembers per workspace and drops the oldest when full", () => {
-  const shown = new ShownUrls({ urlsPerUser: 3 });
+  const shown = new ShownUrls({ urlsPerWorkspace: 3 });
   shown.add(1, ["https://a.example/1", "https://a.example/2", "nonsense"]);
   assert.equal(shown.find(1, "http://A.example/1/") !== null, true, "same page, different spelling");
   assert.equal(shown.find(1, "http://A.example/1/#top"), "https://a.example/1", "and it is requested the way it was shown");
@@ -74,7 +74,7 @@ test("ShownUrls remembers per workspace and drops the oldest when full", () => {
 });
 
 test("ShownUrls is bounded by characters and by workspaces, whatever is thrown at it", () => {
-  const shown = new ShownUrls({ charsPerUser: 1000, users: 2 });
+  const shown = new ShownUrls({ charsPerWorkspace: 1000, workspaces: 2 });
   const long = (n: number) => `https://a.example/${String(n).padStart(4, "0")}${"x".repeat(180)}`;
   shown.add(1, Array.from({ length: 50 }, (_, n) => long(n)));
   assert.equal(shown.find(1, long(49)) !== null, true);

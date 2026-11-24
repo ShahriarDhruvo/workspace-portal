@@ -6,10 +6,8 @@ import {
   AGENT_NAMES,
   displayName,
   users,
-  WORKSPACE_KIND_NAMES,
   type AgentInfo,
   type WorkspaceInfo,
-  type WorkspaceKind,
 } from "@portal/core";
 import { updateProfile } from "@/lib/actions/admin";
 import { startingAgent } from "@/lib/agent-choice";
@@ -19,7 +17,7 @@ import { formatVersion, initials, summarizeWorkspace, workspaceState } from "@/l
 import { gateway, toApiError } from "@/lib/gateway";
 import { requireAdmin } from "@/lib/session";
 import { userIdSchema } from "@/lib/validation";
-import { hasContainer } from "@/lib/workspace-kind";
+import { hasContainer, runningWorkspace } from "@/lib/workspace-kind";
 import { BackLink } from "@/components/admin/back-link";
 import { OnlineAccess } from "@/components/admin/online-access";
 import { OpenWorkspaceForm } from "@/components/admin/open-workspace-form";
@@ -80,14 +78,13 @@ export default async function UserPage({ params }: PageProps<"/admin/users/[id]"
   // The facts behind the status pill (idle time, memory, why it stopped), for its tooltip.
   const summary = workspaceError ? null : summarizeWorkspace(workspace, config.idleTimeoutMinutes);
   const facts = summary ? [summary.detail, summary.title].filter((fact) => fact !== null).join(" · ") : "";
-  const dialogUser = { id: user.id, name, username: user.username, busy: workspace?.busy ?? false };
-  // A kind's files can't be erased while its container is there (nor while the gateway can't say).
-  const eraseBlocked = (kind: WorkspaceKind) =>
-    workspaceError
-      ? "The workspace status is unknown right now."
-      : workspace && workspace.kind === kind && hasContainer(workspace.status)
-        ? `The ${WORKSPACE_KIND_NAMES[kind]} workspace is running. Stop it first.`
-        : null;
+  const dialogUser = {
+    id: user.id,
+    name,
+    username: user.username,
+    busy: workspace?.busy ?? false,
+    running: workspace ? runningWorkspace(workspace) : null,
+  };
 
   return (
     <PageMain width="md">
@@ -159,12 +156,15 @@ export default async function UserPage({ params }: PageProps<"/admin/users/[id]"
               portalOff={workspace?.online === "off"}
             />
           </CardContent>
-          <CardFooter className="flex-wrap gap-2">
-            <UserDialogButton kind="erasePrivate" user={dialogUser} icon={<TrashIcon />} blockedReason={eraseBlocked("private")}>
-              Erase Private files…
-            </UserDialogButton>
-            <UserDialogButton kind="eraseOnline" user={dialogUser} icon={<TrashIcon />} blockedReason={eraseBlocked("online")}>
-              Erase Online files…
+          <CardFooter>
+            {/* Which workspace can't be erased is the gateway's to say: no dialog while it can't. */}
+            <UserDialogButton
+              kind="erase"
+              user={dialogUser}
+              icon={<TrashIcon />}
+              blockedReason={workspaceError ? "The workspace status is unknown right now." : null}
+            >
+              Erase files…
             </UserDialogButton>
           </CardFooter>
         </Section>
