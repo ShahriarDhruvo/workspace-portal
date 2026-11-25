@@ -94,6 +94,8 @@ install -d -m 0700 -o root -g root "$PORTAL_DATA_DIR/config/models"
 for file in settings.json system-defaults.json; do
   [[ -f $PORTAL_DATA_DIR/config/models/$file ]] || install -m 0600 -o root -g root "models/$file" "$PORTAL_DATA_DIR/config/models/$file"
 done
+INSTRUCTIONS="$PORTAL_DATA_DIR/config/instructions.md"
+[[ -f $INSTRUCTIONS ]] || install -m 0600 -o root -g root harnesses/instructions.md "$INSTRUCTIONS"
 if selinux_on; then
   log "labelling $PORTAL_DATA_DIR for containers (SELinux)"
   if command -v semanage >/dev/null; then
@@ -194,8 +196,6 @@ READER="on (read_page)"
 if env_is READER_URL off; then READER="off (READER_URL=off)"; fi
 ONLINE="on (ONLINE_WORKSPACES; Admin > Users switches it off per user)"
 online_enabled || ONLINE="off for everyone (ONLINE_WORKSPACES=off)"
-INSTRUCTIONS="$PORTAL_DATA_DIR/config/instructions.md"
-[[ -f $INSTRUCTIONS ]] || INSTRUCTIONS="none of your own (write them to $INSTRUCTIONS; every agent is told them)"
 
 cat <<DONE
 
@@ -208,7 +208,7 @@ cat <<DONE
     Admin:      $(env_get ADMIN_USERNAME)   (first sign-in: grep ^ADMIN_PASSWORD $ENV_FILE; you choose a new one then)
 $(for agent in "${ENABLED_AGENTS[@]}"; do printf '    Agent:      %s %s\n' "${AGENT_NAME[$agent]}" "$(agent_version "$agent")"; done)
     Models:       $PORTAL_DATA_DIR/config/models (deploy/models.sh; used by every agent)
-    Instructions: $INSTRUCTIONS
+    Instructions: $INSTRUCTIONS (every agent is told them)
     Web:        web_search through $SEARCH; page reader $READER
     Monitoring: $MONITORING
 

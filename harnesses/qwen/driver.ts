@@ -99,12 +99,12 @@ export const qwenDriver: AgentDriver = {
     ];
   },
 
-  renderSettings(config, kind) {
-    const rendered = qwenSettingsFor(config, kind);
+  renderSettings(config, workspace) {
+    const rendered = qwenSettingsFor(config, workspace.kind);
     return {
       "settings.json": `${JSON.stringify(rendered.settings, null, 2)}\n`,
       "system-defaults.json": `${JSON.stringify(rendered.systemDefaults, null, 2)}\n`,
-      [INSTRUCTIONS_FILE]: agentInstructions(config, kind),
+      [INSTRUCTIONS_FILE]: agentInstructions(config, workspace),
     };
   },
 

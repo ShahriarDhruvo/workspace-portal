@@ -14,7 +14,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { workspaceNumber, type WorkspaceRef } from "@portal/core";
-import { driverFor } from "@portal/harnesses";
+import { driverFor, type WorkspaceFacts } from "@portal/harnesses";
 import type { Config } from "../config.ts";
 
 interface FileOwner {
@@ -51,11 +51,11 @@ export function workspaceOwner(config: Config, userId: number, ref: WorkspaceRef
  * Everything a workspace's container mounts, ready before it is created. The read-only files are rendered at every
  * start, so changed admin settings apply on restart. Throws AgentConfigError for unusable settings.
  */
-export function prepareWorkspaceFiles(config: Config, userId: number, ref: WorkspaceRef): void {
+export function prepareWorkspaceFiles(config: Config, userId: number, ref: WorkspaceRef, facts: WorkspaceFacts): void {
   const paths = workspacePaths(config.dataDir, userId, ref);
   const owner = workspaceOwner(config, userId, ref);
   // Rendered first: invalid settings fail the start before anything is written.
-  const files = driverFor(ref.agent).renderSettings(config, ref.kind);
+  const files = driverFor(ref.agent).renderSettings(config, facts);
   for (const dir of [userRoot(config.dataDir, userId), path.dirname(paths.root), paths.root]) ensureDir(dir, 0o711);
   ensureDir(paths.system, 0o755);
   ensureDir(paths.settings, 0o755);

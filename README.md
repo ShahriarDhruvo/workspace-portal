@@ -95,11 +95,12 @@ sudo bash deploy/models.sh install models/system-defaults.json models/settings.j
 sudo bash deploy/models.sh check        # or: show
 ```
 
-Every agent is told the facts of its workspace: what is kept, what its network reaches, which tools are
-installed, and that a web server must listen on `0.0.0.0` for the Preview button. To add your own instructions
-for every agent of every user (how to answer, how to write code), write them as Markdown, at most 32 KiB, to
-`$PORTAL_DATA_DIR/config/instructions.md`. The file is not in the repository, so it may hold what is personal.
-Workspaces read it at their next start.
+Every agent is told the facts of its workspace: the person's name, the place picked under Settings >
+Electricity price, what is kept, what its network reaches, which tools are installed, and that a web server
+must listen on `0.0.0.0` for the Preview button. The instructions for every agent of every user follow (how to
+answer, how to write code): Markdown, at most 32 KiB, in `$PORTAL_DATA_DIR/config/instructions.md`. A fresh
+install starts with [`harnesses/instructions.md`](harnesses/instructions.md). Install your own in its place;
+workspaces read the file at their next start.
 
 ```sh
 sudo install -m 0600 my-instructions.md /srv/workspace-portal/config/instructions.md

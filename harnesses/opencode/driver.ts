@@ -81,10 +81,11 @@ export const opencodeDriver: AgentDriver = {
     return [`OPENCODE_PASSWORD=${credential}`];
   },
 
-  renderSettings(config, kind) {
+  renderSettings(config, workspace) {
+    const { kind } = workspace;
     return {
       [OPENCODE_CONFIG_FILE]: renderOpencodeConfig({ catalog: modelCatalog(config), serviceBaseUrl: serviceBaseUrl(config, kind), browser: config.workspace.browser, kind }),
-      [INSTRUCTIONS_FILE]: agentInstructions(config, kind),
+      [INSTRUCTIONS_FILE]: agentInstructions(config, workspace),
     };
   },
 

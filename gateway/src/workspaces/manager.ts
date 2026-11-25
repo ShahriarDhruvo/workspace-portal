@@ -43,6 +43,7 @@ import type { SessionLog } from "../monitor/session-log.ts";
 import { assessActivity, averageCores, chooseEviction, idleMs, reapVerdict, type ActivityAssessment, type AgentState, type ReapVerdict } from "./policy.ts";
 import { READY_TIMEOUT_MS, waitForReady, type ReadyResult } from "./readiness.ts";
 import { WorkspaceImageMissingError, type ContainerRuntime, type ContainerState, type ContainerSummary } from "../docker/runtime.ts";
+import { workspaceFacts } from "./facts.ts";
 import { eraseWorkspaceFiles, prepareWorkspaceFiles, removeUserData, workspaceOwner } from "./paths.ts";
 import { listeningServers } from "./servers.ts";
 
@@ -600,7 +601,7 @@ export class WorkspaceManager {
       // A container a failed stop left behind (whichever workspace's) goes first.
       await this.#removeLeftover(entry);
       if (entry.status !== "starting") return this.info(userId);
-      prepareWorkspaceFiles(this.#config, userId, ref);
+      prepareWorkspaceFiles(this.#config, userId, ref, workspaceFacts(this.#db, userId, kind));
       const credential = driverFor(agent).generateCredential();
       const { version, image } = this.#versions.selection(agent);
       // The fence once more, as late as it gets: an Online container runs only inside it.

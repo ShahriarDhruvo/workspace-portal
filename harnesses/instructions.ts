@@ -1,11 +1,11 @@
 // What every workspace's agent is told before its first prompt, whichever harness it runs: the facts of its workspace
-// that it cannot find out by looking (what is kept, what the network reaches, how the person gets to see a web
-// server), then the portal's own instructions, if its admin wrote any: a Markdown file in the data folder
-// (config/instructions.md), read at every start. A driver puts the text in the workspace's settings directory; its
-// settings.ts says how the harness comes to read it.
+// that it cannot find out by looking (whose it is, where the portal is, what is kept, what the network reaches, how
+// the person gets to see a web server), then the portal's own instructions: a Markdown file in the data folder
+// (config/instructions.md, which a fresh install copies from instructions.md), read at every start. A driver puts the
+// text in the workspace's settings directory; its settings.ts says how the harness comes to read it.
 import fs from "node:fs";
 import type { WorkspaceKind } from "@portal/core";
-import type { HarnessConfig } from "./harness.ts";
+import type { HarnessConfig, WorkspaceFacts } from "./harness.ts";
 import { AgentConfigError } from "./shared.ts";
 
 /** The text's name in a settings directory: the one every harness knows instructions by. */
@@ -19,13 +19,15 @@ const NETWORK: Record<WorkspaceKind, string> = {
   online: "Network: the internet, for downloads, package registries and git. The LAN and the machine the workspace runs on are out of reach.",
 };
 
-/** The instructions of a workspace of `kind`. Throws AgentConfigError when the admin's file can't be used. */
-export function agentInstructions(config: HarnessConfig, kind: WorkspaceKind): string {
+/** A workspace's instructions. Throws AgentConfigError when the admin's file can't be used. */
+export function agentInstructions(config: HarnessConfig, { kind, person, place }: WorkspaceFacts): string {
   const facts = [
     "# This workspace",
     "",
     "You work in a Workspace Portal workspace: a Linux container that belongs to one person, who uses it from a web browser on another computer.",
     "",
+    `- The person: ${person}.`,
+    ...(place === null ? [] : [`- Place: the portal's server is in ${place}.`]),
     "- Files: projects belong in /workspace, and /home/user is the home folder. Both are kept. Everything else is read-only, and /tmp is emptied at every start.",
     "- Nothing in /tmp can be run (it is mounted noexec): build and run programs in /workspace or the home folder.",
     `- ${NETWORK[kind]}`,

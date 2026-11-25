@@ -83,11 +83,11 @@ export const dshDriver: AgentDriver = {
     return [`DSH_COOKIE_SECRET=${credential}`];
   },
 
-  renderSettings(config, kind) {
+  renderSettings(config, workspace) {
     return {
-      [DSH_PATCH_FILE]: renderDshPatch({ catalog: fitDshModels(modelCatalog(config)), serviceBaseUrl: serviceBaseUrl(config, kind), browser: config.workspace.browser }),
+      [DSH_PATCH_FILE]: renderDshPatch({ catalog: fitDshModels(modelCatalog(config)), serviceBaseUrl: serviceBaseUrl(config, workspace.kind), browser: config.workspace.browser }),
       // image/start.sh makes it the AGENTS.md dsh reads for every session.
-      [INSTRUCTIONS_FILE]: agentInstructions(config, kind),
+      [INSTRUCTIONS_FILE]: agentInstructions(config, workspace),
     };
   },
 

@@ -24,8 +24,8 @@ async function main(log: Logger): Promise<void> {
   for (const agent of config.workspace.agents) {
     const driver = driverFor(agent);
     try {
-      // The kinds differ only in the service address, so one rendering finds every problem.
-      driver.renderSettings(config, "private");
+      // Workspaces differ only in the service address and in who they are for, so one rendering finds every problem.
+      driver.renderSettings(config, { kind: "private", person: "", place: null });
     } catch (error) {
       // Not fatal: the portal keeps working, and starts of this agent report the same problem.
       if (!(error instanceof AgentConfigError)) throw error;

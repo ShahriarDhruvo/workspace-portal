@@ -58,7 +58,7 @@ browser --(cookie portal_session)--> web app   WEB_BIND:WEB_PORT  <--(API key)--
 | `gateway/src/monitor/` | live view, hostd client, host and LLM monitors, energy meter, prices, usage per user, session and API key |
 | `gateway/src/lib/`, `gateway/test/` | HTTP helpers and `HttpError`, forwarding, logging; the harness, fakes and integration suites |
 | `web/` | the web app (Next.js); installable through `app/manifest.ts`, without a service worker, since it does nothing offline |
-| `harnesses/` | `@portal/harnesses`: the contract every agent's driver implements (`harness.ts`), the registry (`index.ts`), the admin's models (`models.ts`), what an agent is told (`instructions.ts`) |
+| `harnesses/` | `@portal/harnesses`: the contract every agent's driver implements (`harness.ts`), the registry (`index.ts`), the admin's models (`models.ts`), what an agent is told (`instructions.ts`, and `instructions.md` for a fresh install) |
 | `harnesses/<name>/` | one agent, whole: `driver.ts` and `settings.ts` for the gateway, `harness.env` for the deploy scripts, `image/` with what its image installs (`install.sh`), checks (`check.sh`) and starts (`start.sh`) |
 | `container/image/` | the one Dockerfile: the base every workspace has, with the toolchains, then the stage that installs one agent from its folder; the entry guard every start script sources |
 | `container/security/` | `@portal/container`: the one security profile (`spec.ts`), the networks, the fence probe, the firewall (`firewall.sh`) |
@@ -124,7 +124,7 @@ the gateway which origins to name: `https://host` for the portal instead of `htt
 PORTAL_DATA_DIR/                    root 0755
   db/portal.sqlite                  db/ is 10001's (the web app), 0700
   config/models/                    root 0700; settings.json, system-defaults.json, 0600
-  config/instructions.md            optional, the admin's: what every agent is told beside its workspace's facts
+  config/instructions.md            root 0600; what every agent is told beside its workspace's facts
   config/agent-versions.env         root 0600; the agent versions in use
   users/<id>/                       root 0711, as users/ itself
     <agent>/                        root 0711
@@ -438,12 +438,15 @@ The admin writes the models as Qwen Code settings (`config/models/`, JSON with c
 `system/settings/`, mounted read-only. What the renderers guarantee:
 
 - **Instructions** (`harnesses/instructions.ts`): every workspace gets an `AGENTS.md` beside its settings. It
-  states what an agent cannot find out by looking: which folders are kept, that `/tmp` runs no program, what
-  the network of its kind reaches, the tools installed, and that a web server must listen on `0.0.0.0` and is
-  opened with the Preview button, never by a localhost link. The admin's `config/instructions.md` follows when
-  there is one (at most 32 KiB, since every request carries it; a longer or unreadable file fails the start
-  with `AgentConfigError`). It applies to every user's agents. OpenCode reads the file through its managed
-  `instructions` setting. Qwen Code reads it as the context file of an included folder
+  states what an agent cannot find out by looking: the person's full name, the place of the portal's server
+  when the admin has picked one (Settings > Electricity price), which folders are kept, that `/tmp` runs no
+  program, what the network of its kind reaches, the tools installed, and that a web server must listen on
+  `0.0.0.0` and is opened with the Preview button, never by a localhost link. The name and the place are read
+  from the database at every start (`gateway/src/workspaces/facts.ts`). The admin's `config/instructions.md`
+  follows: a fresh install starts with `harnesses/instructions.md`, which names nobody and no place and points
+  at those two facts instead (at most 32 KiB, since every request carries it; a longer or unreadable file fails
+  the start with `AgentConfigError`, a missing one adds nothing). It applies to every user's agents. OpenCode
+  reads the file through its managed `instructions` setting. Qwen Code reads it as the context file of an included folder
   (`context.includeDirectories` with `loadFromIncludeDirectories`), which also lists that folder among the
   agent's working directories. DeepSeek Harness reads the `AGENTS.md` of its shared agents folder
   (`DSH_AGENTS_HOME`), which its start script puts together in `/tmp` from this file and the person's own

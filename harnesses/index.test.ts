@@ -44,8 +44,9 @@ test("every harness's settings hold the agent's instructions, and each harness i
     reader: { url: "" },
     workspace: { kinds: { private: { gatewayIp: "172.29.0.1" }, online: { gatewayIp: "172.30.0.1" } }, browser: true, defaultEffort: null },
   };
-  const files = (kind: (typeof AGENT_KINDS)[number]) => driverFor(kind).renderSettings(config, "online");
-  for (const kind of AGENT_KINDS) assert.equal(files(kind)[INSTRUCTIONS_FILE], agentInstructions(config, "online"), kind);
+  const online = { kind: "online", person: "Ana Lima", place: "Florida, US" } as const;
+  const files = (kind: (typeof AGENT_KINDS)[number]) => driverFor(kind).renderSettings(config, online);
+  for (const kind of AGENT_KINDS) assert.equal(files(kind)[INSTRUCTIONS_FILE], agentInstructions(config, online), kind);
   const file = (kind: (typeof AGENT_KINDS)[number]): string => `${driverFor(kind).settingsMount}/${INSTRUCTIONS_FILE}`;
 
   assert.deepEqual(JSON.parse(files("opencode")["opencode.json"]!).instructions, [file("opencode")], "OpenCode: a file its settings name");

@@ -52,13 +52,14 @@ test("a start renders the workspace's own account and settings, in its own folde
   const config = loadConfig({ GATEWAY_CONTROL_SECRET: "c".repeat(32), PORTAL_DATA_DIR: dataDir });
   // The admin's models, which every agent's settings are rendered from.
   write(path.join(config.modelsDir, "system-defaults.json"), JSON.stringify({ modelProviders: { openai: [{ id: "model-a" }] } }));
-  prepareWorkspaceFiles(config, 3, DSH_PRIVATE);
+  prepareWorkspaceFiles(config, 3, DSH_PRIVATE, { kind: "private", person: "Ana Lima", place: null });
   const paths = workspacePaths(dataDir, 3, DSH_PRIVATE);
   const { uid } = workspaceOwner(config, 3, DSH_PRIVATE);
   assert.match(fs.readFileSync(paths.passwd, "utf8"), new RegExp(`^user:x:${uid}:${uid}:Workspace user:/home/user:/bin/bash$`, "m"));
   assert.match(fs.readFileSync(paths.group, "utf8"), new RegExp(`^user:x:${uid}:$`, "m"));
   assert.deepEqual(fs.readdirSync(paths.root).sort(), ["home", "system", "workspace"]);
   assert.deepEqual(fs.readdirSync(paths.settings).sort(), ["AGENTS.md", "portal.patch.yml"], "the agent's settings and instructions");
+  assert.match(fs.readFileSync(path.join(paths.settings, "AGENTS.md"), "utf8"), /^- The person: Ana Lima\.$/m);
   for (const dir of [userRoot(dataDir, 3), path.dirname(paths.root), paths.root]) assert.equal(fs.statSync(dir).mode & 0o777, 0o711, dir);
   for (const dir of [paths.home, paths.workspace]) assert.equal(fs.statSync(dir).mode & 0o777, 0o700, dir);
   assert.deepEqual(fs.readdirSync(userRoot(dataDir, 3)), ["dsh"], "no other agent's folder");

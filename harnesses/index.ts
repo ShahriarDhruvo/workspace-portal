@@ -14,6 +14,6 @@ export function driverFor(kind: AgentKind): AgentDriver {
 /** Every token harness's bearerSubprotocolPrefix: a token offered on any workspace's socket is checked, whichever harness it was meant for. */
 export const BEARER_SUBPROTOCOL_PREFIXES: readonly string[] = AGENT_KINDS.flatMap((kind) => DRIVERS[kind].bearerSubprotocolPrefix ?? []);
 
-export type { AgentDriver, AgentEndpoint, HarnessConfig, HeaderMap } from "./harness.ts";
+export type { AgentDriver, AgentEndpoint, HarnessConfig, HeaderMap, WorkspaceFacts } from "./harness.ts";
 export { modelCatalog, type ModelCatalog, type PortalModel, type SettingsObject } from "./models.ts";
 export { AgentConfigError, LLM_KEY_ENV } from "./shared.ts";

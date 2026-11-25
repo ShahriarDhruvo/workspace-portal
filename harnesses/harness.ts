@@ -27,6 +27,15 @@ export interface HarnessConfig {
   };
 }
 
+/** What the gateway knows of one workspace when it starts: its settings and its agent's instructions are rendered from it. */
+export interface WorkspaceFacts {
+  kind: WorkspaceKind;
+  /** The full name of the person it belongs to. */
+  person: string;
+  /** Where the portal's server is, as its admin set it ("Florida, US"); null when not set. */
+  place: string | null;
+}
+
 /** Where a running agent listens, and the per-start credential the gateway uses with it. */
 export interface AgentEndpoint {
   host: string;
@@ -83,11 +92,11 @@ export interface AgentDriver {
   /** The agent's own container environment, the credential included. */
   containerEnv(credential: string, config: HarnessConfig): string[];
   /**
-   * The files of the settings directory (name → content) for a workspace of `kind`: the admin's settings with the
-   * portal's forced keys on top (that kind's service address among them), and the agent's instructions
-   * (instructions.ts). Throws AgentConfigError when the admin's settings or instructions are unusable.
+   * The files of the settings directory (name → content) for a workspace: the admin's settings with the portal's
+   * forced keys on top (its kind's service address among them), and the agent's instructions (instructions.ts).
+   * Throws AgentConfigError when the admin's settings or instructions are unusable.
    */
-  renderSettings(config: HarnessConfig, kind: WorkspaceKind): Record<string, string>;
+  renderSettings(config: HarnessConfig, workspace: WorkspaceFacts): Record<string, string>;
   /**
    * Makes a forwarded request the agent's own: `headers` are the browser's as the proxy cleaned them (no Host, no
    * Origin, none of its cookies or credentials), and get the Host the agent expects and its credential. `authorised`

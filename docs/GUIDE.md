@@ -821,7 +821,7 @@ sudo bash deploy/install.sh
     Agent:      DeepSeek Harness 0.2.2-rc.1
     Agent:      OpenCode 2.4.1
     Models:       /srv/workspace-portal/config/models (deploy/models.sh; used by every agent)
-    Instructions: none of your own (write them to /srv/workspace-portal/config/instructions.md; every agent is told them)
+    Instructions: /srv/workspace-portal/config/instructions.md (every agent is told them)
     Web:        web_search through the built-in SearXNG (http://127.0.0.1:8888); page reader on (read_page)
     Monitoring: this server: portal-hostd on http://127.0.0.1:9180; LLM server: not set up (hostd/README.md)
 
@@ -909,9 +909,11 @@ public GitHub repositories; both are public services, so what the agent asks the
   it in a tab of its own; with several servers it lists them. The server must listen on all addresses (`next dev
   -H 0.0.0.0`, `vite --host 0.0.0.0`): one on localhost only is listed with that advice. The agents are told the
   same, so they start servers that way.
-- **Instructions.** Every agent is told the facts above. To have every agent follow your own rules as well (how
-  to answer, how to write code), write them to a Markdown file and install it; workspaces read it at their next
-  start. It applies to every person's agents, may be 32 KiB long, and is not part of the repository:
+- **Instructions.** Every agent is told the facts above, the name of the person it works for, and the place
+  picked under **Settings > Electricity price**, if one is. Then come the portal's rules for how to answer and
+  how to write code: a fresh install starts with `harnesses/instructions.md`. To change them, edit a copy and
+  install it; workspaces read it at their next start. The file applies to every person's agents and may be
+  32 KiB long; an empty one means no such rules:
 
   ```sh
   sudo install -m 0600 my-instructions.md /srv/workspace-portal/config/instructions.md
@@ -1006,7 +1008,7 @@ a second.
   as `TZ`). For the money, pick where you live under **Settings > Electricity price**: a US state uses the EIA's
   monthly average residential price, a European country Eurostat's half-yearly household price with taxes. The
   portal downloads both every day, no account needed. The kWh come from the chips' own sensors, so a wall meter
-  reads more.
+  reads more. Every agent is told this place too, as the place of the portal's server.
 - **Access:** `portal-hostd`, the daemon that takes the readings, listens on 127.0.0.1 only on the portal server.
   On the LLM server it listens on port 9180, and its installer adds one firewall rule that lets only the portal
   server in. Every request except the health check needs the token; workspaces cannot reach either server. What it

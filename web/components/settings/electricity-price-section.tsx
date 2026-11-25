@@ -9,6 +9,7 @@ import { EnergyLocationPicker } from "./energy-location-picker";
 /**
  * Settings' Electricity price card (the page renders it for the admin only): where Admin > Energy's prices come
  * from, with that place's price today. When the place has no prices yet, the gateway's last download says why.
+ * The place is the portal's only one, so every agent is told it as well (gateway/src/workspaces/facts.ts).
  */
 export async function ElectricityPriceSection() {
   const db = getDb();
@@ -22,7 +23,7 @@ export async function ElectricityPriceSection() {
       .catch(() => null);
   }
   return (
-    <Section id="electricity" title="Electricity price">
+    <Section id="electricity" title="Electricity price" description="Where the portal's server is. Admin > Energy uses this place's price, and every agent is told the place.">
       <CardContent>
         <EnergyLocationPicker chosen={location?.id ?? null} summary={priceSummary(location, price, downloadError)} labelledBy="electricity-title" />
       </CardContent>
