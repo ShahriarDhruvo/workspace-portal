@@ -13,7 +13,7 @@ import { hashSessionToken, llmUsage, sessions, WORKSPACE_REFS, workspaceSessions
 import { closeEndedSessions, PRESENCE_MS } from "../src/proxy/connections.ts";
 import { userRoot, workspacePaths } from "../src/workspaces/paths.ts";
 import { AGENT_UNKNOWN_GRACE_MS } from "../src/workspaces/policy.ts";
-import type { SettingsObject } from "../src/agents/qwen-settings.ts";
+import type { SettingsObject } from "@portal/harnesses";
 import { WorkspaceImageMissingError } from "../src/docker/runtime.ts";
 import { formatResults, type SearchQuery } from "../src/service/search-mcp.ts";
 import { closeServer, listenLocal } from "./fakes.ts";
@@ -1461,8 +1461,8 @@ test("the session sweep closes connections of sessions that ended, or of an admi
 test("a system-defaults.json without a model fails the start, naming the file", () =>
   withGateway({}, async (gw) => {
     const { alice } = gw.ids;
-    const file = path.join(gw.config.qwenConfigDir, "system-defaults.json");
-    const expected = { error: "start_failed", message: `the Qwen Code settings file ${file} defines no model: add at least one entry with an "id" under modelProviders.openai` };
+    const file = path.join(gw.config.modelsDir, "system-defaults.json");
+    const expected = { error: "start_failed", message: `the settings file ${file} defines no model: add at least one entry with an "id" under modelProviders.openai` };
     fs.writeFileSync(file, JSON.stringify({ modelProviders: { openai: [{ name: "No id" }] } }));
     const reply = await gw.control("POST", `/control/workspaces/${alice}/start`);
     assert.deepEqual([reply.status, json(reply)], [500, expected]);
@@ -1766,18 +1766,18 @@ test("after a gateway restart, a container is adopted as the workspace its label
     assert.equal(gw.runtime.starts.length, starts, "nothing was started");
   }));
 
-test("invalid admin Qwen Code settings fail the start with a clear message", () =>
+test("invalid admin settings fail the start with a clear message", () =>
   withGateway({}, async (gw) => {
     const { alice } = gw.ids;
-    const file = path.join(gw.config.qwenConfigDir, "settings.json");
-    fs.mkdirSync(gw.config.qwenConfigDir, { recursive: true });
+    const file = path.join(gw.config.modelsDir, "settings.json");
+    fs.mkdirSync(gw.config.modelsDir, { recursive: true });
     fs.writeFileSync(file, '{ "ui": { "theme": "Dracula" }\n');
 
     const reply = await gw.control("POST", `/control/workspaces/${alice}/start`);
     assert.equal(reply.status, 500);
     const { error, message } = json<{ error: string; message: string }>(reply);
     assert.equal(error, "start_failed");
-    assert.match(message, new RegExp(`^the Qwen Code settings file ${escapeRegExp(file)} is not valid JSON: `));
+    assert.match(message, new RegExp(`^the settings file ${escapeRegExp(file)} is not valid JSON: `));
     assert.deepEqual(pick(gw.info(alice), ["status", "lastError"]), { status: "error", lastError: message });
     assert.deepEqual(gw.auditActions(alice).at(-1), { action: "workspace_error", details: { error: message, kind: "private", agent: "qwen" }, actorUserId: null });
     assert.equal(gw.runtime.starts.length, 0, "no container was created");
@@ -1788,7 +1788,7 @@ test("invalid admin Qwen Code settings fail the start with a clear message", () 
 
     fs.writeFileSync(file, "[]");
     const notObject = await gw.control("POST", `/control/workspaces/${alice}/start`);
-    assert.equal(json<{ message: string }>(notObject).message, `the Qwen Code settings file ${file} must contain a JSON object`);
+    assert.equal(json<{ message: string }>(notObject).message, `the settings file ${file} must contain a JSON object`);
 
     fs.writeFileSync(file, '{ "ui": { "theme": "Dracula" } } // fixed\n');
     const retry = await request(gw.agentPort(alice), {
@@ -1804,7 +1804,7 @@ test("invalid admin Qwen Code settings fail the start with a clear message", () 
 test("every start renders the workspace's Qwen Code settings, passwd and group", () =>
   withGateway({}, async (gw) => {
     const { alice, bob } = gw.ids;
-    const dir = gw.config.qwenConfigDir;
+    const dir = gw.config.modelsDir;
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(
       path.join(dir, "settings.json"),

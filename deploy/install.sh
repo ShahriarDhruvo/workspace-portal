@@ -51,7 +51,7 @@ mapfile -t FIREWALL_ENV < <(
   done
   echo "NEVER_REACH=$NEVER_REACH"
 )
-env "${FIREWALL_ENV[@]}" bash deploy/firewall.sh check || die "the firewall rules do not load with the settings in .env (see above)"
+env "${FIREWALL_ENV[@]}" bash container/security/firewall.sh check || die "the firewall rules do not load with the settings in .env (see above)"
 overlaps=$(subid_overlaps)
 [[ -z $overlaps ]] || die "the workspace UIDs (WORKSPACE_UID_BASE in .env) overlap the ranges of:$overlaps. Those accounts could read workspace files: set WORKSPACE_UID_BASE to a free range"
 # A port of the stack among the workspaces': the gateway refuses to start with one of its own there
@@ -84,9 +84,15 @@ log "preparing $PORTAL_DATA_DIR"
 install -d -m 0755 -o root -g root "$PORTAL_DATA_DIR"
 install -d -m 0700 -o 10001 -g 10001 "$PORTAL_DATA_DIR/db"
 install -d -m 0711 -o root -g root "$PORTAL_DATA_DIR/users"
-install -d -m 0700 -o root -g root "$PORTAL_DATA_DIR/config" "$PORTAL_DATA_DIR/config/qwen"
+install -d -m 0700 -o root -g root "$PORTAL_DATA_DIR/config"
+# An install from before the model list had a name of its own keeps its files.
+if [[ -d $PORTAL_DATA_DIR/config/qwen && ! -e $PORTAL_DATA_DIR/config/models ]]; then
+  mv "$PORTAL_DATA_DIR/config/qwen" "$PORTAL_DATA_DIR/config/models"
+  log "moved $PORTAL_DATA_DIR/config/qwen to $PORTAL_DATA_DIR/config/models"
+fi
+install -d -m 0700 -o root -g root "$PORTAL_DATA_DIR/config/models"
 for file in settings.json system-defaults.json; do
-  [[ -f $PORTAL_DATA_DIR/config/qwen/$file ]] || install -m 0600 -o root -g root "qwen-config/$file" "$PORTAL_DATA_DIR/config/qwen/$file"
+  [[ -f $PORTAL_DATA_DIR/config/models/$file ]] || install -m 0600 -o root -g root "models/$file" "$PORTAL_DATA_DIR/config/models/$file"
 done
 if selinux_on; then
   log "labelling $PORTAL_DATA_DIR for containers (SELinux)"
@@ -107,7 +113,7 @@ docker compose build --pull
 log "installing the firewall (nftables table inet workspace_portal); never reached besides every private address: $NEVER_REACH"
 # systemd gets copies: under SELinux it may not read the project directory.
 install -d -m 0755 /usr/local/libexec/workspace-portal /etc/workspace-portal
-install -m 0755 deploy/firewall.sh /usr/local/libexec/workspace-portal/firewall.sh
+install -m 0755 container/security/firewall.sh /usr/local/libexec/workspace-portal/firewall.sh
 {
   echo "# Written by deploy/install.sh from $ENV_FILE. NEVER_REACH holds the addresses as they were then."
   printf '%s\n' "${FIREWALL_ENV[@]}"
@@ -199,7 +205,7 @@ cat <<DONE
     Online:     $ONLINE
     Admin:      $(env_get ADMIN_USERNAME)   (first sign-in: grep ^ADMIN_PASSWORD $ENV_FILE; you choose a new one then)
 $(for agent in "${ENABLED_AGENTS[@]}"; do printf '    Agent:      %s %s\n' "${AGENT_NAME[$agent]}" "$(agent_version "$agent")"; done)
-    Models:     $PORTAL_DATA_DIR/config/qwen (deploy/qwen-config.sh; used by every agent)
+    Models:     $PORTAL_DATA_DIR/config/models (deploy/models.sh; used by every harness)
     Web:        web_search through $SEARCH; page reader $READER
     Monitoring: $MONITORING
 

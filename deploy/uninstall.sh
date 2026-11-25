@@ -26,7 +26,7 @@ rm -f /etc/systemd/system/docker.service.d/workspace-portal-firewall.conf
 rmdir /etc/systemd/system/docker.service.d 2>/dev/null || true
 systemctl daemon-reload
 systemctl disable --now workspace-portal-firewall.service >/dev/null 2>&1 || true
-bash deploy/firewall.sh remove
+bash container/security/firewall.sh remove
 rm -rf /etc/systemd/system/workspace-portal-firewall.service /usr/local/libexec/workspace-portal /etc/workspace-portal
 systemctl daemon-reload
 if systemctl is-active --quiet firewalld; then firewalld_rules remove; fi

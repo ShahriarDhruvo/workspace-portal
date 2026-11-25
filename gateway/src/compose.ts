@@ -13,7 +13,7 @@ import type { ImageBuilder } from "./docker/image-builder.ts";
 import type { ContainerRuntime } from "./docker/runtime.ts";
 import { EnergyMeter } from "./monitor/energy-meter.ts";
 import { EnergyPrices, type FetchText } from "./monitor/energy-prices.ts";
-import { fenceCheck, type FenceState } from "./workspaces/fence.ts";
+import { fenceCheck, type FenceState } from "@portal/container";
 import { createRegistryClient, EngineReleases, type RegistryClient } from "./updates/engine-releases.ts";
 import { createEngineHost, EngineUpdater, type EngineHost } from "./updates/engine-updater.ts";
 import { createGitHubReleases, type GitHubReleases } from "./updates/github-releases.ts";
@@ -92,7 +92,7 @@ export function compose(
   });
   const connections = new ConnectionRegistry(now);
   const sessions = new SessionCache((tokenHash) => loadSessionContext(db, tokenHash));
-  // Online workspaces run only while the host firewall that fences them in answers (deploy/firewall.sh, fence.ts).
+  // Online workspaces run only while the host firewall that fences them in answers (firewall.sh and fence.ts in container/security).
   const fence = seams.fence ?? fenceCheck(config.servicePort);
   const manager = new WorkspaceManager({ config, db, runtime, versions, llm, connections, log, fence, sessions: sessionLog, now });
   const registry = seams.registry ?? createNpmRegistry();

@@ -12,10 +12,11 @@ import {
   type AgentKind,
   type WorkspaceKind,
 } from "@portal/core";
+import { driverFor } from "@portal/harnesses";
 
 /**
  * A workspace's preview port is its agent port plus this. Fixed: Qwen Code's and DeepSeek Harness's web previews work
- * it out too (PREVIEW_PORT_OFFSET in workspace-image/qwen/trim-web-shell.mjs and workspace-image/dsh/web-preview.mjs),
+ * it out too (PREVIEW_PORT_OFFSET in harnesses/qwen/image/trim-web-shell.mjs and harnesses/dsh/image/web-preview.mjs),
  * and so does deploy/lib.sh.
  */
 export const PREVIEW_PORT_OFFSET = 10_000;
@@ -110,10 +111,10 @@ export interface Config {
   /** The same path on the host and in the gateway container. */
   dataDir: string;
   dbFile: string;
-  /** The admin's Qwen Code settings; its system-defaults.json holds every agent's models. */
-  qwenConfigDir: string;
+  /** The admin's model list (deploy/models.sh), which every harness's settings are rendered from. */
+  modelsDir: string;
   agentVersionsFile: string;
-  /** The build context of agent images. */
+  /** The build context of workspace images: what holds container/image/ and harnesses/. */
   imageContextDir: string;
   webPort: number;
   /** What browsers reach the portal over. Over HTTPS it is on port 443, the workspaces on their own ports. */
@@ -158,7 +159,7 @@ export class ConfigError extends Error {
 /** portal-hostd refuses shorter tokens. */
 const MIN_HOSTD_TOKEN_LENGTH = 32;
 export const MIB = 1024 * 1024;
-/** Qwen Code's effort tiers. */
+/** The efforts DEFAULT_REASONING_EFFORT may name: the tiers a model's entry lists (capabilities.reasoning.efforts). */
 const REASONING_EFFORTS = ["none", "low", "medium", "high", "xhigh", "max"];
 /** Workspace UIDs stay above system and human accounts, */
 const MIN_UID_BASE = 100_000;
@@ -171,7 +172,7 @@ const UID_LIMIT = 2_147_352_576;
  */
 const BROWSER_BLOCKED_PORTS: readonly number[] = [1719, 1720, 1723, 2049, 3659, 4045, 4190, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668, 6669, 6679, 6697, 10080];
 
-/** The IANA special-purpose IPv4 ranges: not the public internet. deploy/firewall.sh drops the same list (config.test.ts). */
+/** The IANA special-purpose IPv4 ranges: not the public internet. container/security/firewall.sh drops the same list (config.test.ts). */
 export const NOT_PUBLIC: readonly string[] = [
   "0.0.0.0/8",
   "10.0.0.0/8",
@@ -292,10 +293,10 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   const config: Config = {
     dataDir,
     dbFile: path.join(dataDir, "db", "portal.sqlite"),
-    qwenConfigDir: path.join(dataDir, "config", "qwen"),
+    modelsDir: path.join(dataDir, "config", "models"),
     agentVersionsFile: path.join(dataDir, "config", "agent-versions.env"),
-    // workspace-image/ beside the gateway's code: mounted at /app/workspace-image in the container, the repository's in development.
-    imageContextDir: fileURLToPath(new URL("../../workspace-image", import.meta.url)),
+    // Two levels above the gateway's code: /app in the container, where docker-compose.yml mounts the two folders, and the repository in development.
+    imageContextDir: fileURLToPath(new URL("../../", import.meta.url)),
     webPort: port("WEB_PORT", 3000),
     scheme: bool("PORTAL_HTTPS", false) ? "https" : "http",
     agentBind: checked("AGENT_BIND", "0.0.0.0", (value) => net.isIP(value) !== 0, "be an IP address"),
@@ -341,7 +342,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
         },
         `list one or more of ${AGENT_KINDS.join(", ")}, comma-separated`,
       ),
-      defaultVersions: { qwen: version("QWEN_CODE_VERSION", "0.27.0"), dsh: version("DSH_VERSION", "0.2.2-rc.1"), opencode: version("OPENCODE_VERSION", "2.4.1") },
+      defaultVersions: Object.fromEntries(AGENT_KINDS.map((kind) => [kind, version(driverFor(kind).release.versionKey, driverFor(kind).release.defaultVersion)])) as Record<AgentKind, string>,
       kinds: {
         private: {
           kind: "private",

@@ -6,8 +6,7 @@
 //
 // Each query Exa gets leaves the server for a company, from the server's address. That is what EXA_SEARCH turns on:
 // without it a search only ever goes to SearXNG.
-import { failureReason, readBoundedText } from "../lib/bounded-body.ts";
-import { field, parseJson } from "../lib/json.ts";
+import { failureReason, field, parseJson, readBoundedText } from "@portal/core";
 import { createAnswerCache, formatResults, MAX_RESULTS, type SearchBackend } from "./search-mcp.ts";
 
 /** Exa's hosted MCP server. It takes a tool call by itself: no handshake and no session come first. */

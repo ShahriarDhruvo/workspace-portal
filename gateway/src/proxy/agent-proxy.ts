@@ -9,11 +9,11 @@ import type http from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tokensEqual, workspaceOf, type WorkspaceRef } from "@portal/core";
 import { checkAgentAccess, INVALID_TOKEN, unavailable, type AgentAccess, type AgentDeps, type WorkspaceSurface } from "./agent-access.ts";
-import { driverFor } from "../agents/index.ts";
+import { driverFor } from "@portal/harnesses";
 import { MIB, PREVIEW_PORT_OFFSET, type Config } from "../config.ts";
 import { connectionOf, connectionRole } from "./connections.ts";
 import { forward } from "../lib/forward.ts";
-import { bearerToken, frameAncestorSources, workspaceResponseHeaders, type FramePolicy, type HeaderMap } from "./headers.ts";
+import { bearerToken, frameAncestorSources, type FramePolicy, type HeaderMap, workspaceRequestHeaders, workspaceResponseHeaders } from "./headers.ts";
 import { createStreamingServer, HttpError, isDocumentNavigation, sendError, splitTarget } from "../lib/http-util.ts";
 import {
   PORTAL_PATH_PREFIX,
@@ -158,7 +158,7 @@ async function handleRequest(deps: AgentDeps, req: IncomingMessage, res: ServerR
     // A token agent's UI authenticates with that token: only requests that presented it get the container's
     // credential; the others (the page and its static assets) go through unauthorised, and the agent answers anything
     // else with 401 itself. A session agent gets it on every request: the session and port checks authorise it.
-    headers: driver.requestHeaders(req.headers, upstream, { authorised: driver.browserAuth === "session" || presentsToken }),
+    headers: workspaceRequestHeaders(req.headers, driver, upstream, { authorised: driver.browserAuth === "session" || presentsToken }),
     responseHeaders: (incoming) => workspaceResponseHeaders(incoming.headers, frame, incoming.statusCode),
     unreachable: (error) => {
       deps.log.warn("workspace did not answer", { userId, error });

@@ -2,8 +2,9 @@
 // an agent and a workspace's web app see of a browser's request and the browser of their answers, and the LLM proxy's
 // requests.
 import type { IncomingHttpHeaders } from "node:http";
+import type { AgentDriver, AgentEndpoint, HeaderMap } from "@portal/harnesses";
 
-export type HeaderMap = Record<string, string | string[]>;
+export type { HeaderMap };
 
 /** RFC 9110 §7.6.1 connection-specific fields, plus the legacy ones proxies still see. */
 const HOP_BY_HOP = ["connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "proxy-connection", "te", "trailer", "transfer-encoding", "upgrade"];
@@ -74,20 +75,23 @@ export function rejectsSameSite(method: string, headers: IncomingHttpHeaders, up
 /** Never passed into a workspace: the portal's cookies, where the browser really is, and `expect` (the gateway answers it). */
 const notForwarded = (name: string): boolean => ["host", "cookie", "expect", "forwarded", "x-real-ip"].includes(name) || name.startsWith("x-forwarded-");
 
-/** WebSocket subprotocol prefix a token agent's UI uses to carry its bearer token (browsers can't set headers). */
-export const BEARER_SUBPROTOCOL_PREFIX = "qwen-bearer.";
-
 /**
- * The browser's request headers as an agent may see them, with Host set to `authority`: also no Origin (the gateway
- * checked it) and no credentials (the agent's driver adds its own).
+ * The headers of a request forwarded to a workspace's agent: the browser's without its Host, its Origin (the gateway
+ * checked it) and its credentials, then the Host and the credential the agent expects, from its driver. `authorised`
+ * is false only for a token agent's request that presented no token.
  */
-export function workspaceRequestHeaders(incoming: IncomingHttpHeaders, authority: string, options: { websocket?: boolean } = {}): HeaderMap {
+export function workspaceRequestHeaders(
+  incoming: IncomingHttpHeaders,
+  driver: AgentDriver,
+  endpoint: AgentEndpoint,
+  options: { authorised: boolean; websocket?: boolean },
+): HeaderMap {
   const out = endToEndHeaders(incoming);
   for (const name of Object.keys(out)) {
     const stripped = notForwarded(name) || name === "origin" || name === "authorization" || name.startsWith("sec-fetch-");
     if (stripped || (options.websocket && name.startsWith("sec-websocket-"))) delete out[name];
   }
-  out.host = authority;
+  driver.signRequest(out, endpoint, { authorised: options.authorised, origin: incoming.origin !== undefined });
   return out;
 }
 
@@ -97,15 +101,19 @@ export function bearerToken(header: string | undefined): string | null {
   return match ? match[1]! : null;
 }
 
-/** Splits a Sec-WebSocket-Protocol offer into the Web Shell's bearer token (decoded) and the other protocols. */
-export function splitBearerSubprotocol(header: string | undefined): { token: string | null; protocols: string[] } {
+/**
+ * Splits a Sec-WebSocket-Protocol offer into a bearer token (decoded) and the other protocols. A token agent's UI
+ * can't set headers on a WebSocket, so it offers its token as a protocol with one of `prefixes`, base64url after it.
+ */
+export function splitBearerSubprotocol(header: string | undefined, prefixes: readonly string[]): { token: string | null; protocols: string[] } {
   let token: string | null = null;
   const protocols: string[] = [];
   for (const raw of (header ?? "").split(",")) {
     const protocol = raw.trim();
     if (protocol === "") continue;
-    if (protocol.startsWith(BEARER_SUBPROTOCOL_PREFIX)) {
-      const encoded = protocol.slice(BEARER_SUBPROTOCOL_PREFIX.length);
+    const prefix = prefixes.find((known) => protocol.startsWith(known));
+    if (prefix !== undefined) {
+      const encoded = protocol.slice(prefix.length);
       token = /^[A-Za-z0-9_-]+={0,2}$/.test(encoded) ? Buffer.from(encoded, "base64url").toString("utf8") : "";
     } else {
       protocols.push(protocol);

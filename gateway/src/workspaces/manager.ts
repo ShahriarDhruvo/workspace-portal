@@ -29,11 +29,10 @@ import {
   type WorkspaceStatus,
 } from "@portal/core";
 import type { AgentVersions } from "../updates/agent-versions.ts";
-import { AgentConfigError, driverFor, type AgentDriver, type AgentEndpoint } from "../agents/index.ts";
+import { AgentConfigError, driverFor, type AgentDriver, type AgentEndpoint } from "@portal/harnesses";
 import type { Config } from "../config.ts";
 import { closeEndedSessions, type ConnectionRegistry } from "../proxy/connections.ts";
-import { containerName } from "../docker/container-spec.ts";
-import type { FenceState } from "./fence.ts";
+import { containerName, type FenceState } from "@portal/container";
 import type { LlmQueue } from "../service/llm-queue.ts";
 import { HttpError } from "../lib/http-util.ts";
 import { errorMessage, type Logger } from "../lib/log.ts";

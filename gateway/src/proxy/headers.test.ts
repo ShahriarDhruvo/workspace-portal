@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { driverFor } from "@portal/harnesses";
 import {
-  BEARER_SUBPROTOCOL_PREFIX,
   bearerToken,
   endToEndHeaders,
   frameAncestorSources,
@@ -17,7 +17,12 @@ import {
   workspaceResponseHeaders,
 } from "./headers.ts";
 
-const subprotocol = (token: string): string => `${BEARER_SUBPROTOCOL_PREFIX}${Buffer.from(token).toString("base64url")}`;
+const BEARER_PREFIXES = ["qwen-bearer."];
+const subprotocol = (token: string): string => `${BEARER_PREFIXES[0]}${Buffer.from(token).toString("base64url")}`;
+const split = (header: string | undefined) => splitBearerSubprotocol(header, BEARER_PREFIXES);
+/** Qwen Code's Web Shell at an address, for a request that presented no token: the driver adds the Host and nothing else. */
+const QWEN = driverFor("qwen");
+const at = (authority: string) => ({ host: authority.split(":")[0]!, port: Number(authority.split(":")[1]), credential: "container-credential" });
 
 test("endToEndHeaders drops hop-by-hop fields and those named in Connection", () => {
   const out = endToEndHeaders({
@@ -145,7 +150,9 @@ test("workspaceRequestHeaders: no cookie, Origin, browser credentials or forward
       "user-agent": "test",
       "last-event-id": "7",
     },
-    "172.29.128.5:4170",
+    QWEN,
+    at("172.29.128.5:4170"),
+    { authorised: false },
   );
   assert.deepEqual(out, {
     host: "172.29.128.5:4170",
@@ -158,7 +165,7 @@ test("workspaceRequestHeaders: no cookie, Origin, browser credentials or forward
 });
 
 test("workspaceRequestHeaders never passes the browser's own token upstream", () => {
-  const out = workspaceRequestHeaders({ host: "h:3107", authorization: "Bearer browser-token", accept: "text/html" }, "10.0.0.2:4170");
+  const out = workspaceRequestHeaders({ host: "h:3107", authorization: "Bearer browser-token", accept: "text/html" }, QWEN, at("10.0.0.2:4170"), { authorised: false });
   assert.deepEqual(out, { host: "10.0.0.2:4170", accept: "text/html" });
 });
 
@@ -176,10 +183,28 @@ test("workspaceRequestHeaders strips the WebSocket handshake fields for the rela
       "sec-websocket-protocol": "qwen-ws, qwen-bearer.abc",
       "user-agent": "test",
     },
-    "10.0.0.2:4170",
-    { websocket: true },
+    QWEN,
+    at("10.0.0.2:4170"),
+    { authorised: false, websocket: true },
   );
   assert.deepEqual(ws, { host: "10.0.0.2:4170", "user-agent": "test" });
+});
+
+test("workspaceRequestHeaders: each agent's own Host and credential on top, a session agent's on every request", () => {
+  const incoming = { host: "h:3107", origin: "http://h:3107", cookie: "portal_session=secret; theme=dark", authorization: "Bearer browser-token", "x-opencode-ticket": "1" };
+  const headers = (agent: "qwen" | "dsh" | "opencode", authorised: boolean, from = incoming) =>
+    workspaceRequestHeaders(from, driverFor(agent), { host: "172.29.128.9", port: driverFor(agent).port, credential: "Y29udGFpbmVyLWNyZWRlbnRpYWw" }, { authorised });
+  assert.deepEqual(headers("qwen", true), { host: "172.29.128.9:4170", "x-opencode-ticket": "1", authorization: "Bearer Y29udGFpbmVyLWNyZWRlbnRpYWw" });
+  assert.equal(headers("qwen", false).authorization, undefined, "a token agent's only when the browser presented its token");
+  // OpenCode gives a terminal's ticket only to a request that carries its header.
+  const basic = `Basic ${Buffer.from("opencode:Y29udGFpbmVyLWNyZWRlbnRpYWw").toString("base64")}`;
+  for (const authorised of [true, false]) assert.deepEqual(headers("opencode", authorised), { host: "172.29.128.9:4096", "x-opencode-ticket": "1", authorization: basic });
+  // DeepSeek Harness: its loopback authority, the gateway's cookie instead of the browser's, and an Origin to match when the browser sent one.
+  const dsh = headers("dsh", true);
+  assert.deepEqual([dsh.host, dsh.origin, dsh.authorization], ["localhost:3080", "http://localhost:3080", undefined]);
+  assert.match(String(dsh.cookie), /^dsh-auth-[\w-]+=v1\./);
+  assert.ok(!String(dsh.cookie).includes("portal_session"));
+  assert.equal(headers("dsh", true, { ...incoming, origin: undefined as never }).origin, undefined);
 });
 
 test("bearerToken reads only the Bearer scheme", () => {
@@ -192,15 +217,15 @@ test("bearerToken reads only the Bearer scheme", () => {
 });
 
 test("splitBearerSubprotocol takes the token out of the offer and keeps the other protocols", () => {
-  assert.deepEqual(splitBearerSubprotocol(`qwen-ws, ${subprotocol("tok.en/+")}`), { token: "tok.en/+", protocols: ["qwen-ws"] });
-  assert.deepEqual(splitBearerSubprotocol(`${subprotocol("t")},qwen-ws ,  other`), { token: "t", protocols: ["qwen-ws", "other"] });
-  assert.deepEqual(splitBearerSubprotocol("qwen-ws"), { token: null, protocols: ["qwen-ws"] });
-  assert.deepEqual(splitBearerSubprotocol(undefined), { token: null, protocols: [] });
-  assert.deepEqual(splitBearerSubprotocol(" , "), { token: null, protocols: [] });
+  assert.deepEqual(split(`qwen-ws, ${subprotocol("tok.en/+")}`), { token: "tok.en/+", protocols: ["qwen-ws"] });
+  assert.deepEqual(split(`${subprotocol("t")},qwen-ws ,  other`), { token: "t", protocols: ["qwen-ws", "other"] });
+  assert.deepEqual(split("qwen-ws"), { token: null, protocols: ["qwen-ws"] });
+  assert.deepEqual(split(undefined), { token: null, protocols: [] });
+  assert.deepEqual(split(" , "), { token: null, protocols: [] });
   // A bearer protocol that does not decode yields an empty token, which never matches.
-  assert.deepEqual(splitBearerSubprotocol("qwen-bearer.not!base64, qwen-ws"), { token: "", protocols: ["qwen-ws"] });
-  assert.deepEqual(splitBearerSubprotocol("qwen-bearer."), { token: "", protocols: [] });
-  assert.equal(splitBearerSubprotocol(`${subprotocol("first")}, ${subprotocol("second")}`).token, "second");
+  assert.deepEqual(split("qwen-bearer.not!base64, qwen-ws"), { token: "", protocols: ["qwen-ws"] });
+  assert.deepEqual(split("qwen-bearer."), { token: "", protocols: [] });
+  assert.equal(split(`${subprotocol("first")}, ${subprotocol("second")}`).token, "second");
 });
 
 test("workspaceResponseHeaders strips cookies, framing denial and a request to sign in, keeps encoding", () => {

@@ -2,9 +2,7 @@
 // LLM server, updates the LLM engine. Its API and payloads are described in hostd/README.md.
 import http from "node:http";
 import https from "node:https";
-import type { HostInfo, HostSample } from "@portal/core";
-import { readBounded } from "../lib/bounded-body.ts";
-import { field, parseJson } from "../lib/json.ts";
+import { field, parseJson, readBounded, type HostInfo, type HostSample } from "@portal/core";
 import type { HostdConfig } from "../config.ts";
 
 const REQUEST_TIMEOUT_MS = 5_000;

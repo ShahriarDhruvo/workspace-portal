@@ -5,11 +5,11 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import Docker from "dockerode";
+import { networkMismatches, workspaceNetworkOptions } from "@portal/container";
 import type { WorkspaceKind } from "@portal/core";
 import { logFrame } from "../../test/fakes.ts";
 import { loadConfig } from "../config.ts";
-import { workspaceNetworkOptions } from "./container-spec.ts";
-import { cpuSeconds, demuxDockerLogs, DOCKER_API_TIMEOUT_MS, DockerRuntime, isSupportedDockerVersion, memoryUsage, networkMismatches } from "./docker-runtime.ts";
+import { cpuSeconds, demuxDockerLogs, DOCKER_API_TIMEOUT_MS, DockerRuntime, isSupportedDockerVersion, memoryUsage } from "./docker-runtime.ts";
 
 const config = loadConfig({ GATEWAY_CONTROL_SECRET: "c".repeat(32) });
 

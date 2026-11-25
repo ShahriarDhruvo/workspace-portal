@@ -6,7 +6,7 @@
 import type http from "node:http";
 import { agentPortRange, openDatabase, WORKSPACE_KINDS, workspaceForAgentPort, type WorkspaceKind } from "@portal/core";
 import { AgentVersions } from "./updates/agent-versions.ts";
-import { AgentConfigError, driverFor } from "./agents/index.ts";
+import { AgentConfigError, driverFor } from "@portal/harnesses";
 import { compose } from "./compose.ts";
 import { ConfigError, loadConfig, PREVIEW_PORT_OFFSET, type Config } from "./config.ts";
 import { DockerRuntime, isSupportedDockerVersion, MIN_DOCKER_VERSION_TEXT } from "./docker/docker-runtime.ts";

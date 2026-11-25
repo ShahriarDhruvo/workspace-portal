@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { AGENT_KINDS, agentPortFor, agentPortRange, WORKSPACE_BLOCK, WORKSPACE_KINDS, WORKSPACE_REFS, workspaceNumber } from "@portal/core";
-import { driverFor } from "./agents/index.ts";
+import { driverFor } from "@portal/harnesses";
 import { ConfigError, DEFAULT_TRUSTED_HOSTS, isPublicIpv4, loadConfig, MIB, NOT_PUBLIC, parseByteSize, PREVIEW_PORT_OFFSET } from "./config.ts";
 
 const secrets = { GATEWAY_CONTROL_SECRET: "c".repeat(64) };
@@ -39,9 +39,9 @@ test("the defaults are .env.example's", () => {
   const config = loadConfig(secrets);
   assert.deepEqual(config, loadConfig({ ...settings, ...secrets }));
   assert.equal(config.dbFile, "/srv/workspace-portal/db/portal.sqlite");
-  assert.equal(config.qwenConfigDir, "/srv/workspace-portal/config/qwen");
+  assert.equal(config.modelsDir, "/srv/workspace-portal/config/models");
   assert.equal(config.agentVersionsFile, "/srv/workspace-portal/config/agent-versions.env");
-  assert.equal(config.imageContextDir, fileURLToPath(new URL("../../workspace-image", import.meta.url)), "/app/workspace-image in the container");
+  assert.equal(config.imageContextDir, fileURLToPath(new URL("../../", import.meta.url)), "/app in the container, where container/image and harnesses are mounted");
   // What both sides of the comparison above derive alike: a unit, or a default that .env.example leaves unset.
   assert.deepEqual(
     {
@@ -94,7 +94,7 @@ test("values are parsed and normalised", () => {
     MAX_BUSY_HOURS: "0",
   });
   assert.equal(config.dataDir, "/data/portal");
-  assert.equal(config.qwenConfigDir, "/data/portal/config/qwen");
+  assert.equal(config.modelsDir, "/data/portal/config/models");
   assert.deepEqual([config.agentPortBase, config.agentPortCount], [7000, 10]);
   assert.equal(config.llm.upstreamUrl, "http://llm.internal:8000");
   assert.deepEqual(config.search, {
@@ -234,8 +234,8 @@ test("a workspace is never served on a port that browsers refuse to open", () =>
 
 test("the gateway, Qwen Code's and DeepSeek Harness's web previews and the deploy scripts agree on where the preview ports are", () => {
   const source = (file: string): string => fs.readFileSync(new URL(`../../${file}`, import.meta.url), "utf8");
-  assert.match(source("workspace-image/qwen/trim-web-shell.mjs"), new RegExp(`^const PREVIEW_PORT_OFFSET = ${PREVIEW_PORT_OFFSET};$`, "m"));
-  assert.match(source("workspace-image/dsh/web-preview.mjs"), new RegExp(`^const PREVIEW_PORT_OFFSET = ${PREVIEW_PORT_OFFSET};$`, "m"));
+  assert.match(source("harnesses/qwen/image/trim-web-shell.mjs"), new RegExp(`^const PREVIEW_PORT_OFFSET = ${PREVIEW_PORT_OFFSET};$`, "m"));
+  assert.match(source("harnesses/dsh/image/web-preview.mjs"), new RegExp(`^const PREVIEW_PORT_OFFSET = ${PREVIEW_PORT_OFFSET};$`, "m"));
   assert.match(source("deploy/lib.sh"), new RegExp(`^PREVIEW_PORT_OFFSET=${PREVIEW_PORT_OFFSET}$`, "m"));
 });
 
@@ -296,7 +296,7 @@ test("the Online workspaces' resolvers must be public; the workspaces' UIDs stay
 });
 
 test("NOT_PUBLIC is the firewall's not_public set; isPublicIpv4 is its complement", () => {
-  const firewall = fileURLToPath(new URL("../../deploy/firewall.sh", import.meta.url));
+  const firewall = fileURLToPath(new URL("../../container/security/firewall.sh", import.meta.url));
   assert.deepEqual(execFileSync("bash", [firewall, "not-public"], { encoding: "utf8" }).trim().split("\n"), [...NOT_PUBLIC]);
   for (const address of ["1.1.1.1", "9.9.9.9", "8.8.8.8", "100.63.255.255", "100.128.0.0", "172.15.255.255", "172.32.0.0", "223.255.255.255"]) assert.equal(isPublicIpv4(address), true, address);
   for (const address of ["10.1.2.3", "100.64.0.1", "127.0.0.1", "169.254.169.254", "172.16.0.1", "172.31.255.255", "192.168.10.11", "198.18.0.1", "224.0.0.1", "255.255.255.255", "example.com", "::1"]) {

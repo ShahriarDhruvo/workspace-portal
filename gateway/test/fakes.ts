@@ -8,11 +8,10 @@ import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { WebSocketServer } from "ws";
-import { isVersion, openDatabase, WORKSPACE_REFS, type PortalDb } from "@portal/core";
-import type { AgentKind, EngineJob, EngineStatus, WorkspaceKind, WorkspaceRef } from "@portal/core";
-import { driverFor } from "../src/agents/index.ts";
-import type { SettingsObject } from "../src/agents/qwen-settings.ts";
-import { containerName, type WorkspaceStartOptions } from "../src/docker/container-spec.ts";
+import { isVersion, openDatabase, WORKSPACE_REFS, type AgentKind, type EngineJob, type EngineStatus, type PortalDb, type WorkspaceKind, type WorkspaceRef } from "@portal/core";
+import { containerName } from "@portal/container";
+import { driverFor, type SettingsObject } from "@portal/harnesses";
+import { closeServer, listenLocal } from "@portal/harnesses/testing";
 import {
   BuildError,
   imageInUse,
@@ -31,7 +30,7 @@ import { HostdError, type MeterReading } from "../src/monitor/hostd.ts";
 import { parseWorkspaceImage, STAGING_REPOSITORY, workspaceImage } from "../src/docker/image-names.ts";
 import { registryError, type NpmPackage, type NpmRegistry } from "../src/updates/npm-registry.ts";
 import { workspacePaths } from "../src/workspaces/paths.ts";
-import type { ContainerRuntime, ContainerSample, ContainerState, ContainerSummary, StartedContainer } from "../src/docker/runtime.ts";
+import type { ContainerRuntime, ContainerSample, ContainerState, ContainerSummary, StartedContainer, WorkspaceStartOptions } from "../src/docker/runtime.ts";
 import type { Logger } from "../src/lib/log.ts";
 
 export const quiet: Logger = { info() {}, warn() {}, error() {} };
@@ -43,23 +42,7 @@ export function recorder<T>(entry: (level: string, ...line: Parameters<Logger["i
   return { lines, log: { info: at("info"), warn: at("warn"), error: at("error") } };
 }
 
-export async function listenLocal(server: http.Server, port = 0, host = "127.0.0.1"): Promise<number> {
-  await new Promise<void>((resolve, reject) => {
-    const onError = (error: Error): void => reject(error);
-    server.once("error", onError);
-    server.listen(port, host, () => {
-      server.off("error", onError);
-      resolve();
-    });
-  });
-  return (server.address() as AddressInfo).port;
-}
-
-export async function closeServer(server: http.Server): Promise<void> {
-  if (!server.listening) return;
-  server.closeAllConnections();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-}
+export { closeServer, listenLocal };
 
 /** A fetch that answers from a table of URL → handler, recording the calls. */
 export function fakeFetch(routes: Record<string, (init: RequestInit) => Response>): { fetch: typeof fetch; calls: Array<{ url: string; auth: string | null; method: string }> } {
@@ -588,7 +571,7 @@ interface FakeContainer {
   kind: WorkspaceKind | null;
   /** The image it was created from. */
   image: string;
-  /** The version label (container-spec.ts VERSION_LABEL); null for a container without one. */
+  /** The version label (@portal/container's VERSION_LABEL); null for a container without one. */
   version: string | null;
   /** Address on its kind's "network" (Private 127.0.0.N, Online 127.0.1.N); null for orphans nobody serves. */
   ip: string | null;

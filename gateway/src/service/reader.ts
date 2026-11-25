@@ -2,8 +2,7 @@
 // (reader/), which is unprivileged and can only reach the public internet. The gateway decides whether a workspace
 // may open a URL (url-policy.ts), asks the reader, keeps the answer for a while so paging through a long page costs
 // one download, and hands the model one slice at a time.
-import { readBoundedText } from "../lib/bounded-body.ts";
-import { parseJson } from "../lib/json.ts";
+import { parseJson, readBoundedText } from "@portal/core";
 import { canonicalUrl, MAX_URL_CHARS } from "./url-policy.ts";
 
 /** One page as the reader returns it. */

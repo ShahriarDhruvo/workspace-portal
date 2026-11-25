@@ -4,7 +4,7 @@
 // conversation: the user's messages and the output of its tools), but not one it composed itself. A short list of
 // documentation and code sites is open as a whole, because nobody but their operators sees what is requested from
 // them. READER_URL_POLICY=any turns the rule off (every public page can be read).
-import { parseJson } from "../lib/json.ts";
+import { parseJson } from "@portal/core";
 
 /** Longer URLs are not read (the reader refuses them too), so they are not remembered either. */
 export const MAX_URL_CHARS = 2000;

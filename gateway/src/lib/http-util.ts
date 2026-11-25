@@ -1,6 +1,5 @@
 import http, { type IncomingHttpHeaders, type IncomingMessage, type ServerResponse } from "node:http";
-import type { ApiError } from "@portal/core";
-import { readBounded } from "./bounded-body.ts";
+import { readBounded, type ApiError } from "@portal/core";
 import type { Logger } from "./log.ts";
 
 /**

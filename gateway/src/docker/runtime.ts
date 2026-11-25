@@ -1,7 +1,15 @@
 // What WorkspaceManager needs from a container engine. DockerRuntime implements it for real;
 // the integration tests use an in-process fake.
 import type { AgentKind, WorkspaceRef } from "@portal/core";
-import type { WorkspaceStartOptions } from "./container-spec.ts";
+
+export interface WorkspaceStartOptions {
+  /** Which of the user's workspaces. */
+  ref: WorkspaceRef;
+  /** The agent's credential (driver.credentialEnv); new for every start. */
+  credential: string;
+  /** The image of the agent's current version (workspace-portal/workspace:<agent>-<version>). */
+  image: string;
+}
 
 export interface StartedContainer {
   id: string;

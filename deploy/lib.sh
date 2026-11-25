@@ -50,12 +50,20 @@ online_enabled() { ! env_is ONLINE_WORKSPACES false off no 0; }
 exa_enabled() { env_is EXA_SEARCH true on yes 1; }
 selinux_on() { command -v selinuxenabled >/dev/null && selinuxenabled; }
 
-# Per agent: its name and the .env key of its version, which is also the build argument of its Dockerfile stage.
-# Its CLI and its stage are named like the agent. In the gateway's order (AGENT_KINDS in
-# packages/core/src/wire/kinds.ts; a gateway test compares them), which numbers the workspaces: append only.
+# The harnesses, in the gateway's order (AGENT_KINDS in packages/core/src/wire/kinds.ts; a gateway test compares
+# them), which numbers the workspaces: append only. Each one's folder says the rest (harnesses/<name>/harness.env):
+# its name, the .env key of its version, the port it listens on in a workspace, and its CLI.
 AGENTS=(qwen dsh opencode)
-declare -A AGENT_NAME=([qwen]="Qwen Code" [dsh]="DeepSeek Harness" [opencode]="OpenCode")
-declare -A AGENT_VERSION_KEY=([qwen]=QWEN_CODE_VERSION [dsh]=DSH_VERSION [opencode]=OPENCODE_VERSION)
+declare -A AGENT_NAME AGENT_VERSION_KEY AGENT_PORT AGENT_CLI
+for agent in "${AGENTS[@]}"; do
+  # shellcheck source=/dev/null
+  source "$ROOT/harnesses/$agent/harness.env"
+  AGENT_NAME[$agent]=$NAME AGENT_VERSION_KEY[$agent]=$VERSION_KEY AGENT_PORT[$agent]=$PORT AGENT_CLI[$agent]=$CLI
+done
+unset agent NAME VERSION_KEY PORT CLI
+# SANDBOX and SANDBOX_TMPFS: what a container started from a workspace image runs with.
+# shellcheck source=container/security/sandbox.sh
+source "$ROOT/container/security/sandbox.sh"
 known_agent() { [[ -n ${AGENT_NAME[${1:-?}]-} ]] || die "unknown agent \"$1\" (one of: ${AGENTS[*]})"; }
 
 # Sets ENABLED_AGENTS from WORKSPACE_AGENTS, read as the gateway does: in any case, empty items left out. Dies on
@@ -105,8 +113,8 @@ workspace_image() { # agent [version]
 check_workspace_image() { # agent version
   local image reported
   image=$(workspace_image "$1" "$2")
-  reported=$(docker run --rm --network none --tmpfs /tmp -e HOME=/tmp --entrypoint "$1" "$image" --version 2>/dev/null |
-    grep -oE "$VERSION_PATTERN" | head -n 1) || true
+  reported=$(docker run --rm --network none "${SANDBOX[@]}" --tmpfs "/tmp:$SANDBOX_TMPFS,size=64m" -e HOME=/tmp \
+    --entrypoint "${AGENT_CLI[$1]}" "$image" --version 2>/dev/null | grep -oE "$VERSION_PATTERN" | head -n 1) || true
   [[ $reported == "$2" ]] || die "$image reports ${AGENT_NAME[$1]} \"$reported\", expected $2"
 }
 
@@ -114,8 +122,8 @@ build_workspace_image() { # agent version [docker build options...]
   local agent=$1 version=$2
   shift 2
   log "building $(workspace_image "$agent" "$version") (${AGENT_NAME[$agent]} $version)"
-  docker build --pull "$@" --target "$agent" --build-arg "${AGENT_VERSION_KEY[$agent]}=$version" \
-    -t "$(workspace_image "$agent" "$version")" "$ROOT/workspace-image"
+  docker build --pull "$@" -f "$ROOT/container/image/Dockerfile" --build-arg "HARNESS=$agent" --build-arg "HARNESS_VERSION=$version" \
+    -t "$(workspace_image "$agent" "$version")" "$ROOT"
   check_workspace_image "$agent" "$version"
 }
 
@@ -181,7 +189,7 @@ url = u.urlsplit(sys.argv[1]); print(url.port or (443 if url.scheme == "https" e
 url_ipv4s() { getent ahostsv4 "$(url_host "$1")" 2>/dev/null | awk '{print $1}' | sort -u; }
 
 # firewall.sh's not_public ranges, one per line.
-not_public_ranges() { bash "$ROOT/deploy/firewall.sh" not-public; }
+not_public_ranges() { bash "$ROOT/container/security/firewall.sh" not-public; }
 
 # The resolver settings the firewall would let no answer through for, as " KEY (value)": it lets DNS through only
 # to public IPv4 addresses outside NEVER.

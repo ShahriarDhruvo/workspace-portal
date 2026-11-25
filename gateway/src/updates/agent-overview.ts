@@ -13,7 +13,7 @@ import {
   type ReleaseNotes,
   type WorkspaceInfo,
 } from "@portal/core";
-import { driverFor } from "../agents/index.ts";
+import { driverFor } from "@portal/harnesses";
 import type { WorkspaceImageSummary } from "../docker/image-builder.ts";
 import type { NpmPackage } from "./npm-registry.ts";
 

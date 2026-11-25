@@ -67,7 +67,7 @@ test("an update builds a staging image, checks it, tags it and makes it current"
     done.log.push("changed by the caller");
     assert.equal(t.updater.job()!.log.at(-1), "qwen --version: 0.27.4", "the job is served as a copy");
     assert.deepEqual(t.builder.builds.map(({ outcome, ...spec }) => [spec, outcome]), [
-      [{ kind: "qwen", version: "0.27.4", versionKey: "QWEN_CODE_VERSION", image: stagingImage("qwen", "0.27.4"), noCache: false }, "built"],
+      [{ kind: "qwen", version: "0.27.4", image: stagingImage("qwen", "0.27.4"), noCache: false }, "built"],
     ]);
     assert.deepEqual(t.builder.verified, [stagingImage("qwen", "0.27.4")], "the staging image is what gets checked");
     assert.ok(t.builder.images.has(workspaceImage("qwen", "0.27.4")));

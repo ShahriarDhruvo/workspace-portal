@@ -20,8 +20,6 @@ ONLINE_DNS_1=$(env_get ONLINE_DNS_1) ONLINE_DNS_2=$(env_get ONLINE_DNS_2)
 ONLINE_ON=false
 if online_enabled; then ONLINE_ON=true; fi
 declare -A KIND_NETWORK=([private]="$NETWORK" [online]="$ONLINE_NETWORK")
-# The port each agent listens on in a workspace, as its driver in gateway/src/agents/.
-declare -A AGENT_PORT=([qwen]=4170 [dsh]=3080 [opencode]=4096)
 SERVICE_PORT=$(env_get SERVICE_PORT) CONTROL_PORT=$(env_get CONTROL_PORT) WEB_PORT=$(env_get WEB_PORT)
 # The portal's port on this host's addresses: behind deploy/tailscale-https.sh, 443 on Tailscale's.
 PORTAL_PORT=$WEB_PORT
@@ -66,7 +64,7 @@ check "Docker requires the firewall unit (a failed firewall keeps Docker and eve
 rules=$(nft list table inet workspace_portal 2>/dev/null || true)
 check "firewall table allows only $GW tcp/$SERVICE_PORT from the workspace network" \
   '[[ $rules == *"iifname \"$BRIDGE\" jump from_workspace"* && $rules == *"ip daddr $GW tcp dport $SERVICE_PORT ct state new accept"* ]]'
-# What the gateway asks before it runs an Online workspace (gateway/src/workspaces/fence.ts).
+# What the gateway asks before it runs an Online workspace (container/security/fence.ts).
 fence=$(python3 -I -c '
 import errno, socket, sys
 s = socket.socket(); s.settimeout(2)
@@ -337,7 +335,7 @@ workspace_probe() { # kind network [docker run options...]
     image=$(workspace_image "$agent")
     echo "-- from the ${AGENT_NAME[$agent]} image ($image), as ${kind^} workspaces run"
     tally "$image" "$(docker run --rm --pull never --name "$NAME" --network "$network" --user "$UID_BASE:$UID_BASE" \
-      --read-only --tmpfs /tmp:rw,nosuid,nodev,size=16m --cap-drop ALL --security-opt no-new-privileges \
+      "${SANDBOX[@]}" --tmpfs "/tmp:$SANDBOX_TMPFS,size=16m" \
       --pids-limit 128 --memory 256m -e KIND="$kind" -e SERVICE_PORT="$SERVICE_PORT" -e ROUTER="$ROUTER" "$@" \
       --entrypoint python3 "$image" -I -c "$PROBE" 2>&1 || true)"
   done

@@ -8,8 +8,7 @@
 //   * Eurostat nrg_pc_204 (JSON-stat): household prices with all taxes, band 2,500-4,999 kWh a year, in euros per
 //     kWh, for the last six half years.
 import { sql } from "drizzle-orm";
-import { ENERGY_LOCATIONS, ENERGY_PRICE_SOURCES, energyPrices, type EnergyCurrency, type EnergyPriceSource, type EnergyPriceStatus, type PortalDb } from "@portal/core";
-import { fetchBounded } from "../lib/bounded-body.ts";
+import { ENERGY_LOCATIONS, ENERGY_PRICE_SOURCES, energyPrices, fetchBounded, type EnergyCurrency, type EnergyPriceSource, type EnergyPriceStatus, type PortalDb } from "@portal/core";
 import { errorMessage, type Logger } from "../lib/log.ts";
 import { singleFlight } from "../lib/single-flight.ts";
 

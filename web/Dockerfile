@@ -10,6 +10,8 @@ WORKDIR /repo
 # npm checks the lockfile against every workspace's manifest.
 COPY package.json package-lock.json ./
 COPY packages/core/package.json packages/core/
+COPY harnesses/package.json harnesses/
+COPY container/package.json container/
 COPY gateway/package.json gateway/
 COPY web/package.json web/
 RUN npm ci --workspace @portal/web --no-audit --no-fund \

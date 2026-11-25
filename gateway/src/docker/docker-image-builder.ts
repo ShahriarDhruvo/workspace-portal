@@ -1,9 +1,9 @@
 // ImageBuilder backed by the Docker Engine API: the gateway already holds the Docker socket, so the admin console
 // can update agents without a shell on the host.
-//   * BuildKit (`version: "2"`): workspace-image/Dockerfile uses `COPY --chmod`, which the classic builder refuses.
-//   * The context is the project's workspace-image/ directory, mounted read-only (docker-compose.yml), so an edit
-//     there applies to the next build. dockerode tars it into the request: nothing is written to disk (the
-//     gateway's root filesystem is read-only and its /tmp a small tmpfs).
+//   * BuildKit (`version: "2"`): container/image/Dockerfile uses `RUN --mount`, which the classic builder refuses.
+//   * The context is the project's container/image/ directory and the harness's own harnesses/<name>/image/, both
+//     mounted read-only (docker-compose.yml), so an edit there applies to the next build. dockerode tars them into
+//     the request: nothing is written to disk (the gateway's root filesystem is read-only and its /tmp a small tmpfs).
 //   * A BuildKit build needs a session: a second connection to the engine, hijacked for a gRPC server on our side.
 //     dockerode's buildImage closes it only when the build stream emits "end", which a refused, aborted or broken
 //     build never does. So the builder opens the session itself (with dockerode's own session code), sends the build
@@ -13,14 +13,15 @@
 //     instead: aborting closes the connection, and the engine cancels the build.
 import fs from "node:fs";
 import { createRequire } from "node:module";
+import path from "node:path";
 import Docker from "dockerode";
+import { AGENT_LABEL, sandbox } from "@portal/container";
 import { BuildProgress, JsonLineDecoder } from "./build-progress.ts";
 import { MIB } from "../config.ts";
-import { AGENT_LABEL } from "./container-spec.ts";
 import { demuxDockerLogs, DOCKER_API_TIMEOUT_MS, engineMessage, orMissing, statusCode } from "./docker-runtime.ts";
 import { BuildError, imageInUse, imageNotFound, VerifyError, type BuildObserver, type BuildSpec, type ImageBuilder, type SweepResult, type WorkspaceImageSummary } from "./image-builder.ts";
 import { parseWorkspaceImage, STAGING_REPOSITORY, WORKSPACE_REPOSITORY } from "./image-names.ts";
-import { findVersion } from "@portal/core";
+import { findVersion, type AgentKind } from "@portal/core";
 
 /** BuildKit's session for one build (see above). */
 interface BuildSession {
@@ -60,8 +61,11 @@ const VERIFY_LOG_LINES = 20;
 /** Marks the throwaway containers of version checks (never workspace containers). */
 const VERIFY_LABEL = "workspace-portal.verify";
 
+/** The image definition every harness's image is built from, inside the build context. */
+const DOCKERFILE = "container/image/Dockerfile";
+
 interface DockerImageBuilderOptions {
-  /** The workspace-image/ directory: the build context. */
+  /** The directory that holds container/image/ and harnesses/: the project's, or where docker-compose.yml mounts them. */
   contextDir: string;
   /** For short API calls (with the gateway's usual client timeout). */
   docker?: Docker;
@@ -86,7 +90,7 @@ export class DockerImageBuilder implements ImageBuilder {
 
   async build(spec: BuildSpec, observer: BuildObserver, signal: AbortSignal): Promise<void> {
     signal.throwIfAborted();
-    const context = this.#context();
+    const context = this.#context(spec.kind);
     let session: BuildSession;
     try {
       session = await this.#openSession(this.#buildDocker);
@@ -102,19 +106,15 @@ export class DockerImageBuilder implements ImageBuilder {
     if ((await this.#imageId(spec.image)) === null) throw new BuildError(`the build finished, but there is no image ${spec.image}`);
   }
 
-  /** The workspace-image directory to send; BuildError when it can't be read or isn't one. */
-  #context(): BuildContext {
-    let entries: string[];
-    try {
-      entries = fs.readdirSync(this.#contextDir);
-    } catch (error) {
-      throw new BuildError(`the build context ${this.#contextDir} cannot be read: ${engineMessage(error)}`);
+  /** What a build of the harness is sent: the common image definition and that harness's own files. BuildError when either is missing. */
+  #context(kind: AgentKind): BuildContext {
+    const harness = `harnesses/${kind}/image`;
+    // Docker creates an empty directory for a bind mount whose source is missing, so a file in each is asked for.
+    for (const file of [DOCKERFILE, `${harness}/install.sh`]) {
+      if (fs.existsSync(path.join(this.#contextDir, file))) continue;
+      throw new BuildError(`the build context ${this.#contextDir} has no ${file} (docker-compose.yml mounts the project's container/image/ and harnesses/ directories there)`);
     }
-    // Docker creates an empty directory for a bind mount whose source is missing.
-    if (!entries.includes("Dockerfile")) {
-      throw new BuildError(`the build context ${this.#contextDir} has no Dockerfile (docker-compose.yml mounts the project's workspace-image/ directory there)`);
-    }
-    return { context: this.#contextDir, src: entries };
+    return { context: this.#contextDir, src: [path.dirname(DOCKERFILE), harness] };
   }
 
   /** Sends the build and follows its progress to the end. */
@@ -222,7 +222,7 @@ export class DockerImageBuilder implements ImageBuilder {
     }
     // A rebuild moves the workspace tag; the build it replaced loses its last tag but stays while a
     // workspace container uses it (or if the gateway stopped before removing it), and only the label
-    // workspace-image/Dockerfile's agent stages set still tells it apart.
+    // container/image/Dockerfile sets still tells it apart.
     for (const { Id } of await this.#docker.listImages({ filters: { dangling: ["true"], label: [AGENT_LABEL] } })) {
       if (await removedUnlessBusy(this.#docker.getImage(Id).remove())) removed.images.push(Id);
     }
@@ -257,9 +257,9 @@ export class DockerImageBuilder implements ImageBuilder {
   }
 }
 
-/** As `deploy/lib.sh build_workspace_image` builds: --pull, --target <agent>, --build-arg <KEY>=<version>. */
+/** As `deploy/lib.sh build_workspace_image` builds: --pull, --build-arg HARNESS=<agent>, --build-arg HARNESS_VERSION=<version>. */
 export function buildOptions(spec: BuildSpec): Docker.ImageBuildOptions {
-  return { t: spec.image, target: spec.kind, buildargs: { [spec.versionKey]: spec.version }, pull: true, nocache: spec.noCache, version: "2" };
+  return { t: spec.image, dockerfile: DOCKERFILE, buildargs: { HARNESS: spec.kind, HARNESS_VERSION: spec.version }, pull: true, nocache: spec.noCache, version: "2" };
 }
 
 /** POST /build as dockerode's buildImage sends it, minus the session it would open itself. */
@@ -286,7 +286,7 @@ async function removedUnlessBusy(removal: Promise<unknown>): Promise<boolean> {
   }
 }
 
-/** The throwaway container that asks an image's agent CLI for its version, as `deploy/lib.sh check_workspace_image` does but with nothing it doesn't need. */
+/** The throwaway container that asks an image's agent CLI for its version, as `deploy/lib.sh check_workspace_image` does. */
 export function verifyContainerOptions(image: string, cli: string): Docker.ContainerCreateOptions {
   return {
     Image: image,
@@ -299,10 +299,7 @@ export function verifyContainerOptions(image: string, cli: string): Docker.Conta
     NetworkDisabled: true,
     HostConfig: {
       NetworkMode: "none",
-      ReadonlyRootfs: true,
-      Tmpfs: { "/tmp": "rw,nosuid,nodev,size=64m" },
-      CapDrop: ["ALL"],
-      SecurityOpt: ["no-new-privileges:true"],
+      ...sandbox(64 * MIB),
       Memory: 512 * MIB,
       PidsLimit: 128,
       NanoCpus: 1e9,

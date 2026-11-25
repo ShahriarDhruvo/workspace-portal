@@ -5,6 +5,14 @@
 !packages/core/package.json
 !packages/core/tsconfig.json
 !packages/core/src/
+!harnesses/package.json
+!harnesses/tsconfig.json
+!harnesses/*.ts
+!harnesses/*/*.ts
+!container/package.json
+!container/tsconfig.json
+!container/index.ts
+!container/security/*.ts
 !gateway/package.json
 !gateway/tsconfig.json
 !gateway/build.mjs

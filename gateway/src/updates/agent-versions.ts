@@ -10,7 +10,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { AGENT_KINDS, isVersion, type AgentKind } from "@portal/core";
-import { driverFor } from "../agents/index.ts";
+import { driverFor } from "@portal/harnesses";
 import type { Config } from "../config.ts";
 import { workspaceImage } from "../docker/image-names.ts";
 import type { Logger } from "../lib/log.ts";

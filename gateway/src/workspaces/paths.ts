@@ -14,7 +14,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { workspaceNumber, type WorkspaceRef } from "@portal/core";
-import { driverFor } from "../agents/index.ts";
+import { driverFor } from "@portal/harnesses";
 import type { Config } from "../config.ts";
 
 interface FileOwner {

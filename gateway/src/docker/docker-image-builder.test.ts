@@ -14,8 +14,8 @@ import { BuildError, type BuildSpec } from "./image-builder.ts";
 import { stagingImage, workspaceImage } from "./image-names.ts";
 
 const FIXTURES = new URL("../../test/fixtures/", import.meta.url);
-const CONTEXT = fileURLToPath(new URL("../../../workspace-image", import.meta.url));
-const SPEC: BuildSpec = { kind: "qwen", version: "0.27.4", versionKey: "QWEN_CODE_VERSION", image: stagingImage("qwen", "0.27.4"), noCache: false };
+const CONTEXT = fileURLToPath(new URL("../../../", import.meta.url));
+const SPEC: BuildSpec = { kind: "qwen", version: "0.27.4", image: stagingImage("qwen", "0.27.4"), noCache: false };
 
 const dockerError = (statusCode: number, message: string): Error => Object.assign(new Error(`(HTTP code ${statusCode}) ${message}`), { statusCode, json: { message } });
 
@@ -167,8 +167,8 @@ function recorder() {
 test("builds use BuildKit with the options deploy/lib.sh uses", () => {
   assert.deepEqual(buildOptions({ ...SPEC, noCache: true }), {
     t: "workspace-portal/workspace-build:qwen-0.27.4",
-    target: "qwen",
-    buildargs: { QWEN_CODE_VERSION: "0.27.4" },
+    dockerfile: "container/image/Dockerfile",
+    buildargs: { HARNESS: "qwen", HARNESS_VERSION: "0.27.4" },
     pull: true,
     nocache: true,
     version: "2",
@@ -188,7 +188,7 @@ test("the version check runs the CLI without network, privileges or a writable r
     HostConfig: {
       NetworkMode: "none",
       ReadonlyRootfs: true,
-      Tmpfs: { "/tmp": "rw,nosuid,nodev,size=64m" },
+      Tmpfs: { "/tmp": `rw,nosuid,nodev,size=${64 * 1024 * 1024}` },
       CapDrop: ["ALL"],
       SecurityOpt: ["no-new-privileges:true"],
       Memory: 512 * 1024 * 1024,
@@ -200,14 +200,14 @@ test("the version check runs the CLI without network, privileges or a writable r
   });
 });
 
-test("build streams the workspace-image directory in its own BuildKit session and reports the recorded progress", async () => {
+test("build streams the image definition and the harness's folder in its own BuildKit session and reports the recorded progress", async () => {
   const trace = fs.readFileSync(new URL("buildkit-qwen-0.27.4.jsonl", FIXTURES));
   const fake = fakeDocker({ stream: () => Readable.from([trace.subarray(0, 5000), trace.subarray(5000)]) });
   const { steps, lines, observer } = recorder();
   await builder(fake).build(SPEC, observer, new AbortController().signal);
   const { file, ...request } = fake.builds[0]!;
   assert.deepEqual(request, { path: "/build?", method: "POST", isStream: true, options: { ...buildOptions(SPEC), session: "session-1" } }, "as dockerode's buildImage sends it");
-  assert.ok(file instanceof Readable, "the directory, tarred on the fly");
+  assert.ok(file instanceof Readable, "the two directories, tarred on the fly");
   assert.deepEqual(fake.sessions, { opened: 1, closed: 1 }, "the session is closed once the build is over");
   assert.ok(steps.includes("exporting to image"));
   assert.ok(lines.some((line) => line.endsWith("added 14 packages in 7s")));
@@ -229,22 +229,22 @@ test("a failed build rejects with the engine's message after showing the output"
 test("a refused build, a missing or empty context, a refused session or a missing result is a BuildError", async () => {
   const signal = new AbortController().signal;
   const { observer } = recorder();
-  const refused = fakeDocker({ buildError: dockerError(400, "target stage qwen could not be found") });
+  const refused = fakeDocker({ buildError: dockerError(400, "dockerfile parse error") });
   await assert.rejects(builder(refused).build(SPEC, observer, signal), {
     name: "BuildError",
-    message: "the Docker Engine refused the build: target stage qwen could not be found",
+    message: "the Docker Engine refused the build: dockerfile parse error",
   });
   assert.deepEqual(refused.sessions, { opened: 1, closed: 1 }, "dockerode would leave this session open: there is no stream to end");
 
-  const missing = path.join(os.tmpdir(), "no-such-workspace-image-dir");
+  // Docker mounts an empty directory where the project's is missing: the common definition's, then the harness's own.
   const noContext = fakeDocker();
-  await assert.rejects(builder(noContext, missing).build(SPEC, observer, signal), (error: unknown) => error instanceof BuildError && error.message.startsWith(`the build context ${missing} cannot be read`));
-  const empty = fs.mkdtempSync(path.join(os.tmpdir(), "workspace-image-"));
+  const empty = fs.mkdtempSync(path.join(os.tmpdir(), "image-context-"));
+  const mounts = "(docker-compose.yml mounts the project's container/image/ and harnesses/ directories there)";
   try {
-    await assert.rejects(builder(noContext, empty).build(SPEC, observer, signal), {
-      name: "BuildError",
-      message: `the build context ${empty} has no Dockerfile (docker-compose.yml mounts the project's workspace-image/ directory there)`,
-    });
+    await assert.rejects(builder(noContext, empty).build(SPEC, observer, signal), { name: "BuildError", message: `the build context ${empty} has no container/image/Dockerfile ${mounts}` });
+    fs.mkdirSync(path.join(empty, "container/image"), { recursive: true });
+    fs.writeFileSync(path.join(empty, "container/image/Dockerfile"), "");
+    await assert.rejects(builder(noContext, empty).build(SPEC, observer, signal), { name: "BuildError", message: `the build context ${empty} has no harnesses/qwen/image/install.sh ${mounts}` });
   } finally {
     fs.rmSync(empty, { recursive: true, force: true });
   }

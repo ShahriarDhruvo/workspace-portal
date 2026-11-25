@@ -8,7 +8,7 @@ import path from "node:path";
 import { users, workspaces, type WorkspaceInfo, type WorkspaceRef } from "@portal/core";
 import { eq } from "drizzle-orm";
 import { ALL, BOTH, bearerSubprotocol, json, MIN, tryAgain, upgrade, upgradeStatus, withGateway, type Gateway, type Reply } from "./harness.ts";
-import { driverFor } from "../src/agents/index.ts";
+import { driverFor } from "@portal/harnesses";
 import { workspaceImage } from "../src/docker/image-names.ts";
 import { userRoot, workspacePaths } from "../src/workspaces/paths.ts";
 

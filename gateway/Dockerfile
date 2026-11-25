@@ -9,12 +9,16 @@ WORKDIR /src
 # npm checks the lockfile against every workspace's manifest; it installs the gateway's dependencies only.
 COPY package.json package-lock.json ./
 COPY packages/core/package.json packages/core/
+COPY harnesses/package.json harnesses/
+COPY container/package.json container/
 COPY gateway/package.json gateway/
 COPY web/package.json web/
 RUN npm ci --workspace @portal/gateway --include-workspace-root=false --no-audit --no-fund
 RUN node -e "require('better-sqlite3')(':memory:')" \
  || npm --prefix node_modules/better-sqlite3 run build-release
 COPY packages/core/ packages/core/
+COPY harnesses/ harnesses/
+COPY container/ container/
 COPY gateway/ gateway/
 # Bundles dist/main.js and copies the modules it leaves out, with their dependencies, to /out/node_modules.
 RUN node gateway/build.mjs --runtime-deps /out

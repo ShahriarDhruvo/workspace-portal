@@ -6,11 +6,9 @@
 // Code's is about 1.9 MB of JSON, 230 kB gzipped on the wire. A request that sends the last answer's ETag is answered
 // 304 without a body while nothing was published, so the release cache downloads it again only after a release
 // (OpenCode publishes snapshot builds daily, so its document comes again about as often as it is asked for).
-import { failureReason, fetchBounded, FETCH_TIMEOUT_MS } from "../lib/bounded-body.ts";
+import { failureReason, FETCH_TIMEOUT_MS, fetchBounded, isRecord, isVersion } from "@portal/core";
 import { HttpError } from "../lib/http-util.ts";
-import { isRecord } from "../lib/json.ts";
 import { isGitHubRepo } from "./github-releases.ts";
-import { isVersion } from "@portal/core";
 
 /** One published version (an unpublished one is gone from the document). */
 export interface PublishedVersion {

@@ -7,7 +7,7 @@ import crypto from "node:crypto";
 import { isVersion, type AgentKind, type AgentUpdateJob, type AgentVersionsOverview, type PortalDb, type WorkspaceInfo } from "@portal/core";
 import { describeAgentVersions } from "./agent-overview.ts";
 import type { AgentVersions } from "./agent-versions.ts";
-import { driverFor } from "../agents/index.ts";
+import { driverFor } from "@portal/harnesses";
 import type { Config } from "../config.ts";
 import type { ImageBuilder } from "../docker/image-builder.ts";
 import { stagingImage, workspaceImage } from "../docker/image-names.ts";
@@ -225,7 +225,7 @@ export class AgentUpdater {
         append([`Using the image already on this server (${image}).`]);
       } else {
         await builder.build(
-          { kind: agent, version, versionKey: release.versionKey, image: staging, noCache: rebuild },
+          { kind: agent, version, image: staging, noCache: rebuild },
           {
             onStep: (step) => {
               if (job.finishedAt === null) job.step = step;

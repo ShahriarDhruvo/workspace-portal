@@ -30,8 +30,8 @@ import {
 import { compose, type Seams } from "../src/compose.ts";
 import { AgentVersions } from "../src/updates/agent-versions.ts";
 import { loadConfig, PREVIEW_PORT_OFFSET, type Config } from "../src/config.ts";
-import type { FenceState } from "../src/workspaces/fence.ts";
-import { BEARER_SUBPROTOCOL_PREFIX } from "../src/proxy/headers.ts";
+import type { FenceState } from "@portal/container";
+import { driverFor } from "@portal/harnesses";
 import type { FinishedLlmRequest } from "../src/monitor/llm-requests.ts";
 import { createLogger } from "../src/lib/log.ts";
 import type { ReaderBackend } from "../src/service/reader.ts";
@@ -123,7 +123,7 @@ export async function waitFor<T>(probe: () => T | undefined | null | false, what
 
 export const NAVIGATE = { "sec-fetch-mode": "navigate", "sec-fetch-dest": "iframe", "sec-fetch-site": "same-site", accept: "text/html" };
 export const cookie = (token: string): string => `theme=dark; portal_session=${encodeURIComponent(token)}`;
-export const bearerSubprotocol = (token: string): string => `${BEARER_SUBPROTOCOL_PREFIX}${Buffer.from(token).toString("base64url")}`;
+export const bearerSubprotocol = (token: string): string => `${driverFor("qwen").bearerSubprotocolPrefix}${Buffer.from(token).toString("base64url")}`;
 
 export interface Message {
   data: Buffer;
@@ -274,8 +274,8 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
   });
   const db = openDatabase(config.dbFile);
   const clock = { now: Date.now() };
-  fs.mkdirSync(config.qwenConfigDir, { recursive: true });
-  fs.writeFileSync(path.join(config.qwenConfigDir, "system-defaults.json"), JSON.stringify(SYSTEM_DEFAULTS));
+  fs.mkdirSync(config.modelsDir, { recursive: true });
+  fs.writeFileSync(path.join(config.modelsDir, "system-defaults.json"), JSON.stringify(SYSTEM_DEFAULTS));
 
   const addUser = (username: string, role: "admin" | "user"): number => {
     const now = Date.now();

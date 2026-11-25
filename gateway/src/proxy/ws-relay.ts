@@ -8,10 +8,10 @@ import type { Duplex } from "node:stream";
 import WebSocket, { WebSocketServer, type RawData } from "ws";
 import { tokensEqual, type SessionContext } from "@portal/core";
 import { checkAgentAccess, INVALID_TOKEN, unavailable, type AgentDeps } from "./agent-access.ts";
-import { driverFor } from "../agents/index.ts";
+import { BEARER_SUBPROTOCOL_PREFIXES, driverFor } from "@portal/harnesses";
 import { MIB } from "../config.ts";
 import { connectionOf } from "./connections.ts";
-import { bearerToken, splitBearerSubprotocol } from "./headers.ts";
+import { bearerToken, splitBearerSubprotocol, workspaceRequestHeaders } from "./headers.ts";
 import { splitTarget } from "../lib/http-util.ts";
 import type { Upstream } from "../workspaces/manager.ts";
 
@@ -38,7 +38,7 @@ export function createWsRelay(deps: AgentDeps): (req: IncomingMessage, socket: D
     const access = checkAgentAccess(req, deps, true);
     if (!access.ok) return rejectUpgrade(socket, access.status, access.code, access.message);
     // As on the HTTP side, a token the browser presents must be the right one, whatever the agent.
-    const { token: offered, protocols } = splitBearerSubprotocol(req.headers["sec-websocket-protocol"]);
+    const { token: offered, protocols } = splitBearerSubprotocol(req.headers["sec-websocket-protocol"], BEARER_SUBPROTOCOL_PREFIXES);
     const presented = presentedToken(offered, req.headers.authorization);
     if (presented !== null && !tokensEqual(presented, access.browserToken)) {
       return rejectUpgrade(socket, 401, INVALID_TOKEN.code, INVALID_TOKEN.message);
@@ -72,7 +72,7 @@ function connect(
   protocols: string[],
 ): void {
   const workspace = new WebSocket(address, protocols, {
-    headers: driverFor(upstream.agent).requestHeaders(req.headers, upstream, { authorised: true, websocket: true }),
+    headers: workspaceRequestHeaders(req.headers, driverFor(upstream.agent), upstream, { authorised: true, websocket: true }),
     perMessageDeflate: false,
     followRedirects: false,
     handshakeTimeout: HANDSHAKE_TIMEOUT_MS,

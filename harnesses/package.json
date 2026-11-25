@@ -1,0 +1,24 @@
+{
+  "name": "@portal/harnesses",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./index.ts",
+    "./testing": "./testing.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --experimental-strip-types --test \"*.test.ts\" \"*/*.test.ts\""
+  },
+  "dependencies": {
+    "@portal/core": "0.1.0",
+    "ws": "8.22.1"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "@types/ws": "8.18.2",
+    "typescript": "5.9.3"
+  }
+}

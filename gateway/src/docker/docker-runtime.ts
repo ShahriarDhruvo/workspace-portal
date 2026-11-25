@@ -1,11 +1,20 @@
 // ContainerRuntime backed by the Docker Engine API (dockerode, /var/run/docker.sock or DOCKER_HOST).
 import Docker from "dockerode";
 import { compareVersions, isAgentKind, isVersion, isWorkspaceKind, WORKSPACE_REFS, type AgentKind, type WorkspaceKind, type WorkspaceRef } from "@portal/core";
-import { driverFor } from "../agents/index.ts";
-import type { Config, KindConfig } from "../config.ts";
+import { AGENT_LABEL, containerName, KIND_LABEL, networkMismatches, USER_ID_LABEL, VERSION_LABEL, WORKSPACE_LABEL, workspaceNetworkOptions } from "@portal/container";
+import { driverFor } from "@portal/harnesses";
+import type { Config } from "../config.ts";
 import { errorMessage } from "../lib/log.ts";
-import { AGENT_LABEL, containerName, KIND_LABEL, USER_ID_LABEL, VERSION_LABEL, WORKSPACE_LABEL, workspaceContainerOptions, workspaceNetworkOptions, type WorkspaceStartOptions } from "./container-spec.ts";
-import { WorkspaceImageMissingError, type ContainerRuntime, type ContainerSample, type ContainerState, type ContainerSummary, type StartedContainer } from "./runtime.ts";
+import {
+  WorkspaceImageMissingError,
+  type ContainerRuntime,
+  type ContainerSample,
+  type ContainerState,
+  type ContainerSummary,
+  type StartedContainer,
+  type WorkspaceStartOptions,
+} from "./runtime.ts";
+import { workspaceContainer } from "./workspace-container.ts";
 
 const STOP_GRACE_SECONDS = 10;
 /**
@@ -46,7 +55,7 @@ export class DockerRuntime implements ContainerRuntime {
   /**
    * Creates a kind's workspace network unless it exists. A network of that name that differs from the one the
    * gateway creates (isolation options, bridge name, addresses) is replaced when nothing uses it, and refused
-   * otherwise: workspaces never start on a network that differs from what deploy/firewall.sh fences (Private: one
+   * otherwise: workspaces never start on a network that differs from what container/security/firewall.sh fences (Private: one
    * that can reach the outside; Online: one with inter-container traffic or IPv6), and the host firewall, which
    * matches on the bridge name, must see the bridge it expects.
    */
@@ -77,7 +86,7 @@ export class DockerRuntime implements ContainerRuntime {
     for (const ref of WORKSPACE_REFS) await this.removeContainer(containerName(userId, ref));
     let container: Docker.Container;
     try {
-      container = await this.#docker.createContainer(workspaceContainerOptions(this.#config, userId, options));
+      container = await this.#docker.createContainer(workspaceContainer(this.#config, userId, options));
     } catch (error) {
       throw statusCode(error) === 404 && /no such image/i.test(engineMessage(error)) ? new WorkspaceImageMissingError(options.image) : error;
     }
@@ -151,34 +160,6 @@ export class DockerRuntime implements ContainerRuntime {
     const stats = await this.#docker.getContainer(id).stats({ stream: false, "one-shot": true } as { stream: false });
     return { running: true, memoryBytes: memoryUsage(stats), cpuSeconds: cpuSeconds(stats) };
   }
-}
-
-/**
- * How an existing network differs from what workspaceNetworkOptions creates for the kind, attribute by attribute;
- * empty when it matches.
- */
-export function networkMismatches(network: Docker.NetworkInspectInfo, own: KindConfig): string[] {
-  const options = network.Options ?? {};
-  const online = own.kind === "online";
-  const problems: string[] = [];
-  const expect = (what: string, actual: unknown, expected: unknown): void => {
-    if (actual !== expected) problems.push(`${what} is ${JSON.stringify(actual ?? null)}, expected ${JSON.stringify(expected)}`);
-  };
-  expect("Driver", network.Driver, "bridge");
-  expect("Internal", network.Internal === true, !online);
-  expect("EnableIPv6", network.EnableIPv6 === true, false);
-  expect("bridge name", options["com.docker.network.bridge.name"], own.bridge);
-  expect("enable_icc", options["com.docker.network.bridge.enable_icc"], "false");
-  expect("enable_ip_masquerade", options["com.docker.network.bridge.enable_ip_masquerade"], online ? "true" : "false");
-  const pools = network.IPAM?.Config ?? [];
-  if (pools.length !== 1) problems.push(`it has ${pools.length} IPAM pools, expected 1`);
-  const pool = pools[0];
-  if (pool) {
-    expect("Subnet", pool.Subnet, own.subnet);
-    expect("Gateway", pool.Gateway, own.gatewayIp);
-    expect("IPRange", pool.IPRange, own.ipRange);
-  }
-  return problems;
 }
 
 /**

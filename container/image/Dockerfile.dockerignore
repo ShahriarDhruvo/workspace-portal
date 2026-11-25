@@ -1,0 +1,4 @@
+# Build context allowlist for the workspace image (the context is the repository root).
+*
+!container/image
+!harnesses/*/image

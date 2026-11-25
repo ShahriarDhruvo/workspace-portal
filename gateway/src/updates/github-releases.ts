@@ -1,8 +1,7 @@
 // Release notes from GitHub, for Admin > Updates: one anonymous request lists a repository's newest releases with their
 // notes. GitHub allows 60 anonymous requests an hour per address, so the answers are cached (release-cache.ts) and
 // asked for only while an admin has the Updates page open (its polls are what asks).
-import { failureReason, fetchBounded } from "../lib/bounded-body.ts";
-import { isVersion, type ReleaseNotes } from "@portal/core";
+import { failureReason, fetchBounded, isVersion, type ReleaseNotes } from "@portal/core";
 
 /**
  * Releases asked for, newest first: GitHub's maximum for one request. Qwen Code's repository also publishes nightlies,

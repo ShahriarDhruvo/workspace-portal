@@ -8,8 +8,6 @@ import { HttpError } from "../lib/http-util.ts";
 export interface BuildSpec {
   kind: AgentKind;
   version: string;
-  /** The Dockerfile build argument that carries the version (the driver's release.versionKey). */
-  versionKey: string;
   /** The tag the build gets. */
   image: string;
   /** Without the build cache: fresh Debian packages and a fresh npm install. */
@@ -59,7 +57,7 @@ export const imageInUse = (image: string): HttpError =>
 
 export interface ImageBuilder {
   /**
-   * Builds `spec.image` from the workspace-image Dockerfile (target = the agent kind). Rejects with
+   * Builds `spec.image` from container/image/Dockerfile and the harness's own image files. Rejects with
    * BuildError when the build fails; when `signal` aborts, the build is abandoned and the promise
    * rejects with the signal's reason.
    */

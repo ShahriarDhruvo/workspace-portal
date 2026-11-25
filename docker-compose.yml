@@ -16,7 +16,7 @@ x-common: &common
 x-healthcheck: &healthcheck { interval: 30s, timeout: 5s, retries: 3, start_period: 20s }
 
 # SearXNG and the reader fetch what agents name from the public internet, so they get no volume, no capability,
-# no portal secret, and a network each from which deploy/firewall.sh lets them reach only public addresses on ports
+# no portal secret, and a network each from which container/security/firewall.sh lets them reach only public addresses on ports
 # 80 and 443 and their DNS servers. Only the gateway talks to them, through a port on the host's loopback.
 x-internet-only: &internet-only
   <<: *common
@@ -78,7 +78,8 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${PORTAL_DATA_DIR:?}:${PORTAL_DATA_DIR:?}
       # The build context of agent updates from the admin console.
-      - ./workspace-image:/app/workspace-image:ro
+      - ./container/image:/app/container/image:ro
+      - ./harnesses:/app/harnesses:ro
     healthcheck:
       <<: *healthcheck
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:'+(process.env.CONTROL_PORT||4002)+'/control/health',{headers:{authorization:'Bearer '+process.env.GATEWAY_CONTROL_SECRET}}).then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]

@@ -51,7 +51,7 @@ test("a start renders the workspace's own account and settings, in its own folde
   t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
   const config = loadConfig({ GATEWAY_CONTROL_SECRET: "c".repeat(32), PORTAL_DATA_DIR: dataDir });
   // The admin's models, which every agent's settings are rendered from.
-  write(path.join(config.qwenConfigDir, "system-defaults.json"), JSON.stringify({ modelProviders: { openai: [{ id: "model-a" }] } }));
+  write(path.join(config.modelsDir, "system-defaults.json"), JSON.stringify({ modelProviders: { openai: [{ id: "model-a" }] } }));
   prepareWorkspaceFiles(config, 3, DSH_PRIVATE);
   const paths = workspacePaths(dataDir, 3, DSH_PRIVATE);
   const { uid } = workspaceOwner(config, 3, DSH_PRIVATE);

@@ -1,9 +1,8 @@
 // The LLM engine's releases, for Admin > Updates: the stable version tags of the engine's container image in its
 // registry (any Docker Registry v2, with the anonymous token flow ghcr.io and Docker Hub use), their image digests,
 // and their release notes from GitHub, cached like the agents' releases (release-cache.ts).
-import { byNewestVersion, compareVersions, isStableVersion, type EngineRelease, type EngineReleaseList, type ReleaseNotes } from "@portal/core";
+import { byNewestVersion, compareVersions, fetchBounded, isStableVersion, type EngineRelease, type EngineReleaseList, type ReleaseNotes } from "@portal/core";
 import { RELEASES_OFFERED } from "./agent-overview.ts";
-import { fetchBounded } from "../lib/bounded-body.ts";
 import type { GitHubRelease, GitHubReleases } from "./github-releases.ts";
 import type { Logger } from "../lib/log.ts";
 import { ReleaseCache } from "./release-cache.ts";
