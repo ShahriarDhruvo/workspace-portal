@@ -194,6 +194,8 @@ READER="on (read_page)"
 if env_is READER_URL off; then READER="off (READER_URL=off)"; fi
 ONLINE="on (ONLINE_WORKSPACES; Admin > Users switches it off per user)"
 online_enabled || ONLINE="off for everyone (ONLINE_WORKSPACES=off)"
+PROMPT="$PORTAL_DATA_DIR/config/instructions.md"
+[[ -f $PROMPT ]] || PROMPT="none of your own (write them to $PROMPT; every agent is told them)"
 
 cat <<DONE
 
@@ -206,6 +208,7 @@ cat <<DONE
     Admin:      $(env_get ADMIN_USERNAME)   (first sign-in: grep ^ADMIN_PASSWORD $ENV_FILE; you choose a new one then)
 $(for agent in "${ENABLED_AGENTS[@]}"; do printf '    Agent:      %s %s\n' "${AGENT_NAME[$agent]}" "$(agent_version "$agent")"; done)
     Models:     $PORTAL_DATA_DIR/config/models (deploy/models.sh; used by every harness)
+    Prompt:     $PROMPT
     Web:        web_search through $SEARCH; page reader $READER
     Monitoring: $MONITORING
 
