@@ -48,7 +48,7 @@
 - Consistent spacing, widths, cards, filters, tables and date formats across pages. Use horizontal space before stacking vertically; no empty gaps.
 - Every async action shows loading, success and error states. No silent waits, flicker or jumping layouts.
 - Check desktop, tablet and mobile. Pointer cursor on clickable things, required fields marked *, errors next to the field.
-- When I point out a UI problem, fix every instance of it, ideally in the shared component. If you can take screenshots, check the result yourself.
+- When I point out a UI problem, fix every instance of it, ideally in the shared component.
 
 ## Workflow
 - If a requirement is ambiguous or the change is large, ask short specific questions or show a brief plan first. Don't ask about things with an obvious default.
