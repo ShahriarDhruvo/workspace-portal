@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { users, workspaces, type WorkspaceInfo, type WorkspaceRef } from "@portal/core";
 import { eq } from "drizzle-orm";
-import { ALL, BOTH, bearerSubprotocol, json, MIN, tryAgain, upgrade, upgradeStatus, withGateway, type Gateway, type Reply } from "./harness.ts";
+import { ALL, BOTH, bearerSubprotocol, json, MIN, tryAgain, upgrade, upgradeStatus, waitFor, withGateway, type Gateway, type Reply } from "./harness.ts";
 import { driverFor } from "@portal/harnesses";
 import { workspaceImage } from "../src/docker/image-names.ts";
 import { userRoot, workspacePaths } from "../src/workspaces/paths.ts";
@@ -156,13 +156,27 @@ test("Try again on a stopped workspace's port starts that port's workspace, not 
     assert.deepEqual(startedFor(g, bob), [QWEN, qwenOnline]);
     assert.deepEqual([g.info(bob).agent, g.info(bob).kind], ["qwen", "online"]);
 
-    // An agent this portal has not enabled has ports all the same: nothing starts from them.
+    // An agent this portal has not enabled has no ports: nothing listens there, so nothing starts from them.
     await g.manager.stop(bob, "user");
-    const disabled = await tryAgain(g, g.tokens.bob, bob, OPENCODE);
-    assert.equal(disabled.status, 503);
-    assert.ok(disabled.body.includes("OpenCode is not available on this portal."), disabled.body);
+    await assert.rejects(tryAgain(g, g.tokens.bob, bob, OPENCODE), { code: "ECONNREFUSED" });
     assert.deepEqual(startedFor(g, bob), [QWEN, qwenOnline]);
     assert.equal(g.info(bob).status, "stopped");
+  }));
+
+test("a gateway started with an agent no longer enabled stops the containers of it that it finds, and closes its ports; the others are adopted", () =>
+  withGateway({ env: { WORKSPACE_AGENTS: "qwen,dsh", MAX_RUNNING_WORKSPACES: "3" } }, async (g) => {
+    const { alice, bob } = g.ids;
+    await g.startReady(alice, DSH);
+    await g.startReady(bob, QWEN);
+    assert.equal((await g.navigate(g.tokens.alice, alice, "/", {}, DSH)).status, 200);
+    const manager = await g.restart({ ...g.config, workspace: { ...g.config.workspace, agents: ["qwen"] } });
+    assert.deepEqual([manager.info(alice).status, manager.info(alice).stopReason], ["stopped", "agent_unavailable"]);
+    assert.deepEqual(g.auditActions(alice).at(-1)?.details, { reason: "agent_unavailable", ...DSH });
+    assert.deepEqual(g.runtime.runningUsers(), [bob], "the DeepSeek Harness container is gone; the Qwen Code one runs on");
+    await waitFor(() => manager.info(bob).ready, "bob's workspace to be adopted");
+    assert.equal(g.runtime.startsFor(bob).length, 1, "adopted, not restarted");
+    await assert.rejects(g.navigate(g.tokens.alice, alice, "/", {}, DSH), { code: "ECONNREFUSED" });
+    assert.equal(json<{ error: string }>(await start(g, alice, { agent: "dsh" })).error, "agent_unavailable");
   }));
 
 test("a user's harnesses share nothing: each one's workspace has its own folders, UID, container name, ports and browser token", () =>

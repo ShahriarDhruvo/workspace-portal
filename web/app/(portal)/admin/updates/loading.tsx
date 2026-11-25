@@ -3,15 +3,13 @@ import { ButtonSkeleton, HeadingSkeleton } from "@/components/layout/skeletons";
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 
-/** The four cards (the LLM engine, Qwen Code, DeepSeek Harness, OpenCode): the widths of their titles and sources. */
+/** The two cards every install has (the LLM engine and a harness): the widths of their titles and sources. */
 const CARDS = [
   { title: "max-w-24", source: "max-w-72" },
   { title: "max-w-24", source: "max-w-36" },
-  { title: "max-w-36", source: "max-w-32" },
-  { title: "max-w-24", source: "max-w-24" },
 ];
 
-/** The Updates page while it loads: each card as VersionCard draws it, so nothing moves when it arrives. */
+/** The Updates page while it loads: each card as VersionCard draws it, so these don't move when the page arrives (a further harness adds its card below). */
 export default function UpdatesLoading() {
   return (
     <PageMain width="lg">

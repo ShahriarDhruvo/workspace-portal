@@ -46,6 +46,7 @@ test("stop reasons in plain words", () => {
   assert.equal(stopReasonText("idle", 30), "after 30 minutes without activity");
   assert.equal(stopReasonText("admin", 30), "by the administrator");
   assert.equal(stopReasonText("capacity", 30), "to free resources");
+  assert.equal(stopReasonText("agent_unavailable", 30), "because its harness was turned off on this portal");
   assert.equal(stopReasonText("online_disabled", 30), "because Online workspaces were turned off on this portal");
   assert.equal(stopReasonText("online_not_allowed", 30, "owner"), "because Online workspaces were turned off for your account");
   assert.equal(stopReasonText("logout", 30), "because its owner signed out");

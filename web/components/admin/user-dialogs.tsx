@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useEffectEvent, useRef, useState, type ReactNode, type RefObject } from "react";
-import { AGENT_NAMES, sameWorkspace, WORKSPACE_KIND_NAMES, WORKSPACE_REFS, type WorkspaceRef } from "@portal/core/wire";
+import { AGENT_NAMES, sameWorkspace, WORKSPACE_KIND_NAMES, WORKSPACE_REFS, type AgentKind, type WorkspaceRef } from "@portal/core/wire";
 import {
   deleteUser,
   eraseWorkspaceFiles,
@@ -54,6 +54,8 @@ export interface DialogUser {
   busy?: boolean;
   /** The one of the user's workspaces that is starting, running or stopping: its files can't be erased. */
   running?: WorkspaceRef | null;
+  /** The enabled harnesses, whose workspaces the erase dialog offers; without them (the gateway can't say), every harness's. */
+  harnesses?: readonly AgentKind[] | null;
 }
 
 const TITLES: Record<UserDialogKind, string> = {
@@ -294,12 +296,14 @@ function radioValue(workspace: WorkspaceRef): string {
 
 /**
  * Erasing empties one workspace, so the button stays disabled until one is chosen: a radio card for each the user
- * has, an agent's two side by side. The one that is starting, running or stopping can't be chosen (the gateway
- * refuses it) and says so. Two columns on a phone too: the dialog doesn't scroll, and six cards in one column are
- * taller than a small screen.
+ * has of an enabled harness, a harness's two side by side. The one that is starting, running or stopping can't be
+ * chosen (the gateway refuses it) and says so. Two columns on a phone too: the dialog doesn't scroll, and the cards
+ * of several harnesses in one column are taller than a small screen.
  */
 function EraseFilesForm({ user, whose, onDone }: { user: DialogUser; whose: ReactNode; onDone: () => void }) {
   const [chosen, setChosen] = useState<WorkspaceRef | null>(null);
+  const { harnesses } = user;
+  const offered = harnesses ? WORKSPACE_REFS.filter((workspace) => harnesses.includes(workspace.agent)) : WORKSPACE_REFS;
   return (
     <ActionForm
       user={user}
@@ -322,13 +326,13 @@ function EraseFilesForm({ user, whose, onDone }: { user: DialogUser; whose: Reac
             onValueChange={(next) => {
               // Only a card's value: React resets the form after the action, which the group reports as no choice,
               // and a refused erase keeps its choice beside the reason.
-              const workspace = WORKSPACE_REFS.find((candidate) => radioValue(candidate) === next);
+              const workspace = offered.find((candidate) => radioValue(candidate) === next);
               if (workspace) setChosen(workspace);
             }}
             aria-label="Workspace to erase"
             className="grid-cols-2"
           >
-            {WORKSPACE_REFS.map((workspace) => {
+            {offered.map((workspace) => {
               const value = radioValue(workspace);
               const Icon = workspace.kind === "online" ? GlobeIcon : LockIcon;
               const running = user.running ? sameWorkspace(workspace, user.running) : false;

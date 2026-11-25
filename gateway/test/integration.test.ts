@@ -167,14 +167,10 @@ test("a session only gets into the workspace on its own user's port", async () =
 
 test("a page load starts nothing: a stopped workspace's port links to the portal, where the kind and the agent are chosen", async () => {
   const { alice } = g.ids;
-  // Each of her six ports names its own workspace, those of the agents this portal has not enabled too.
+  // Each port of the enabled agent names its own workspace.
   const ports: Array<[WorkspaceRef, string]> = [
     [{ agent: "qwen", kind: "private" }, "Private Qwen Code"],
     [{ agent: "qwen", kind: "online" }, "Online Qwen Code"],
-    [{ agent: "dsh", kind: "private" }, "Private DeepSeek Harness"],
-    [{ agent: "dsh", kind: "online" }, "Online DeepSeek Harness"],
-    [{ agent: "opencode", kind: "private" }, "Private OpenCode"],
-    [{ agent: "opencode", kind: "online" }, "Online OpenCode"],
   ];
   for (const [workspace, name] of ports) {
     for (const headers of [{}, { "sec-fetch-dest": "document", "sec-fetch-site": "cross-site" }] as Record<string, string>[]) {
@@ -187,6 +183,10 @@ test("a page load starts nothing: a stopped workspace's port links to the portal
   }
   assert.equal(g.info(alice).status, "stopped", "nothing was started");
   assert.equal(g.runtime.runningUsers().length, 0);
+  // The agents this portal has not enabled have no port: nothing listens where their workspaces would be.
+  for (const workspace of WORKSPACE_REFS.filter((ref) => ref.agent !== "qwen")) {
+    await assert.rejects(g.navigate(g.tokens.alice, alice, "/", {}, workspace), { code: "ECONNREFUSED" }, `${workspace.agent} ${workspace.kind}`);
+  }
 });
 
 test("a start from the portal: the agent port shows the starting page, then proxies", async () => {

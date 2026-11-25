@@ -84,6 +84,7 @@ export default async function UserPage({ params }: PageProps<"/admin/users/[id]"
     username: user.username,
     busy: workspace?.busy ?? false,
     running: workspace ? runningWorkspace(workspace) : null,
+    harnesses: enabled?.map((agent) => agent.id) ?? null,
   };
 
   return (

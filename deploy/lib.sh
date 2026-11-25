@@ -282,16 +282,18 @@ port_ranges() {
   printf '%s-%s %s-%s\n' "$first" "$last" "$((first + PREVIEW_PORT_OFFSET))" "$((last + PREVIEW_PORT_OFFSET))"
 }
 
-# Every port in those ranges that a workspace has, one per line: the workspaces' ports, then their previews'. The
-# rest of each user's block serves nothing.
-workspace_ports() {
-  local base count offset user place
+# Every port in those ranges that a workspace of these harnesses has, one per line: the workspaces' ports, then their
+# previews'. The gateway listens on those of the enabled harnesses (workspacePorts in gateway/src/config.ts; a test
+# compares the two); the rest of each user's block serves nothing.
+workspace_ports() { # harness...
+  local base count offset user agent kind place places=()
   base=$(env_get AGENT_PORT_BASE) count=$(env_get AGENT_PORT_COUNT)
+  for agent in "$@"; do
+    for kind in "${WORKSPACE_KINDS[@]}"; do places+=("$(workspace_number 0 "$agent" "$kind")"); done
+  done
   for offset in 0 "$PREVIEW_PORT_OFFSET"; do
     for ((user = 1; user < count; user++)); do
-      for ((place = 0; place < ${#AGENTS[@]} * ${#WORKSPACE_KINDS[@]}; place++)); do
-        echo "$((base + user * WORKSPACE_BLOCK + place + offset))"
-      done
+      for place in "${places[@]}"; do echo "$((base + user * WORKSPACE_BLOCK + place + offset))"; done
     done
   done
 }

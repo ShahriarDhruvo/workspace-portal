@@ -5,7 +5,7 @@ import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { AGENT_KINDS, agentPortFor, agentPortRange, WORKSPACE_BLOCK, WORKSPACE_KINDS, WORKSPACE_REFS, workspaceNumber } from "@portal/core";
 import { driverFor } from "@portal/harnesses";
-import { ConfigError, DEFAULT_TRUSTED_HOSTS, isPublicIpv4, loadConfig, MIB, NOT_PUBLIC, parseByteSize, PREVIEW_PORT_OFFSET } from "./config.ts";
+import { ConfigError, DEFAULT_TRUSTED_HOSTS, isPublicIpv4, loadConfig, MIB, NOT_PUBLIC, parseByteSize, PREVIEW_PORT_OFFSET, workspacePorts } from "./config.ts";
 
 const secrets = { GATEWAY_CONTROL_SECRET: "c".repeat(64) };
 
@@ -173,6 +173,8 @@ test("WORKSPACE_AGENTS selects the agents; the version variables set their defau
     assert.equal(loadConfig({ ...secrets, [versionKey]: "9.8.7" }).workspace.defaultVersions[kind], "9.8.7", `${kind}: the driver's versionKey is the env variable`);
   }
   assert.deepEqual(loadConfig({ ...secrets, WORKSPACE_AGENTS: "qwen" }).workspace.agents, ["qwen"]);
+  // Of an agent that is not enabled nothing is built or started: its version is not read.
+  assert.equal(loadConfig({ ...secrets, WORKSPACE_AGENTS: "opencode", QWEN_CODE_VERSION: "not a version" }).workspace.defaultVersions.qwen, driverFor("qwen").release.defaultVersion);
 
   assert.deepEqual(problems({ ...secrets, WORKSPACE_AGENTS: "qwen,claude" }), [
     'WORKSPACE_AGENTS must list one or more of qwen, dsh, opencode, comma-separated (got "qwen,claude")',
@@ -258,7 +260,14 @@ test("the deploy scripts number a workspace as the gateway does", () => {
       for (const ref of WORKSPACE_REFS) served.push(agentPortFor(config.agentPortBase, config.agentPortCount, userId, ref)! + offset);
     }
   }
-  assert.deepEqual(bash(`ENV_FILE=${JSON.stringify(env)}; workspace_ports`).split("\n").map(Number), served);
+  assert.deepEqual(bash(`ENV_FILE=${JSON.stringify(env)}; workspace_ports "\${AGENTS[@]}"`).split("\n").map(Number), served);
+  // Of those, the gateway serves the enabled agents'.
+  for (const enabled of ["opencode", "dsh,qwen"]) {
+    const listening = workspacePorts(loadConfig({ ...secrets, WORKSPACE_AGENTS: enabled }));
+    const mapped = bash(`ENV_FILE=${JSON.stringify(env)}; workspace_ports ${enabled.replace(",", " ")}`).split("\n").map(Number);
+    assert.deepEqual([...mapped].sort((a, b) => a - b), [...listening, ...listening.map((port) => port + PREVIEW_PORT_OFFSET)].sort((a, b) => a - b), enabled);
+  }
+  assert.deepEqual(workspacePorts(config), served.slice(0, served.length / 2), "every agent enabled: every workspace's port");
   const { first, last } = agentPortRange(config.agentPortBase, config.agentPortCount);
   assert.equal(bash(`ENV_FILE=${JSON.stringify(env)}; port_ranges`), `${first}-${last} ${first + PREVIEW_PORT_OFFSET}-${last + PREVIEW_PORT_OFFSET}`);
 });

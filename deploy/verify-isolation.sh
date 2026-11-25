@@ -24,9 +24,10 @@ SERVICE_PORT=$(env_get SERVICE_PORT) CONTROL_PORT=$(env_get CONTROL_PORT) WEB_PO
 # The portal's port on this host's addresses: behind deploy/tailscale-https.sh, 443 on Tailscale's.
 PORTAL_PORT=$WEB_PORT
 ! env_is PORTAL_HTTPS true || PORTAL_PORT=443
-# The workspace ports the probes try, each with its preview's: user 1's Private and Online workspace of the first agent.
-PRIVATE_PORT=$(($(env_get AGENT_PORT_BASE) + $(workspace_number 1 "${AGENTS[0]}" private)))
-ONLINE_PORT=$(($(env_get AGENT_PORT_BASE) + $(workspace_number 1 "${AGENTS[0]}" online)))
+# The workspace ports the probes try, each with its preview's: user 1's Private and Online workspace of the first
+# enabled harness (the gateway listens on no other harness's).
+PRIVATE_PORT=$(($(env_get AGENT_PORT_BASE) + $(workspace_number 1 "${ENABLED_AGENTS[0]}" private)))
+ONLINE_PORT=$(($(env_get AGENT_PORT_BASE) + $(workspace_number 1 "${ENABLED_AGENTS[0]}" online)))
 DATA_DIR=$(env_get PORTAL_DATA_DIR)
 ROUTER=$(routers | head -n 1)
 HOST_ADDRESSES=$(ip -4 -o addr show | awk '$4 !~ /^127\./ {sub("/.*", "", $4); print $4}')

@@ -390,6 +390,12 @@ export class WorkspaceManager {
     return allowed ? "allowed" : "not_allowed";
   }
 
+  /** Why this workspace of the user may not run (now), or null when it may: its agent is not enabled, or it is Online and that is refused. */
+  #refusal(userId: number, ref: WorkspaceRef): HttpError | null {
+    if (!this.#config.workspace.agents.includes(ref.agent)) return agentUnavailable(ref.agent);
+    return ref.kind === "online" ? this.#onlineRefusal(userId) : null;
+  }
+
   /** Why an Online workspace of this user may not run (now), or null when it may. */
   #onlineRefusal(userId: number): HttpError | null {
     if (!this.#config.workspace.onlineEnabled) return onlineDisabled();
@@ -487,12 +493,9 @@ export class WorkspaceManager {
     }
 
     const ref = this.#workspaceFor(userId, options);
-    if (ref.kind === "online") {
-      const refusal = this.#onlineRefusal(userId);
-      if (refusal) return { ok: false, error: refusal };
-    }
+    const refusal = this.#refusal(userId, ref);
+    if (refusal) return { ok: false, error: refusal };
     if (existing?.erasing && sameWorkspace(existing.erasing.ref, ref)) return { ok: false, error: beingDeleted(ref) };
-    if (!this.#config.workspace.agents.includes(ref.agent)) return { ok: false, error: agentUnavailable(ref.agent) };
 
     const eviction = this.#makeRoom(userId);
     if (eviction === false) return refuse(409, "capacity", `All ${this.#config.maxRunning} workspace slots are in use and none has been idle long enough to make room.`);
@@ -950,7 +953,7 @@ export class WorkspaceManager {
         );
         continue;
       }
-      const refusal = entry && container.ref?.kind === "online" ? this.#onlineRefusal(entry.userId) : null;
+      const refusal = entry && container.ref ? this.#refusal(entry.userId, container.ref) : null;
       if (entry && container.ref && container.running && !isActive(entry) && refusal) {
         await this.#stopRefused(entry, container.id, container.ref, refusal);
         continue;
@@ -973,16 +976,16 @@ export class WorkspaceManager {
   });
 
   /**
-   * An Online container found running that may not run (ONLINE_WORKSPACES is off, or the admin barred the user since):
-   * stopped, not adopted, and recorded as stopped for that reason.
+   * A container found running that may not run (its agent is no longer enabled, ONLINE_WORKSPACES is off, or the
+   * admin barred the user since): stopped, not adopted, and recorded as stopped for that reason.
    */
   async #stopRefused(entry: Entry, containerId: string, ref: WorkspaceRef, refusal: HttpError): Promise<void> {
     const reason = refusal.code;
-    this.#log.info("stopping an Online workspace that may not run", { userId: entry.userId, containerId, reason });
+    this.#log.info("stopping a workspace that may not run", { userId: entry.userId, containerId, ...ref, reason });
     try {
       await this.#runtime.stopContainer(containerId);
     } catch (error) {
-      this.#log.warn("could not stop an Online workspace that may not run; reconcile retries", { userId: entry.userId, containerId, error });
+      this.#log.warn("could not stop a workspace that may not run; reconcile retries", { userId: entry.userId, containerId, ...ref, error });
       return;
     }
     this.#persist(entry, { ...NO_CONTAINER, ...ref, status: "stopped", stoppedAt: this.#now(), stopReason: reason, lastError: null });

@@ -4,11 +4,11 @@
 // kind, on that kind's network).
 // See docs/ARCHITECTURE.md.
 import type http from "node:http";
-import { agentPortRange, openDatabase, WORKSPACE_KINDS, workspaceForAgentPort, type WorkspaceKind } from "@portal/core";
+import { agentPortRange, openDatabase, WORKSPACE_KINDS, type WorkspaceKind } from "@portal/core";
 import { AgentVersions } from "./updates/agent-versions.ts";
 import { AgentConfigError, driverFor } from "@portal/harnesses";
 import { compose } from "./compose.ts";
-import { ConfigError, loadConfig, PREVIEW_PORT_OFFSET, type Config } from "./config.ts";
+import { ConfigError, loadConfig, PREVIEW_PORT_OFFSET, workspacePorts, type Config } from "./config.ts";
 import { DockerRuntime, isSupportedDockerVersion, MIN_DOCKER_VERSION_TEXT } from "./docker/docker-runtime.ts";
 import { listen } from "./lib/listen.ts";
 import { createLogger, type Logger } from "./lib/log.ts";
@@ -84,12 +84,11 @@ async function main(log: Logger): Promise<void> {
   const servers: http.Server[] = [control];
 
   await listen(control, { host: "127.0.0.1", port: config.controlPort });
-  // One port per workspace: each is its own browser origin, and so are the web apps running in it (its preview port,
-  // PREVIEW_PORT_OFFSET above). A workspace's ports listen even while its agent is not enabled or Online is off (they
-  // answer that the workspace is stopped); the ports of a user's block that no workspace has stay closed.
+  // One port per workspace of an enabled agent: each is its own browser origin, and so are the web apps running in
+  // it (its preview port, PREVIEW_PORT_OFFSET above). They listen even while Online is off (and answer that the
+  // workspace is stopped); the rest of the two ranges stays closed.
   const ports = agentPortRange(config.agentPortBase, config.agentPortCount);
-  for (let port = ports.first; port <= ports.last; port++) {
-    if (workspaceForAgentPort(config.agentPortBase, config.agentPortCount, port) === null) continue;
+  for (const port of workspacePorts(config)) {
     const agent = createAgentServer();
     await listen(agent, { host: config.agentBind, port });
     servers.push(agent);

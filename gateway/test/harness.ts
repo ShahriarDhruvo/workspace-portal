@@ -11,7 +11,6 @@ import {
   AGENT_KINDS,
   agentBrowserToken,
   agentPortFor,
-  agentPortRange,
   auditLog,
   generateSessionToken,
   hashSessionToken,
@@ -20,7 +19,6 @@ import {
   users,
   WORKSPACE_BLOCK,
   WORKSPACE_KINDS,
-  workspaceForAgentPort,
   workspaces,
   type PortalDb,
   type WorkspaceInfo,
@@ -29,7 +27,7 @@ import {
 } from "@portal/core";
 import { compose, type Seams } from "../src/compose.ts";
 import { AgentVersions } from "../src/updates/agent-versions.ts";
-import { loadConfig, PREVIEW_PORT_OFFSET, type Config } from "../src/config.ts";
+import { loadConfig, PREVIEW_PORT_OFFSET, workspacePorts, type Config } from "../src/config.ts";
 import type { FenceState } from "@portal/container";
 import { driverFor } from "@portal/harnesses";
 import type { FinishedLlmRequest } from "../src/monitor/llm-requests.ts";
@@ -565,14 +563,12 @@ function randomBase(): number {
   return 11_000 + span * Math.floor(Math.random() * (11_000 / span));
 }
 
-/** One agent and one preview server per workspace, like main.ts; moves the base if a port is taken. */
+/** One agent and one preview server per workspace of an enabled agent, like main.ts; moves the base if a port is taken. */
 async function listenAgentPorts(config: Config, create: () => http.Server, createPreview: () => http.Server): Promise<http.Server[]> {
   for (let attempt = 0; ; attempt++) {
     const servers: http.Server[] = [];
     try {
-      const ports = agentPortRange(config.agentPortBase, config.agentPortCount);
-      for (let port = ports.first; port <= ports.last; port++) {
-        if (workspaceForAgentPort(config.agentPortBase, config.agentPortCount, port) === null) continue;
+      for (const port of workspacePorts(config)) {
         const server = create();
         servers.push(server);
         await listenLocal(server, port);

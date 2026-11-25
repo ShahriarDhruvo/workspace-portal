@@ -79,6 +79,8 @@ export function stopReasonText(
       return viewer === "owner" ? "because you signed out" : "because its owner signed out";
     case "error":
       return "because it ran into an error";
+    case "agent_unavailable":
+      return "because its harness was turned off on this portal";
     case "online_disabled":
       return "because Online workspaces were turned off on this portal";
     case "online_not_allowed":

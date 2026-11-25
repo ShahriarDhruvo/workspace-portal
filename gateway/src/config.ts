@@ -4,11 +4,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   AGENT_KINDS,
+  agentPortFor,
   agentPortRange,
   isAgentKind,
   isVersion,
   MIN_CONTROL_SECRET_LENGTH,
   WORKSPACE_BLOCK,
+  WORKSPACE_REFS,
   type AgentKind,
   type WorkspaceKind,
 } from "@portal/core";
@@ -38,7 +40,7 @@ export interface KindConfig {
 }
 
 export interface WorkspaceConfig {
-  /** The agents users choose from, the default first. */
+  /** The enabled agents: those users choose from, the default first. Of any other the portal runs and serves nothing. */
   agents: readonly AgentKind[];
   /** What a fresh install builds; updates/agent-versions.ts holds the versions in use. */
   defaultVersions: Readonly<Record<AgentKind, string>>;
@@ -221,6 +223,19 @@ function httpUrl(text: string): string | undefined {
   return URL.canParse(text) && /^https?:$/.test(new URL(text).protocol) ? text.replace(/\/+$/, "") : undefined;
 }
 
+/**
+ * The ports the gateway serves workspaces on, user by user: one per workspace of an enabled agent, each with its
+ * preview port PREVIEW_PORT_OFFSET above. The ports of the other agents' workspaces stay closed.
+ */
+export function workspacePorts({ agentPortBase, agentPortCount, workspace }: Config): number[] {
+  const refs = WORKSPACE_REFS.filter((ref) => workspace.agents.includes(ref.agent));
+  const ports: number[] = [];
+  for (let userId = 1; userId < agentPortCount; userId++) {
+    for (const ref of refs) ports.push(agentPortFor(agentPortBase, agentPortCount, userId, ref)!);
+  }
+  return ports;
+}
+
 /** Throws a ConfigError that lists every problem. */
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
   const problems: string[] = [];
@@ -289,6 +304,15 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   };
 
   const dataDir = read("PORTAL_DATA_DIR", "/srv/workspace-portal", (value) => (path.isAbsolute(value) ? path.resolve(value) : undefined), "be an absolute path");
+  const agents: readonly AgentKind[] = read(
+    "WORKSPACE_AGENTS",
+    "qwen,dsh,opencode",
+    (value) => {
+      const items = value.split(",").map((item) => item.trim().toLowerCase()).filter(Boolean);
+      return items.length > 0 && items.every(isAgentKind) ? [...new Set(items)] : undefined;
+    },
+    `list one or more of ${AGENT_KINDS.join(", ")}, comma-separated`,
+  );
 
   const config: Config = {
     dataDir,
@@ -333,16 +357,14 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
       maxConcurrentPerUser: int("READER_MAX_CONCURRENT_PER_USER", 2, 1),
     },
     workspace: {
-      agents: read(
-        "WORKSPACE_AGENTS",
-        "qwen,dsh,opencode",
-        (value) => {
-          const items = value.split(",").map((item) => item.trim().toLowerCase()).filter(Boolean);
-          return items.length > 0 && items.every(isAgentKind) ? [...new Set(items)] : undefined;
-        },
-        `list one or more of ${AGENT_KINDS.join(", ")}, comma-separated`,
-      ),
-      defaultVersions: Object.fromEntries(AGENT_KINDS.map((kind) => [kind, version(driverFor(kind).release.versionKey, driverFor(kind).release.defaultVersion)])) as Record<AgentKind, string>,
+      agents,
+      // Only an enabled agent's version is read from the environment: nothing is built or started of the others.
+      defaultVersions: Object.fromEntries(
+        AGENT_KINDS.map((kind) => {
+          const { versionKey, defaultVersion } = driverFor(kind).release;
+          return [kind, agents.includes(kind) ? version(versionKey, defaultVersion) : defaultVersion];
+        }),
+      ) as Record<AgentKind, string>,
       kinds: {
         private: {
           kind: "private",
