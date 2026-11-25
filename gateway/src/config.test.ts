@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
-import { AGENT_KINDS, agentPortFor, agentPortRange, WORKSPACE_BLOCK, WORKSPACE_KINDS, WORKSPACE_REFS, workspaceNumber } from "@portal/core";
+import { AGENT_KINDS, agentPortFor, agentPortRange, PREVIEW_PORT_OFFSET, WORKSPACE_BLOCK, WORKSPACE_KINDS, WORKSPACE_REFS, workspaceNumber } from "@portal/core";
 import { driverFor } from "@portal/harnesses";
-import { ConfigError, DEFAULT_TRUSTED_HOSTS, isPublicIpv4, loadConfig, MIB, NOT_PUBLIC, parseByteSize, PREVIEW_PORT_OFFSET, workspacePorts } from "./config.ts";
+import { ConfigError, DEFAULT_TRUSTED_HOSTS, isPublicIpv4, loadConfig, MIB, NOT_PUBLIC, parseByteSize, workspacePorts } from "./config.ts";
 
 const secrets = { GATEWAY_CONTROL_SECRET: "c".repeat(64) };
 
@@ -234,17 +234,10 @@ test("a workspace is never served on a port that browsers refuse to open", () =>
   for (const count of ["2", "100", "500"]) assert.doesNotThrow(() => loadConfig({ ...secrets, AGENT_PORT_COUNT: count }), `the default base suits AGENT_PORT_COUNT=${count}`);
 });
 
-test("the gateway, Qwen Code's and DeepSeek Harness's web previews and the deploy scripts agree on where the preview ports are", () => {
-  const source = (file: string): string => fs.readFileSync(new URL(`../../${file}`, import.meta.url), "utf8");
-  assert.match(source("harnesses/qwen/image/trim-web-shell.mjs"), new RegExp(`^const PREVIEW_PORT_OFFSET = ${PREVIEW_PORT_OFFSET};$`, "m"));
-  assert.match(source("harnesses/dsh/image/web-preview.mjs"), new RegExp(`^const PREVIEW_PORT_OFFSET = ${PREVIEW_PORT_OFFSET};$`, "m"));
-  assert.match(source("deploy/lib.sh"), new RegExp(`^PREVIEW_PORT_OFFSET=${PREVIEW_PORT_OFFSET}$`, "m"));
-});
-
 test("the deploy scripts number a workspace as the gateway does", () => {
   const lib = fileURLToPath(new URL("../../deploy/lib.sh", import.meta.url));
   const bash = (script: string): string => execFileSync("bash", ["-c", `source "$1"; ${script}`, "bash", lib], { encoding: "utf8" }).trim();
-  assert.equal(bash('echo "$WORKSPACE_BLOCK"'), String(WORKSPACE_BLOCK));
+  assert.equal(bash('echo "$WORKSPACE_BLOCK $PREVIEW_PORT_OFFSET"'), `${WORKSPACE_BLOCK} ${PREVIEW_PORT_OFFSET}`);
   assert.deepEqual(bash('echo "${AGENTS[@]}"').split(" "), [...AGENT_KINDS], "the agents, in the order that numbers their workspaces");
   assert.deepEqual(bash('echo "${WORKSPACE_KINDS[@]}"').split(" "), [...WORKSPACE_KINDS]);
   for (const userId of [1, 7, 99]) {

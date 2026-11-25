@@ -9,11 +9,6 @@ import { workspaceName, type WorkspaceRef } from "@portal/core";
 export const PORTAL_PATH_PREFIX = "/__portal/";
 /** POST target of the "Try again" buttons: starts that port's workspace, then redirects to /. */
 export const START_PATH = `${PORTAL_PATH_PREFIX}start`;
-/**
- * A preview port's entry: `/__portal/port/<n>/<path>` serves the workspace's port n from now on, starting at
- * /<path> (preview-proxy.ts). The Web Shell's Web preview opens `http://localhost:<n>/<path>` this way.
- */
-export const PORT_PATH = `${PORTAL_PATH_PREFIX}port/`;
 
 const MAX_DETAIL_CHARS = 4_000;
 
@@ -142,11 +137,11 @@ export function unreachablePage(): string {
   });
 }
 
-/** A preview port opened without a port chosen (`PORT_PATH`): its address alone doesn't say which app. */
+/** A preview port opened without a web server chosen (PREVIEW_PORT_PATH): its address alone doesn't say which. */
 export function previewUnchosenPage(): string {
   return render({
-    title: "No app chosen",
-    text: "Open your app from the Web preview in your workspace: http://localhost followed by the port its server listens on, such as http://localhost:3000. In OpenCode, which has no Web preview, add the port to this address instead, as in /__portal/port/3000/.",
+    title: "No web server chosen",
+    text: "Open it with the Preview button in the portal's top bar, which appears while a web server runs in your workspace.",
   });
 }
 

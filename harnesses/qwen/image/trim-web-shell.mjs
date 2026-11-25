@@ -5,9 +5,8 @@
 //   * the chat header loses Mobile access (pairing a phone, which the gateway blocks);
 //   * a finished turn keeps its answer on screen when background tasks get replies after it: as shipped, the last
 //     reply alone stays and the answer is folded into "Processed" with the turn's steps;
-//   * the Web preview shows the workspace's web apps: in the person's browser localhost is their own computer, so
-//     localhost, 127.x.x.x and 0.0.0.0 go to the workspace's preview port (the gateway's preview proxy), and its
-//     frame may lock the pointer and show alert and confirm dialogs;
+//   * the right panel has no Web preview: its frame is in the person's browser, where localhost is their own
+//     computer, not the workspace. The portal's Preview button opens the workspace's web servers;
 //   * the dialog that asks what to do with a dropped file holds its three buttons: as shipped it is 24rem wide, less
 //     than they need in English and Russian, and its content sticks out of it;
 //   * a file dropped or attached in the Web Shell may be as large as the gateway's upload limit, and goes to disk
@@ -15,8 +14,8 @@
 // Qwen Code has no setting for these: the app hard-codes its shell component's options, and the upload limit is a
 // constant.
 // Three layers:
-//   1. The app bundle: the shell component's options, a turn's visible replies and the Web preview, for every
-//      layout and language. The edited bundle gets a new file name (an import map in index.html points the other
+//   1. The app bundle: the shell component's options and a turn's visible replies, for every layout and
+//      language. The edited bundle gets a new file name (an import map in index.html points the other
 //      chunks at it), because browsers keep the shipped one cached as immutable.
 //   2. A stylesheet in index.html, keyed on the Web Shell's data-* attributes and icon names, not on its generated
 //      class names: on the desktop layouts it hides the buttons layer 1 removes, and the rail's agents button,
@@ -65,22 +64,6 @@ const STYLE_HOOKS = [
  * Layer 1, edits of the Web Shell app's bundle. Each pattern must match exactly once. Minified names are
  * matched as `[\w$]+`, so a rebuild of the same code still fits; anything else is a different version.
  */
-/**
- * The gateway serves a workspace's web apps on its agent port + this (gateway/src/config.ts, PREVIEW_PORT_OFFSET;
- * a gateway test checks the two agree).
- */
-const PREVIEW_PORT_OFFSET = 10000;
-
-/**
- * The Web preview's address, as the person's browser can reach it: a loopback address of the workspace becomes
- * `<this page's host>:<its port + PREVIEW_PORT_OFFSET>/__portal/port/<port>/<path>`, which the gateway answers
- * with the workspace's port <port>. `u` is the address (a URL), `p` this page's address; any other address stays.
- */
-const PREVIEW_ADDRESS =
-  `(u,p)=>{if(!/^(?:localhost|127(?:\\.\\d{1,3}){3}|0\\.0\\.0\\.0)$/i.test(u.hostname))return u;` +
-  `const w=new URL(p),q=Number(w.port)+${PREVIEW_PORT_OFFSET};if(!w.port||q>65535)return u;` +
-  `return new URL("/__portal/port/"+(u.port||(u.protocol==="https:"?"443":"80"))+u.pathname+u.search+u.hash,w.protocol+"//"+w.hostname+":"+q)}`;
-
 const EDITS = [
   {
     name: "sidebar: only Home, New session and the toggle",
@@ -117,21 +100,10 @@ const EDITS = [
       `else if(${crossed}&&!portalWork&&portalRole==="assistant"&&${row}.message.content?.trim())${from}=${i},${crossed}=!1}`,
   },
   {
-    name: "Web preview: the workspace's own addresses through the gateway",
-    // The preview's address check, which both the address bar and the links opened from messages go through:
-    //   function Eie(e,t,n){try{const s=new URL(e.trim());if(…)return;const r=[…],o=new URL(s);return o.protocol=
-    //   "https:",r.includes(xB(s))||r.includes(xB(o))?void 0:s}catch{return}}
-    // (t: this page's address). The address it accepts goes through PREVIEW_ADDRESS; the frame, its frame-src,
-    // the refresh and "Open externally" all use what it returns.
-    pattern: /(function [\w$]+\(([\w$]+),([\w$]+),[\w$]+\)\{try\{const ([\w$]+)=new URL\(\2\.trim\(\)\);[^{}]{0,400}?\?void 0:)\4(\}catch\{return\}\})/g,
-    replace: (_, head, _address, page, parsed, tail) => `${head}(${PREVIEW_ADDRESS})(${parsed},${page})${tail}`,
-  },
-  {
-    name: "Web preview: pointer lock and dialogs in its frame",
-    // <iframe title="${o8(t)}" src="${o8(e.href)}" sandbox="allow-scripts allow-same-origin allow-forms" ...>
-    // The sandbox keeps the app in its frame (no popups, no navigating the page); a game still needs the mouse.
-    pattern: /(src="\$\{[\w$]+\([\w$]+\.href\)\}" sandbox="allow-scripts allow-same-origin allow-forms)"/g,
-    replace: (_, head) => `${head} allow-pointer-lock allow-modals"`,
+    name: "right panel: no Web preview",
+    // rightPanel:{items:["files","review","sideTask","terminal","webPreview","trajectory","changeOverview"]}
+    pattern: /(rightPanel:\{items:\[)((?:"\w+",)*"webPreview"(?:,"\w+")*)(\]\})/g,
+    replace: (_, head, items, tail) => `${head}${items.split(",").filter((item) => item !== '"webPreview"').join(",")}${tail}`,
   },
 ];
 

@@ -15,6 +15,7 @@ import {
   generateSessionToken,
   hashSessionToken,
   openDatabase,
+  PREVIEW_PORT_OFFSET,
   sessions,
   users,
   WORKSPACE_BLOCK,
@@ -27,7 +28,7 @@ import {
 } from "@portal/core";
 import { compose, type Seams } from "../src/compose.ts";
 import { AgentVersions } from "../src/updates/agent-versions.ts";
-import { loadConfig, PREVIEW_PORT_OFFSET, workspacePorts, type Config } from "../src/config.ts";
+import { loadConfig, workspacePorts, type Config } from "../src/config.ts";
 import type { FenceState } from "@portal/container";
 import { driverFor } from "@portal/harnesses";
 import type { FinishedLlmRequest } from "../src/monitor/llm-requests.ts";

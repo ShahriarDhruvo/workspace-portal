@@ -1,9 +1,7 @@
-// The preview ports: the web apps running in a workspace, as the person's browser sees them. A workspace runs on a
-// host the browser can't reach, so the agent's web preview (Qwen Code's Web preview, trim-web-shell.mjs; DeepSeek
-// Harness's sidebar Browser, web-preview.mjs) opens `http://localhost:<n>` here instead: one port per workspace,
-// the agent port + PREVIEW_PORT_OFFSET, so an app is a browser origin of its own, apart from the agent's (its page
-// can't read the agent UI's token or storage) and every other workspace's. OpenCode has no web preview: a person
-// opens the address below in a tab.
+// The preview ports: the web servers running in a workspace, as the person's browser sees them. A workspace runs on
+// a host the browser can't reach, so the portal's Preview button opens a server here, in a tab: one port per
+// workspace, the agent port + PREVIEW_PORT_OFFSET, so an app is a browser origin of its own, apart from the portal's,
+// the agent's (its page can't read the agent UI's token or storage) and every other workspace's.
 //
 // A request passes the agent ports' checks, then goes to the port of the workspace the person chose:
 // `/__portal/port/<n>/<path>` keeps n in a cookie of this port and redirects to /<path>; everything after goes to n,
@@ -12,17 +10,16 @@
 // starts nothing: only "Try again" (a POST) starts this port's workspace.
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
+import { PREVIEW_PORT_PATH } from "@portal/core";
 import { checkAgentAccess, unavailable, type AgentDeps } from "./agent-access.ts";
 import { admit, handlePortalPath, handleUnavailable, relay, sendPage } from "./agent-proxy.ts";
 import { connectionOf } from "./connections.ts";
 import { endToEndHeaders, isPortalCookie, previewRequestHeaders, previewResponseHeaders, type HostParts } from "./headers.ts";
 import { createStreamingServer, sendError, splitTarget } from "../lib/http-util.ts";
-import { PORT_PATH, PORTAL_PATH_PREFIX, previewBadPortPage, previewUnchosenPage, previewUnreachablePage, START_PATH } from "./pages.ts";
+import { PORTAL_PATH_PREFIX, previewBadPortPage, previewUnchosenPage, previewUnreachablePage, START_PATH } from "./pages.ts";
 import { HANDSHAKE_TIMEOUT_MS, rejectUpgrade } from "./ws-relay.ts";
 import type { Upstream } from "../workspaces/manager.ts";
-
-/** Ports below this need root in the container, where nothing runs as root. */
-const FIRST_PORT = 1024;
+import { FIRST_SERVER_PORT } from "../workspaces/servers.ts";
 
 /** The cookie that keeps a preview port's chosen app port; named after the preview port, as cookies ignore ports. */
 export function previewCookieName(previewPort: number): string {
@@ -33,7 +30,7 @@ export function previewCookieName(previewPort: number): string {
 function appPort(text: string | undefined, upstream: Upstream | null): number | null {
   if (text === undefined || !/^\d{1,5}$/.test(text)) return null;
   const port = Number(text);
-  if (port < FIRST_PORT || port > 65535) return null;
+  if (port < FIRST_SERVER_PORT || port > 65535) return null;
   return upstream !== null && port === upstream.port ? null : port;
 }
 
@@ -69,16 +66,16 @@ async function handleRequest(deps: AgentDeps, req: IncomingMessage, res: ServerR
   if (pathname.startsWith(PORTAL_PATH_PREFIX)) {
     // "Try again" as on the agent port, its pages framed by the portal alone.
     if (pathname === START_PATH) return handlePortalPath(deps, req, res, userId, ref, { portal: frame.portal }, pathname);
-    if (!pathname.startsWith(PORT_PATH)) return sendError(res, 404, "not_found", "Not found.");
+    if (!pathname.startsWith(PREVIEW_PORT_PATH)) return sendError(res, 404, "not_found", "Not found.");
     if (method !== "GET" && method !== "HEAD") return sendError(res, 405, "method_not_allowed", "Use GET.", { allow: "GET, HEAD" });
     // /__portal/port/<n>[/<path>]: serve n from now on, from /<path>.
-    const rest = pathname.slice(PORT_PATH.length);
+    const rest = pathname.slice(PREVIEW_PORT_PATH.length);
     const slash = rest.indexOf("/");
     const asked = slash === -1 ? rest : rest.slice(0, slash);
     const port = appPort(asked, upstream);
     if (port === null) {
       if (navigation) return sendPage(res, 400, previewBadPortPage(asked.slice(0, 12)), frame);
-      return sendError(res, 400, "bad_port", `Choose a port from ${FIRST_PORT} to 65535, other than the agent's.`);
+      return sendError(res, 400, "bad_port", `Choose a port from ${FIRST_SERVER_PORT} to 65535, other than the agent's.`);
     }
     const path = slash === -1 ? "/" : rest.slice(slash);
     res.writeHead(303, {
@@ -96,7 +93,7 @@ async function handleRequest(deps: AgentDeps, req: IncomingMessage, res: ServerR
   const port = chosenPort(req, upstream);
   if (port === null) {
     if (navigation) return sendPage(res, 404, previewUnchosenPage(), frame);
-    return sendError(res, 404, "no_app_chosen", "No app chosen: open it from the Web preview.");
+    return sendError(res, 404, "no_app_chosen", "No web server chosen: open it with the portal's Preview button.");
   }
 
   if (navigation) deps.manager.touch(userId);

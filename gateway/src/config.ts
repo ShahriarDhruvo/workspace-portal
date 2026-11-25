@@ -9,19 +9,13 @@ import {
   isAgentKind,
   isVersion,
   MIN_CONTROL_SECRET_LENGTH,
+  PREVIEW_PORT_OFFSET,
   WORKSPACE_BLOCK,
   WORKSPACE_REFS,
   type AgentKind,
   type WorkspaceKind,
 } from "@portal/core";
 import { driverFor } from "@portal/harnesses";
-
-/**
- * A workspace's preview port is its agent port plus this. Fixed: Qwen Code's and DeepSeek Harness's web previews work
- * it out too (PREVIEW_PORT_OFFSET in harnesses/qwen/image/trim-web-shell.mjs and harnesses/dsh/image/web-preview.mjs),
- * and so does deploy/lib.sh.
- */
-export const PREVIEW_PORT_OFFSET = 10_000;
 
 /**
  * What one kind of workspace (Private, Online) has to itself: its network. Every agent's workspace of the kind is on

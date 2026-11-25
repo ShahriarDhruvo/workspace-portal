@@ -48,11 +48,6 @@
 - id: ui-open-in-app
   disabled: true
 
-# The sidebar Browser, dsh's web preview: off in dsh's web profile, on here. It is a frame in the person's own
-# browser, so dsh/web-preview.mjs sends the workspace's own addresses (localhost, 127.x) to the gateway's preview port.
-- id: ui-sidebar-browser
-  disabled: false
-
 # Agent teamwork on for new sessions, where dsh ships it off: the agent and the subagents it starts divide the work on
 # a shared task board, which does better on large tasks and spends more tokens. A person switches it off for a session
 # in the model menu (Enable agent teamwork). A session keeps the mode it saved, so sessions from before stay as they

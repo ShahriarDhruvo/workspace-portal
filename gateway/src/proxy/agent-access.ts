@@ -4,8 +4,18 @@
 // admin must have opened them from the admin console). The preview ports (the agent port + PREVIEW_PORT_OFFSET) pass
 // the same checks, where a same-site page load may also open the preview in a tab of its own.
 import type { IncomingMessage } from "node:http";
-import { agentBrowserToken, sameWorkspace, workspaceForAgentPort, workspaceName, workspaceOf, type SessionContext, type WorkspaceInfo, type WorkspaceRef } from "@portal/core";
-import { PREVIEW_PORT_OFFSET, type Config } from "../config.ts";
+import {
+  agentBrowserToken,
+  PREVIEW_PORT_OFFSET,
+  sameWorkspace,
+  workspaceForAgentPort,
+  workspaceName,
+  workspaceOf,
+  type SessionContext,
+  type WorkspaceInfo,
+  type WorkspaceRef,
+} from "@portal/core";
+import type { Config } from "../config.ts";
 import type { ConnectionRegistry } from "./connections.ts";
 import { originMatchesHost, parseHostHeader, rejectsCrossSite, rejectsSameSite, type HostParts } from "./headers.ts";
 import type { Logger } from "../lib/log.ts";

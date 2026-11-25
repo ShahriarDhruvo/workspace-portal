@@ -128,6 +128,7 @@ const ROUTES: Route[] = [
   },
   { method: "GET", pattern: /^\/control\/workspaces$/, handler: (deps) => ({ workspaces: deps.manager.list() }) },
   { method: "GET", pattern: /^\/control\/workspaces\/([^/]+)$/, handler: (deps, _req, [id]) => deps.manager.info(userIdParam(id)) },
+  { method: "GET", pattern: /^\/control\/workspaces\/([^/]+)\/servers$/, handler: (deps, _req, [id]) => deps.manager.servers(userIdParam(id)) },
   {
     method: "POST",
     pattern: /^\/control\/workspaces\/([^/]+)\/start$/,

@@ -4,11 +4,11 @@
 // kind, on that kind's network).
 // See docs/ARCHITECTURE.md.
 import type http from "node:http";
-import { agentPortRange, openDatabase, WORKSPACE_KINDS, type WorkspaceKind } from "@portal/core";
+import { agentPortRange, openDatabase, PREVIEW_PORT_OFFSET, WORKSPACE_KINDS, type WorkspaceKind } from "@portal/core";
 import { AgentVersions } from "./updates/agent-versions.ts";
 import { AgentConfigError, driverFor } from "@portal/harnesses";
 import { compose } from "./compose.ts";
-import { ConfigError, loadConfig, PREVIEW_PORT_OFFSET, workspacePorts, type Config } from "./config.ts";
+import { ConfigError, loadConfig, workspacePorts, type Config } from "./config.ts";
 import { DockerRuntime, isSupportedDockerVersion, MIN_DOCKER_VERSION_TEXT } from "./docker/docker-runtime.ts";
 import { listen } from "./lib/listen.ts";
 import { createLogger, type Logger } from "./lib/log.ts";

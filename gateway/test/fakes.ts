@@ -610,6 +610,10 @@ export interface StartRecord {
 export class FakeRuntime implements ContainerRuntime {
   readonly containers = new Map<string, FakeContainer>();
   readonly starts: StartRecord[] = [];
+  /** What every container's socket tables read as (/proc/net/tcp, then tcp6), or the failure of reading them. */
+  socketTables: string | Error = "";
+  /** The containers whose socket tables were read, in order. */
+  readonly socketReads: string[] = [];
   readyAfterMs = 0;
   pingIntervalMs = 50;
   memoryBytes = 256 * 1024 * 1024;
@@ -783,6 +787,12 @@ export class FakeRuntime implements ContainerRuntime {
 
   async logsTail(id: string): Promise<string> {
     return `fake ${this.containers.get(id)?.agent ?? "agent"}: last log line\n`;
+  }
+
+  async sockets(id: string): Promise<string> {
+    this.socketReads.push(id);
+    if (this.socketTables instanceof Error) throw this.socketTables;
+    return this.socketTables;
   }
 
   async sample(id: string): Promise<ContainerSample> {

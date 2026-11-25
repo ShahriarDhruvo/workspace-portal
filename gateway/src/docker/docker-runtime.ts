@@ -1,6 +1,6 @@
 // ContainerRuntime backed by the Docker Engine API (dockerode, /var/run/docker.sock or DOCKER_HOST).
 import Docker from "dockerode";
-import { compareVersions, isAgentKind, isVersion, isWorkspaceKind, WORKSPACE_REFS, type AgentKind, type WorkspaceKind, type WorkspaceRef } from "@portal/core";
+import { compareVersions, isAgentKind, isVersion, isWorkspaceKind, readBounded, WORKSPACE_REFS, type AgentKind, type WorkspaceKind, type WorkspaceRef } from "@portal/core";
 import { AGENT_LABEL, containerName, KIND_LABEL, networkMismatches, USER_ID_LABEL, VERSION_LABEL, WORKSPACE_LABEL, workspaceNetworkOptions } from "@portal/container";
 import { driverFor } from "@portal/harnesses";
 import type { Config } from "../config.ts";
@@ -28,6 +28,9 @@ export const DOCKER_API_TIMEOUT_MS = 60_000;
  * which would give workspaces a way out. Fixed in 25.0.5 and 26.0.0.
  */
 export const MIN_DOCKER_VERSION_TEXT = "25.0.5";
+/** Reading a container's socket tables: `cat` of two small files. A page waits for it, so it gets seconds, and a table past the size is not read. */
+const SOCKETS_TIMEOUT_MS = 3_000;
+const SOCKETS_MAX_BYTES = 1024 * 1024;
 
 /** For `.catch`: the engine's "no such container, image or network" (404) becomes `missing`; any other failure stays one. */
 export function orMissing<T>(missing: T): (error: unknown) => T {
@@ -159,6 +162,18 @@ export class DockerRuntime implements ContainerRuntime {
     // one-shot: no second sample a second later; CPU is averaged by the caller across calls.
     const stats = await this.#docker.getContainer(id).stats({ stream: false, "one-shot": true } as { stream: false });
     return { running: true, memoryBytes: memoryUsage(stats), cpuSeconds: cpuSeconds(stats) };
+  }
+
+  /** `cat`, the image's own, run in the container as its user: nothing of the workspace's is executed. A missing tcp6 (no IPv6) only costs its lines. */
+  async sockets(id: string): Promise<string> {
+    const abortSignal = AbortSignal.timeout(SOCKETS_TIMEOUT_MS);
+    const exec = await this.#docker.getContainer(id).exec({ Cmd: ["/usr/bin/cat", "/proc/net/tcp", "/proc/net/tcp6"], AttachStdout: true, AttachStderr: false, abortSignal });
+    const output = await exec.start({ abortSignal });
+    try {
+      return demuxDockerLogs((await readBounded(output, SOCKETS_MAX_BYTES)) ?? Buffer.alloc(0));
+    } finally {
+      output.destroy();
+    }
   }
 }
 

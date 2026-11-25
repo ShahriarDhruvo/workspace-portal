@@ -30,7 +30,7 @@ import { StopDialog } from "./stop-dialog";
  * The stop reasons worth a line on the card. Not the owner's own Stop or sign-out, and not an idle stop: the
  * card's footer already says idle workspaces stop.
  */
-const NOTED_STOP_REASONS = new Set(["admin", "capacity", "error", "online_disabled", "online_not_allowed"]);
+const NOTED_STOP_REASONS = new Set(["admin", "capacity", "error", "agent_unavailable", "online_disabled", "online_not_allowed"]);
 
 interface HomeCardProps {
   /** The workspace as the page rendered it; null when the gateway couldn't be asked. */

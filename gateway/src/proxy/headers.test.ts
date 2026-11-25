@@ -4,7 +4,6 @@ import { driverFor } from "@portal/harnesses";
 import {
   bearerToken,
   endToEndHeaders,
-  frameAncestorSources,
   llmRequestHeaders,
   mergeFrameAncestors,
   originMatchesHost,
@@ -249,9 +248,8 @@ test("workspaceResponseHeaders strips cookies, framing denial and a request to s
     "content-type": "text/html",
     "cache-control": "no-cache",
   });
-  assert.equal(workspaceResponseHeaders({ "content-type": "text/css" }, { portal: "https://h" })["content-security-policy"], "frame-ancestors https://h");
   // Only the portal may frame a workspace: not another workspace's port or any other service on the host.
-  assert.equal(frameAncestorSources({ portal: "https://portal.example", agent: "https://portal.example:3101" }), "https://portal.example https://portal.example:3101");
+  assert.equal(workspaceResponseHeaders({ "content-type": "text/css" }, { portal: "https://h" })["content-security-policy"], "frame-ancestors https://h");
 });
 
 test("workspaceResponseHeaders makes per-user responses uncacheable, but leaves 304s alone", () => {

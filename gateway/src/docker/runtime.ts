@@ -74,4 +74,6 @@ export interface ContainerRuntime {
   list(): Promise<ContainerSummary[]>;
   logsTail(id: string, lines: number): Promise<string>;
   sample(id: string): Promise<ContainerSample>;
+  /** A running container's TCP sockets as its kernel lists them (/proc/net/tcp, then tcp6), for workspaces/servers.ts to read. */
+  sockets(id: string): Promise<string>;
 }

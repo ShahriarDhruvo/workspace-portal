@@ -26,6 +26,8 @@ import {
   type WorkspaceInfo,
   type WorkspaceKind,
   type WorkspaceRef,
+  type WorkspaceServer,
+  type WorkspaceServers,
   type WorkspaceStatus,
 } from "@portal/core";
 import type { AgentVersions } from "../updates/agent-versions.ts";
@@ -42,6 +44,7 @@ import { assessActivity, averageCores, chooseEviction, idleMs, reapVerdict, type
 import { READY_TIMEOUT_MS, waitForReady, type ReadyResult } from "./readiness.ts";
 import { WorkspaceImageMissingError, type ContainerRuntime, type ContainerState, type ContainerSummary } from "../docker/runtime.ts";
 import { eraseWorkspaceFiles, prepareWorkspaceFiles, removeUserData, workspaceOwner } from "./paths.ts";
+import { listeningServers } from "./servers.ts";
 
 /** The user's data (or, `erasing`, that workspace's files) is being deleted: it can't be started meanwhile. */
 const beingDeleted = (erasing: WorkspaceRef | null = null): HttpError =>
@@ -102,6 +105,8 @@ const SAMPLE_INTERVAL_MS = 15_000;
 const FLUSH_INTERVAL_MS = 30_000;
 /** The Online workspaces stop within this long of the fence going. */
 const FENCE_INTERVAL_MS = 5_000;
+/** A workspace's servers are looked up at most this often, however many tabs ask. */
+const SERVERS_MAX_AGE_MS = 2_000;
 /** WebSocket close code sent to browsers when their workspace stops ("going away"). */
 const CLOSE_GOING_AWAY = 1001;
 const CLOSE_INTERNAL_ERROR = 1011;
@@ -226,6 +231,8 @@ export class WorkspaceManager {
   readonly #log: Logger;
   readonly #now: () => number;
   readonly #entries = new Map<number, Entry>();
+  /** By container: the last look at its servers, while it is fresh (SERVERS_MAX_AGE_MS). */
+  readonly #servers = new Map<string, { at: number; found: Promise<WorkspaceServer[]> }>();
   readonly #checking = new Set<number>();
   readonly #timers: NodeJS.Timeout[] = [];
   readonly #fenceCheck: () => Promise<FenceState>;
@@ -401,6 +408,33 @@ export class WorkspaceManager {
     if (!this.#config.workspace.onlineEnabled) return onlineDisabled();
     if (this.#fence !== "loaded") return onlineDisabled(true);
     return this.#onlineAccess(userId) === "not_allowed" ? new HttpError(403, "online_not_allowed", "Your administrator hasn't allowed you an Online workspace.") : null;
+  }
+
+  /**
+   * The web servers running in the user's workspace, for its preview port to show: those of the one that runs and is
+   * ready, else none. Reading them changes nothing: it is no activity, and nothing starts. A container that can't be
+   * asked has none.
+   */
+  async servers(userId: number): Promise<WorkspaceServers> {
+    const entry = this.#entries.get(userId);
+    const workspace = entry && workspaceOf(entry);
+    if (!entry || !workspace || entry.status !== "running" || !entry.ready || !entry.containerId || !entry.ip || entry.port === null) return { workspace: null, servers: [] };
+    const { containerId, ip, port } = entry;
+    const now = this.#now();
+    for (const [id, looked] of this.#servers) if (now - looked.at >= SERVERS_MAX_AGE_MS) this.#servers.delete(id);
+    let looked = this.#servers.get(containerId);
+    if (!looked) {
+      const found = this.#runtime.sockets(containerId).then(
+        (tables) => listeningServers(tables, ip, port),
+        (error: unknown) => {
+          this.#log.warn("could not list a workspace's web servers", { userId, containerId, error });
+          return [];
+        },
+      );
+      looked = { at: now, found };
+      this.#servers.set(containerId, looked);
+    }
+    return { workspace, servers: await looked.found };
   }
 
   /** Workspaces holding a container slot (starting or running). */

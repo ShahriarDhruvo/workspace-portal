@@ -10,10 +10,10 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { tokensEqual, workspaceOf, type WorkspaceRef } from "@portal/core";
 import { checkAgentAccess, INVALID_TOKEN, unavailable, type AgentAccess, type AgentDeps, type WorkspaceSurface } from "./agent-access.ts";
 import { driverFor } from "@portal/harnesses";
-import { MIB, PREVIEW_PORT_OFFSET, type Config } from "../config.ts";
+import { MIB, type Config } from "../config.ts";
 import { connectionOf, connectionRole } from "./connections.ts";
 import { forward } from "../lib/forward.ts";
-import { bearerToken, frameAncestorSources, type FramePolicy, type HeaderMap, workspaceRequestHeaders, workspaceResponseHeaders } from "./headers.ts";
+import { bearerToken, type FramePolicy, type HeaderMap, workspaceRequestHeaders, workspaceResponseHeaders } from "./headers.ts";
 import { createStreamingServer, HttpError, isDocumentNavigation, sendError, splitTarget } from "../lib/http-util.ts";
 import {
   PORTAL_PATH_PREFIX,
@@ -62,10 +62,10 @@ type Admitted = Extract<AgentAccess, { ok: true }> & { method: string; target: s
 
 const portalUrl = (frame: FramePolicy, path = "/"): string => frame.portal + path;
 
-/** The portal and, for a preview, its workspace's agent port, as the browser names them on this host. */
-function framePolicy({ scheme, webPort }: Config, hostname: string, agentPort?: number): FramePolicy {
+/** The portal, as the browser names it on this host. */
+function framePolicy({ scheme, webPort }: Config, hostname: string): FramePolicy {
   const host = `${scheme}://${hostname}`;
-  return { portal: scheme === "https" ? host : `${host}:${webPort}`, agent: agentPort === undefined ? undefined : `${host}:${agentPort}` };
+  return { portal: scheme === "https" ? host : `${host}:${webPort}` };
 }
 
 /** The access checks. A refused request is answered here: a signed-out or other-workspace page load with a page, the rest with the JSON error. */
@@ -76,9 +76,7 @@ export function admit(deps: AgentDeps, req: IncomingMessage, res: ServerResponse
   const access: AgentAccess = target.startsWith("/")
     ? checkAgentAccess(req, deps, false, surface)
     : { ok: false, status: 400, code: "bad_request", message: "Unsupported request target.", host: null };
-  // A preview is framed by its workspace's agent UI (the agent port), inside the portal.
-  const agentPort = surface === "preview" ? (req.socket.localPort ?? 0) - PREVIEW_PORT_OFFSET : undefined;
-  const frame = access.host && framePolicy(deps.config, access.host.hostname, agentPort);
+  const frame = access.host && framePolicy(deps.config, access.host.hostname);
   if (access.ok) return { ...access, method, target, navigation, frame: frame! };
   if (navigation && frame && access.status === 401) sendPage(res, 401, signedOutPage(portalUrl(frame, "/login")), frame);
   else if (navigation && frame && access.code === "other_workspace") sendPage(res, 403, otherWorkspacePage(portalUrl(frame)), frame);
@@ -218,7 +216,7 @@ export function sendPage(res: ServerResponse, status: number, html: string, fram
     "content-type": "text/html; charset=utf-8",
     "content-length": Buffer.byteLength(html),
     "cache-control": "no-store",
-    "content-security-policy": `default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors ${frameAncestorSources(frame)}`,
+    "content-security-policy": `default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors ${frame.portal}`,
     "x-content-type-options": "nosniff",
     "referrer-policy": "no-referrer",
     ...headers,

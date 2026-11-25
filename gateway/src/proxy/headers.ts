@@ -122,16 +122,10 @@ export function splitBearerSubprotocol(header: string | undefined, prefixes: rea
   return { token, protocols };
 }
 
-/**
- * Who may frame a workspace, as origins: the portal page; a preview port also its workspace's agent port (the Web
- * Shell's Web preview frames the app, inside the portal's frame).
- */
+/** Who may frame what a workspace's ports answer: the portal page alone, as an origin. */
 export interface FramePolicy {
   portal: string;
-  agent?: string;
 }
-
-export const frameAncestorSources = ({ portal, agent }: FramePolicy): string => (agent ? `${portal} ${agent}` : portal);
 
 /**
  * Sets frame-ancestors in a Content-Security-Policy value (one header or a comma-separated policy list), replacing
@@ -172,7 +166,7 @@ function responseHeaders(upstream: IncomingHttpHeaders, frame: FramePolicy, stat
     delete out.expires;
     out["cache-control"] = workspaceCacheControl(upstream["cache-control"]);
   }
-  out["content-security-policy"] = mergeFrameAncestors(policies, frameAncestorSources(frame));
+  out["content-security-policy"] = mergeFrameAncestors(policies, frame.portal);
   return out;
 }
 
@@ -245,9 +239,9 @@ function previewLocation(location: string, port: number): string {
 }
 
 /**
- * A workspace app's response as the browser gets it: framed only by its workspace's Web Shell inside the portal,
- * never setting a portal cookie, its own redirects kept on the preview origin, and for a Private workspace confined
- * to that origin (privatePreviewPolicy).
+ * A workspace app's response as the browser gets it: framed by nothing but the portal, never setting a portal
+ * cookie, its own redirects kept on the preview origin, and for a Private workspace confined to that origin
+ * (privatePreviewPolicy).
  */
 export function previewResponseHeaders(
   upstream: IncomingHttpHeaders,

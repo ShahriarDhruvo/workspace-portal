@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import WebSocket, { WebSocketServer } from "ws";
-import { hashSessionToken, type WorkspaceRef } from "@portal/core";
+import { hashSessionToken, type WorkspaceRef, type WorkspaceServers } from "@portal/core";
 import { BOTH, cookie, json, NAVIGATE, request, startGateway, withGateway, type Gateway, type Reply, type WorkspaceChoice } from "./harness.ts";
 import { previewCookieName } from "../src/proxy/preview-proxy.ts";
 
@@ -159,14 +159,14 @@ test("over HTTPS the portal is on the default port, and every origin the gateway
     const page = await previewNavigate(g, g.tokens.alice, alice, "/", { cookie: chosen, referer: `https://127.0.0.1:${g.previewPort(alice)}/menu` });
     assert.equal(app.seen.at(-1)?.headers.referer, `http://localhost:${app.port}/menu`);
     const [own, confined] = String(page.headers["content-security-policy"]).split(", ");
-    assert.equal(own, `img-src 'self'; frame-ancestors https://127.0.0.1 https://127.0.0.1:${g.agentPort(alice)}`);
+    assert.equal(own, "img-src 'self'; frame-ancestors https://127.0.0.1");
     assert.match(confined!, new RegExp(`connect-src 'self' wss://127\\.0\\.0\\.1:${g.previewPort(alice)};`));
     const signedOut = await g.navigate(null, alice);
     assert.ok(signedOut.body.includes('href="https://127.0.0.1/login" target="_top"'));
     assert.equal(signedOut.headers["content-security-policy"]?.toString().split("; ").at(-1), "frame-ancestors https://127.0.0.1");
   }, { PORTAL_HTTPS: "true" }));
 
-test("the app's answer: no portal cookies, framed only by its Web Shell inside the portal, redirects kept on the preview", () =>
+test("the app's answer: no portal cookies, framed by nothing but the portal, redirects kept on the preview", () =>
   withApp(async (g, app, alice) => {
     const chosen = await choose(g, g.tokens.alice, alice, app.port);
     const page = await previewNavigate(g, g.tokens.alice, alice, "/", { cookie: chosen });
@@ -176,7 +176,7 @@ test("the app's answer: no portal cookies, framed only by its Web Shell inside t
     assert.equal(page.headers["x-frame-options"], undefined);
     assert.equal(page.headers["cache-control"], "private, no-store");
     const host = "127.0.0.1";
-    const ancestors = `frame-ancestors http://${host}:${g.config.webPort} http://${host}:${g.agentPort(alice)}`;
+    const ancestors = `frame-ancestors http://${host}:${g.config.webPort}`;
     const csp = String(page.headers["content-security-policy"]);
     const policies = csp.split(", ");
     assert.equal(policies[0], `img-src 'self'; ${ancestors}`, "the app's own policy, its frame-ancestors replaced");
@@ -244,7 +244,7 @@ test("no app chosen, nothing listening, a stopped workspace: a page for page loa
   withApp(async (g, app, alice) => {
     const unchosen = await previewNavigate(g, g.tokens.alice, alice, "/");
     assert.equal(unchosen.status, 404);
-    assert.match(unchosen.body, /No app chosen/);
+    assert.match(unchosen.body, /No web server chosen/);
     const xhr = await request(g.previewPort(alice), { path: "/api", headers: { cookie: cookie(g.tokens.alice), "sec-fetch-site": "same-origin", "sec-fetch-mode": "cors" } });
     assert.equal(json<{ error: string }>(xhr).error, "no_app_chosen");
 
@@ -254,7 +254,7 @@ test("no app chosen, nothing listening, a stopped workspace: a page for page loa
     const down = await previewNavigate(g, g.tokens.alice, alice, "/", { cookie: chosen });
     assert.equal(down.status, 502);
     assert.match(down.body, new RegExp(`Nothing answers on port ${port}`));
-    assert.match(String(down.headers["content-security-policy"]), new RegExp(`frame-ancestors .*:${g.agentPort(alice)}`), "framed in the Web preview");
+    assert.match(String(down.headers["content-security-policy"]), new RegExp(`frame-ancestors http://127\\.0\\.0\\.1:${g.config.webPort}$`), "framed by nothing but the portal");
 
     await g.manager.stop(alice, "test");
     const stopped = await previewNavigate(g, g.tokens.alice, alice, "/", { cookie: chosen });
@@ -284,7 +284,7 @@ test("a harness's preview port never serves another harness's apps: another_runn
     // Nor is what was chosen there chosen on Qwen Code's own preview port: the cookie is its port's.
     const own = await previewNavigate(g, g.tokens.alice, alice, "/", { cookie: chosen });
     assert.equal(own.status, 404);
-    assert.match(own.body, /No app chosen/);
+    assert.match(own.body, /No web server chosen/);
     assert.deepEqual([app.seen.length, app.sockets.length], [0, 0], "nothing reached the app");
   }, BOTH.env));
 
@@ -307,6 +307,39 @@ test("Try again on a preview port starts that port's workspace, not the agent a 
     await g.waitReady(alice);
     assert.deepEqual(g.runtime.startsFor(alice).map((record) => record.options.ref), [DSH_PRIVATE]);
     assert.equal(g.manager.upstream(alice, QWEN_PRIVATE), null);
+  }));
+
+test("GET /control/workspaces/:id/servers: the web servers of the workspace that runs, looked up once however many ask, and no activity", () =>
+  withGateway({}, async (g) => {
+    const { alice, bob } = g.ids;
+    const servers = async (userId: number) => json<WorkspaceServers>(await g.control("GET", `/control/workspaces/${userId}/servers`));
+    const socket = (address: string, port: number, state = "0A") =>
+      `   0: ${address}:${port.toString(16).toUpperCase().padStart(4, "0")} 00000000:0000 ${state} 00000000:00000000 00:00000000 00000000 200020        0 7 1 0000000000000000 100 0 0 10 0`;
+
+    assert.deepEqual(await servers(alice), { workspace: null, servers: [] }, "stopped");
+    assert.deepEqual(g.runtime.socketReads, [], "no container is asked");
+
+    await g.startReady(alice);
+    const agentPort = g.manager.upstream(alice, QWEN_PRIVATE)!.port;
+    g.runtime.socketTables = [socket("00000000", 3000), socket("0100007F", 5173), socket("00000000", agentPort), socket("00000000", 8080, "01")].join("\n");
+    const active = g.info(alice).lastActivityAt;
+    g.clock.now += 60_000;
+    const listed = { workspace: QWEN_PRIVATE, servers: [{ port: 3000, reachable: true }, { port: 5173, reachable: false }] };
+    assert.deepEqual(await Promise.all([servers(alice), servers(alice)]), [listed, listed], "not the agent's own port, nor a socket that does not listen");
+    assert.deepEqual(await servers(alice), listed);
+    assert.equal(g.runtime.socketReads.length, 1, "three asked, the container once");
+    assert.equal(g.info(alice).lastActivityAt, active, "looking is no activity");
+    assert.deepEqual(await servers(bob), { workspace: null, servers: [] }, "another user's workspace says nothing");
+
+    // Later, a container that can't be asked has none.
+    g.clock.now += 2_000;
+    g.runtime.socketTables = new Error("the container is paused");
+    assert.deepEqual(await servers(alice), { workspace: QWEN_PRIVATE, servers: [] });
+    assert.equal(g.runtime.socketReads.length, 2);
+
+    await g.manager.stop(alice, "test");
+    assert.deepEqual(await servers(alice), { workspace: null, servers: [] });
+    assert.equal((await g.control("GET", "/control/workspaces/zero/servers")).status, 400);
   }));
 
 test("WebSockets reach the chosen app as a local browser's, after the same checks, and close with the session", () =>
