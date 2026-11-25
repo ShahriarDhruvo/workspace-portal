@@ -780,12 +780,13 @@ The small second PC. Steps 11 and 12.
 
 ### 11. Workspace Portal
 
-*Portal server · about 10 min*
+*Portal server · about 12 min*
 
 Installs Docker and [Workspace Portal](https://github.com/ShahriarDhruvo/workspace-portal), points it at the LLM
 server, and sizes it for an 8 GB machine: three workspaces of at most 2.25 GiB each. The installer builds the
 images, loads the firewall and starts the portal, its own SearXNG for web search, and the page reader that lets
-agents open the pages they find. On the 2-core test machine that took 10 minutes.
+agents open the pages they find. On the 2-core test machine that took 7.5 minutes with one agent enabled; the
+images of the other two, built by hand, took 4 more.
 
 **Portal server**:
 
@@ -839,10 +840,10 @@ curl -s 'http://127.0.0.1:8888/search?q=fedora+linux&format=json' \
 grep ^ADMIN_PASSWORD .env
 ```
 
-**You should see** one `PASS` line per check and a last line with `failed 0`, after about 12 minutes on the 2-core
-test machine: most of that is waiting for connections that must fail. The count before it grows with the setup and
-with the workspaces people have used: `passed 492` on the test machine with the three agents and no workspace
-started yet. Then a line like
+**You should see** one `PASS` line per check and a last line with `failed 0`, after about 6.5 minutes on the
+2-core test machine: most of that is waiting for connections that must fail. The count before it grows with the
+setup and with the workspaces people have used: `passed 296` on the test machine with one agent enabled and no
+workspace started yet. Then a line like
 `33 results, engines that failed: []`: an engine named in the brackets was turned away this time and comes back by
 itself.
 
@@ -1244,8 +1245,9 @@ sudo bash deploy/install.sh
 sudo bash deploy/verify-isolation.sh
 ```
 
-**You should see** `Workspace Portal is running.` within 2 minutes, and `failed 0` about 12 minutes later. Running
-workspaces keep running, and an open browser tab carries on without a reload.
+**You should see** `Workspace Portal is running.` within 3 minutes, or after the time of [step
+11](#11-workspace-portal) when the update changes what every agent's image starts from, and `failed 0` about 6.5
+minutes later. Running workspaces keep running, and an open browser tab carries on without a reload.
 
 <details>
 <summary>From a portal where a person's agents shared their two workspaces</summary>
@@ -1324,7 +1326,7 @@ sudo bash deploy/verify-isolation.sh
   `opencode` for OpenCode.
 - **A new agent** (OpenCode, for an install from before it) stays off, because the installer keeps
   `WORKSPACE_AGENTS` in your `.env`: add `opencode` to it, as in `WORKSPACE_AGENTS=qwen,dsh,opencode`, and run the
-  installer again. It builds the agent's image, about 2 GB.
+  installer again. It builds the agent's image: 4.2 to 4.9 GB, of which the agents' images share 3.7 GB.
 - **portal-hostd on the LLM server** updates separately: `cd ~/workspace-portal && git pull --ff-only && sudo bash
   hostd/install.sh llm --portal PORTAL_IP` there. It keeps its token and restarts only if something changed.
 - **Chromium and the other system packages** inside the workspace images: `sudo bash deploy/update-image.sh
@@ -1410,16 +1412,25 @@ fan service is running and that the vents have space on all sides. How each was 
   previous version back by itself.
 - More than the 9 hours of continuous load tests the model has served without a restart.
 - DeepSeek Harness under load. The stress runs used Qwen Code.
-- OpenCode on these servers, and OpenCode with the real model. Its image was built on a development machine and
-  run there as a workspace runs, behind the portal's gateway and in a browser, with a stand-in for the model. So
-  the times of [step 11](#11-workspace-portal) are without its image, and nothing here says how it handles a long
-  conversation or an answer cut off at the model's limit, or what memory it needs.
-- A workspace of its own for every agent, in a browser. The portal server got that layout on November 24, 2026,
-  with every person's files deleted: the isolation check and the half minute of [step
-  12](#12-https-and-remote-access) are from that run, and a workspace of each agent was started, stopped and erased
-  through the gateway, without a browser. Not run: the agents' pages in a browser on the new ports, `tailscale-https.sh
-  off` on them, and the update from the old layout as [Update the portal](#update-the-portal) writes it (the server's
-  old ports were closed with `tailscale serve reset`, and nobody's files were moved).
+- OpenCode under load. Since November 24, 2026 it is the portal server's only agent: its image was built there,
+  and in a headless browser a person signed in, started a Private workspace in one click, opened one and three web
+  servers with the Preview button and stopped the workspace; Home, the list of servers and the workspace page
+  were also opened at the widths of a tablet and a phone. In a Private and an Online workspace OpenCode reported
+  its plugins, skills and MCP servers as loaded, the toolchains built and ran their programs, and the model
+  answered one prompt in 14 seconds. Nothing here says how OpenCode handles a long conversation or an answer cut
+  off at the model's limit, or what memory it needs.
+- All three agents since the workspace image holds the toolchains. The times and the count of [step
+  11](#11-workspace-portal) are the portal server's with OpenCode alone; with three agents, before that image, the
+  isolation check made 492 checks in 12 minutes. The images of Qwen Code and DeepSeek Harness were built on the
+  portal server and removed again; on a development machine each was started as a workspace runs and answered the
+  gateway's readiness check, with a stand-in for the model at most and without a browser.
+- A workspace of its own for every agent, with Qwen Code or DeepSeek Harness in a browser. The portal server got
+  that layout on November 24, 2026, with every person's files deleted: the half minute of [step
+  12](#12-https-and-remote-access) is from that run, with three agents (9 seconds with one), and a workspace of each
+  agent was started, stopped and erased through the gateway. Not run: those two agents' pages in a browser on the
+  new ports, `tailscale-https.sh off` on them, and the update from the old layout as [Update the
+  portal](#update-the-portal) writes it (the server's old ports were closed with `tailscale serve reset`, and
+  nobody's files were moved).
 - The page reader under many agents at once. It was tested with one agent of each kind and with six pages at a
   time.
 - [Step 12](#12-https-and-remote-access) from its first line. Tailscale was already installed and signed in, so
@@ -1449,7 +1460,7 @@ fan service is running and that the vents have space on all sides. How each was 
 | Fan driver | `llm-server/fans/ec_su_axb35.c` in the repository, version m5-1: reduced from [cmetz/ec-su_axb35-linux](https://github.com/cmetz/ec-su_axb35-linux/tree/f62c2c228959a08683273a26ef3afd8991e69f6d) at f62c2c2, duty registers after [FanControl.AXB35](https://github.com/crmaris/FanControl.AXB35) |
 | CPU undervolt | [RyzenAdj](https://github.com/FlyGoat/RyzenAdj) 0.18.0 (527cacc) from [COPR shdwchn10/ryzenadj](https://copr.fedorainfracloud.org/coprs/shdwchn10/ryzenadj/), with its `ryzen_smu` driver (d298366) |
 | Portal server | Pentium G4400T (2 cores), 8 GB; Fedora 45 Server, kernel 7.3.4-300.fc45, moby-engine 29.9.3, Tailscale 1.102.5 |
-| Portal | [Workspace Portal](https://github.com/ShahriarDhruvo/workspace-portal), [Qwen Code](https://github.com/QwenLM/qwen-code) 0.28.0 (a fresh install builds 0.27.0; updated under **Admin > Updates**), DeepSeek Harness 0.2.2-rc.1, [SearXNG](https://github.com/searxng/searxng) 2026.11.12. Page reader: [Defuddle](https://github.com/kepano/defuddle) 0.19.6, pypdfium2 5.15.2 |
+| Portal | [Workspace Portal](https://github.com/ShahriarDhruvo/workspace-portal), [Qwen Code](https://github.com/QwenLM/qwen-code) 0.28.0 (a fresh install builds 0.27.0; updated under **Admin > Updates**), DeepSeek Harness 0.2.2-rc.1, OpenCode 2.4.1 (the only agent enabled on the test server since November 24, 2026), [SearXNG](https://github.com/searxng/searxng) 2026.11.12. Page reader: [Defuddle](https://github.com/kepano/defuddle) 0.19.6, pypdfium2 5.15.2 |
 
 Further reading: [Gufo server options](https://github.com/gufo-org/gufo/blob/v0.35.0/docs/server.md) · [amdgpu
 kernel parameters](https://docs.kernel.org/gpu/amdgpu/module-parameters.html) · [kyuz0's Strix Halo
