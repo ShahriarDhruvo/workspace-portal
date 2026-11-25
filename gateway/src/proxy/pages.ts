@@ -103,7 +103,7 @@ export function capacityPage(maxRunning: number): string {
 /** `portalUrl`: the portal's Home, where a workspace is started. */
 const portalLink = (portalUrl: string): string => `<a class="button" href="${escapeHtml(portalUrl)}" target="_top">Go to the portal</a>`;
 
-/** A stopped workspace's port: it is started from the portal, where its kind is chosen and confirmed. */
+/** A stopped workspace's port: it is started from the portal, where its kind is chosen. */
 export function stoppedPage(ref: WorkspaceRef, portalUrl: string): string {
   return render({
     title: `Your ${workspaceName(ref)} workspace is stopped`,

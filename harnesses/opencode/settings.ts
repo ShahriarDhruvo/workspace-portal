@@ -69,8 +69,6 @@ export function opencodeConfig(options: OpencodeConfigOptions): Record<string, u
     model: `${PROVIDER}/${catalog.defaultModel}`,
     // Added to every session's prompt, after the AGENTS.md files of the person and the project.
     instructions: [`${OPENCODE_SETTINGS_DIR}/${INSTRUCTIONS_FILE}`],
-    // Superpowers: skills for working in steps, which it tells every session about. Safety Net: refuses the commands
-    // that destroy work and reads of keys.
     plugins: [`${SHARE}/plugins/superpowers`, `${SHARE}/plugins/safety-net`],
     skills: [`${SHARE}/skills`],
     // Files are formatted after an edit, by the formatters OpenCode knows and the image has (gofmt, rustfmt, ruff,

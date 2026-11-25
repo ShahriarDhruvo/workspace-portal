@@ -50,7 +50,7 @@ online_enabled() { ! env_is ONLINE_WORKSPACES false off no 0; }
 exa_enabled() { env_is EXA_SEARCH true on yes 1; }
 selinux_on() { command -v selinuxenabled >/dev/null && selinuxenabled; }
 
-# The harnesses, in the gateway's order (AGENT_KINDS in packages/core/src/wire/kinds.ts; a gateway test compares
+# The agents, in the gateway's order (AGENT_KINDS in packages/core/src/wire/kinds.ts; a gateway test compares
 # them), which numbers the workspaces: append only. Each one's folder says the rest (harnesses/<name>/harness.env):
 # its name, the .env key of its version, the port it listens on in a workspace, and its CLI.
 AGENTS=(qwen dsh opencode)
@@ -282,10 +282,10 @@ port_ranges() {
   printf '%s-%s %s-%s\n' "$first" "$last" "$((first + PREVIEW_PORT_OFFSET))" "$((last + PREVIEW_PORT_OFFSET))"
 }
 
-# Every port in those ranges that a workspace of these harnesses has, one per line: the workspaces' ports, then their
-# previews'. The gateway listens on those of the enabled harnesses (workspacePorts in gateway/src/config.ts; a test
+# Every port in those ranges that a workspace of these agents has, one per line: the workspaces' ports, then their
+# previews'. The gateway listens on those of the enabled agents (workspacePorts in gateway/src/config.ts; a test
 # compares the two); the rest of each user's block serves nothing.
-workspace_ports() { # harness...
+workspace_ports() { # agent...
   local base count offset user agent kind place places=()
   base=$(env_get AGENT_PORT_BASE) count=$(env_get AGENT_PORT_COUNT)
   for agent in "$@"; do
@@ -310,8 +310,8 @@ portal_sources() {
   printf '%s' "$lan"
 }
 
-# Adds or removes the firewalld rich rules that open the portal's ports to portal_sources. Every workspace's port,
-# also with Online off or an agent not enabled: the gateway answers there that the workspace is stopped.
+# Adds or removes the firewalld rich rules that open the portal's ports to portal_sources: the whole ranges, also
+# where the gateway does not listen (the ports of an agent that is not enabled, the unused rest of a user's block).
 firewalld_rules() { # add | remove
   local source port rule refused=die
   [[ $1 == add ]] || refused=warn

@@ -16,7 +16,7 @@ import { decodeString, readFields } from "./protobuf.ts";
 
 interface VertexUpdate {
   digest: string;
-  /** The step as BuildKit names it, e.g. `[qwen 1/3] RUN npm install -g …`. */
+  /** The step as BuildKit names it, e.g. `[base 2/8] RUN apt-get update …`. */
   name: string;
   cached: boolean;
   /** Epoch ms; null while it has not started (or finished). */

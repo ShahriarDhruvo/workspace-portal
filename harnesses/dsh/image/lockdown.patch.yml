@@ -2,7 +2,7 @@
 # and then the gateway's portal.patch.yml (models, search, browser), both after the user's own patch, where the UI's
 # settings land: these rows win, and the UI shows their plugins read-only. Top-level rows only: a patch replaces a
 # row's whole config, so the preset rows of the web tools turned off here are disabled in the shipped presets instead
-# (dsh/adapt-presets.mjs).
+# (adapt-presets.mjs).
 # The image build fails unless every row applies to its dsh version and every setting a row gives is one its plugin
 # has, with a value it takes (check-lockdown.sh). A row marked "# optional" is of a plugin some dsh versions don't
 # have, and may be missing: the build names each that is.

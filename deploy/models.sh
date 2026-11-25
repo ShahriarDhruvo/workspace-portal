@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The portal's models, which every harness offers, in the format of Qwen Code's settings.
+# The portal's models, which every agent offers, in the format of Qwen Code's settings.
 #   sudo bash deploy/models.sh install <file>...   checks and installs system-defaults.json (the models, and Qwen
 #                                                  Code's defaults users may change) and/or settings.json (Qwen
 #                                                  Code's settings that override the users' own)

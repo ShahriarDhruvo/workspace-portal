@@ -2,7 +2,8 @@
 // Install your own:  sudo bash deploy/models.sh install settings.json
 // On top of this file the portal sets the "search" MCP server and, with WORKSPACE_BROWSER, the "browser" one
 // (headless Chromium in the workspace); turns off auto-update, usage statistics, telemetry and the model-catalog
-// refresh; denies web_fetch and removes the built-in web search providers; and sets its own OpenAI-compatible auth.
+// refresh; denies web_fetch and removes the built-in web search providers; sets its own OpenAI-compatible auth; and
+// adds its instructions' folder to context.includeDirectories, with loadFromIncludeDirectories on.
 {
   "$version": 4,
   "general": {

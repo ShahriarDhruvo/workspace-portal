@@ -15,7 +15,7 @@ export interface BuildSpec {
 }
 
 export interface BuildObserver {
-  /** The step the build is at, as BuildKit names it (`[qwen 1/3] RUN npm install -g …`). */
+  /** The step the build is at, as BuildKit names it (`[base 2/8] RUN apt-get update …`). */
   onStep(step: string): void;
   /** New lines of build output. */
   onLog(lines: string[]): void;

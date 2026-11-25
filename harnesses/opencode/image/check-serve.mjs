@@ -2,7 +2,7 @@
 // of OpenCode's files: it only gives it settings (../settings.ts) and talks to its API
 // (../driver.ts), and an OpenCode that read either differently would start all the same, with
 // another provider, its own web tools, or a status the gateway misreads. So this starts the real `opencode serve`
-// once, with settings as the gateway renders them (check-settings.json; a gateway test keeps it that) and a stand-in
+// once, with settings as the gateway renders them (check-settings.json; ../driver.test.ts keeps it that) and a stand-in
 // for the gateway's service API, and checks each thing by name:
 //   * it serves its page, and its API to nobody without OPENCODE_PASSWORD;
 //   * /etc/opencode/opencode.json is read and wins over a person's and a project's own settings, under their older

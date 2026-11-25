@@ -25,7 +25,7 @@ SERVICE_PORT=$(env_get SERVICE_PORT) CONTROL_PORT=$(env_get CONTROL_PORT) WEB_PO
 PORTAL_PORT=$WEB_PORT
 ! env_is PORTAL_HTTPS true || PORTAL_PORT=443
 # The workspace ports the probes try, each with its preview's: user 1's Private and Online workspace of the first
-# enabled harness (the gateway listens on no other harness's).
+# enabled agent (the gateway listens on no other agent's).
 PRIVATE_PORT=$(($(env_get AGENT_PORT_BASE) + $(workspace_number 1 "${ENABLED_AGENTS[0]}" private)))
 ONLINE_PORT=$(($(env_get AGENT_PORT_BASE) + $(workspace_number 1 "${ENABLED_AGENTS[0]}" online)))
 DATA_DIR=$(env_get PORTAL_DATA_DIR)

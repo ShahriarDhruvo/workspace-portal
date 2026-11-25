@@ -1,5 +1,5 @@
 // Turns the Docker Engine's build stream into what an update job shows: the current step and log
-// lines in the style of `docker build --progress=plain` (`#5 [qwen 1/3] RUN npm install …`, the
+// lines in the style of `docker build --progress=plain` (`#6 [base 2/8] RUN apt-get update …`, the
 // command's output prefixed with `#5`, then `#5 DONE 21.3s`), plus, when the build failed, why: the failed
 // step's last output lines and the engine's error. Pure (no I/O), so it is tested against a recorded trace.
 //

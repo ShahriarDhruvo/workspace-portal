@@ -4,7 +4,6 @@ import assert from "node:assert/strict";
 import { createHash, createHmac } from "node:crypto";
 import fs from "node:fs";
 import http, { type IncomingMessage } from "node:http";
-import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { WebSocketServer } from "ws";

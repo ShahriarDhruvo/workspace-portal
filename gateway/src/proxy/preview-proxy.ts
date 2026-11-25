@@ -64,8 +64,8 @@ async function handleRequest(deps: AgentDeps, req: IncomingMessage, res: ServerR
   const upstream = deps.manager.upstream(userId, ref);
 
   if (pathname.startsWith(PORTAL_PATH_PREFIX)) {
-    // "Try again" as on the agent port, its pages framed by the portal alone.
-    if (pathname === START_PATH) return handlePortalPath(deps, req, res, userId, ref, { portal: frame.portal }, pathname);
+    // "Try again" as on the agent port.
+    if (pathname === START_PATH) return handlePortalPath(deps, req, res, userId, ref, frame, pathname);
     if (!pathname.startsWith(PREVIEW_PORT_PATH)) return sendError(res, 404, "not_found", "Not found.");
     if (method !== "GET" && method !== "HEAD") return sendError(res, 405, "method_not_allowed", "Use GET.", { allow: "GET, HEAD" });
     // /__portal/port/<n>[/<path>]: serve n from now on, from /<path>.

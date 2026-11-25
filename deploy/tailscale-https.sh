@@ -3,7 +3,7 @@
 #   sudo bash deploy/tailscale-https.sh        Tailscale ends TLS: the portal on port 443, each workspace on its own
 #   sudo bash deploy/tailscale-https.sh off    back to HTTP on every address
 # The tailnet needs MagicDNS and HTTPS certificates (admin console, DNS). The ports are those in .env, of the
-# harnesses WORKSPACE_AGENTS enables: run it with "off" before changing either or uninstalling the portal, and again
+# agents WORKSPACE_AGENTS enables: run it with "off" before changing either or uninstalling the portal, and again
 # after the change.
 set -euo pipefail
 # shellcheck source=deploy/lib.sh
@@ -15,7 +15,7 @@ require_root
 no_console_update "then run this again"
 
 # Each workspace's port and its preview's, not their whole ranges: Tailscale is asked port by port, and the rest of
-# a user's block serves nothing. On: those the gateway listens on. Off: every harness's, so none stays mapped.
+# a user's block serves nothing. On: those the gateway listens on. Off: every agent's, so none stays mapped.
 if [[ $# -eq 0 ]]; then
   load_enabled_agents
   ports=$(workspace_ports "${ENABLED_AGENTS[@]}")

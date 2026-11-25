@@ -5,7 +5,7 @@ description: Use when solving a contest or online-judge problem in C++ (Codeforc
 
 # Competitive programming in C++
 
-The compiler here is GCC 12: use `-std=gnu++20`. `<bits/stdc++.h>` and the policy-based data structures (`<ext/pb_ds/...>`) are there.
+The compiler here is GCC: use `-std=gnu++20`. `<bits/stdc++.h>` and the policy-based data structures (`<ext/pb_ds/...>`) are there.
 
 ## Before writing code
 

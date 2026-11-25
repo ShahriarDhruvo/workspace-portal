@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { WorkspaceServersResponse } from "@/lib/api";
-import { byPort, onlyServer, previewUrl } from "@/lib/preview";
+import { onlyServer, previewUrl } from "@/lib/preview";
 import { usePoll } from "@/components/common/use-poll";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -79,7 +79,7 @@ export function PreviewButton() {
           </DialogDescription>
         </DialogHeader>
         <ul className="-m-1 flex min-h-0 flex-col gap-2 overflow-y-auto p-1">
-          {byPort(servers).map(({ port, reachable }) => (
+          {servers.map(({ port, reachable }) => (
             <li key={port} className="flex flex-col gap-1">
               {reachable ? (
                 <DialogClose asChild>
