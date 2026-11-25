@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Installs Workspace Portal on this server, or brings it up to date:  sudo bash deploy/install.sh
 # A re-run rebuilds the images (the agents at their versions in use) and restarts what changed. It keeps .env,
-# adding the settings it lacks, the Qwen Code settings and all data.
+# adding the settings it lacks, the model settings, your instructions and all data.
 set -euo pipefail
 # shellcheck source=deploy/lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -194,8 +194,8 @@ READER="on (read_page)"
 if env_is READER_URL off; then READER="off (READER_URL=off)"; fi
 ONLINE="on (ONLINE_WORKSPACES; Admin > Users switches it off per user)"
 online_enabled || ONLINE="off for everyone (ONLINE_WORKSPACES=off)"
-PROMPT="$PORTAL_DATA_DIR/config/instructions.md"
-[[ -f $PROMPT ]] || PROMPT="none of your own (write them to $PROMPT; every agent is told them)"
+INSTRUCTIONS="$PORTAL_DATA_DIR/config/instructions.md"
+[[ -f $INSTRUCTIONS ]] || INSTRUCTIONS="none of your own (write them to $INSTRUCTIONS; every agent is told them)"
 
 cat <<DONE
 
@@ -207,8 +207,8 @@ cat <<DONE
     Online:     $ONLINE
     Admin:      $(env_get ADMIN_USERNAME)   (first sign-in: grep ^ADMIN_PASSWORD $ENV_FILE; you choose a new one then)
 $(for agent in "${ENABLED_AGENTS[@]}"; do printf '    Agent:      %s %s\n' "${AGENT_NAME[$agent]}" "$(agent_version "$agent")"; done)
-    Models:     $PORTAL_DATA_DIR/config/models (deploy/models.sh; used by every harness)
-    Prompt:     $PROMPT
+    Models:       $PORTAL_DATA_DIR/config/models (deploy/models.sh; used by every agent)
+    Instructions: $INSTRUCTIONS
     Web:        web_search through $SEARCH; page reader $READER
     Monitoring: $MONITORING
 
