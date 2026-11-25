@@ -1,11 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { hasContainer, initialKind, onlineAccessAfter, onlineBlockedReason, otherKind, runningWorkspace, startErrorText } from "./workspace-kind.ts";
-
-test("otherKind is the other of the two kinds", () => {
-  assert.equal(otherKind("private"), "online");
-  assert.equal(otherKind("online"), "private");
-});
+import { hasContainer, initialKind, onlineAccessAfter, onlineBlockedReason, runningWorkspace, startErrorText } from "./workspace-kind.ts";
 
 test("the picker offers Online first when it may start; a failed start offers its own kind again", () => {
   assert.equal(initialKind({ status: "stopped", kind: "private", online: "allowed" }), "online", "Online is the default");

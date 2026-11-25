@@ -11,10 +11,6 @@ import {
   type WorkspaceStatus,
 } from "@portal/core/wire";
 
-export function otherKind(kind: WorkspaceKind): WorkspaceKind {
-  return kind === "online" ? "private" : "online";
-}
-
 /**
  * A workspace's container exists: starting, running or stopping. Its files can't be erased then, and no other
  * workspace of its user starts.

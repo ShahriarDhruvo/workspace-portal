@@ -8,9 +8,8 @@ export default function HomeLoading() {
     <PageMain width="sm" className="gap-4">
       <Card aria-busy="true" aria-label="Loading your workspace">
         <CardHeader>
-          <Skeleton className="h-6 w-36" />
-          <Skeleton className="col-start-1 h-5 w-32" />
-          <CardAction className="flex gap-2 max-sm:col-span-2 max-sm:col-start-1 max-sm:row-span-1 max-sm:row-start-3 max-sm:justify-self-stretch max-sm:pt-3 max-sm:*:flex-1">
+          <Skeleton className="h-6 w-36 self-center" />
+          <CardAction className="row-span-1 flex gap-2 max-sm:col-span-2 max-sm:col-start-1 max-sm:row-start-3 max-sm:justify-self-stretch max-sm:pt-3 max-sm:*:flex-1">
             <Skeleton className="h-8 w-31" />
           </CardAction>
         </CardHeader>

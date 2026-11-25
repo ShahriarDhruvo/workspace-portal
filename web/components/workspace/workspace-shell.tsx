@@ -9,7 +9,7 @@ import { needsReauth, startRefusal, startWorkspace, stopWorkspace } from "@/lib/
 import { stopReasonText, workspaceState, type WorkspaceState } from "@/lib/format";
 import type { WorkspaceStatusResponse } from "@/lib/api";
 import type { ActionResult } from "@/lib/validation";
-import { hasContainer, initialKind, onlineAccessAfter, otherKind } from "@/lib/workspace-kind";
+import { hasContainer, initialKind, onlineAccessAfter } from "@/lib/workspace-kind";
 import { stopWarnings } from "@/lib/workspace-stop";
 import { PortalMark } from "@/components/brand";
 import { HOME_LINK, portalLinks } from "@/components/layout/portal-links";
@@ -277,7 +277,7 @@ export function WorkspaceShell({ viewer, target, frames, idleTimeoutMinutes, ban
     pollRound,
   );
 
-  /** Starts that kind (confirmed in the start dialog, or retried after the service couldn't be reached). */
+  /** Starts that kind (the one chosen in the card, or retried after the service couldn't be reached). */
   async function start(kind: WorkspaceKind) {
     dispatch({ type: "startRequested", kind });
     pollNow();
@@ -349,16 +349,7 @@ export function WorkspaceShell({ viewer, target, frames, idleTimeoutMinutes, ban
             <>
               {/* Apart from Start; under it when a phone has no room. */}
               {home ? <div className="mr-auto max-sm:order-last">{home}</div> : null}
-              {info ? (
-                <StartWorkspaceButton
-                  kind={choice.kind}
-                  onSwitch={choice.onlineBlocked ? undefined : () => choice.choose(otherKind(choice.kind))}
-                  whose={whose}
-                  retry={copy.retry}
-                  disabled={info.nextAgent === null}
-                  onStart={start}
-                />
-              ) : null}
+              {info ? <StartWorkspaceButton kind={choice.kind} retry={copy.retry} disabled={info.nextAgent === null} onStart={start} /> : null}
             </>
           }
           body={

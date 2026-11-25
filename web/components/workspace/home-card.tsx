@@ -6,10 +6,10 @@ import { useRef, useState } from "react";
 import { AGENT_NAMES, WORKSPACE_KIND_NAMES, type AgentKind, type WorkspaceKind, type WorkspaceStatus } from "@portal/core/wire";
 import { saveHarness } from "@/lib/actions/settings";
 import { needsReauth, startRefusal, startWorkspace, stopWorkspace } from "@/lib/fetch-json";
-import { formatVersion, stopReasonText, workspaceState } from "@/lib/format";
+import { stopReasonText, workspaceState } from "@/lib/format";
 import type { WorkspaceStatusResponse } from "@/lib/api";
 import type { ActionResult } from "@/lib/validation";
-import { initialKind, onlineAccessAfter, otherKind } from "@/lib/workspace-kind";
+import { initialKind, onlineAccessAfter } from "@/lib/workspace-kind";
 import { stopWarnings } from "@/lib/workspace-stop";
 import { usePoll } from "@/components/common/use-poll";
 import { FormError } from "@/components/forms/form-error";
@@ -73,7 +73,7 @@ export function HomeCard({ initial, initialError, idleTimeoutMinutes }: HomeCard
     setPollError(result.ok ? null : result.error.message);
   });
 
-  /** Starts the kind confirmed in the start dialog, then goes to the workspace page. */
+  /** Starts that kind, then goes to the workspace page. */
   async function start(kind: WorkspaceKind) {
     setRequest("start");
     setStartedKind(kind);
@@ -129,9 +129,6 @@ export function HomeCard({ initial, initialError, idleTimeoutMinutes }: HomeCard
 
   const active = status === "starting" || status === "running";
   const state = request === "start" ? workspaceState({ status: "starting", ready: false, busy: false }) : workspaceState(info);
-  // The harness of the running workspace; stopped, the one Start launches (the user's choice in the card).
-  const agent = active ? info.agent : harness.value;
-  const version = active ? info.agentVersion : info.agents.find((offered) => offered.id === harness.value)?.version ?? null;
   const changesNextTime = active && info.nextAgent !== null && info.agent !== info.nextAgent;
   const stoppedBecause =
     status === "stopped" && info.stopReason !== null && NOTED_STOP_REASONS.has(info.stopReason)
@@ -152,21 +149,17 @@ export function HomeCard({ initial, initialError, idleTimeoutMinutes }: HomeCard
   return (
     <Card>
       <CardHeader>
-        <CardTitle>
+        <CardTitle className="self-center">
           <h1 className="text-16">Your workspace</h1>
         </CardTitle>
-        <CardDescription className="col-start-1 flex flex-wrap items-baseline gap-x-2">
-          {agent ? (
-            <>
-              <span className="text-14 font-medium text-foreground">{AGENT_NAMES[agent]}</span>
-              {version ? <span className="font-mono text-12">{formatVersion(version)}</span> : null}
-            </>
-          ) : (
-            "No harness is enabled. Ask the administrator."
-          )}
-        </CardDescription>
-        {/* Top right on wider screens; on a phone, a full-width row under the title, the buttons sharing its width. */}
-        <CardAction className="flex items-center gap-2 max-sm:col-span-2 max-sm:col-start-1 max-sm:row-span-1 max-sm:row-start-3 max-sm:justify-self-stretch max-sm:pt-3 max-sm:*:not-data-[slot=badge]:flex-1">
+        {active || harness.value !== null ? null : (
+          <CardDescription className="col-start-1">No harness is enabled. Ask the administrator.</CardDescription>
+        )}
+        {/*
+          Top right on wider screens, in the title's row alone, so the title is centred on the buttons; on a phone, a
+          full-width row under the title, the buttons sharing its width.
+        */}
+        <CardAction className="row-span-1 flex items-center gap-2 max-sm:col-span-2 max-sm:col-start-1 max-sm:row-start-3 max-sm:justify-self-stretch max-sm:pt-3 max-sm:*:not-data-[slot=badge]:flex-1">
           {ready || starting || stopping ? <KindBadge kind={kind} /> : null}
           {ready ? (
             <>
@@ -192,14 +185,7 @@ export function HomeCard({ initial, initialError, idleTimeoutMinutes }: HomeCard
               Stopping…
             </Button>
           ) : (
-            <StartWorkspaceButton
-              kind={choice.kind}
-              onSwitch={choice.onlineBlocked ? undefined : () => choice.choose(otherKind(choice.kind))}
-              whose="your"
-              retry={status === "error"}
-              disabled={!canStart}
-              onStart={start}
-            />
+            <StartWorkspaceButton kind={choice.kind} retry={status === "error"} disabled={!canStart} onStart={start} />
           )}
         </CardAction>
         {/* The buttons show the state; this says it to screen readers as it changes. */}
