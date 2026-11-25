@@ -5,11 +5,7 @@
 #   portal-theme.mjs: its dark theme in the blacks of Qwen Code's Web Shell and the portal.
 set -eu
 here=$(dirname "$0")
-# What dsh's plugin manager installs plugins with (its Plugins page, and its agent tools), into the profile in
-# DSH_HOME. They come from the npm registry or GitHub, so only an Online workspace can install one; both can switch on
-# the plugins dsh comes with.
-PNPM_VERSION=11.28.13
-npm install -g "@deepseek-ai/dsh@$1" "pnpm@$PNPM_VERSION"
+npm install -g "@deepseek-ai/dsh@$1"
 dsh=$(npm root -g)/@deepseek-ai/dsh
 npm install --prefix /tmp/wp-tools yaml@2.9.1
 cp "$here/adapt-presets.mjs" /tmp/wp-tools/
