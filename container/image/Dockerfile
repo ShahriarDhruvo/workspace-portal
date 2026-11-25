@@ -19,6 +19,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/* \
  && userdel --remove node \
  && mkdir /home/user /workspace /usr/local/lib/workspace-portal
+COPY --chmod=0644 container/image/fetch.sh /usr/local/lib/workspace-portal/fetch.sh
 # Go, Rust, uv, ruff, PowerShell, shellcheck and shfmt.
 RUN --mount=type=bind,source=container/image/toolchains.sh,target=/mnt/toolchains.sh sh /mnt/toolchains.sh
 RUN --mount=type=tmpfs,target=/tmp npm install -g --no-fund --no-audit "@playwright/mcp@${PLAYWRIGHT_MCP_VERSION}" "pnpm@${PNPM_VERSION}"
