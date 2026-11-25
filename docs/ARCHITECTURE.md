@@ -50,7 +50,7 @@ browser --(cookie portal_session)--> web app   WEB_BIND:WEB_PORT  <--(API key)--
 | `gateway/src/compose.ts` | composition root: builds every part once, for `main.ts` and the test harness; starts nothing |
 | `gateway/src/config.ts` | the environment, parsed and checked once (`loadConfig`); every problem reported together |
 | `gateway/src/control-api.ts` | the control listener: the control API's routes, and the LLM API beside them |
-| `gateway/src/workspaces/` | lifecycle (`manager.ts`), its pure decisions (`policy.ts`), file layout, readiness, fence probe |
+| `gateway/src/workspaces/` | lifecycle (`manager.ts`), its pure decisions (`policy.ts`), file layout, readiness, a workspace's web servers (`servers.ts`) |
 | `gateway/src/docker/` | the Docker runtime, a workspace's container from the security profile, the image builder (BuildKit) |
 | `gateway/src/proxy/` | agent ports, preview ports, WebSocket relay, header rules, connections, session cache |
 | `gateway/src/service/` | service API and LLM API, the LLM proxy and queue under both, MCP server, URL policy, reader client |
@@ -66,6 +66,9 @@ browser --(cookie portal_session)--> web app   WEB_BIND:WEB_PORT  <--(API key)--
 | `hostd/`, `models/` | portal-hostd; the model settings a fresh install starts with |
 | `llm-server/` | the reference LLM server: engine service file, model download, load test, fan control for one board |
 | `deploy/` | installer, isolation check, image update, model settings, HTTPS, uninstall; `lib.sh` is shared |
+
+An agent and a harness are the same thing, the program a workspace runs: the settings and the code say agent,
+Home and the folders say harness.
 
 Imports go one way: `@portal/core`, then `harnesses`, then `container`, then the gateway. No file outside
 `harnesses/<name>/` names that agent's files, port or package: the Dockerfile takes the agent as a build
@@ -287,7 +290,7 @@ A preview port (`preview-proxy.ts`) passes the same five checks. `GET /__portal/
 (1024 to 65535, never the agent's port) in a cookie of that preview port and redirects to the path; later
 requests, WebSockets included, go to `<container>:<n>`. The app sees a browser on its own machine (`Host`,
 `Origin` and `Referer` say `localhost:<n>`) and none of the portal's cookies, and cannot set one. Its pages
-may be framed by its workspace's agent port and the portal. A Private workspace's app also gets a
+may be framed by the portal alone. A Private workspace's app also gets a
 Content-Security-Policy that confines loads, connections and forms to the preview origin: code running in the
 person's browser must not carry out data the workspace itself cannot send.
 
@@ -298,8 +301,7 @@ of a workspace, so only lines of the kernel's exact form count, and at most 32 s
 the gateway connects to the container's address, so a server must listen on every address or on that one. One
 on localhost only is listed as not reachable, unless the kernel picked its port, which marks a helper's socket.
 An answer is kept for 2 s, so many viewers cost one read. The web app's Preview button
-(`web/components/workspace/preview-button.tsx`, in the portal's bar and the workspace's) asks every 5 s while a
-workspace runs. It shows nothing without a server, opens the only server in a new tab, and lists several in a
+(`web/components/workspace/preview-button.tsx`, in the portal's bar and the workspace's) asks every 5 s. It shows nothing without a server, opens the only server in a new tab, and lists several in a
 dialog; a server that is not reachable is listed with how to fix it (`--host 0.0.0.0`). Every agent is told the
 same rule (below), and none has a preview pane of its own: such a pane runs in the person's browser, where
 `localhost` is their own computer.
@@ -512,8 +514,8 @@ download. A person adds their own in `~/.config/opencode` or a project's `.openc
 
 | Kind | What | For |
 |---|---|---|
-| Plugin | [Superpowers](https://github.com/obra/superpowers) 7.0.2 | 15 skills for working in steps (brainstorm, plan, test first, debug by cause, review), and a note in every session that says to use them |
-| Plugin | [Safety Net](https://github.com/kenryu42/claude-code-safety-net) 2.8.3 | refuses commands that destroy work (`git reset --hard`, `rm -rf` of a home or repository, an install script piped from the internet) and reads of keys and credentials |
+| Plugin | [Superpowers](https://github.com/obra/superpowers) | skills for working in steps (brainstorm, plan, test first, debug by cause, review), and a note in every session that says to use them |
+| Plugin | [Safety Net](https://github.com/kenryu42/claude-code-safety-net) | refuses commands that destroy work (`git reset --hard`, `rm -rf` of a home or repository, an install script piped from the internet) and reads of keys and credentials |
 | Skill | `frontend-design` ([anthropics/skills](https://github.com/anthropics/skills)) | UI that does not look like a template |
 | Skill | `react-best-practices` ([vercel-labs/agent-skills](https://github.com/vercel-labs/agent-skills)) | React and Next.js performance rules |
 | Skill | `shadcn` ([shadcn-ui/ui](https://github.com/shadcn-ui/ui)) | shadcn/ui components; its CLI needs an Online workspace |

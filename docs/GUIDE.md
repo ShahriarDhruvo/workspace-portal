@@ -819,8 +819,8 @@ sudo bash deploy/install.sh
     Agent:      Qwen Code 0.27.0
     Agent:      DeepSeek Harness 0.2.2-rc.1
     Agent:      OpenCode 2.4.1
-    Models:     /srv/workspace-portal/config/models (deploy/models.sh; used by every harness)
-    Prompt:     none of your own (write them to /srv/workspace-portal/config/instructions.md; every agent is told them)
+    Models:       /srv/workspace-portal/config/models (deploy/models.sh; used by every agent)
+    Instructions: none of your own (write them to /srv/workspace-portal/config/instructions.md; every agent is told them)
     Web:        web_search through the built-in SearXNG (http://127.0.0.1:8888); page reader on (read_page)
     Monitoring: this server: portal-hostd on http://127.0.0.1:9180; LLM server: not set up (hostd/README.md)
 
@@ -896,7 +896,7 @@ plan, test first and review, and Safety Net, which refuses commands that destroy
 edits is formatted when a formatter for it is there (gofmt, rustfmt, ruff, shfmt, or the project's prettier). An
 Online workspace also has Context7, for a library's current documentation, and grep.app, for code search over
 public GitHub repositories; both are public services, so what the agent asks them leaves the portal. The
-[architecture notes](ARCHITECTURE.md#opencodes-toolset) list the versions and what was left out.
+[architecture notes](ARCHITECTURE.md#opencodes-toolset) say where each comes from and what was left out.
 
 **In every workspace**, whichever agent runs it:
 
@@ -1055,7 +1055,7 @@ do: Docker clears the limit of project 1 each time it starts.
 | `LLM_MAX_CONCURRENCY_PER_USER=3` | One person with many subagents cannot take every session. |
 | `DEFAULT_REASONING_EFFORT=low` | The default. Every new agent session starts at low effort, which answers faster; raise it inside a session for a hard task. `medium` and `xhigh` are this model's other two efforts. |
 | `WORKSPACE_AGENTS=qwen,dsh,opencode` | The default: the agents people choose from, the first being a new person's. One that is left out is off everywhere: Home does not show it, its ports are closed, its image is not built, and a workspace of it that still runs is stopped. Its people's files stay, and are there again when it comes back. `WORKSPACE_AGENTS=opencode` offers OpenCode alone. |
-| `system-defaults.json` | Not in `.env`: Qwen Code's defaults, in `/srv/workspace-portal/config/models`, with the model and its context of 262,144 tokens. It names no `max_tokens`, so Qwen Code asks for replies of 64,000 tokens and continues one that was cut off, and it sets `autoCompactThreshold` to 0.7, so Qwen Code compacts a conversation at 183,500 tokens and a whole reply always fits behind it. `sudo bash deploy/qwen-config.sh show` prints it and `install` replaces it; workspaces read it at their next start. |
+| `system-defaults.json` | Not in `.env`: Qwen Code's defaults, in `/srv/workspace-portal/config/models`, with the model and its context of 262,144 tokens. It names no `max_tokens`, so Qwen Code asks for replies of 64,000 tokens and continues one that was cut off, and it sets `autoCompactThreshold` to 0.7, so Qwen Code compacts a conversation at 183,500 tokens and a whole reply always fits behind it. `sudo bash deploy/models.sh show` prints it and `install` replaces it; workspaces read it at their next start. |
 | `ONLINE_WORKSPACES=on` | The default. An Online workspace reaches public addresses over TCP on any port and looks up names only at 1.1.1.1 and 9.9.9.9; the firewall drops your LAN, both servers and every other container. `off` removes Online for everyone; a person's page under **Admin > Users** switches it off for one person. |
 | `READER_URL_POLICY=shown` | The default. An agent opens only pages it was shown: search results, links on pages it has read and addresses in the conversation, plus a built-in list of documentation and code sites. The page is requested exactly as it was shown, which stops a poisoned page from making the agent send your files to an address it puts together itself. It is a filter, not a guarantee. `any` opens every public page; `READER_URL=off` removes the page reader. |
 

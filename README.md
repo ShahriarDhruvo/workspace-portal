@@ -18,12 +18,11 @@ and reads the audit log.
 
 ## In a workspace
 
-Whichever agent runs it, a workspace has Node.js 24 with npm and pnpm, Python 3 with uv and ruff, Go, Rust
-(cargo, rustfmt, clippy), GCC and G++ with make and gdb, Bash with shellcheck and shfmt, PowerShell, git and a
-headless Chromium for the agent's browser tools. They are in the image, because a Private workspace can download
-nothing. OpenCode also starts with two plugins, five skills, formatting after edits and, in an Online workspace,
-two public MCP servers: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#opencodes-toolset) lists them and what was
-left out.
+Whichever agent runs it, a workspace has the compilers and tools for Node.js, Python, Go, Rust, C and C++, Bash
+and PowerShell: they are in the image, because a Private workspace can download nothing
+([the list](docs/GUIDE.md#11-workspace-portal)). OpenCode also starts with plugins, skills, formatting after edits
+and, in an Online workspace, two public MCP servers: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#opencodes-toolset)
+lists them and what was left out.
 
 ## What runs where
 
@@ -84,10 +83,6 @@ default and meaning. Look at these first:
 Run the installer again after changing `PORTAL_DATA_DIR`, `HOSTD_PORTAL_*`, `FIREWALL_*`, `WORKSPACE_AGENTS`,
 an agent's `*_VERSION`, a port, subnet, `*_GATEWAY_IP`, bridge, DNS server or the server in a `*_URL`
 (the firewall, portal-hostd and the images are made from them). Anything else: `docker compose up -d`.
-
-`WORKSPACE_AGENTS` lists the agents the portal offers. One that is not listed is off everywhere: Home does not
-show it, its ports are closed, its image is not built, and a workspace of it that still runs is stopped. Its
-users' files stay.
 
 The models are not in `.env` but in two files in Qwen Code's settings format, in
 `$PORTAL_DATA_DIR/config/models`: `system-defaults.json` holds the models and the defaults users may change,
