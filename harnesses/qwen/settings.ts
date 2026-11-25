@@ -69,16 +69,15 @@ export function renderQwenSettings(options: RenderOptions): ModelSettings {
     trust: true,
     includeTools: reader ? ["web_search", "read_page"] : ["web_search"],
     alwaysLoadTools: true,
-    description: reader
-      ? "Private web search and page reader. The workspace has no direct internet access, so use these for anything on the web."
-      : "Private web search. The workspace has no direct internet access, so use this for anything on the web.",
+    // What the workspace's network reaches is said once, in the instructions (../instructions.ts).
+    description: reader ? "The portal's web search and page reader: use these to search the web and to read a page." : "The portal's web search: use this to search the web.",
   };
   if (browser) {
     servers.browser = {
       ...BROWSER_MCP,
       timeout: BROWSER_TIMEOUT_MS,
       trust: true,
-      description: "Headless Chromium for pages served inside this workspace (for example a dev server). It has no internet access.",
+      description: "Headless Chromium for pages served inside this workspace (for example a dev server).",
     };
   } else {
     delete servers.browser;
