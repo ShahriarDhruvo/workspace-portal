@@ -28,7 +28,7 @@ import { Separator } from "@/components/ui/separator";
 import { Spinner } from "@/components/ui/spinner";
 import { BootScreen } from "./boot-screen";
 import { KindBadge } from "./kind-badge";
-import { PreviewButton } from "./preview-button";
+import { PreviewButton, useRunningWorkspace } from "./preview-button";
 import { KindPicker, StartWorkspaceButton, useKindChoice } from "./start-workspace";
 import { StateCard } from "./state-card";
 import { StatusPill } from "./status-pill";
@@ -247,6 +247,7 @@ export function WorkspaceShell({ viewer, target, frames, idleTimeoutMinutes, ban
   const [pollRound, pollNow] = useReducer((n: number) => n + 1, 0);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const stopButton = useRef<HTMLButtonElement>(null);
+  const preview = useRunningWorkspace();
 
   const { info } = state;
   const choice = useKindChoice(info?.online ?? "off", state.startError ? state.startedKind : info ? initialKind(info) : "private");
@@ -425,7 +426,7 @@ export function WorkspaceShell({ viewer, target, frames, idleTimeoutMinutes, ban
           ) : null}
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-2">
-          <PreviewButton />
+          <PreviewButton workspace={preview} />
           {canStop ? (
             // Only its icon on phones, as icon-sm's square.
             <Button

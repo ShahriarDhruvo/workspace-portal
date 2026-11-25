@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import type { WorkspaceServer } from "@portal/core/wire";
 import type { WorkspaceServersResponse } from "@/lib/api";
 import { onlyServer, previewUrl } from "@/lib/preview";
 import { usePoll } from "@/components/common/use-poll";
@@ -19,13 +20,15 @@ const POLL_MS = 5_000;
 /** Only its icon on phones, as icon-sm's square (the workspace bar's Stop does the same). */
 const BUTTON = "animate-in fade-in max-sm:w-7 max-sm:px-0";
 
-/**
- * The bars' Preview button, there only while a web server runs in the workspace. A single server the gateway
- * reaches opens from the button itself; several, or one that listens on localhost only, are listed first.
- */
-export function PreviewButton() {
+export interface RunningWorkspace {
+  previewPort: number;
+  servers: readonly WorkspaceServer[];
+}
+
+/** The session's workspace while it runs and is ready, asked again every 5 s; null while none does. */
+export function useRunningWorkspace(): RunningWorkspace | null {
   const [answer, setAnswer] = useState<WorkspaceServersResponse | null>(null);
-  // A failed poll says nothing about the servers: the last answer stays.
+  // A failed poll says nothing about the workspace: the last answer stays.
   usePoll<WorkspaceServersResponse>(
     "/api/workspace/servers",
     POLL_MS,
@@ -34,9 +37,16 @@ export function PreviewButton() {
     },
     0,
   );
+  return answer && answer.previewPort !== null ? { previewPort: answer.previewPort, servers: answer.servers } : null;
+}
 
-  if (!answer || answer.previewPort === null || answer.servers.length === 0) return null;
-  const { previewPort, servers } = answer;
+/**
+ * The bars' Preview button, there only while a web server runs in the workspace. A single server the gateway
+ * reaches opens from the button itself; several, or one that listens on localhost only, are listed first.
+ */
+export function PreviewButton({ workspace }: { workspace: RunningWorkspace | null }) {
+  if (!workspace || workspace.servers.length === 0) return null;
+  const { previewPort, servers } = workspace;
   // An answer only ever arrives in the browser, so the host the user typed is at hand.
   const href = (port: number) => previewUrl(window.location, previewPort, port);
   const label = <span className="max-sm:sr-only">Preview</span>;

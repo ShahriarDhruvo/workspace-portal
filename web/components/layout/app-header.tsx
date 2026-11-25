@@ -4,14 +4,13 @@ import { Brand, UserChip } from "@/components/brand";
 import { BarMenu } from "@/components/common/bar-menu";
 import { ThemeToggle } from "@/components/common/theme-toggle";
 import { SubmitButton } from "@/components/forms/submit-button";
-import { Button } from "@/components/ui/button";
-import { ArrowRightIcon, LogOutIcon } from "@/components/ui/icons";
+import { LogOutIcon } from "@/components/ui/icons";
 import { Separator } from "@/components/ui/separator";
-import { PreviewButton } from "@/components/workspace/preview-button";
 import { cn } from "@/lib/utils";
 import { HeaderBar } from "./header-bar";
 import { HeaderNav, NavMenuItems } from "./header-nav";
 import { portalLinks } from "./portal-links";
+import { WorkspaceButtons } from "./workspace-buttons";
 
 export interface Viewer {
   name: string;
@@ -20,9 +19,9 @@ export interface Viewer {
 }
 
 /**
- * The top bar of every signed-in page but the workspace. At every width it has the way back to the workspace, which
- * is otherwise two steps away (Home, then its button), and Preview while a web server runs there. Beside those, the
- * tabs, the user and Sign out fit from `lg`, and the admin's seven tabs from `xl`: below, they are in the bar's menu.
+ * The top bar of every signed-in page but the workspace. At every width it has the running workspace's buttons.
+ * Beside those, the tabs, the user and Sign out fit from `lg`, and the admin's seven tabs from `xl`: below, they are
+ * in the bar's menu.
  */
 export function AppHeader({ viewer }: { viewer: Viewer }) {
   const links = portalLinks(viewer.isAdmin);
@@ -36,13 +35,7 @@ export function AppHeader({ viewer }: { viewer: Viewer }) {
         <Separator orientation="vertical" className={cn("data-vertical:h-4 data-vertical:self-center", wide)} />
         <HeaderNav label="Portal" links={links} className={wide} />
         <div className="ml-auto flex min-w-0 items-center gap-2">
-          <PreviewButton />
-          <Button asChild variant="outline" size="sm">
-            <Link href="/workspace">
-              Workspace
-              <ArrowRightIcon />
-            </Link>
-          </Button>
+          <WorkspaceButtons />
           <ThemeToggle />
           <div className={cn("flex min-w-0 items-center gap-2", wide)}>
             {/* Beside the admin's seven tabs the name shows from `2xl`; the avatar always. */}
