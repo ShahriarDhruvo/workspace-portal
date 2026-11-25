@@ -7,7 +7,6 @@
 # /etc/opencode: OpenCode's directory for managed settings, where the gateway mounts opencode.json.
 set -eu
 . /usr/local/lib/workspace-portal/fetch.sh
-here=$(dirname "$0")
 HOME=/tmp npm install -g "@opencode/cli@$1"
 rm -rf "$(npm root -g)/@opencode/cli/node_modules"
 HOME=/tmp opencode --version
@@ -41,5 +40,3 @@ skill anthropics/skills e4bb5d960d87126ff3b3a8af1a104b7db67560ba 287d5d39770a929
 skill vercel-labs/agent-skills 5a37a6329fbad3666c3207392a6a7c0110e92efb 3fa11f3c03f7506ac164a4f9f41c296e1a62ca6fe6c035347861489a8ccf6f5a skills/react-best-practices
 skill shadcn-ui/ui 055aa6b7837b1808456a24beb4c97a677864aa82 3c58f5aee57e9079576eccb1a0b93ec559c458e166bdb250c274b983a4ac9e78 skills/shadcn
 skill mattpocock/skills d65391149dbb5fe76478e76fa8d5122b2aa5a70e 1bd2d67bf2c909de9773606aab6fce367e1813392b3a2fcd286047385b1b76c3 skills/engineering/research
-# The portal's own.
-cp -r "$here/skills/." "$share/skills/"

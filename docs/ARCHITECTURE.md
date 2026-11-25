@@ -520,7 +520,6 @@ download. A person adds their own in `~/.config/opencode` or a project's `.openc
 | Skill | `react-best-practices` ([vercel-labs/agent-skills](https://github.com/vercel-labs/agent-skills)) | React and Next.js performance rules |
 | Skill | `shadcn` ([shadcn-ui/ui](https://github.com/shadcn-ui/ui)) | shadcn/ui components; its CLI needs an Online workspace |
 | Skill | `research` ([mattpocock/skills](https://github.com/mattpocock/skills)) | research against primary sources, written up with citations; it uses the portal's search and page reader |
-| Skill | `competitive-programming` (the portal's own, `image/skills/`) | contest problems in C++: flags, sanitizers, a stress test against a brute force |
 | MCP | `search` (the gateway), `browser` (Playwright MCP, headless Chromium) | web search and page reading; looking at the app the agent built |
 | MCP | `context7`, `grep` (Online only) | a library's current documentation ([Context7](https://context7.com)); code search over public GitHub repositories ([grep.app](https://grep.app)). Public services without an account: what the agent asks them leaves the portal |
 | Setting | `formatter` | a file is formatted after an edit: gofmt, rustfmt, ruff and shfmt from the image; prettier or biome when the project has them |

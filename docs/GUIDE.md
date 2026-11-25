@@ -892,8 +892,8 @@ command there.
 
 OpenCode starts with more than it ships with. Two plugins: Superpowers, whose skills make the agent brainstorm,
 plan, test first and review, and Safety Net, which refuses commands that destroy work (`git reset --hard`, `rm
--rf` of a home folder) and reads of keys. Five skills, which the agent loads when a task calls for one:
-`frontend-design`, `react-best-practices`, `shadcn`, `research` and `competitive-programming`. A file the agent
+-rf` of a home folder) and reads of keys. Four skills, which the agent loads when a task calls for one:
+`frontend-design`, `react-best-practices`, `shadcn` and `research`. A file the agent
 edits is formatted when a formatter for it is there (gofmt, rustfmt, ruff, shfmt, or the project's prettier). An
 Online workspace also has Context7, for a library's current documentation, and grep.app, for code search over
 public GitHub repositories; both are public services, so what the agent asks them leaves the portal. The
