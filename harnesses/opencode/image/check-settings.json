@@ -6,6 +6,14 @@
   "instructions": [
     "/etc/opencode/AGENTS.md"
   ],
+  "plugins": [
+    "/usr/local/share/workspace-portal/opencode/plugins/superpowers",
+    "/usr/local/share/workspace-portal/opencode/plugins/safety-net"
+  ],
+  "skills": [
+    "/usr/local/share/workspace-portal/opencode/skills"
+  ],
+  "formatter": {},
   "providers": {
     "portal": {
       "name": "Workspace Portal",

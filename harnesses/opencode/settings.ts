@@ -1,14 +1,17 @@
 // OpenCode's settings in a workspace: opencode.json, rendered before every start and mounted read-only at /etc/opencode,
-// OpenCode's directory for managed settings, with the agent's instructions beside it (../instructions.ts). What that file names wins over a person's own settings
-// (~/.config/opencode) and over any project's opencode.json; everything it leaves out stays theirs (agents, commands,
-// their own MCP servers, permissions for other tools). So it holds only what the portal depends on: the portal's
-// models (../models.ts) through the gateway and no other provider, the gateway's search in place of OpenCode's own web
-// tools, and no update or session sharing, which a workspace could not reach or must not use. The keys are OpenCode
-// 2's (`providers`, `policies`, `permissions`, `mcp.servers`).
+// OpenCode's directory for managed settings, with the agent's instructions beside it (../instructions.ts). What that
+// file names wins over a person's own settings (~/.config/opencode) and over any project's opencode.json; everything
+// it leaves out stays theirs (agents, commands, their own MCP servers, plugins and skills, permissions for other
+// tools). It holds what the portal depends on: the portal's models (../models.ts) through the gateway and no other
+// provider, the gateway's search in place of OpenCode's own web tools, and no update or session sharing, which a
+// workspace could not reach or must not use. And what a workspace starts with: the plugins and skills of the image
+// (image/install.sh), formatting after edits, and for an Online workspace two public MCP servers. The keys are
+// OpenCode 2's (`providers`, `policies`, `permissions`, `mcp.servers`, `plugins`, `skills`).
 //
 // OpenCode replaces `{env:NAME}` and `{file:path}` in the file's text before it parses it. Nothing here uses them; a
 // model name or id of the admin's that held such a marker would be replaced, so a start with one is refused. So is
 // one with a model id that has a `#`, where OpenCode's name for a model ("<provider>/<id>#<variant>") ends the id.
+import type { WorkspaceKind } from "@portal/core";
 import { INSTRUCTIONS_FILE } from "../instructions.ts";
 import type { ModelCatalog, PortalModel } from "../models.ts";
 import { AgentConfigError, BROWSER_MCP, BROWSER_TIMEOUT_MS, LLM_KEY_ENV, LLM_TIMEOUT_MS, SEARCH_TIMEOUT_MS } from "../shared.ts";
@@ -18,6 +21,14 @@ export const OPENCODE_CONFIG_FILE = "opencode.json";
 
 /** The provider's id: models are `portal/<id>` in OpenCode's settings and URLs. */
 const PROVIDER = "portal";
+/** Where image/install.sh puts the plugins and skills: in the image, so that a start downloads nothing. */
+const SHARE = "/usr/local/share/workspace-portal/opencode";
+/**
+ * Public MCP servers that need no account, for a workspace that reaches the internet: the current documentation of a
+ * library (Context7) and code search over public GitHub repositories (grep.app). What the agent asks them leaves the
+ * portal.
+ */
+const ONLINE_MCP = { context7: "https://mcp.context7.com/mcp", grep: "https://mcp.grep.app" };
 
 interface OpencodeConfigOptions {
   catalog: ModelCatalog;
@@ -25,11 +36,12 @@ interface OpencodeConfigOptions {
   serviceBaseUrl: string;
   /** Offer the Playwright MCP browser. */
   browser: boolean;
+  kind: WorkspaceKind;
 }
 
 /** The managed opencode.json of a workspace, as an object. Throws AgentConfigError for a model OpenCode would misread. */
 export function opencodeConfig(options: OpencodeConfigOptions): Record<string, unknown> {
-  const { catalog, serviceBaseUrl, browser } = options;
+  const { catalog, serviceBaseUrl, browser, kind } = options;
   for (const model of catalog.models) {
     const marker = [model.id, model.name].find((text) => /\{(?:env|file):/.test(text));
     if (marker !== undefined) {
@@ -47,6 +59,9 @@ export function opencodeConfig(options: OpencodeConfigOptions): Record<string, u
   if (browser) {
     servers.browser = { type: "local", command: [BROWSER_MCP.command, ...BROWSER_MCP.args], codemode: false, timeout: { execution: BROWSER_TIMEOUT_MS } };
   }
+  if (kind === "online") {
+    for (const [name, url] of Object.entries(ONLINE_MCP)) servers[name] = { type: "remote", url, oauth: false, codemode: false };
+  }
   return {
     $schema: "https://opencode.ai/config.json",
     update: "disable",
@@ -54,6 +69,13 @@ export function opencodeConfig(options: OpencodeConfigOptions): Record<string, u
     model: `${PROVIDER}/${catalog.defaultModel}`,
     // Added to every session's prompt, after the AGENTS.md files of the person and the project.
     instructions: [`${OPENCODE_SETTINGS_DIR}/${INSTRUCTIONS_FILE}`],
+    // Superpowers: skills for working in steps, which it tells every session about. Safety Net: refuses the commands
+    // that destroy work and reads of keys.
+    plugins: [`${SHARE}/plugins/superpowers`, `${SHARE}/plugins/safety-net`],
+    skills: [`${SHARE}/skills`],
+    // Files are formatted after an edit, by the formatters OpenCode knows and the image has (gofmt, rustfmt, ruff,
+    // shfmt) or the project installed (prettier, biome). {} keeps a person's own formatters; `true` would drop them.
+    formatter: {},
     providers: {
       [PROVIDER]: {
         name: "Workspace Portal",

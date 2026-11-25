@@ -7,8 +7,11 @@
 //   * it serves its page, and its API to nobody without OPENCODE_PASSWORD;
 //   * /etc/opencode/opencode.json is read and wins over a person's and a project's own settings, under their older
 //     names too: the one provider, its models and default, no fetching from the workspace;
+//   * the plugins the settings name are running and the skills of their folders are listed, none of them fetched;
 //   * a turn asks the stand-in, with the placeholder key, the model's output limit and default effort, the search and
-//     browser tools, the instructions file the settings name, and without OpenCode's own web tools;
+//     browser tools, the instructions file the settings name and Superpowers' introduction, and without OpenCode's
+//     own web tools;
+//   * Safety Net refuses a command that destroys work, and a file the model writes is formatted;
 //   * the routes of the gateway's status check answer as it reads them: a running turn, one that waits for an
 //     approval, and a command left running in the background;
 //   * a terminal's ticket and socket are given to requests without an Origin, as the gateway sends them;
@@ -65,8 +68,14 @@ const model = sample.providers.portal.models[modelId];
 // The stand-in for the gateway's service API: /mcp/search, and /llm/v1, whose model takes three steps in a turn. It
 // holds its first answer back until `release`, then fetches a page with OpenCode's `execute` tool, then runs a shell
 // command, which the project's own settings make OpenCode ask about. Asked to (BACKGROUND_PROMPT), it instead leaves
-// a command running in the background and ends its turn.
+// a command running in the background and ends its turn. Asked to (TOOLSET_PROMPT), it tries to throw the project's
+// changes away, then writes a Go file (`goFile`) that gofmt would change.
 const BACKGROUND_PROMPT = "Leave a command running in the background.";
+const TOOLSET_PROMPT = "Throw the changes away, then write a Go file.";
+const DESTRUCTIVE_COMMAND = "git reset --hard";
+const GO_AS_WRITTEN = 'package main\nfunc main(){println("check")}\n';
+const GO_FORMATTED = 'package main\n\nfunc main() { println("check") }\n';
+let goFile = "";
 const llmRequests = [];
 let release;
 const held = new Promise((resolve) => (release = resolve));
@@ -106,11 +115,16 @@ async function serve(req, res) {
   // The turn offers tools; the request that names the session offers none and is answered at once.
   const turn = (message.tools ?? []).length > 0;
   const results = message.messages.filter((entry) => entry.role === "tool");
-  const background = message.messages.some((entry) => entry.role === "user" && JSON.stringify(entry.content).includes(BACKGROUND_PROMPT));
-  llmRequests.push({ turn, background, step: results.length, authorization: req.headers.authorization, body: message });
+  const asked = (prompt) => message.messages.some((entry) => entry.role === "user" && JSON.stringify(entry.content).includes(prompt));
+  const background = asked(BACKGROUND_PROMPT);
+  const toolset = asked(TOOLSET_PROMPT);
+  llmRequests.push({ turn, background, toolset, step: results.length, authorization: req.headers.authorization, body: message });
   let call = null;
   if (turn && background) {
     if (results.length === 0) call = toolCall("shell", { command: "sleep 300", background: true });
+  } else if (turn && toolset) {
+    if (results.length === 0) call = toolCall("shell", { command: DESTRUCTIVE_COMMAND });
+    else if (results.length === 1) call = toolCall("write", { path: goFile, content: GO_AS_WRITTEN });
   } else if (turn) {
     if (results.length === 0) {
       await held;
@@ -142,6 +156,7 @@ async function main() {
   home = fs.mkdtempSync("/var/tmp/opencode-check-");
   const project = path.join(home, "project");
   fs.mkdirSync(project);
+  goFile = path.join(project, "check.go");
   // A person's own settings and a project's must not undo the managed ones, under the older names OpenCode still
   // reads either, nor move its server; a rule for another tool (the shell) is theirs to make.
   const own = JSON.stringify({
@@ -261,6 +276,20 @@ async function main() {
   expect(JSON.stringify(efforts) === JSON.stringify(model.capabilities.reasoning.effort), "a model's efforts are its variants", efforts);
   passed("the managed settings win");
 
+  // The plugins and skills are the image's (install.sh): there is no network to fetch one from.
+  await until("GET /api/plugin to list the settings' `plugins` as active", async () => {
+    const listed = (await api("GET", "/api/plugin")).json?.data;
+    return Array.isArray(listed) && sample.plugins.every((folder) => listed.some((plugin) => plugin?.source?.path === folder && plugin.state?.status === "active"));
+  });
+  const installed = sample.skills.flatMap((folder) => fs.readdirSync(folder));
+  expect(installed.length > 0, "the settings' `skills` folders hold skills", sample.skills);
+  await until(`GET /api/skill to list the skills of the settings' folders (${installed.join(", ")}) and Superpowers' (brainstorming)`, async () => {
+    const listed = (await api("GET", "/api/skill")).json?.data;
+    const ids = Array.isArray(listed) ? listed.map((skill) => skill?.id) : [];
+    return [...installed, "brainstorming"].every((id) => ids.includes(id));
+  });
+  passed("its plugins run and its skills are listed");
+
   // The turn's tools are also the MCP servers': on a slow machine they are still connecting now. (Should this route
   // change, nothing waits here, and the tools the turn offers are checked below all the same.)
   await until("the MCP servers of the settings to connect (GET /api/mcp)", async () => {
@@ -287,8 +316,10 @@ async function main() {
   expect(tools.includes("search_web_search"), "the search MCP server's tools are offered by name (search_web_search; codemode false)", tools);
   expect(tools.some((name) => name.startsWith("browser_")), "the browser MCP server's tools are offered by name (browser_*)", tools);
   expect(tools.includes("execute") && tools.includes("shell"), "OpenCode offers its `execute` and `shell` tools, which the rest of this check uses", tools);
-  const told = JSON.stringify(turn.body.messages).split(INSTRUCTIONS).length - 1;
-  expect(told === 1, "the request carries the text of the managed `instructions` file, once", told);
+  const said = (text) => JSON.stringify(turn.body.messages).split(text).length - 1;
+  expect(said(INSTRUCTIONS) === 1, "the request carries the text of the managed `instructions` file, once", said(INSTRUCTIONS));
+  expect(said("You have superpowers.") === 1, "the request carries Superpowers' introduction, once", said("You have superpowers."));
+  expect(tools.includes("skill") && installed.every((id) => JSON.stringify(turn.body).includes(id)), "the request offers the `skill` tool and names the skills of the settings' folders", tools);
   passed("a turn asks the service as the portal needs it to");
 
   const running = async () => (await api("GET", "/api/session/active")).json;
@@ -337,6 +368,18 @@ async function main() {
   expect(job?.kind === "shell" && job.status === "running", "GET /api/experimental/job lists a command left running in the background as {kind: \"shell\", status: \"running\"}", left);
   await api("POST", `/api/experimental/job/${job.id}/cancel`).catch(() => {});
   passed("the status routes answer as the gateway reads them");
+
+  // A turn that tries a command Safety Net refuses, before OpenCode would ask about it, then writes a Go file.
+  const third = (await api("POST", "/api/session", { body: { location: { directory: project } } })).json?.data;
+  expect(typeof third?.id === "string", "POST /api/session creates a third session", third);
+  await api("POST", `/api/session/${third.id}/prompt`, { body: { text: TOOLSET_PROMPT } });
+  await until("the turn that tried a destructive command and wrote a Go file to end", async () => llmRequests.some((request) => request.toolset && request.step === 2) && (await ended(third.id)()));
+  const afterCommand = llmRequests.find((request) => request.toolset && request.step === 1);
+  const refused = JSON.stringify(afterCommand.body.messages.filter((entry) => entry.role === "tool").at(-1)?.content ?? null);
+  expect(refused.includes("BLOCKED by CC Safety Net"), `Safety Net refuses \`${DESTRUCTIVE_COMMAND}\``, refused.slice(0, 300));
+  const written = fs.existsSync(goFile) ? fs.readFileSync(goFile, "utf8") : null;
+  expect(written === GO_FORMATTED, "the managed `formatter` has gofmt format a Go file the model writes", written);
+  passed("Safety Net refuses a destructive command, and a written file is formatted");
   const settled = await providerIds();
   expect(JSON.stringify(settled) === '["portal"]', "the portal's provider is still the only one after a turn", settled);
 
@@ -391,7 +434,7 @@ try {
   }
   service.closeAllConnections();
   service.close();
-  fs.rmSync(MANAGED_SETTINGS, { force: true });
+  for (const file of [MANAGED_SETTINGS, ...(sample.instructions ?? [])]) fs.rmSync(file, { force: true });
   // Retried: a process OpenCode started may still be writing there as it ends.
   if (home !== null) fs.rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   // The browser MCP server's output folder, should it have made it.

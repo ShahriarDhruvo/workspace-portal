@@ -83,7 +83,7 @@ export const opencodeDriver: AgentDriver = {
 
   renderSettings(config, kind) {
     return {
-      [OPENCODE_CONFIG_FILE]: renderOpencodeConfig({ catalog: modelCatalog(config), serviceBaseUrl: serviceBaseUrl(config, kind), browser: config.workspace.browser }),
+      [OPENCODE_CONFIG_FILE]: renderOpencodeConfig({ catalog: modelCatalog(config), serviceBaseUrl: serviceBaseUrl(config, kind), browser: config.workspace.browser, kind }),
       [INSTRUCTIONS_FILE]: agentInstructions(config, kind),
     };
   },
