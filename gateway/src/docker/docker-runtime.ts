@@ -170,7 +170,9 @@ export class DockerRuntime implements ContainerRuntime {
     const exec = await this.#docker.getContainer(id).exec({ Cmd: ["/usr/bin/cat", "/proc/net/tcp", "/proc/net/tcp6"], AttachStdout: true, AttachStderr: false, abortSignal });
     const output = await exec.start({ abortSignal });
     try {
-      return demuxDockerLogs((await readBounded(output, SOCKETS_MAX_BYTES)) ?? Buffer.alloc(0));
+      const tables = await readBounded(output, SOCKETS_MAX_BYTES);
+      if (tables === null) throw new Error(`its socket tables are longer than ${SOCKETS_MAX_BYTES} bytes`);
+      return demuxDockerLogs(tables);
     } finally {
       output.destroy();
     }
