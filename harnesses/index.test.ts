@@ -30,6 +30,7 @@ test("each harness's folder tells the deploy scripts what its driver says, and h
     assert.deepEqual([read("NAME"), read("VERSION_KEY"), read("PORT"), read("CLI")], [name, release.versionKey, String(port), release.cli], kind);
     for (const file of ["install.sh", "env.sh", "check.sh", "start.sh"]) assert.ok(fs.existsSync(new URL(`image/${file}`, folder)), `${kind}/image/${file}`);
     assert.match(fs.readFileSync(new URL("image/start.sh", folder), "utf8"), new RegExp(`--port ${port}\\b`), `${kind}: start.sh listens on the driver's port`);
+    assert.ok(fs.readFileSync(new URL("image/install.sh", folder), "utf8").includes(`npm install -g "${release.packageName}@$1"`), `${kind}: install.sh installs the package Admin > Updates lists`);
   }
 });
 

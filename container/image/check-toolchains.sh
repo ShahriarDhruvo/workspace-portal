@@ -88,7 +88,7 @@ EOF
 prints powershell pwsh -NoLogo -NoProfile -File hello.ps1
 
 prints node node -e 'console.log("node")'
-for tool in make gdb pnpm ssh zip xz file; do
+for tool in make gdb pnpm git rg jq curl ssh zip xz file; do
   command -v "$tool" > /dev/null || { echo "check-toolchains: $tool is missing" >&2; exit 1; }
 done
 echo "check-toolchains: C, C++, Go, Rust, Python, Bash, PowerShell and Node build and run"
