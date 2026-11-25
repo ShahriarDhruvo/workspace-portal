@@ -546,7 +546,8 @@ Left out, and why:
 then a stage that takes `HARNESS` and `HARNESS_VERSION` and runs that agent's `install.sh`, its `check.sh`
 without a network, and installs its `start.sh` as the entrypoint. Every start script sources the entry guard
 (`entry.sh`), which refuses root, sets the agent's environment (its `env.sh`), finds the container's address
-and gives Go a folder it can run programs from (`GOTMPDIR`), because `/tmp` is `noexec`.
+and puts the temporary folder in the home (`TMPDIR`), because compilers run programs from it (`go run`, a Rust
+doc test, `cargo install`) and `/tmp` is `noexec`.
 
 The base holds what a Private workspace could not download (`toolchains.sh`): Go, Rust (compiler, cargo,
 rustfmt, clippy; no rustup), uv, ruff, PowerShell, shellcheck and shfmt, each its maker's release at one

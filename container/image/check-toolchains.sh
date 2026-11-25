@@ -56,12 +56,27 @@ name = "hello"
 version = "0.0.0"
 edition = "2024"
 EOF
+cat > rust/src/lib.rs <<'EOF'
+/// The word the check waits for.
+///
+/// ```
+/// assert_eq!(hello::word(), "rust");
+/// ```
+pub fn word() -> &'static str {
+    "rust"
+}
+EOF
 cat > rust/src/main.rs <<'EOF'
 fn main() {
-    println!("rust");
+    println!("{}", hello::word());
 }
 EOF
 prints rust cargo run --quiet --offline --manifest-path rust/Cargo.toml
+# A doc test is built and run in the temporary folder: in a workspace, where entry.sh puts it.
+cargo test --doc --quiet --offline --manifest-path rust/Cargo.toml > /dev/null || {
+  echo "check-toolchains: a Rust doc test did not run" >&2
+  exit 1
+}
 cargo fmt --check --manifest-path rust/Cargo.toml
 cargo clippy --quiet --offline --manifest-path rust/Cargo.toml -- --deny warnings
 
