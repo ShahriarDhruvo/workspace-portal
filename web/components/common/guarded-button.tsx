@@ -65,7 +65,7 @@ export function GuardedButton({ blockedReason, className, onClick, ref, ...props
         />
       </TooltipTrigger>
       {hint.blocked ? (
-        <TooltipContent collisionPadding={8} className="max-w-64 text-wrap">
+        <TooltipContent className="max-w-64 text-wrap">
           {blockedReason}
         </TooltipContent>
       ) : null}
