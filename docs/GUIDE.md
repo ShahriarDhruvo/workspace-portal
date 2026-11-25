@@ -853,8 +853,8 @@ person chooses their own at the first sign-in.
 
 Each person has a Private and an Online workspace for every agent, and one of them runs at a time. **Private** has
 no internet access. **Online** also reaches public internet addresses, but never your LAN, the servers or another
-workspace. On Home, press **Start Private** or **Start Online**, then **Open workspace**; the **i** on each card
-says what that kind reaches. The agent is
+workspace. On Home, press **Start Private** or **Start Online**, then **Open workspace**; with the mouse over the
+**i** on a card you read what that kind reaches (a touch screen shows no **i**). The agent is
 Qwen Code unless the person picks DeepSeek Harness or OpenCode on Home, under Private and Online, or the
 administrator does on the person's page under **Admin > Users**. Every workspace has its own files and chats, so a
 switch to another agent is a switch to that agent's workspaces, Private and Online: what was made with the agent
