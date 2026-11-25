@@ -9,7 +9,7 @@
 // token. The gateway checks it together with the portal session cookie and replaces it with the container's real
 // token, which never leaves the server.
 import crypto from "node:crypto";
-import { WORKSPACE_BLOCK, WORKSPACE_REFS, workspaceNumber, type WorkspaceRef } from "./wire/index.ts";
+import { PREVIEW_PORT_OFFSET, WORKSPACE_BLOCK, WORKSPACE_REFS, workspaceNumber, type WorkspaceRef } from "./wire/index.ts";
 
 /** Users 1 … count - 1 (AGENT_PORT_COUNT) have workspace ports, and so workspaces. */
 export function hasWorkspacePorts(count: number, userId: number): boolean {
@@ -19,6 +19,12 @@ export function hasWorkspacePorts(count: number, userId: number): boolean {
 /** The port of one of user `userId`'s workspaces, or null when the id is outside the configured range. */
 export function agentPortFor(base: number, count: number, userId: number, ref: WorkspaceRef): number | null {
   return hasWorkspacePorts(count, userId) ? base + workspaceNumber(userId, ref) : null;
+}
+
+/** That workspace's preview port, where the gateway shows the web servers running in it: an origin apart from the agent's. */
+export function previewPortFor(base: number, count: number, userId: number, ref: WorkspaceRef): number | null {
+  const port = agentPortFor(base, count, userId, ref);
+  return port === null ? null : port + PREVIEW_PORT_OFFSET;
 }
 
 /** The workspace a port serves, or null for a port that is no workspace's. */

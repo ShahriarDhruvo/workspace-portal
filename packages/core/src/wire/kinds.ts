@@ -1,5 +1,6 @@
 // The values more than one part names: roles, workspace statuses, agents, workspace kinds, a user's workspaces and
-// how they are numbered, the two servers, why the web app stops a workspace, the control secret's minimum length.
+// how they are numbered, their preview ports, the two servers, why the web app stops a workspace, the control
+// secret's minimum length.
 
 export const ROLES = ["admin", "user"] as const;
 
@@ -63,6 +64,12 @@ export const WORKSPACE_BLOCK = 20;
 export function workspaceNumber(userId: number, ref: WorkspaceRef): number {
   return userId * WORKSPACE_BLOCK + workspaceIndex(ref);
 }
+
+/** A workspace's preview port is its workspace port plus this; deploy/lib.sh holds the same number (gateway/src/config.test.ts compares them). */
+export const PREVIEW_PORT_OFFSET = 10_000;
+
+/** On a preview port, `/__portal/port/<n>/<path>` chooses the workspace's port n and redirects to /<path>. */
+export const PREVIEW_PORT_PATH = "/__portal/port/";
 
 export function sameWorkspace(a: WorkspaceRef, b: WorkspaceRef): boolean {
   return a.agent === b.agent && a.kind === b.kind;

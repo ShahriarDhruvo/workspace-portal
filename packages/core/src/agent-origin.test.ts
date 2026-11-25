@@ -1,7 +1,18 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { agentBrowserToken, agentPortFor, agentPortRange, tokensEqual, workspaceForAgentPort } from "./agent-origin.ts";
-import { AGENT_KINDS, WORKSPACE_BLOCK, WORKSPACE_KINDS, WORKSPACE_REFS, sameWorkspace, workspaceIndex, workspaceName, workspaceNumber, workspaceOf } from "./wire/index.ts";
+import { agentBrowserToken, agentPortFor, agentPortRange, previewPortFor, tokensEqual, workspaceForAgentPort } from "./agent-origin.ts";
+import {
+  AGENT_KINDS,
+  PREVIEW_PORT_OFFSET,
+  WORKSPACE_BLOCK,
+  WORKSPACE_KINDS,
+  WORKSPACE_REFS,
+  sameWorkspace,
+  workspaceIndex,
+  workspaceName,
+  workspaceNumber,
+  workspaceOf,
+} from "./wire/index.ts";
 
 const BASE = 12_000;
 const COUNT = 100;
@@ -51,6 +62,13 @@ test("users outside 1 … count - 1 have no port, and ports outside the workspac
   assert.equal(workspaceForAgentPort(BASE, COUNT, first + WORKSPACE_REFS.length), null);
   assert.equal(workspaceForAgentPort(BASE, COUNT, last), null);
   for (const port of [BASE, BASE + 1, first - 1, last + 1, BASE - 1, 0, Number.NaN]) assert.equal(workspaceForAgentPort(BASE, COUNT, port), null, String(port));
+});
+
+test("a workspace's preview port is its own port, PREVIEW_PORT_OFFSET higher; a user without ports has none", () => {
+  for (const ref of WORKSPACE_REFS) assert.equal(previewPortFor(BASE, COUNT, 7, ref), agentPortFor(BASE, COUNT, 7, ref)! + PREVIEW_PORT_OFFSET);
+  assert.equal(previewPortFor(BASE, COUNT, 7, { agent: "qwen", kind: "private" }), 22_140);
+  assert.equal(previewPortFor(BASE, COUNT, 7, { agent: "opencode", kind: "online" }), 22_145);
+  for (const userId of [0, COUNT, 1.5]) assert.equal(previewPortFor(BASE, COUNT, userId, WORKSPACE_REFS[0]!), null, String(userId));
 });
 
 test("a browser token is one session's for one workspace", () => {

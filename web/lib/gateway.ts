@@ -15,6 +15,7 @@ import type {
   WorkspaceInfo,
   WorkspaceKind,
   WorkspaceRef,
+  WorkspaceServers,
 } from "@portal/core";
 import { config } from "./config";
 import type { DeletedSessions } from "./session-store";
@@ -104,6 +105,8 @@ export const gateway = {
   models: async () => (await call<{ models: string[] }>("GET", "/control/models")).models,
   listWorkspaces: async () => (await call<{ workspaces: WorkspaceInfo[] }>("GET", "/control/workspaces")).workspaces,
   getWorkspace: (userId: number, timeoutMs?: number) => call<WorkspaceInfo>("GET", `/control/workspaces/${userId}`, { timeoutMs }),
+  /** The ports that web servers in the user's running workspace listen on, for its preview port to show. */
+  servers: (userId: number) => call<WorkspaceServers>("GET", `/control/workspaces/${userId}/servers`),
   /**
    * Starts the user's workspace of `kind`, the one of the harness chosen for them, and returns once its container is
    * started (status "starting"); poll getWorkspace until ready. That workspace already starting or running just

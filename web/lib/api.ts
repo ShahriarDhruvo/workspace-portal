@@ -1,5 +1,5 @@
 import "server-only";
-import type { AgentInfo, AgentKind, ApiError, SessionContext, WorkspaceInfo } from "@portal/core";
+import type { AgentInfo, AgentKind, ApiError, SessionContext, WorkspaceInfo, WorkspaceServer } from "@portal/core";
 import { startingAgent } from "./agent-choice";
 import { GatewayError, gateway, toApiError } from "./gateway";
 import { checkApiAccess, isSameOrigin } from "./request-guards";
@@ -16,6 +16,16 @@ export interface WorkspaceStatusResponse extends WorkspaceInfo {
    * enabled agent; null when none is enabled.
    */
   nextAgent: AgentKind | null;
+}
+
+/** GET /api/workspace/servers. */
+export interface WorkspaceServersResponse {
+  /**
+   * The gateway port that shows the servers of the workspace that runs; null when none runs and is ready, or its
+   * user id is outside AGENT_PORT_COUNT (no servers then).
+   */
+  previewPort: number | null;
+  servers: WorkspaceServer[];
 }
 
 export function json(body: unknown, status = 200): Response {

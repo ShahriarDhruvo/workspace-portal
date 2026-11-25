@@ -28,6 +28,7 @@ import { Separator } from "@/components/ui/separator";
 import { Spinner } from "@/components/ui/spinner";
 import { BootScreen } from "./boot-screen";
 import { KindBadge } from "./kind-badge";
+import { PreviewButton } from "./preview-button";
 import { KindPicker, StartWorkspaceButton, useKindChoice } from "./start-workspace";
 import { StateCard } from "./state-card";
 import { StatusPill } from "./status-pill";
@@ -424,6 +425,7 @@ export function WorkspaceShell({ viewer, target, frames, idleTimeoutMinutes, ban
           ) : null}
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-2">
+          <PreviewButton />
           {canStop ? (
             // Only its icon on phones, as icon-sm's square.
             <Button

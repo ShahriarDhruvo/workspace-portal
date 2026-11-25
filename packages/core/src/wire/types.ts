@@ -2,7 +2,7 @@
 // web app reads and passes on to the browser. Types only. Where the gateway hands on what portal-hostd sent
 // (hostd/README.md), those shapes are here too.
 import type { EnergyPriceSource } from "./energy-locations.ts";
-import type { AgentKind, HostRole, WorkspaceKind, WorkspaceStatus } from "./kinds.ts";
+import type { AgentKind, HostRole, WorkspaceKind, WorkspaceRef, WorkspaceStatus } from "./kinds.ts";
 
 /** The error body of every gateway API and of the portal's own JSON routes: a code and a text for people. */
 export interface ApiError {
@@ -52,6 +52,19 @@ export interface WorkspaceInfo {
   /** "logout" | "idle" | "admin" | "user" | "deactivated" | "deleted" | "capacity" | "error" | ... */
   stopReason: string | null;
   lastError: string | null;
+}
+
+/** A TCP port something in a running workspace listens on (1024-65535, never the harness's own). */
+export interface WorkspaceServer {
+  port: number;
+  /** False when it listens on localhost only: the gateway reaches a workspace by its network address. */
+  reachable: boolean;
+}
+
+/** GET /control/workspaces/:id/servers. `workspace`: the one that runs and is ready, else null (and no servers). */
+export interface WorkspaceServers {
+  workspace: WorkspaceRef | null;
+  servers: WorkspaceServer[];
 }
 
 /** GET /control/stats. The gateway runs with the host's /proc, so these are host figures. */

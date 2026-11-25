@@ -4,6 +4,7 @@
 // decorative (aria-hidden) unless given an aria-label.
 import {
   Activity,
+  AppWindow,
   ArrowDown,
   ArrowRight,
   ArrowUp,
@@ -101,3 +102,5 @@ export const InfoIcon = icon(Info, "InfoIcon");
 export const LockIcon = icon(Lock, "LockIcon");
 /** The Online workspace (public internet). */
 export const GlobeIcon = icon(Globe, "GlobeIcon");
+/** A web server running in a workspace, as its preview port shows it. */
+export const PreviewIcon = icon(AppWindow, "PreviewIcon");
