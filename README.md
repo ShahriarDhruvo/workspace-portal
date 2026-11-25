@@ -11,17 +11,27 @@ or OpenCode) and starts its workspace, of one of two kinds:
 
 Every agent has a Private and an Online workspace of its own for each user, and each workspace has its own
 files (`/home/user`, `/workspace`) and chats: nothing is shared between them, and one of a user's workspaces
-runs at a time. Web apps started in a workspace open in the browser on its preview port. With a key from the
-API page, a user's other software (an editor, a script) uses the same model through the portal. The admin
-manages users, watches usage and energy, updates the agents and the LLM engine, and reads the audit log.
+runs at a time. A web server started in a workspace opens from the Preview button in the portal's bar, in a tab
+of its own. With a key from the API page, a user's other software (an editor, a script) uses the same model
+through the portal. The admin manages users, watches usage and energy, updates the agents and the LLM engine,
+and reads the audit log.
+
+## In a workspace
+
+Whichever agent runs it, a workspace has Node.js 24 with npm and pnpm, Python 3 with uv and ruff, Go, Rust
+(cargo, rustfmt, clippy), GCC and G++ with make and gdb, Bash with shellcheck and shfmt, PowerShell, git and a
+headless Chromium for the agent's browser tools. They are in the image, because a Private workspace can download
+nothing. OpenCode also starts with two plugins, five skills, formatting after edits and, in an Online workspace,
+two public MCP servers: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#opencodes-toolset) lists them and what was
+left out.
 
 ## What runs where
 
 | Where | What | Address (defaults) |
 |---|---|---|
 | Portal server | web app: sign-in, Home, API, Settings, admin pages; the LLM API under `/llm/api` | `:3000` |
-| | gateway: agent ports, one per user, agent and kind | `:12020-13999`, a block of 20 per user |
-| | gateway: preview ports (agent port + 10000) | `:22020-23999` |
+| | gateway: agent ports, one per user, enabled agent and kind | `:12020-13999`, a block of 20 per user |
+| | gateway: preview ports (agent port + 10000), for the web servers in a workspace | `:22020-23999` |
 | | gateway: control API, for the web app | `127.0.0.1:4002` |
 | | gateway: service API, for workspaces (model, search, reader) | `172.29.0.1:4001`, `172.28.0.1:4001` |
 | | one container per running workspace | a Docker network per kind |
@@ -75,15 +85,29 @@ Run the installer again after changing `PORTAL_DATA_DIR`, `HOSTD_PORTAL_*`, `FIR
 an agent's `*_VERSION`, a port, subnet, `*_GATEWAY_IP`, bridge, DNS server or the server in a `*_URL`
 (the firewall, portal-hostd and the images are made from them). Anything else: `docker compose up -d`.
 
+`WORKSPACE_AGENTS` lists the agents the portal offers. One that is not listed is off everywhere: Home does not
+show it, its ports are closed, its image is not built, and a workspace of it that still runs is stopped. Its
+users' files stay.
+
 The models are not in `.env` but in two files in Qwen Code's settings format, in
-`$PORTAL_DATA_DIR/config/qwen`: `system-defaults.json` holds the models and the defaults users may change,
-`settings.json` what users cannot override. DeepSeek Harness and OpenCode take their models from the same
-files. Every model `id` must be one the model server serves. Start from the copies in
-[`qwen-config/`](qwen-config); workspaces read the installed files at their next start.
+`$PORTAL_DATA_DIR/config/models`: `system-defaults.json` holds the models and the defaults users may change,
+`settings.json` what users cannot override. Every agent takes its models from these files. Every model `id`
+must be one the model server serves. Start from the copies in [`models/`](models); workspaces read the
+installed files at their next start.
 
 ```sh
-sudo bash deploy/qwen-config.sh install qwen-config/system-defaults.json qwen-config/settings.json
-sudo bash deploy/qwen-config.sh check        # or: show
+sudo bash deploy/models.sh install models/system-defaults.json models/settings.json
+sudo bash deploy/models.sh check        # or: show
+```
+
+Every agent is told the facts of its workspace: what is kept, what its network reaches, which tools are
+installed, and that a web server must listen on `0.0.0.0` for the Preview button. To add your own instructions
+for every agent of every user (how to answer, how to write code), write them as Markdown, at most 32 KiB, to
+`$PORTAL_DATA_DIR/config/instructions.md`. The file is not in the repository, so it may hold what is personal.
+Workspaces read it at their next start.
+
+```sh
+sudo install -m 0600 my-instructions.md /srv/workspace-portal/config/instructions.md
 ```
 
 ## HTTPS
@@ -143,9 +167,9 @@ stack. Running workspaces keep their image until they stop.
 
 Back up `.env` and the data directory (`PORTAL_DATA_DIR`): `db/` is the SQLite database (accounts, sessions,
 API keys, audit log, usage, energy), `users/<id>/<agent>/private` and `users/<id>/<agent>/online` are the
-workspace files (`<agent>` is `qwen`, `dsh` or `opencode`), `config/` holds the model settings and the agent
-versions in use. Stop the stack for a consistent copy of `db/`, and keep numeric owners and modes: each
-workspace's files belong to a UID of its own.
+workspace files (`<agent>` is `qwen`, `dsh` or `opencode`), `config/` holds the model settings, your
+instructions and the agent versions in use. Stop the stack for a consistent copy of `db/`, and keep numeric
+owners and modes: each workspace's files belong to a UID of its own.
 
 ## Update and uninstall
 
@@ -200,7 +224,8 @@ step by step from a fresh Fedora, the model download included.
   this host, its router or the servers `.env` names. SearXNG and the page reader reach the public web only.
   Without the rules the gateway runs no Online workspace.
 - **A browser** reaches a workspace only on that workspace's own port, and only with the portal session of its
-  user or of the admin who opened it.
+  user or of the admin who opened it. A web server in a workspace is reached the same way, on the workspace's
+  preview port: an origin of its own, so its pages share nothing with the agent's or the portal's.
 - **An API key** opens the model server's API and nothing of the portal. The database keeps only its hash. It
   stops working when it is revoked or its user is deactivated. With a hosted provider as the model server it
   opens that provider's whole API on your account, not only the routes a workspace gets.
@@ -214,8 +239,8 @@ The contracts behind this are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 ## Development
 
 ```sh
-npm ci                # Node.js 24 or newer; an npm workspace of packages/core, gateway and web
-npm test              # all three; the gateway's integration tests need no Docker
+npm ci                # Node.js 24 or newer; npm workspaces: packages/core, harnesses, container, gateway, web
+npm test              # all five; the gateway's integration tests need no Docker
 npm run typecheck
 npm run build         # the gateway bundle, then the web app
 python3 -m unittest hostd/test_hostd.py llm-server/fans/test_fans.py

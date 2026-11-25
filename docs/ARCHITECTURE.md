@@ -51,27 +51,34 @@ browser --(cookie portal_session)--> web app   WEB_BIND:WEB_PORT  <--(API key)--
 | `gateway/src/config.ts` | the environment, parsed and checked once (`loadConfig`); every problem reported together |
 | `gateway/src/control-api.ts` | the control listener: the control API's routes, and the LLM API beside them |
 | `gateway/src/workspaces/` | lifecycle (`manager.ts`), its pure decisions (`policy.ts`), file layout, readiness, fence probe |
-| `gateway/src/docker/` | container and network specs, the Docker runtime, the image builder (BuildKit) |
-| `gateway/src/agents/` | one driver per agent (`driver.ts` is the interface), settings rendering |
+| `gateway/src/docker/` | the Docker runtime, a workspace's container from the security profile, the image builder (BuildKit) |
 | `gateway/src/proxy/` | agent ports, preview ports, WebSocket relay, header rules, connections, session cache |
 | `gateway/src/service/` | service API and LLM API, the LLM proxy and queue under both, MCP server, URL policy, reader client |
 | `gateway/src/updates/` | agent updater and versions, engine updater, registries, release cache |
 | `gateway/src/monitor/` | live view, hostd client, host and LLM monitors, energy meter, prices, usage per user, session and API key |
 | `gateway/src/lib/`, `gateway/test/` | HTTP helpers and `HttpError`, forwarding, logging; the harness, fakes and integration suites |
 | `web/` | the web app (Next.js); installable through `app/manifest.ts`, without a service worker, since it does nothing offline |
-| `workspace-image/` | one Dockerfile, a target per agent; start scripts; the Web Shell trim; the dsh lockdown, web preview and profile; OpenCode's build check |
+| `harnesses/` | `@portal/harnesses`: the contract every agent's driver implements (`harness.ts`), the registry (`index.ts`), the admin's models (`models.ts`), what an agent is told (`instructions.ts`) |
+| `harnesses/<name>/` | one agent, whole: `driver.ts` and `settings.ts` for the gateway, `harness.env` for the deploy scripts, `image/` with what its image installs (`install.sh`), checks (`check.sh`) and starts (`start.sh`) |
+| `container/image/` | the one Dockerfile: the base every workspace has, with the toolchains, then the stage that installs one agent from its folder; the entry guard every start script sources |
+| `container/security/` | `@portal/container`: the one security profile (`spec.ts`), the networks, the fence probe, the firewall (`firewall.sh`) |
 | `reader/`, `searxng/` | the page reader (Python, Defuddle in Node); SearXNG with its `settings.yml` built in |
-| `hostd/`, `qwen-config/` | portal-hostd; the model settings a fresh install starts with |
+| `hostd/`, `models/` | portal-hostd; the model settings a fresh install starts with |
 | `llm-server/` | the reference LLM server: engine service file, model download, load test, fan control for one board |
-| `deploy/` | installer, firewall, isolation check, image update, model settings, HTTPS, uninstall; `lib.sh` is shared |
+| `deploy/` | installer, isolation check, image update, model settings, HTTPS, uninstall; `lib.sh` is shared |
+
+Imports go one way: `@portal/core`, then `harnesses`, then `container`, then the gateway. No file outside
+`harnesses/<name>/` names that agent's files, port or package: the Dockerfile takes the agent as a build
+argument, the deploy scripts source its `harness.env`, and `harnesses/index.test.ts` holds that file to the
+driver. Adding an agent is a folder, an entry in the registry and a name appended to `AGENT_KINDS`.
 
 The web app keeps sessions, renders the pages and calls the control API. Pages: `/login`, `/change-password`,
 `/` (Home), `/workspace`, `/api-keys` (API: a page at `/api` would sit among the JSON routes), `/settings`, and
 for the admin `/admin` (Usage), `/admin/energy`, `/admin/users` with `/new`, `/[id]` and `/[id]/workspace`,
-`/admin/updates`, `/admin/audit`. JSON routes: `/api/health`, `/api/workspace/` `start`, `stop`, `status`, and
-`/api/admin/` `overview`, `agents`, `engine`, `energy`, `llm-sessions`, and the event stream `live`. `/llm/api/*`
-is the [LLM API](#llm-api). Stable entry points: `web/lib/gateway.ts` (the only control API
-client), `web/lib/config.ts` (the environment), `web/instrumentation.ts` (start-up: no start without the
+`/admin/updates`, `/admin/audit`. JSON routes: `/api/health`, `/api/workspace/` `start`, `stop`, `status`,
+`servers`, and `/api/admin/` `overview`, `agents`, `engine`, `energy`, `llm-sessions`, and the event stream
+`live`. `/llm/api/*` is the [LLM API](#llm-api). Stable entry points: `web/lib/gateway.ts` (the only control
+API client), `web/lib/config.ts` (the environment), `web/instrumentation.ts` (start-up: no start without the
 control secret; creates the admin account when there is none) and `web/scripts/reset-admin-password.mjs`.
 
 ## Ports and addresses
@@ -80,7 +87,7 @@ control secret; creates the admin account when there is none) and `web/scripts/r
 |---|---|---|
 | web app | `WEB_BIND:WEB_PORT` | `docker-compose.yml` |
 | agent port of a workspace | `AGENT_BIND`, `AGENT_PORT_BASE` + the workspace's number | `agent-origin.ts` in core |
-| preview port | agent port + `PREVIEW_PORT_OFFSET` (10000) | `gateway/src/config.ts` |
+| preview port | agent port + `PREVIEW_PORT_OFFSET` (10000) | `wire/kinds.ts` in core |
 | control API, LLM API | `127.0.0.1:CONTROL_PORT` | `gateway/src/main.ts` |
 | service API | `WORKSPACE_GATEWAY_IP:SERVICE_PORT`, `ONLINE_GATEWAY_IP:SERVICE_PORT` | `gateway/src/main.ts` |
 | agent in a container | Qwen Code 4170, DeepSeek Harness 3080, OpenCode 4096 | the drivers |
@@ -97,10 +104,10 @@ append-only. `deploy/lib.sh` counts the same way (`workspace_number`); `config.t
 A port is a browser origin. Each workspace has its own, so what one workspace's page keeps in the browser
 (storage, a cache, a service worker, its token) is no other's, the same user's other agents and other kind
 included. Web apps get the preview port for the same reason: an app's page is not the agent's origin. User
-ids 1 to `AGENT_PORT_COUNT - 1` have ports; any other id gets 409 `no_workspace_port`. The offset is fixed
-because the Web Shell trim, dsh's web preview and `deploy/lib.sh` hold the same number; `config.test.ts`
-compares them. A workspace's ports listen even while its agent is not enabled or `ONLINE_WORKSPACES` is off.
-A service listener waits up to 60 s for its bridge address; the gateway exits if it never appears.
+ids 1 to `AGENT_PORT_COUNT - 1` have ports; any other id gets 409 `no_workspace_port`. `deploy/lib.sh` holds
+the offset too; `config.test.ts` compares them. Only the ports of the enabled agents listen (`workspacePorts`
+in `config.ts`), and only those are mapped for HTTPS; an Online workspace's listen while `ONLINE_WORKSPACES` is
+off too. A service listener waits up to 60 s for its bridge address; the gateway exits if it never appears.
 
 Neither process speaks TLS. For HTTPS, `deploy/tailscale-https.sh` has Tailscale Serve end TLS on port 443 for
 the web app and on each agent and preview port under its own number, and pass the bytes to 127.0.0.1, where it
@@ -113,7 +120,8 @@ the gateway which origins to name: `https://host` for the portal instead of `htt
 ```
 PORTAL_DATA_DIR/                    root 0755
   db/portal.sqlite                  db/ is 10001's (the web app), 0700
-  config/qwen/                      root 0700; settings.json, system-defaults.json, 0600
+  config/models/                    root 0700; settings.json, system-defaults.json, 0600
+  config/instructions.md            optional, the admin's: what every agent is told beside its workspace's facts
   config/agent-versions.env         root 0600; the agent versions in use
   users/<id>/                       root 0711, as users/ itself
     <agent>/                        root 0711
@@ -121,7 +129,7 @@ PORTAL_DATA_DIR/                    root 0755
         home/        -> /home/user  the workspace's UID, 0700
         workspace/   -> /workspace  the workspace's UID, 0700
         system/                     root 0755; rendered at every start, mounted read-only:
-                                    settings/ (the agent's), passwd, group
+                                    settings/ (the agent's, and AGENTS.md), passwd, group
 ```
 
 A workspace's UID and GID are `WORKSPACE_UID_BASE` plus its number, so no two workspaces share an owner, two
@@ -221,8 +229,9 @@ one entry per user in memory, which names the workspace that runs or ran last (`
   session of its own, which its approvals are asked in, and the session that started it does not run while it
   waits for it.
 - **Reconcile**, at start and every 5 minutes: running containers of known users are adopted (agent, kind and
-  version from their labels, the credential from their environment) and probed again; Online containers that
-  may not run are stopped. A container with unknown labels, or not named as its labels say
+  version from their labels, the credential from their environment) and probed again; one that may not run is
+  stopped instead: its agent is no longer enabled, or it is Online and that is refused. A container with unknown
+  labels, or not named as its labels say
   (`wp-<agent>-<kind>-<user id>`), is nobody's and is removed, as is one of an unknown user or of a user id
   without a port: the gateway creates none like it, so nothing about it can be relied on. A container's exit is
   noticed within 15 s, or at once when a forwarded request fails.
@@ -233,7 +242,7 @@ one entry per user in memory, which names the workspace that runs or ran last (`
 
 The gateway's shutdown leaves the containers running, which lets it restart without ending anyone's work. Stop
 reasons in `workspaces.stop_reason` and the audit log: `admin`, `user`, `deactivated`, `deleted` (from the web
-app), `logout`, `idle`, `capacity`, `online_disabled`, `online_not_allowed`, `error`.
+app), `logout`, `idle`, `capacity`, `online_disabled`, `online_not_allowed`, `agent_unavailable`, `error`.
 
 ## Agent ports, preview ports and the WebSocket relay
 
@@ -281,6 +290,19 @@ requests, WebSockets included, go to `<container>:<n>`. The app sees a browser o
 may be framed by its workspace's agent port and the portal. A Private workspace's app also gets a
 Content-Security-Policy that confines loads, connections and forms to the preview origin: code running in the
 person's browser must not carry out data the workspace itself cannot send.
+
+The portal finds the servers; nobody types an address. `GET /control/workspaces/:userId/servers` reads the
+kernel's tables of the workspace that runs (`cat /proc/net/tcp /proc/net/tcp6` in the container, as its user)
+and lists the listening ports from 1024 up, without the agent's own (`workspaces/servers.ts`; the text comes out
+of a workspace, so only lines of the kernel's exact form count, and at most 32 servers). Each has `reachable`:
+the gateway connects to the container's address, so a server must listen on every address or on that one. One
+on localhost only is listed as not reachable, unless the kernel picked its port, which marks a helper's socket.
+An answer is kept for 2 s, so many viewers cost one read. The web app's Preview button
+(`web/components/workspace/preview-button.tsx`, in the portal's bar and the workspace's) asks every 5 s while a
+workspace runs. It shows nothing without a server, opens the only server in a new tab, and lists several in a
+dialog; a server that is not reachable is listed with how to fix it (`--host 0.0.0.0`). Every agent is told the
+same rule (below), and none has a preview pane of its own: such a pane runs in the person's browser, where
+`localhost` is their own computer.
 
 ## Service API
 
@@ -385,6 +407,7 @@ client --(key)--> web app  app/llm/api/[[...path]]/route.ts
 | DELETE | `/control/engine/images/:digest` | `{ ok: true }` | 400 `invalid_digest`; 409 `engine_job_running`; hostd's own 404 and 409 codes; 502 `hostd_failed`; 503 `engine_unavailable` |
 | GET | `/control/workspaces` | `{ workspaces: WorkspaceInfo[] }` | |
 | GET | `/control/workspaces/:userId` | `WorkspaceInfo`; `stopped` for a user without a row | |
+| GET | `/control/workspaces/:userId/servers` | `WorkspaceServers`: the web servers of the workspace that runs; counts as no activity | |
 | POST | `/control/workspaces/:userId/start` | `{ agent?, kind? }`, `WorkspaceInfo` once the container exists | 400 `unknown_agent`, `unknown_kind`, `agent_unavailable`; 403 `online_not_allowed`; 404 `user_not_found`; 409 `no_workspace_port`, `deleting`, `another_running`, `online_disabled`, `capacity`; 500 `start_failed` |
 | POST | `/control/workspaces/:userId/stop` | `{ reason?, actorUserId? }`, `WorkspaceInfo`; reason defaults to `admin` | 400 `invalid_reason` |
 | POST | `/control/workspaces/:userId/attach` | `WorkspaceInfo` | |
@@ -408,8 +431,23 @@ to `types.ts` first: the gateway and the web app compile against it.
 
 ## Agent settings rendering
 
-The admin writes Qwen Code settings (`config/qwen/`, JSON with comments); the gateway renders each workspace's
-own copy at every start into its `system/settings/`, mounted read-only. What the renderers guarantee:
+The admin writes the models as Qwen Code settings (`config/models/`, JSON with comments); each agent's driver
+(`harnesses/<name>/driver.ts`, `settings.ts`) renders a workspace's own settings at every start into its
+`system/settings/`, mounted read-only. What the renderers guarantee:
+
+- **Instructions** (`harnesses/instructions.ts`): every workspace gets an `AGENTS.md` beside its settings. It
+  states what an agent cannot find out by looking: which folders are kept, that `/tmp` runs no program, what
+  the network of its kind reaches, the tools installed, and that a web server must listen on `0.0.0.0` and is
+  opened with the Preview button, never by a localhost link. The admin's `config/instructions.md` follows when
+  there is one (at most 32 KiB, since every request carries it; a longer or unreadable file fails the start
+  with `AgentConfigError`). It applies to every user's agents. OpenCode reads the file through its managed
+  `instructions` setting. Qwen Code reads it as the context file of an included folder
+  (`context.includeDirectories` with `loadFromIncludeDirectories`), which also lists that folder among the
+  agent's working directories. DeepSeek Harness reads the `AGENTS.md` of its shared agents folder
+  (`DSH_AGENTS_HOME`), which its start script puts together in `/tmp` from this file and the person's own
+  `~/.agents/skills`; a person's own instructions for dsh go in `~/.dsh/AGENTS.md`. Only OpenCode's image build
+  proves that the text reaches the model; for the other two the build checks that the agent still has the
+  setting it is given.
 
 - **Models** are the `modelProviders.openai` entries: `system-defaults.json` must hold at least one with an
   `id`, and a list in `settings.json` replaces it. Every entry gets the service API's `/llm/v1` as `baseUrl`
@@ -420,18 +458,15 @@ own copy at every start into its `system/settings/`, mounted read-only. What the
   removed, and the MCP server `search` (plus `browser` with `WORKSPACE_BROWSER`).
 - **DeepSeek Harness** gets the same models as a patch file written as JSON, which is valid YAML: dsh
   evaluates YAML tags, and JSON has none, so no string of the admin's can become one. Models whose context
-  window leaves dsh too little room are left out (`fitDshModels` in `dsh-settings.ts`). Otherwise dsh runs as it
-  ships: a static lockdown patch in the image turns off only the DeepSeek sign-in and API, the built-in web tools
-  and opening folders in desktop apps, turns on the sidebar Browser and agent teamwork for new sessions, and names
+  window leaves dsh too little room are left out (`fitDshModels` in `harnesses/dsh/settings.ts`). Otherwise dsh
+  runs as it ships: a static lockdown patch in the image turns off only the DeepSeek sign-in and API, the built-in
+  web tools and opening folders in desktop apps, turns on agent teamwork for new sessions, and names
   `~/Documents` as dsh's Documents folder. The image build fails when a row of it does not apply (one marked
   optional may be missing: agent teamwork, which dsh 0.2.2-rc.1 does not have), or when a setting a row gives is
   not one its plugin declares, with a value it takes, because dsh would ignore it without a word
   (`check-lockdown-config.mjs`). `DSH_PERMISSION_MODE` in the image starts new sessions with Full access, and
   `default-profile.mjs` switches Auto review on once in each person's profile.
-- **dsh's web preview** (`workspace-image/dsh/web-preview.mjs`): its sidebar Browser opens a workspace's own
-  addresses (`localhost`, `127.x`) on the preview port, as the Web Shell's Web preview does. When the edit no
-  longer fits, the build fails.
-- **dsh's dark theme** (`workspace-image/dsh/portal-theme.mjs`): a stylesheet in its frontend's `index.html` sets
+- **dsh's dark theme** (`harnesses/dsh/image/portal-theme.mjs`): a stylesheet in its frontend's `index.html` sets
   its dark surface tokens (page, sidebar, panels, message box, code blocks) to the Web Shell's blacks, which
   `web/app/theme.css` copies, and its boot background follows; its light theme and what sits on the surfaces stay
   dsh's own. When the theme no longer defines a token the sheet sets, the build fails.
@@ -440,8 +475,9 @@ own copy at every start into its `system/settings/`, mounted read-only. What the
   own settings, under the older names OpenCode still reads too; what it leaves out stays theirs, a permission
   rule for another tool included. It names the portal's provider and, by policy, no other (OpenCode otherwise
   offers hosted models of its own; a session that names one fails), no update and no session sharing, its
-  `webfetch` and `websearch` tools off, the `fetch` of its `execute` tool with them, and the MCP server `search`
-  (plus `browser` with `WORKSPACE_BROWSER`), whose tools the model calls by name. The image adds
+  `webfetch` and `websearch` tools off, the `fetch` of its `execute` tool with them, the MCP server `search`
+  (plus `browser` with `WORKSPACE_BROWSER`), whose tools the model calls by name, and its
+  [toolset](#opencodes-toolset). The image adds
   `OPENCODE_DISABLE_MODELS_FETCH`: its list of the world's models stays the one it ships with. A model's efforts
   are its variants in OpenCode's picker, and its default effort goes with every request for which no variant
   was picked. A start is refused (`AgentConfigError`) when a model's id or name contains `{env:` or `{file:`,
@@ -452,18 +488,71 @@ own copy at every start into its `system/settings/`, mounted read-only. What the
   are OpenCode's own and show in any browser; the projects in its sidebar and its open tabs are kept in the
   browser, per workspace port. OpenCode 1 is another package (`opencode-ai`) with other settings and another
   API; this driver is not for it.
-- **OpenCode's build check** (`workspace-image/opencode/check-serve.mjs`) starts OpenCode once, without a
-  network, against a stand-in for the service API, with settings a gateway test keeps as the renderer writes
-  them. The build fails when OpenCode does not serve its page, or serves its API to anyone without its password;
-  when a person's or a project's settings undo the managed ones or move its server; when a turn asks the model
-  with another key, output limit, effort or set of tools; when the routes of the status check (a running turn,
+- **OpenCode's build check** (`harnesses/opencode/image/check-serve.mjs`) starts OpenCode once, without a
+  network, against a stand-in for the service API, with settings a test keeps as the renderer writes them. The
+  build fails when OpenCode does not serve its page, or serves its API to anyone without its password; when a
+  person's or a project's settings undo the managed ones or move its server; when a plugin of the settings does
+  not run or a skill is not listed; when a turn asks the model with another key, output limit, effort or set of
+  tools, or without the instructions and Superpowers' introduction; when Safety Net lets `git reset --hard`
+  through or a Go file the model writes stays unformatted; when the routes of the status check (a running turn,
   a pending approval, a background job) or a terminal's ticket and socket answer differently; or when its
   native libraries are not unpacked into `BUN_TMPDIR`.
-- **The Web Shell trim** (`workspace-image/qwen/trim-web-shell.mjs`) removes what the portal does not offer,
-  points the Web preview at the preview port, sizes the dropped-file dialog to its buttons and keeps a turn's
+- **The Web Shell trim** (`harnesses/qwen/image/trim-web-shell.mjs`) removes what the portal does not offer,
+  the Web preview pane included, sizes the dropped-file dialog to its buttons and keeps a turn's
   answer on screen when replies to background tasks follow it. Its uploads take the gateway's `UPLOAD_LIMIT_MB`
   and go to disk as they arrive; as shipped, the daemon holds each one in memory, up to 50 MiB. All or nothing:
   when a change does not fit, the trim names it and the build fails.
+
+### OpenCode's toolset
+
+What an OpenCode workspace starts with, beside OpenCode's own tools. `harnesses/opencode/image/install.sh`
+downloads the plugins and skills into the image, each at one version and refused when its SHA-256 differs, and
+the managed settings load them from there (`plugins`, `skills`), so a Private workspace has them without a
+download. A person adds their own in `~/.config/opencode` or a project's `.opencode/`.
+
+| Kind | What | For |
+|---|---|---|
+| Plugin | [Superpowers](https://github.com/obra/superpowers) 7.0.2 | 15 skills for working in steps (brainstorm, plan, test first, debug by cause, review), and a note in every session that says to use them |
+| Plugin | [Safety Net](https://github.com/kenryu42/claude-code-safety-net) 2.8.3 | refuses commands that destroy work (`git reset --hard`, `rm -rf` of a home or repository, an install script piped from the internet) and reads of keys and credentials |
+| Skill | `frontend-design` ([anthropics/skills](https://github.com/anthropics/skills)) | UI that does not look like a template |
+| Skill | `react-best-practices` ([vercel-labs/agent-skills](https://github.com/vercel-labs/agent-skills)) | React and Next.js performance rules |
+| Skill | `shadcn` ([shadcn-ui/ui](https://github.com/shadcn-ui/ui)) | shadcn/ui components; its CLI needs an Online workspace |
+| Skill | `research` ([mattpocock/skills](https://github.com/mattpocock/skills)) | research against primary sources, written up with citations; it uses the portal's search and page reader |
+| Skill | `competitive-programming` (the portal's own, `image/skills/`) | contest problems in C++: flags, sanitizers, a stress test against a brute force |
+| MCP | `search` (the gateway), `browser` (Playwright MCP, headless Chromium) | web search and page reading; looking at the app the agent built |
+| MCP | `context7`, `grep` (Online only) | a library's current documentation ([Context7](https://context7.com)); code search over public GitHub repositories ([grep.app](https://grep.app)). Public services without an account: what the agent asks them leaves the portal |
+| Setting | `formatter` | a file is formatted after an edit: gofmt, rustfmt, ruff and shfmt from the image; prettier or biome when the project has them |
+
+Left out, and why:
+
+| What | Why |
+|---|---|
+| A plugin for creating, renaming and deleting folders in OpenCode's web page | none exists that is widely used; the agent and the terminal do it |
+| oh-my-opencode | it left OpenCode for a harness of its own |
+| oh-my-opencode-slim | it divides work among several models; the portal serves one |
+| Dynamic Context Pruning | it rewrites earlier messages, which makes the model server read the whole conversation again |
+| opencode-mem | it downloads an embedding model |
+| opencode-pty | OpenCode 2 runs background commands itself |
+| Plugins for OpenCode 1 | OpenCode 2 has another plugin API |
+| `web-design-guidelines`, `webapp-testing` skills | the first fetches its rules from the internet at every use; the second needs Playwright for Python |
+| Serena, chrome-devtools-mcp | they overlap with OpenCode's own code search and with the `browser` server |
+| Language servers | OpenCode 2 runs none |
+
+## Workspace image
+
+`container/image/Dockerfile` builds one image per agent and version: a base stage, the same for every agent,
+then a stage that takes `HARNESS` and `HARNESS_VERSION` and runs that agent's `install.sh`, its `check.sh`
+without a network, and installs its `start.sh` as the entrypoint. Every start script sources the entry guard
+(`entry.sh`), which refuses root, sets the agent's environment (its `env.sh`), finds the container's address
+and gives Go a folder it can run programs from (`GOTMPDIR`), because `/tmp` is `noexec`.
+
+The base holds what a Private workspace could not download (`toolchains.sh`): Go, Rust (compiler, cargo,
+rustfmt, clippy; no rustup), uv, ruff, PowerShell, shellcheck and shfmt, each its maker's release at one
+version, refused when its SHA-256 differs (amd64 and arm64); `build-essential` and `gdb` from Debian; pnpm and
+Playwright MCP from npm. `check-toolchains.sh` runs in the build without a network and fails it unless C, C++
+(with the sanitizers), Go, Rust, Python, Bash, PowerShell and Node each build and run a program.
+`fetch.sh` is the download helper both the base and an agent's `install.sh` use. Raising a version means its
+new SHA-256 values too.
 
 ## Agent versions and updates
 
@@ -480,8 +569,8 @@ One update job runs at a time, for all agents (`gateway/src/updates/agent-update
 4. Promotion tags the image, saves the version and audits `agent_updated`; from there it is not cancellable. A
    failure or a cancel discards the staging image, audits `agent_update_failed` and leaves the version.
 
-A version the portal's changes or checks don't fit fails at step 2: the Web Shell trim, dsh's preset, web
-preview, theme, profile and lockdown checks, and OpenCode's `check-serve.mjs` fail the build. A failed build's
+A version the portal's changes or checks don't fit fails at step 2: the Web Shell trim, dsh's preset, theme,
+profile and lockdown checks, and OpenCode's `check-serve.mjs` fail the build. A failed build's
 error is the failed step's last ten output lines, then the engine's message, so it says what did not fit.
 
 A gateway that stops mid-job records it as failed; at its next start `sweep` removes staging tags and check
@@ -524,7 +613,7 @@ These parts of `gateway/src/monitor/` run all the time:
 
 | Guarantee | Enforced by |
 |---|---|
-| A workspace has no privilege | `container-spec.ts`: own UID, read-only root, all capabilities dropped, `no-new-privileges`, limits; images without setuid programs |
+| A workspace has no privilege | `container/security/spec.ts`: own UID, read-only root, all capabilities dropped, `no-new-privileges`, limits; images without setuid programs |
 | It sees only its own files | binds of its own `home/`, `workspace/` and `system/` files alone; folders 0700, each workspace's under its own UID |
 | A user's agents and kinds have nothing in common but the service API | per workspace: folders, UID, container, browser origin (its two ports) and browser token; the service API keeps what a workspace was shown by its number |
 | It talks to no other container | Docker networks with inter-container traffic off; the firewall's `never` set |
@@ -539,13 +628,14 @@ The origin belongs in that row because a browser gives storage, caches and servi
 a page: an agent's page that registers a service worker, as OpenCode's does, would otherwise answer for every
 agent served on its port.
 
-`deploy/firewall.sh` builds the table `inet workspace_portal` and loads it in one transaction. It matches each
-bridge by name and by subnet. Its `not_public` set must equal `NOT_PUBLIC` in `gateway/src/config.ts`;
+`container/security/firewall.sh` builds the table `inet workspace_portal` and loads it in one transaction. It
+matches each bridge by name and by subnet. Its `not_public` set must equal `NOT_PUBLIC` in `gateway/src/config.ts`;
 `config.test.ts` compares them. The `never` set holds the container subnets and what the installer resolved:
 this host's networks, its routers, the servers the `*_URL` settings name and `FIREWALL_NEVER_REACH`.
 
 The gateway has no `CAP_NET_ADMIN` and cannot list rules, so the table carries a marker: its first rule
 rejects TCP to `127.0.0.1:SERVICE_PORT`, where nothing listens. Unless `ONLINE_WORKSPACES` is off, `fence.ts`
+(`container/security/`)
 connects there every 5 s (not while the check before still runs), and `EHOSTUNREACH` means loaded. On any
 other answer the gateway stops every Online workspace (`online_disabled`) and refuses Online starts; it asks
 once more right before an Online container starts.
@@ -568,14 +658,17 @@ ports and UIDs (`numberingProblems`: ranges that do not fit, that hold `WEB_PORT
 
 ## Testing
 
-`npm test` runs Node's test runner on the TypeScript sources of the three workspaces.
+`npm test` runs Node's test runner on the TypeScript sources of the five workspaces.
 
 | Suite | Covers |
 |---|---|
 | `packages/core/src/**/*.test.ts` | opening and migrating the database, the version syntax, a workspace's number, port and token |
-| `gateway/src/**/*.test.ts` | each module beside its source: policy, headers, URL policy, settings, specs, updaters |
+| `harnesses/**/*.test.ts` | each driver and its settings, the models, the instructions; every `harness.env` against its driver |
+| `container/security/*.test.ts` | the security profile and its bash twin (`sandbox.sh`), the networks, the fence probe |
+| `gateway/src/**/*.test.ts` | each module beside its source: policy, headers, URL policy, servers, updaters |
 | `gateway/test/*.test.ts` | the whole gateway through its real listeners |
 | `web/lib/**/*.test.ts` | the web app's pure logic, the wire contract's import rule, its fallbacks against `.env.example` |
+| the workspace image build | without a network: the toolchains build and run a program each; the agent's own `check.sh` (see [Agent settings rendering](#agent-settings-rendering)) |
 | `reader/test_*.py` | address checks, conversion, PDFs; run in the image build, which fails with them |
 | `hostd/test_hostd.py` | portal-hostd against a fake `/proc` and `/sys`: `python3 -m unittest hostd/test_hostd.py` |
 | `llm-server/fans/test_fans.py` | the fan curve and its loop against fake sensors, run the same way |

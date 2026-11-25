@@ -217,7 +217,7 @@ a limit. November 18, 2026, Gufo 0.35.0, Qwen Code 0.28.0:
 - Qwen Code asks for 64,000 tokens for a qwen3 model when its settings name no `max_tokens`: every request of a
   session in a portal workspace carried it. It asks for less when the context has less left after a 5% margin:
   with its own compaction point, 85% of the context, 26,000 tokens in a 262,144-token session; with
-  `autoCompactThreshold` 0.7 (`qwen-config/system-defaults.json`) it compacts at 183,500 tokens, where 64,000
+  `autoCompactThreshold` 0.7 (`models/system-defaults.json`) it compacts at 183,500 tokens, where 64,000
   still fit. The last two numbers come from running Qwen Code's own functions, not from a session that long.
 - That session, at `low`: the agent read the same document with its file tool and answered a 110,500-token
   prompt with 33,300 tokens, three quarters of them thinking, in 13.8 minutes. The old settings left such a

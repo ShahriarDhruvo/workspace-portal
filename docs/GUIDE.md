@@ -633,8 +633,8 @@ step give the agents its context (here 131072):
 ```sh
 cd ~/workspace-portal
 sed 's|"contextWindowSize": 262144|"contextWindowSize": 131072|' \
-  qwen-config/system-defaults.json > /tmp/system-defaults.json
-sudo bash deploy/qwen-config.sh install /tmp/system-defaults.json
+  models/system-defaults.json > /tmp/system-defaults.json
+sudo bash deploy/models.sh install /tmp/system-defaults.json
 ```
 
 With 128K sessions also set `--reasoning-budget 16000`: there Qwen Code's replies shrink to 29,000 tokens before it
@@ -819,7 +819,8 @@ sudo bash deploy/install.sh
     Agent:      Qwen Code 0.27.0
     Agent:      DeepSeek Harness 0.2.2-rc.1
     Agent:      OpenCode 2.4.1
-    Models:     /srv/workspace-portal/config/qwen (deploy/qwen-config.sh; used by every agent)
+    Models:     /srv/workspace-portal/config/models (deploy/models.sh; used by every harness)
+    Prompt:     none of your own (write them to /srv/workspace-portal/config/instructions.md; every agent is told them)
     Web:        web_search through the built-in SearXNG (http://127.0.0.1:8888); page reader on (read_page)
     Monitoring: this server: portal-hostd on http://127.0.0.1:9180; LLM server: not set up (hostd/README.md)
 
@@ -851,7 +852,8 @@ person chooses their own at the first sign-in.
 
 Each person has a Private and an Online workspace for every agent, and one of them runs at a time. **Private** has
 no internet access. **Online** also reaches public internet addresses, but never your LAN, the servers or another
-workspace. On Home, press **Start Private** or **Start Online**, confirm, then **Open workspace**. The agent is
+workspace. On Home, press **Start Private** or **Start Online**, then **Open workspace**; the **i** on each card
+says what that kind reaches. The agent is
 Qwen Code unless the person picks DeepSeek Harness or OpenCode on Home, under Private and Online, or the
 administrator does on the person's page under **Admin > Users**. Every workspace has its own files and chats, so a
 switch to another agent is a switch to that agent's workspaces, Private and Online: what was made with the agent
@@ -870,8 +872,8 @@ model, switches it off for that session.
 Its first workspace is `Documents/deepseek-harness/default-workspace` in its home folder;
 **Add workspace** opens any other folder. **Plugins**, in its sidebar, switches on the
 plugins DeepSeek Harness comes with and, in an Online workspace, installs others from npm or GitHub. A plugin runs
-with the person's own access, so install only those you trust. Its **Browser** shows a web app running in the
-workspace, whoever started it: open `http://localhost:PORT`. Its dark theme takes the portal's blacks, as Qwen Code's.
+with the person's own access, so install only those you trust. Its dark theme takes the portal's blacks, as Qwen
+Code's.
 
 OpenCode (OpenCode 2, the `@opencode/cli` package) also runs as it ships; a workspace leaves out only other model
 providers, sharing a session, its own web fetch and search (the portal's search and page reader replace them),
@@ -885,12 +887,34 @@ reasoning. A model's efforts are its variants in OpenCode's model picker.
 
 The agent changes files and runs commands in the workspace without asking. An `opencode.json` in a project's
 folder with `{"permissions": [{"action": "shell", "resource": "*", "effect": "ask"}]}` makes it ask before each
-command there. OpenCode has no web preview. Its agent looks at an app running in the workspace with the browser
-it has; to see the app yourself, open `http://PORTAL_IP:PREVIEW_PORT/__portal/port/PORT/` in a tab of its own.
-`PORT` is the port the app listens on. `PREVIEW_PORT` is 20 times the person's number plus 22004 for OpenCode's
-Private workspace, plus 22005 for its Online one (22024 and 22025 for person 1; the installer's `Previews` line
-gives the range); the number ends the address of the person's page under **Admin > Users**. Behind HTTPS
-([step 12](#12-https-and-remote-access)) the address starts with `https://NAME.YOUR-TAILNET.ts.net` instead.
+command there.
+
+OpenCode starts with more than it ships with. Two plugins: Superpowers, whose skills make the agent brainstorm,
+plan, test first and review, and Safety Net, which refuses commands that destroy work (`git reset --hard`, `rm
+-rf` of a home folder) and reads of keys. Five skills, which the agent loads when a task calls for one:
+`frontend-design`, `react-best-practices`, `shadcn`, `research` and `competitive-programming`. A file the agent
+edits is formatted when a formatter for it is there (gofmt, rustfmt, ruff, shfmt, or the project's prettier). An
+Online workspace also has Context7, for a library's current documentation, and grep.app, for code search over
+public GitHub repositories; both are public services, so what the agent asks them leaves the portal. The
+[architecture notes](ARCHITECTURE.md#opencodes-toolset) list the versions and what was left out.
+
+**In every workspace**, whichever agent runs it:
+
+- **Tools.** Node.js 24 with npm and pnpm, Python 3 with uv and ruff, Go, Rust with cargo, rustfmt and clippy, GCC
+  and G++ with make and gdb, Bash with shellcheck and shfmt, PowerShell (`pwsh`) and git. They are part of the
+  image, because a Private workspace can download nothing; an Online one installs more into its home folder.
+  There is no root and no `apt`. `/tmp` runs no program, so build in `/workspace` or the home folder.
+- **Preview.** When a web server runs in the workspace, a **Preview** button appears in the portal's bar and opens
+  it in a tab of its own; with several servers it lists them. The server must listen on all addresses (`next dev
+  -H 0.0.0.0`, `vite --host 0.0.0.0`): one on localhost only is listed with that advice. The agents are told the
+  same, so they start servers that way.
+- **Instructions.** Every agent is told the facts above. To have every agent follow your own rules as well (how
+  to answer, how to write code), write them to a Markdown file and install it; workspaces read it at their next
+  start. It applies to every person's agents, may be 32 KiB long, and is not part of the repository:
+
+  ```sh
+  sudo install -m 0600 my-instructions.md /srv/workspace-portal/config/instructions.md
+  ```
 
 #### The API, for your own software
 
@@ -1030,7 +1054,8 @@ do: Docker clears the limit of project 1 each time it starts.
 | `LLM_MAX_CONCURRENCY=4` | Matches the four sessions. More requests wait in the portal instead of in Gufo. |
 | `LLM_MAX_CONCURRENCY_PER_USER=3` | One person with many subagents cannot take every session. |
 | `DEFAULT_REASONING_EFFORT=low` | The default. Every new agent session starts at low effort, which answers faster; raise it inside a session for a hard task. `medium` and `xhigh` are this model's other two efforts. |
-| `system-defaults.json` | Not in `.env`: Qwen Code's defaults, in `/srv/workspace-portal/config/qwen`, with the model and its context of 262,144 tokens. It names no `max_tokens`, so Qwen Code asks for replies of 64,000 tokens and continues one that was cut off, and it sets `autoCompactThreshold` to 0.7, so Qwen Code compacts a conversation at 183,500 tokens and a whole reply always fits behind it. `sudo bash deploy/qwen-config.sh show` prints it and `install` replaces it; workspaces read it at their next start. |
+| `WORKSPACE_AGENTS=qwen,dsh,opencode` | The default: the agents people choose from, the first being a new person's. One that is left out is off everywhere: Home does not show it, its ports are closed, its image is not built, and a workspace of it that still runs is stopped. Its people's files stay, and are there again when it comes back. `WORKSPACE_AGENTS=opencode` offers OpenCode alone. |
+| `system-defaults.json` | Not in `.env`: Qwen Code's defaults, in `/srv/workspace-portal/config/models`, with the model and its context of 262,144 tokens. It names no `max_tokens`, so Qwen Code asks for replies of 64,000 tokens and continues one that was cut off, and it sets `autoCompactThreshold` to 0.7, so Qwen Code compacts a conversation at 183,500 tokens and a whole reply always fits behind it. `sudo bash deploy/qwen-config.sh show` prints it and `install` replaces it; workspaces read it at their next start. |
 | `ONLINE_WORKSPACES=on` | The default. An Online workspace reaches public addresses over TCP on any port and looks up names only at 1.1.1.1 and 9.9.9.9; the firewall drops your LAN, both servers and every other container. `off` removes Online for everyone; a person's page under **Admin > Users** switches it off for one person. |
 | `READER_URL_POLICY=shown` | The default. An agent opens only pages it was shown: search results, links on pages it has read and addresses in the conversation, plus a built-in list of documentation and code sites. The page is requested exactly as it was shown, which stops a poisoned page from making the agent send your files to an address it puts together itself. It is a filter, not a guarantee. `any` opens every public page; `READER_URL=off` removes the page reader. |
 
@@ -1321,7 +1346,7 @@ sudo bash deploy/verify-isolation.sh
 | Gufo is restarted while loading | Loading took over 10 minutes, usually a slow disk. Raise `TimeoutStartSec` in `gufo.container`. |
 | The model disappears under load | Read `journalctl --user -u gufo.service` and `sudo journalctl -k -b`. Exit status 75 is the stall timeout: nothing progressed for 10 minutes. An out-of-memory kill means something else is running on the LLM server, or the layout is too big. |
 | HTTP 429 from the model | More than 32 requests are waiting. Let the queue drain. |
-| An agent thinks for minutes and stops without an answer | The reply ran out during the thinking. `gufo.container` must have its `--reasoning-budget` ([step 8](#8-start-the-model)), and `sudo bash deploy/qwen-config.sh show` must list an `autoCompactThreshold` and no `max_tokens`. |
+| An agent thinks for minutes and stops without an answer | The reply ran out during the thinking. `gufo.container` must have its `--reasoning-budget` ([step 8](#8-start-the-model)), and `sudo bash deploy/models.sh show` must list an `autoCompactThreshold` and no `max_tokens`. |
 | An agent never gets an answer | All four sessions are busy with long prompts, and a long prompt slows everyone who arrives after it. Look at `/slots` (see [Day to day](#day-to-day)). |
 | The load test in step 9 says `FAIL` | A failed session says why on its own line; the line of readings shows whether all sessions ran at once, how much memory was left, and whether anything was swapped or killed. |
 | The installer in step 7 says `refusing` or `Secure Boot is not off` | The first names what differs from the tested board and BIOS (AXB35-02, 3.11): the check is deliberate, stay on the firmware's fan control. For the second, switch Secure Boot off in the BIOS ([step 1](#1-install-fedora-server)) and run the installer again. |
@@ -1329,7 +1354,7 @@ sudo bash deploy/verify-isolation.sh
 | The installer in step 11 ends with `the stack did not become healthy` | One of the four containers did not come up. `sudo docker compose ps` names it and `sudo docker compose logs NAME` says why. Run the installer again afterwards. |
 | Portal chat: `404 model ... is not served` | The model name in `system-defaults.json` must be `qwen3.8-flash-next`, the name Gufo serves. |
 | An agent dies on its first tool call | `WORKSPACE_MEMORY` is too small. Qwen Code needs about 1.9 GB for a moment; use 2 GiB or more. |
-| The Web preview (DeepSeek Harness: Browser) stays blank | Type the app's own address, such as `http://localhost:3000`: the portal opens that port of the workspace. The app's server must listen on all addresses (`0.0.0.0`; Vite needs `--host`). In a Private workspace the preview loads nothing from other sites, so an app that takes scripts or fonts from a CDN stays incomplete there. Sites that forbid framing, Google among them, stay blank in any preview: use **Open externally**. OpenCode has no preview: the app opens in a tab of its own ([step 11](#11-workspace-portal)), and what this row says of the app's server holds there too. |
+| No **Preview** button, or a server listed as on localhost only | The button shows while a web server runs in the workspace, a few seconds after it starts. The server must listen on all addresses (`0.0.0.0`; Vite and Next.js need `--host 0.0.0.0` or `-H 0.0.0.0`). In a Private workspace the preview loads nothing from other sites, so an app that takes scripts or fonts from a CDN stays incomplete there. The preview shows one server of a workspace at a time: opening another switches its open tabs to that one. |
 | Agents report no search results | The answer names the engines that did not answer. They sit out for 10 to 60 minutes and come back by themselves. |
 | `read_page only opens pages you were shown` | The agent took the address from memory or made it up. Have it search first, paste the address into the chat, or change `READER_URL_POLICY` ([step 11](#settings)). |
 | `read_page`: `The site refused the request` | That site turns automated readers away. The agent has to use another source. |
