@@ -58,12 +58,10 @@ interface ConnectProps {
   baseUrl: string;
   /** The model to ask for; null when the gateway could not say. */
   model: string | null;
-  /** Show the examples from the start: for someone who has no key yet. */
-  examplesOpen: boolean;
 }
 
 /** What a program needs besides a key: where the API is and which model to ask for, then a first request to copy. */
-export function Connect({ baseUrl, model, examplesOpen }: ConnectProps) {
+export function Connect({ baseUrl, model }: ConnectProps) {
   const [language, setLanguage] = useState("curl");
   const code = EXAMPLES.find((example) => example.id === language)!.code(baseUrl, model ?? "MODEL");
   return (
@@ -77,7 +75,7 @@ export function Connect({ baseUrl, model, examplesOpen }: ConnectProps) {
           <Value label="Base URL" value={baseUrl} />
           {model ? <Value label="Model" value={model} /> : null}
         </dl>
-        <Collapsible defaultOpen={examplesOpen} className="flex flex-col gap-3">
+        <Collapsible className="flex flex-col gap-3">
           <CollapsibleTrigger asChild>
             <Button type="button" variant="ghost" size="sm" className="group -ml-2.5 self-start text-muted-foreground">
               <ChevronDownIcon className="transition-transform group-data-[state=closed]:-rotate-90" />

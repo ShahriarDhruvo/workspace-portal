@@ -21,7 +21,7 @@ export default async function ApiKeysPage() {
     <PageMain width="md">
       <PageHeading title="API" />
       {/* The address the browser used: the portal is reached directly, or through a proxy that keeps Host. */}
-      <Connect baseUrl={`${config.cookieSecure ? "https" : "http"}://${host}/llm/api/v1`} model={models[0] ?? null} examplesOpen={view.keys.length === 0} />
+      <Connect baseUrl={`${config.cookieSecure ? "https" : "http"}://${host}/llm/api/v1`} model={models[0] ?? null} />
       <ApiKeys {...view} />
     </PageMain>
   );
