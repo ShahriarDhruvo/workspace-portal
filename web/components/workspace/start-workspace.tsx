@@ -31,7 +31,7 @@ const KIND_LINES: Readonly<Record<WorkspaceKind, string>> = {
   online: "Public internet access, for installing packages and using online services.",
 };
 
-/** What each kind means for the files in it and for the agent's work: the tooltip of its card's info button. */
+/** What each kind means for the files in it and for the agent's work: the tooltip of its card's info button (KindInfo). */
 const KIND_DETAILS: Readonly<Record<WorkspaceKind, readonly string[]>> = {
   private: [
     "Starts without internet access: only the portal's web search and page reader reach the internet for it.",
@@ -87,29 +87,45 @@ export function KindPicker({ value, onValueChange, onlineBlocked, idPrefix, clas
                 <RadioGroupItem value={kind} id={`${idPrefix}-${kind}`} disabled={blocked !== null} />
               </Field>
             </FieldLabel>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  className="absolute right-1.25 bottom-1.25 text-muted-foreground"
-                  aria-label={`About the ${WORKSPACE_KIND_NAMES[kind]} workspace`}
-                >
-                  <InfoIcon />
-                </Button>
-              </TooltipTrigger>
-              {/* Below the card, whose own name and line stay readable beside it. */}
-              <TooltipContent side="bottom" className="flex max-w-80 flex-col items-start gap-1">
-                {KIND_DETAILS[kind].map((line) => (
-                  <p key={line}>{line}</p>
-                ))}
-              </TooltipContent>
-            </Tooltip>
+            <KindInfo kind={kind} />
           </div>
         );
       })}
     </RadioGroup>
+  );
+}
+
+/** A kind's details, from the info button of its card: on hover and focus, and on a tap, since a touch screen has no hover. */
+function KindInfo({ kind }: { kind: WorkspaceKind }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Tooltip open={open} onOpenChange={setOpen}>
+      <TooltipTrigger
+        asChild
+        // The tooltip's own handlers close it on a press and on a click; a prevented event keeps them away.
+        onPointerDown={(event) => event.preventDefault()}
+        onClick={(event) => {
+          event.preventDefault();
+          setOpen(true);
+        }}
+      >
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          className="absolute right-1.25 bottom-1.25 text-muted-foreground"
+          aria-label={`About the ${WORKSPACE_KIND_NAMES[kind]} workspace`}
+        >
+          <InfoIcon />
+        </Button>
+      </TooltipTrigger>
+      {/* Below the card, whose own name and line stay readable beside it. */}
+      <TooltipContent side="bottom" className="flex max-w-80 flex-col items-start gap-1">
+        {KIND_DETAILS[kind].map((line) => (
+          <p key={line}>{line}</p>
+        ))}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
