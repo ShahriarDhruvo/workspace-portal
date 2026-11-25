@@ -8,7 +8,7 @@
 //   * /etc/opencode/opencode.json is read and wins over a person's and a project's own settings, under their older
 //     names too: the one provider, its models and default, no fetching from the workspace;
 //   * a turn asks the stand-in, with the placeholder key, the model's output limit and default effort, the search and
-//     browser tools, and without OpenCode's own web tools;
+//     browser tools, the instructions file the settings name, and without OpenCode's own web tools;
 //   * the routes of the gateway's status check answer as it reads them: a running turn, one that waits for an
 //     approval, and a command left running in the background;
 //   * a terminal's ticket and socket are given to requests without an Origin, as the gateway sends them;
@@ -23,6 +23,7 @@ import net from "node:net";
 import path from "node:path";
 
 const MANAGED_SETTINGS = "/etc/opencode/opencode.json";
+const INSTRUCTIONS = "The build check's instructions: answer in one word.";
 const SERVICE_PLACEHOLDER = "http://service.invalid:4001";
 const PASSWORD = "build-check-password";
 const BASIC = `Basic ${Buffer.from(`opencode:${PASSWORD}`).toString("base64")}`;
@@ -134,6 +135,8 @@ async function main() {
   expect(settingsText.includes(SERVICE_PLACEHOLDER), `${process.argv[2]} names the service as ${SERVICE_PLACEHOLDER}`);
   fs.mkdirSync(path.dirname(MANAGED_SETTINGS), { recursive: true });
   fs.writeFileSync(MANAGED_SETTINGS, settingsText.replaceAll(SERVICE_PLACEHOLDER, serviceUrl));
+  expect(sample.instructions?.length === 1 && path.dirname(sample.instructions[0]) === path.dirname(MANAGED_SETTINGS), `${process.argv[2]} names one instructions file, beside ${MANAGED_SETTINGS}`, sample.instructions);
+  fs.writeFileSync(sample.instructions[0], `${INSTRUCTIONS}\n`);
 
   // Not under /tmp, which may be noexec here as it is in a workspace: OpenCode loads its native libraries from BUN_TMPDIR.
   home = fs.mkdtempSync("/var/tmp/opencode-check-");
@@ -284,6 +287,8 @@ async function main() {
   expect(tools.includes("search_web_search"), "the search MCP server's tools are offered by name (search_web_search; codemode false)", tools);
   expect(tools.some((name) => name.startsWith("browser_")), "the browser MCP server's tools are offered by name (browser_*)", tools);
   expect(tools.includes("execute") && tools.includes("shell"), "OpenCode offers its `execute` and `shell` tools, which the rest of this check uses", tools);
+  const told = JSON.stringify(turn.body.messages).split(INSTRUCTIONS).length - 1;
+  expect(told === 1, "the request carries the text of the managed `instructions` file, once", told);
   passed("a turn asks the service as the portal needs it to");
 
   const running = async () => (await api("GET", "/api/session/active")).json;

@@ -109,6 +109,8 @@ export interface Config {
   dbFile: string;
   /** The admin's model list (deploy/models.sh), which every harness's settings are rendered from. */
   modelsDir: string;
+  /** The admin's own instructions for every workspace's agent; the file need not exist. */
+  instructionsFile: string;
   agentVersionsFile: string;
   /** The build context of workspace images: what holds container/image/ and harnesses/. */
   imageContextDir: string;
@@ -312,6 +314,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     dataDir,
     dbFile: path.join(dataDir, "db", "portal.sqlite"),
     modelsDir: path.join(dataDir, "config", "models"),
+    instructionsFile: path.join(dataDir, "config", "instructions.md"),
     agentVersionsFile: path.join(dataDir, "config", "agent-versions.env"),
     // Two levels above the gateway's code: /app in the container, where docker-compose.yml mounts the two folders, and the repository in development.
     imageContextDir: fileURLToPath(new URL("../../", import.meta.url)),

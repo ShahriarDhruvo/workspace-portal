@@ -1,10 +1,14 @@
-// Qwen Code's settings files, rendered per workspace before every start: the admin's settings.json and
-// system-defaults.json with their models settled (../models.ts), every model routed through the gateway, and the keys
-// the portal depends on forced on top.
+// Qwen Code's settings files, rendered per workspace before every start and mounted read-only at QWEN_SETTINGS_DIR:
+// the admin's settings.json and system-defaults.json with their models settled (../models.ts), every model routed
+// through the gateway, and the keys the portal depends on forced on top. The agent's instructions are beside them
+// (../instructions.ts).
 import type { WorkspaceKind } from "@portal/core";
 import type { HarnessConfig } from "../harness.ts";
 import { asObject, effectiveModels, listedModels, loadAdminSettings, mergeSettings, resolveModels, type AdminSettings, type ModelSettings, type SettingsObject } from "../models.ts";
 import { BROWSER_MCP, BROWSER_TIMEOUT_MS, LLM_KEY_ENV, SEARCH_TIMEOUT_MS, serviceBaseUrl } from "../shared.ts";
+
+/** Where the image's QWEN_CODE_SYSTEM_SETTINGS_PATH and QWEN_CODE_SYSTEM_DEFAULTS_PATH point (image/env.sh). */
+export const QWEN_SETTINGS_DIR = "/etc/workspace-portal/qwen";
 
 interface RenderOptions {
   admin: AdminSettings;
@@ -80,6 +84,13 @@ export function renderQwenSettings(options: RenderOptions): ModelSettings {
     delete servers.browser;
   }
   settings.mcpServers = servers;
+
+  // The instructions: Qwen Code puts the AGENTS.md of every folder its settings include into the model's system
+  // prompt, and has no other place for a file that is not the person's. It lists the folder among those the agent
+  // works in, too.
+  const context = asObject(settings.context);
+  const included = Array.isArray(context.includeDirectories) ? context.includeDirectories.filter((dir): dir is string => typeof dir === "string") : [];
+  settings.context = { ...context, includeDirectories: [...new Set([...included, QWEN_SETTINGS_DIR])], loadFromIncludeDirectories: true };
 
   const rendered = { settings, systemDefaults: defaults };
   if (defaultEffort !== null) sessionEffort(rendered, defaultEffort);

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { AdminSettings, SettingsObject } from "../models.ts";
 import { AgentConfigError, LLM_KEY_ENV } from "../shared.ts";
-import { renderQwenSettings } from "./settings.ts";
+import { QWEN_SETTINGS_DIR, renderQwenSettings } from "./settings.ts";
 
 const SERVICE = "http://172.29.0.1:4001";
 const DEFAULTS_FILE = "/data/config/models/system-defaults.json";
@@ -41,6 +41,7 @@ test("renderQwenSettings with one model and no other settings: the portal's keys
         description: "Headless Chromium for pages served inside this workspace (for example a dev server). It has no internet access.",
       },
     },
+    context: { includeDirectories: [QWEN_SETTINGS_DIR], loadFromIncludeDirectories: true },
   });
   assert.deepEqual(systemDefaults, {
     $version: 4,
@@ -85,6 +86,7 @@ test("renderQwenSettings keeps the admin's settings but forces the portal's keys
       security: { auth: { enforcedType: "qwen-oauth", selectedType: "gemini" }, folderTrust: { enabled: false } },
       permissions: { allow: ["run_shell_command(npm test)"], deny: ["run_shell_command(rm -rf /)", 42, "web_fetch"] },
       tools: { webSearch: { provider: [{ type: "tavily", apiKey: "tvly-secret" }] }, sandbox: false },
+      context: { fileName: "RULES.md", includeDirectories: ["/opt/shared", 7], loadFromIncludeDirectories: false },
       mcpServers: {
         search: { httpUrl: "https://search.example/mcp" },
         browser: { command: "/usr/bin/evil" },
@@ -110,6 +112,11 @@ test("renderQwenSettings keeps the admin's settings but forces the portal's keys
     deny: ["run_shell_command(rm -rf /)", "web_fetch"],
   });
   assert.deepEqual(settings.tools, { sandbox: false }, "built-in web search providers need the internet");
+  assert.deepEqual(
+    settings.context,
+    { fileName: "RULES.md", includeDirectories: ["/opt/shared", QWEN_SETTINGS_DIR], loadFromIncludeDirectories: true },
+    "the instructions' folder is included beside the admin's own",
+  );
   const servers = settings.mcpServers as Record<string, SettingsObject>;
   assert.deepEqual(Object.keys(servers).sort(), ["notes", "search"], "an admin browser entry is dropped when the browser is off");
   assert.equal(servers.search!.httpUrl, `${SERVICE}/mcp/search`);

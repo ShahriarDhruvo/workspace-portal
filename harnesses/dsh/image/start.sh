@@ -8,8 +8,9 @@ set -eu
 . /usr/local/lib/workspace-portal/entry.sh
 LOCKDOWN=/usr/local/share/workspace-portal/dsh/lockdown.patch.yml
 PORTAL=/etc/workspace-portal/dsh/portal.patch.yml
+INSTRUCTIONS=/etc/workspace-portal/dsh/AGENTS.md
 CREDENTIALS=/tmp/dsh-credentials.yaml
-for file in "$LOCKDOWN" "$PORTAL"; do
+for file in "$LOCKDOWN" "$PORTAL" "$INSTRUCTIONS"; do
   [ -r "$file" ] || { echo "start-harness: $file is missing" >&2; exit 1; }
 done
 
@@ -21,7 +22,11 @@ esac
 [ "${#secret}" -eq 43 ] || { echo "start-harness: DSH_COOKIE_SECRET must be 32 bytes (43 base64url characters)" >&2; exit 1; }
 
 umask 077
-mkdir -p "$HOME" "$DSH_HOME" "$DSH_AGENTS_HOME"
+# DSH_AGENTS_HOME (~/.agents outside the portal) holds the gateway's instructions and the person's own skills. Their
+# own instructions go in ~/.dsh/AGENTS.md, which dsh reads as well.
+mkdir -p "$HOME" "$DSH_HOME" "$HOME/.agents/skills" "$DSH_AGENTS_HOME"
+ln -s "$INSTRUCTIONS" "$DSH_AGENTS_HOME/AGENTS.md"
+ln -s "$HOME/.agents/skills" "$DSH_AGENTS_HOME/skills"
 # /tmp is a fresh tmpfs per start; noclobber refuses to write through anything already there.
 # printf is a shell builtin, so the secret never appears in a process's argv.
 set -C

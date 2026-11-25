@@ -58,7 +58,7 @@ test("a start renders the workspace's own account and settings, in its own folde
   assert.match(fs.readFileSync(paths.passwd, "utf8"), new RegExp(`^user:x:${uid}:${uid}:Workspace user:/home/user:/bin/bash$`, "m"));
   assert.match(fs.readFileSync(paths.group, "utf8"), new RegExp(`^user:x:${uid}:$`, "m"));
   assert.deepEqual(fs.readdirSync(paths.root).sort(), ["home", "system", "workspace"]);
-  assert.ok(fs.readdirSync(paths.settings).length > 0, "the agent's settings");
+  assert.deepEqual(fs.readdirSync(paths.settings).sort(), ["AGENTS.md", "portal.patch.yml"], "the agent's settings and instructions");
   for (const dir of [userRoot(dataDir, 3), path.dirname(paths.root), paths.root]) assert.equal(fs.statSync(dir).mode & 0o777, 0o711, dir);
   for (const dir of [paths.home, paths.workspace]) assert.equal(fs.statSync(dir).mode & 0o777, 0o700, dir);
   assert.deepEqual(fs.readdirSync(userRoot(dataDir, 3)), ["dsh"], "no other agent's folder");

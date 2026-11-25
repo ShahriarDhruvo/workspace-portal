@@ -4,7 +4,9 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { AGENT_KINDS, AGENT_NAMES, isVersion } from "@portal/core";
+import type { HarnessConfig } from "./harness.ts";
 import { BEARER_SUBPROTOCOL_PREFIXES, driverFor } from "./index.ts";
+import { agentInstructions, INSTRUCTIONS_FILE } from "./instructions.ts";
 
 test("every harness has a driver of its own kind, port, credential and settings mount", () => {
   for (const kind of AGENT_KINDS) {
@@ -29,4 +31,25 @@ test("each harness's folder tells the deploy scripts what its driver says, and h
     for (const file of ["install.sh", "env.sh", "check.sh", "start.sh"]) assert.ok(fs.existsSync(new URL(`image/${file}`, folder)), `${kind}/image/${file}`);
     assert.match(fs.readFileSync(new URL("image/start.sh", folder), "utf8"), new RegExp(`--port ${port}\\b`), `${kind}: start.sh listens on the driver's port`);
   }
+});
+
+test("every harness's settings hold the agent's instructions, and each harness is pointed at them", () => {
+  const config: HarnessConfig = {
+    modelsDir: fileURLToPath(new URL("../models/", import.meta.url)),
+    instructionsFile: "/nowhere/instructions.md",
+    servicePort: 4001,
+    idleTimeoutMs: 1_800_000,
+    uploadLimitBytes: 1024,
+    reader: { url: "" },
+    workspace: { kinds: { private: { gatewayIp: "172.29.0.1" }, online: { gatewayIp: "172.30.0.1" } }, browser: true, defaultEffort: null },
+  };
+  const files = (kind: (typeof AGENT_KINDS)[number]) => driverFor(kind).renderSettings(config, "online");
+  for (const kind of AGENT_KINDS) assert.equal(files(kind)[INSTRUCTIONS_FILE], agentInstructions(config, "online"), kind);
+  const file = (kind: (typeof AGENT_KINDS)[number]): string => `${driverFor(kind).settingsMount}/${INSTRUCTIONS_FILE}`;
+
+  assert.deepEqual(JSON.parse(files("opencode")["opencode.json"]!).instructions, [file("opencode")], "OpenCode: a file its settings name");
+  const { context } = JSON.parse(files("qwen")["settings.json"]!);
+  assert.deepEqual(context, { includeDirectories: [driverFor("qwen").settingsMount], loadFromIncludeDirectories: true }, "Qwen Code: the AGENTS.md of a folder its settings include");
+  const start = fs.readFileSync(new URL("dsh/image/start.sh", import.meta.url), "utf8");
+  assert.ok(start.includes(`INSTRUCTIONS=${file("dsh")}\n`) && start.includes('ln -s "$INSTRUCTIONS" "$DSH_AGENTS_HOME/AGENTS.md"'), "DeepSeek Harness: the AGENTS.md of the folder start.sh puts together");
 });

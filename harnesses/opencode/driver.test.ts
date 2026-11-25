@@ -37,6 +37,7 @@ test("opencodeConfig: one provider through the gateway, the portal's models and 
   );
   assert.equal(config.websearch, false);
   assert.deepEqual(config.permissions, [{ action: "webfetch", resource: "*", effect: "deny" }]);
+  assert.deepEqual(config.instructions, ["/etc/opencode/AGENTS.md"], "the file the driver renders beside the settings");
 
   const { portal } = config.providers;
   assert.equal(portal.package, "@opencode/ai/providers/openai-compatible", "part of OpenCode: nothing to download");

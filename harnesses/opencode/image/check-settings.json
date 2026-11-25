@@ -3,6 +3,9 @@
   "update": "disable",
   "share": "disabled",
   "model": "portal/models/Check/Check-Model",
+  "instructions": [
+    "/etc/opencode/AGENTS.md"
+  ],
   "providers": {
     "portal": {
       "name": "Workspace Portal",

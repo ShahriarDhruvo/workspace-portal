@@ -408,7 +408,7 @@ test("a DeepSeek Harness workspace: its own image, credential and settings, the 
     assert.deepEqual(record!.options.ref, DSH);
     assert.match(record!.options.credential, /^[A-Za-z0-9_-]{43}$/);
     assert.equal(g.runtime.dshFor(alice).secret, record!.options.credential);
-    assert.deepEqual(Object.keys(record!.files), ["portal.patch.yml"]);
+    assert.deepEqual(Object.keys(record!.files).sort(), ["AGENTS.md", "portal.patch.yml"], "its settings and the agent's instructions");
 
     // The patch: models from Qwen Code's system-defaults.json, all through the gateway, plus search.
     const patch = record!.files["portal.patch.yml"]!;
@@ -580,7 +580,7 @@ test("an OpenCode workspace: its own image, password and managed settings, the s
     assert.equal(record!.options.image, workspaceImage("opencode", "2.4.1"));
     assert.match(record!.options.credential, /^[A-Za-z0-9_-]{43}$/);
     assert.equal(g.runtime.opencodeFor(alice).password, record!.options.credential);
-    assert.deepEqual(Object.keys(record!.files), ["opencode.json"]);
+    assert.deepEqual(Object.keys(record!.files).sort(), ["AGENTS.md", "opencode.json"], "its settings and the agent's instructions");
 
     // The managed settings: the models from Qwen Code's system-defaults.json, all through the gateway, plus search.
     const settings = JSON.parse(record!.files["opencode.json"]!) as Record<string, any>;

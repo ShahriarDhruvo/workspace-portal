@@ -1,5 +1,5 @@
 // OpenCode's settings in a workspace: opencode.json, rendered before every start and mounted read-only at /etc/opencode,
-// OpenCode's directory for managed settings. What that file names wins over a person's own settings
+// OpenCode's directory for managed settings, with the agent's instructions beside it (../instructions.ts). What that file names wins over a person's own settings
 // (~/.config/opencode) and over any project's opencode.json; everything it leaves out stays theirs (agents, commands,
 // their own MCP servers, permissions for other tools). So it holds only what the portal depends on: the portal's
 // models (../models.ts) through the gateway and no other provider, the gateway's search in place of OpenCode's own web
@@ -9,9 +9,11 @@
 // OpenCode replaces `{env:NAME}` and `{file:path}` in the file's text before it parses it. Nothing here uses them; a
 // model name or id of the admin's that held such a marker would be replaced, so a start with one is refused. So is
 // one with a model id that has a `#`, where OpenCode's name for a model ("<provider>/<id>#<variant>") ends the id.
+import { INSTRUCTIONS_FILE } from "../instructions.ts";
 import type { ModelCatalog, PortalModel } from "../models.ts";
 import { AgentConfigError, BROWSER_MCP, BROWSER_TIMEOUT_MS, LLM_KEY_ENV, LLM_TIMEOUT_MS, SEARCH_TIMEOUT_MS } from "../shared.ts";
 
+export const OPENCODE_SETTINGS_DIR = "/etc/opencode";
 export const OPENCODE_CONFIG_FILE = "opencode.json";
 
 /** The provider's id: models are `portal/<id>` in OpenCode's settings and URLs. */
@@ -50,6 +52,8 @@ export function opencodeConfig(options: OpencodeConfigOptions): Record<string, u
     update: "disable",
     share: "disabled",
     model: `${PROVIDER}/${catalog.defaultModel}`,
+    // Added to every session's prompt, after the AGENTS.md files of the person and the project.
+    instructions: [`${OPENCODE_SETTINGS_DIR}/${INSTRUCTIONS_FILE}`],
     providers: {
       [PROVIDER]: {
         name: "Workspace Portal",

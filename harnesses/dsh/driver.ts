@@ -13,10 +13,12 @@
 //     job (`job/list`, a stream) still runs. A turn that only waits for the person (an approval or a question,
 //     `session/state`) is not work: dsh never times those out, and they must not keep a workspace nobody uses running.
 //     dsh reports no time of last activity, so the gateway times the end of the work itself.
+//   * Settings: portal.patch.yml (settings.ts), and the instructions file beside it.
 import crypto from "node:crypto";
 import WebSocket from "ws";
 import { AGENT_NAMES, field, parseJson } from "@portal/core";
 import type { AgentDriver, AgentEndpoint, AgentStatus } from "../harness.ts";
+import { agentInstructions, INSTRUCTIONS_FILE } from "../instructions.ts";
 import { modelCatalog } from "../models.ts";
 import { AGENT_TIMEOUT_MS, agentJson, generateCredential, serviceBaseUrl } from "../shared.ts";
 import { DSH_PATCH_FILE, fitDshModels, renderDshPatch } from "./settings.ts";
@@ -82,7 +84,11 @@ export const dshDriver: AgentDriver = {
   },
 
   renderSettings(config, kind) {
-    return { [DSH_PATCH_FILE]: renderDshPatch({ catalog: fitDshModels(modelCatalog(config)), serviceBaseUrl: serviceBaseUrl(config, kind), browser: config.workspace.browser }) };
+    return {
+      [DSH_PATCH_FILE]: renderDshPatch({ catalog: fitDshModels(modelCatalog(config)), serviceBaseUrl: serviceBaseUrl(config, kind), browser: config.workspace.browser }),
+      // image/start.sh makes it the AGENTS.md dsh reads for every session.
+      [INSTRUCTIONS_FILE]: agentInstructions(config, kind),
+    };
   },
 
   signRequest(headers, endpoint, { origin }) {

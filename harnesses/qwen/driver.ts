@@ -4,11 +4,12 @@
 //   * Readiness and "is the agent working?": `GET /health?deep=1`. Readiness also asks `GET /daemon/status` when the
 //     daemon is up without its agent process (see probeReady).
 //   * Settings: settings.json and system-defaults.json, mounted where the image's QWEN_CODE_SYSTEM_SETTINGS_PATH /
-//     QWEN_CODE_SYSTEM_DEFAULTS_PATH point.
+//     QWEN_CODE_SYSTEM_DEFAULTS_PATH point, and the instructions file beside them, which the settings include.
 import { AGENT_NAMES, field, isRecord } from "@portal/core";
 import type { AgentDriver, AgentEndpoint } from "../harness.ts";
+import { agentInstructions, INSTRUCTIONS_FILE } from "../instructions.ts";
 import { agentJson, generateCredential } from "../shared.ts";
-import { qwenSettingsFor } from "./settings.ts";
+import { QWEN_SETTINGS_DIR, qwenSettingsFor } from "./settings.ts";
 
 const QWEN_SOCKET_PATHS: ReadonlySet<string> = new Set(["/terminal", "/acp", "/live/web"]);
 const MAX_HEALTH_BYTES = 64 * 1024;
@@ -71,7 +72,7 @@ export const qwenDriver: AgentDriver = {
   release: { packageName: "@qwen-code/qwen-code", versionKey: "QWEN_CODE_VERSION", defaultVersion: "0.27.0", cli: "qwen" },
   port: 4170,
   credentialEnv: "QWEN_SERVER_TOKEN",
-  settingsMount: "/etc/workspace-portal/qwen",
+  settingsMount: QWEN_SETTINGS_DIR,
   browserAuth: "token",
   bearerSubprotocolPrefix: "qwen-bearer.",
   // Device pairing would hand a browser the container's real token.
@@ -103,6 +104,7 @@ export const qwenDriver: AgentDriver = {
     return {
       "settings.json": `${JSON.stringify(rendered.settings, null, 2)}\n`,
       "system-defaults.json": `${JSON.stringify(rendered.systemDefaults, null, 2)}\n`,
+      [INSTRUCTIONS_FILE]: agentInstructions(config, kind),
     };
   },
 

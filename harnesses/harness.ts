@@ -12,6 +12,8 @@ export type HeaderMap = Record<string, string | string[]>;
 export interface HarnessConfig {
   /** The admin's model list, in Qwen Code's settings format (models.ts); Qwen Code takes its own settings from it too. */
   modelsDir: string;
+  /** The admin's own instructions for every agent (instructions.ts); the file need not exist. */
+  instructionsFile: string;
   servicePort: number;
   idleTimeoutMs: number;
   /** The largest request body into a workspace, and the Web Shell's largest upload. */
@@ -81,9 +83,9 @@ export interface AgentDriver {
   /** The agent's own container environment, the credential included. */
   containerEnv(credential: string, config: HarnessConfig): string[];
   /**
-   * The files of the settings directory (name → content) for a workspace of `kind`, from the admin's settings with
-   * the portal's forced keys on top (that kind's service address among them). Throws AgentConfigError when the
-   * admin's settings are unusable.
+   * The files of the settings directory (name → content) for a workspace of `kind`: the admin's settings with the
+   * portal's forced keys on top (that kind's service address among them), and the agent's instructions
+   * (instructions.ts). Throws AgentConfigError when the admin's settings or instructions are unusable.
    */
   renderSettings(config: HarnessConfig, kind: WorkspaceKind): Record<string, string>;
   /**

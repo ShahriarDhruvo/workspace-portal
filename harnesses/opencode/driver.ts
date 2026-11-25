@@ -14,12 +14,14 @@
 //     are asked in, and the session that started it does not run while it only waits for it. A command a turn left
 //     running in the background is work too, though its session no longer runs (`GET /api/experimental/job`).
 //     OpenCode reports no time of last activity, so the gateway times the end of the work itself.
-//   * Settings: opencode.json in OpenCode's directory for managed settings (settings.ts).
+//   * Settings: opencode.json in OpenCode's directory for managed settings, which names the instructions file
+//     beside it (settings.ts).
 import { AGENT_NAMES, field } from "@portal/core";
 import type { AgentDriver, AgentEndpoint, AgentStatus } from "../harness.ts";
+import { agentInstructions, INSTRUCTIONS_FILE } from "../instructions.ts";
 import { modelCatalog } from "../models.ts";
 import { agentJson, generateCredential, serviceBaseUrl } from "../shared.ts";
-import { OPENCODE_CONFIG_FILE, renderOpencodeConfig } from "./settings.ts";
+import { OPENCODE_CONFIG_FILE, OPENCODE_SETTINGS_DIR, renderOpencodeConfig } from "./settings.ts";
 
 /** OpenCode's fixed user name for its HTTP sign-in. */
 const OPENCODE_USER = "opencode";
@@ -58,7 +60,7 @@ export const opencodeDriver: AgentDriver = {
   release: { packageName: "@opencode/cli", versionKey: "OPENCODE_VERSION", defaultVersion: "2.4.1", cli: "opencode" },
   port: 4096,
   credentialEnv: "OPENCODE_PASSWORD",
-  settingsMount: "/etc/opencode",
+  settingsMount: OPENCODE_SETTINGS_DIR,
   browserAuth: "session",
   // Pairing hands another browser or app a session of its own, outside the portal's; a remote machine's link takes
   // no password at all.
@@ -80,7 +82,10 @@ export const opencodeDriver: AgentDriver = {
   },
 
   renderSettings(config, kind) {
-    return { [OPENCODE_CONFIG_FILE]: renderOpencodeConfig({ catalog: modelCatalog(config), serviceBaseUrl: serviceBaseUrl(config, kind), browser: config.workspace.browser }) };
+    return {
+      [OPENCODE_CONFIG_FILE]: renderOpencodeConfig({ catalog: modelCatalog(config), serviceBaseUrl: serviceBaseUrl(config, kind), browser: config.workspace.browser }),
+      [INSTRUCTIONS_FILE]: agentInstructions(config, kind),
+    };
   },
 
   signRequest(headers, endpoint) {

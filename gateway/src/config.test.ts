@@ -40,6 +40,7 @@ test("the defaults are .env.example's", () => {
   assert.deepEqual(config, loadConfig({ ...settings, ...secrets }));
   assert.equal(config.dbFile, "/srv/workspace-portal/db/portal.sqlite");
   assert.equal(config.modelsDir, "/srv/workspace-portal/config/models");
+  assert.equal(config.instructionsFile, "/srv/workspace-portal/config/instructions.md");
   assert.equal(config.agentVersionsFile, "/srv/workspace-portal/config/agent-versions.env");
   assert.equal(config.imageContextDir, fileURLToPath(new URL("../../", import.meta.url)), "/app in the container, where container/image and harnesses are mounted");
   // What both sides of the comparison above derive alike: a unit, or a default that .env.example leaves unset.
