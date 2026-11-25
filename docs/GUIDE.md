@@ -1414,13 +1414,13 @@ fan service is running and that the vents have space on all sides. How each was 
   previous version back by itself.
 - More than the 9 hours of continuous load tests the model has served without a restart.
 - DeepSeek Harness under load. The stress runs used Qwen Code.
-- OpenCode under load. Since November 24, 2026 it is the portal server's only agent: its image was built there,
-  and in a headless browser a person signed in, started a Private workspace in one click, opened one and three web
-  servers with the Preview button and stopped the workspace; Home, the list of servers and the workspace page
-  were also opened at the widths of a tablet and a phone. In a Private and an Online workspace OpenCode reported
-  its plugins, skills and MCP servers as loaded, the toolchains built and ran their programs, and the model
-  answered one prompt in 14 seconds. Nothing here says how OpenCode handles a long conversation or an answer cut
-  off at the model's limit, or what memory it needs.
+- OpenCode's own page under load. Since November 24, 2026 OpenCode is the portal server's only agent. In a
+  headless browser a person signed in, started a Private workspace in one click, opened one and three web
+  servers with the Preview button and stopped the workspace, also at the widths of a tablet and a phone. The
+  [load test](MEASUREMENTS.md#opencode) sent its 51 turns through OpenCode's API with that page closed, in
+  Private workspaces only. Also not tried with OpenCode: more than three workspaces at once, images, a
+  conversation shortened more than once, and a reply cut off at the real limit of 64,000 tokens (it was forced
+  at 1,500).
 - All three agents since the workspace image holds the toolchains. The times and the count of [step
   11](#11-workspace-portal) are the portal server's with OpenCode alone; with three agents, before that image, the
   isolation check made 492 checks in 12 minutes. The images of Qwen Code and DeepSeek Harness were built on the

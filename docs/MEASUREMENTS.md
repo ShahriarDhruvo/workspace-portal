@@ -444,9 +444,69 @@ machine has about 6.3 GB free with the portal and search running.
 | 2 GiB each, four agents | Ran for 21 minutes without a kill. |
 | Two at 2.25 GiB plus 512 MiB of swap each | About 1 GB left with both filled to the limit. |
 | Three at 2 GiB | A realistic run finished with 2.8 GB to spare. In the pinned worst case free memory fell to 13 MB and the kernel killed a workspace process. |
-| Three at 2.25 GiB | In use since November 18, 2026. Not measured: its worst case is that of the row above. |
+| Three at 2.25 GiB | In use since November 18, 2026. Not measured with Qwen Code: its worst case is that of the row above. |
 
 With more RAM, count about 2.75 GiB per workspace.
+
+OpenCode 2.4.1 in three workspaces of 2.25 GiB, during the 51 turns under [OpenCode](#opencode):
+
+- A workspace that has just started holds about 300 MiB. OpenCode's own process has 150 MiB then and 290 to
+  395 MiB while it works (434 at most), the same with 20,000 tokens of conversation as with 208,000.
+- Without the file cache, a working workspace held at most 364 to 915 MiB, depending on the work. The 915 MiB
+  were the one whose agent opened its page in the workspace's Chromium (883 MiB) and ran a Go test under the
+  race detector (567 MiB). g++ took 408 MiB, the Go compiler 170 and rustc 147.
+- With the file cache, that same workspace peaked at 2,297 MiB, 7 below its limit; 1,224 MiB of it were file
+  cache at its end. The kernel counted no hit of the limit and killed nothing. The six other runs of a
+  workspace peaked at 398 to 857 MiB.
+- The machine kept at least 4,306 MiB available while three workspaces worked, and 4,056 MiB while two worked
+  and the one with Chromium was among them. Swap use did not change.
+
+### OpenCode
+
+OpenCode 2.4.1, November 24, 2026, Gufo 0.36.0: 51 turns in six conversations in Private workspaces, sent
+through OpenCode's own API inside each workspace, with its page closed. The tasks were small projects in Go,
+C++, Rust, Python, Bash and PowerShell, each built and tested by the agent.
+
+- The gateway passed 500 model requests and none failed. 50 turns succeeded; the one that failed was made to
+  (the cut-off below). No turn waited for an approval or a question.
+- Of 473 tool calls, 6 edits failed because their old text was not in the file, and the agent repeated each.
+  2 more were the cut-off's.
+
+One long conversation, alone:
+
+- 21 turns. After the fourth the workspace was left alone and stopped for idleness. Started again 40 minutes
+  after that turn, the conversation went on with its 61,320 tokens.
+- Reads of 2,000 lines of Go's own source added up to 26,000 tokens each, until the conversation had 207,733.
+  On the next turn OpenCode shortened it by itself, to 20,345 tokens; that turn took 44 seconds. This fits a
+  limit of the window less the reply limit (262,144 − 64,000 = 198,144 tokens), which is an estimate:
+  OpenCode's rule was not looked up.
+- Afterwards the agent still named two facts from the first turn that were in no file, and worked on for 8
+  turns. The tests of both projects passed at the end.
+- The first word came after 0.2 to 5 seconds when only the prompt was new, after 15 to 17 seconds behind 25,000
+  new tokens, and after 28 seconds when 72,745 tokens were read again after the restart. The gateway counted
+  1,594 tok/s reading.
+
+Three workspaces at once:
+
+- Three conversations worked at the same time for 13 minutes and two for 17 more. Every turn succeeded.
+- A turn took 3.5 seconds to 11.4 minutes. The longest was the first after a restart, with 79,689 tokens to
+  read again and 62 seconds to the first word.
+- Writing, per conversation, as the gateway counted it: 61 to 65 tok/s alone, 48 with two at once, 37 to 45
+  with three.
+- One agent had a subagent review its code in the background and looked at its own page with the browser
+  tools; the review came back two turns later.
+- A workspace used 0.03 to 0.10 of a core on average: most of a turn is the model's time.
+- The LLM server did not restart and no session waited for memory (`gufo_shared_state_waits_total` stayed 0).
+
+A reply cut off at its limit. Asked for 30,000 lines of numbers, the model declined and gave a command
+instead, so the cut-off was forced: one workspace got a reply limit of 1,500 tokens.
+
+- A plain answer: OpenCode tells the model that its answer hit the limit and lets it go on, twice. The third
+  cut-off ends the turn as failed (`Response still truncated after two output token limit continuations`). The
+  three parts stay in the conversation, and "continue" as the next prompt finished the text.
+- A tool call cut off inside its arguments is not run, and the model is told to send smaller pieces. Asked for
+  a file of 2,000 lines in one call, it was cut off twice and then wrote the file in 20 pieces. The file was
+  complete after 219 seconds.
 
 ### Web search
 
