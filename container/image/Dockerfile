@@ -72,5 +72,5 @@ LABEL workspace-portal.agent="${HARNESS}"
 # The gateway names the user; without one it is nobody, and entry.sh refuses root.
 USER 65534:65534
 # The steps above ran as root: a user without privileges has to get through the entry too (its home is /tmp here).
-RUN --network=none --mount=type=tmpfs,target=/tmp export HOME=/tmp && . /usr/local/lib/workspace-portal/entry.sh
+RUN --network=none --mount=type=tmpfs,target=/tmp set -eu && export HOME=/tmp && . /usr/local/lib/workspace-portal/entry.sh
 ENTRYPOINT ["/usr/local/bin/start-harness"]
