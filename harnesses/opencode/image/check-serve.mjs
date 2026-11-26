@@ -280,13 +280,25 @@ async function main() {
   expect(Array.isArray(read.policies) && read.policies.length === sample.policies.length, "the managed `policies` are read as written", read.policies);
   const paths = documents.map((source) => source.path);
   expect(paths.at(-1) === MANAGED_SETTINGS && paths.length > managed.length, "the managed settings are the strongest: the last of those GET /api/config lists, after a person's and a project's", paths);
-  const models = (await api("GET", "/api/model")).json?.data;
-  const offeredModels = Array.isArray(models) ? models.map((entry) => `${entry.providerID}/${entry.id}`).sort() : models;
-  const wanted = Object.keys(sample.providers.portal.models).map((id) => `portal/${id}`).sort();
-  expect(JSON.stringify(offeredModels) === JSON.stringify(wanted), "the provider offers the settings' models and there is no other model", offeredModels);
+  // Chat models are what /api/model lists by default, and all the picker offers; image models are listed apart.
+  const listing = async (type) => (await api("GET", `/api/model?types=${type}`)).json?.data;
+  const chatListing = await listing("chat");
+  const listed = async (type) => {
+    const models = type === "chat" ? chatListing : await listing(type);
+    return Array.isArray(models) ? models.map((entry) => `${entry.providerID}/${entry.id}`).sort() : models;
+  };
+  const ofType = (type) =>
+    Object.entries(sample.providers.portal.models)
+      .filter(([, model]) => (model.type ?? "chat") === type)
+      .map(([id]) => `portal/${id}`)
+      .sort();
+  const chatModels = await listed("chat");
+  expect(JSON.stringify(chatModels) === JSON.stringify(ofType("chat")), "the provider offers the settings' chat models and there is no other model", chatModels);
+  const imageModels = await listed("image");
+  expect(JSON.stringify(imageModels) === JSON.stringify(ofType("image")), "the provider offers the settings' image models as such, apart from its chat models, and no other", imageModels);
   const defaultModel = (await api("GET", "/api/model/default")).json?.data;
   expect(defaultModel?.providerID === "portal" && defaultModel?.id === modelId, "the managed `model` is the default model, whatever a person or a project names", { providerID: defaultModel?.providerID, id: defaultModel?.id });
-  const efforts = (models.find((entry) => entry.id === modelId)?.variants ?? []).map((variant) => variant.id);
+  const efforts = ((Array.isArray(chatListing) ? chatListing : []).find((entry) => entry.id === modelId)?.variants ?? []).map((variant) => variant.id);
   expect(JSON.stringify(efforts) === JSON.stringify(model.capabilities.reasoning.effort), "a model's efforts are its variants", efforts);
   passed("the managed settings win");
 
