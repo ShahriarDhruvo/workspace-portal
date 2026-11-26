@@ -45,6 +45,12 @@ const LLM_PREFIX = "/llm/v1/";
 const MCP_PATH = "/mcp/search";
 
 /**
+ * The image models' routes (IMAGE_MODELS), under the same queue as the LLM. Their prompt is the model's own writing,
+ * not something it was shown, so its URLs are not added to what read_page may open.
+ */
+const IMAGE_ROUTE = /^images\/(?:generations|edits)$/;
+
+/**
  * The only LLM endpoints a workspace may use, by path under /v1/. The proxy adds the real API key, so with a hosted
  * provider anything else (files, batches, fine-tuning, deletions) would be every workspace's to use. A model id may
  * contain slashes (`models/Qwen/Qwen3-8B`).
@@ -53,6 +59,7 @@ const LLM_ROUTES: ReadonlyArray<{ path: RegExp; method: "GET" | "POST" }> = [
   { path: /^chat\/completions$/, method: "POST" },
   { path: /^completions$/, method: "POST" },
   { path: /^embeddings$/, method: "POST" },
+  { path: IMAGE_ROUTE, method: "POST" },
   { path: /^models$/, method: "GET" },
   { path: /^models\/[^/]+(?:\/[^/]+)*$/, method: "GET" },
 ];
@@ -186,7 +193,8 @@ async function handle(
     deps.manager.noteAgentActivity(userId);
     // What the model is shown in a request (the user's messages, tool output) it may then open with read_page. The
     // body has arrived in full before the model can answer, let alone call a tool.
-    const collector = method === "POST" && web.tracksShown ? shownUrlCollector((urls) => web.shown.add(workspace, urls)) : null;
+    const shows = method === "POST" && web.tracksShown && !IMAGE_ROUTE.test(pathname.slice(LLM_PREFIX.length));
+    const collector = shows ? shownUrlCollector((urls) => web.shown.add(workspace, urls)) : null;
     if (collector) {
       req.once("end", () => {
         try {

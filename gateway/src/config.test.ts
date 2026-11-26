@@ -73,6 +73,8 @@ test("values are parsed and normalised", () => {
     AGENT_PORT_BASE: "7000",
     AGENT_PORT_COUNT: "10",
     LLM_UPSTREAM_URL: "http://llm.internal:8000/",
+    IMAGE_MODELS: " Qwen-Image-2.1-Turbo, Qwen-Image-2.1,Qwen-Image-2.1",
+    LLM_SLOTS_PATH: "/upstream/qwen3.8-flash-next/slots",
     SEARXNG_URL: "https://search.internal/searx/",
     SEARXNG_AUTHORIZATION: " Basic dXNlcjpwYXNz ",
     SEARXNG_TIMEOUT_SECONDS: "5",
@@ -98,6 +100,8 @@ test("values are parsed and normalised", () => {
   assert.equal(config.modelsDir, "/data/portal/config/models");
   assert.deepEqual([config.agentPortBase, config.agentPortCount], [7000, 10]);
   assert.equal(config.llm.upstreamUrl, "http://llm.internal:8000");
+  assert.deepEqual(config.llm.imageModels, ["Qwen-Image-2.1-Turbo", "Qwen-Image-2.1"]);
+  assert.equal(config.llm.slotsPath, "/upstream/qwen3.8-flash-next/slots");
   assert.deepEqual(config.search, {
     url: "https://search.internal/searx",
     authorization: "Basic dXNlcjpwYXNz",
@@ -138,6 +142,8 @@ test("every problem is reported at once", () => {
       AGENT_PORT_BASE: "70000",
       AGENT_PORT_COUNT: "1",
       LLM_MAX_CONCURRENCY: "0",
+      IMAGE_MODELS: "Qwen-Image-2.1, bad model",
+      LLM_SLOTS_PATH: "slots",
       PORTAL_DATA_DIR: "data",
       SEARXNG_URL: "ftp://search",
       SEARCH_FALLBACK_ENGINES: "duckduckgo,bad&engine",
@@ -153,6 +159,8 @@ test("every problem is reported at once", () => {
       'AGENT_PORT_COUNT must be an integer >= 2 (got "1")',
       "GATEWAY_CONTROL_SECRET must be at least 16 characters",
       'LLM_MAX_CONCURRENCY must be an integer >= 1 (got "0")',
+      'IMAGE_MODELS must be a comma-separated list of model ids (got "bad model")',
+      'LLM_SLOTS_PATH must be a path such as /slots (got "slots")',
       'SEARXNG_URL must be an http(s) URL (got "ftp://search")',
       'SEARCH_FALLBACK_ENGINES must be a comma-separated list of SearXNG engine names (got "bad&engine")',
       'READER_URL must be an http(s) URL (got "reader:4003")',

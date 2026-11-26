@@ -115,6 +115,7 @@ export function compose(
   };
   const llmMonitor = new LlmMonitor({
     upstreamUrl: config.llm.upstreamUrl,
+    slotsPath: config.llm.slotsPath,
     apiKey: config.llm.apiKey,
     queue: llm,
     requests,

@@ -251,6 +251,8 @@ export interface EngineStatus {
   state: string;
   subState: string;
   ready: boolean;
+  /** Behind llama-swap: the engine is stopped on purpose, to make room for the image models, and starts on demand. */
+  unloaded: boolean;
   buildInfo: string | null;
   previous: { image: string; digest: string | null; version: string | null } | null;
   images: EngineImage[];
@@ -378,7 +380,8 @@ export interface HostLive {
   today: HostToday | null;
 }
 
-export type EngineState = "ready" | "loading" | "offline" | "unknown";
+/** unloaded: behind llama-swap, the LLM is stopped while the image models run, or is starting again. */
+export type EngineState = "ready" | "loading" | "unloaded" | "offline" | "unknown";
 export type SessionPhase = "preparing" | "reading" | "writing";
 
 /** One engine session working on a request. Token counts and rates are null where unknown. */

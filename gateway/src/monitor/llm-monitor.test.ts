@@ -203,12 +203,38 @@ test("the live view lists who waits in the gateway and in the engine, and surviv
   engine.status = 503;
   await monitor.poll();
   assert.equal(monitor.snapshot().engine, "loading");
+  // Behind llama-swap, while the image models run or the LLM starts again.
+  engine.status = 409;
+  await monitor.poll();
+  live = monitor.snapshot();
+  assert.deepEqual([live.engine, live.sessionsReported, live.engineSessions], ["unloaded", false, null]);
   engine.down = true;
   await monitor.poll();
   live = monitor.snapshot();
   assert.deepEqual([live.engine, live.sessionsReported, live.engineSessions], ["offline", false, null]);
   queue.resume();
   (await waiting)();
+});
+
+test("behind llama-swap the sessions come from LLM_SLOTS_PATH, which never starts the LLM", async () => {
+  const urls: string[] = [];
+  const monitor = new LlmMonitor({
+    upstreamUrl: "http://llm:8080",
+    slotsPath: "/upstream/qwen3.8-flash-next/slots",
+    apiKey: "",
+    queue: new LlmQueue(3, 2),
+    requests: new LlmRequests({ now: () => 0 }),
+    names: () => new Map(),
+    log: quiet,
+    now: () => 0,
+    fetch: (async (url: string | URL | Request) => {
+      urls.push(String(url));
+      return new Response("model qwen3.8-flash-next is not loaded; path matches upstream.ignorePaths", { status: 409 });
+    }) as typeof fetch,
+  });
+  await monitor.poll();
+  assert.deepEqual(urls, ["http://llm:8080/upstream/qwen3.8-flash-next/slots"]);
+  assert.equal(monitor.snapshot().engine, "unloaded");
 });
 
 test("without /slots (another kind of server) the rows come from the gateway's own count", async () => {

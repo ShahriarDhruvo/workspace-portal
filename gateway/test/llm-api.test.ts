@@ -89,6 +89,31 @@ test("every path, method, header and body reaches the LLM server as it was sent,
   });
 });
 
+test("llama-swap's routes that run the LLM server are left out", async () => {
+  await withGateway({}, async (g) => {
+    addKey(g, g.ids.alice);
+    const sent = g.llm.requests.length;
+    for (const [method, path] of [
+      ["POST", "/api/models/unload"],
+      ["GET", "/api/events"],
+      ["GET", "/ui/"],
+      ["GET", "/logs/stream"],
+      ["GET", "/unload"],
+      ["GET", "/running"],
+      ["GET", "/metrics"],
+      ["GET", "/upstream/qwen3.8-flash-next/slots"],
+    ] as const) {
+      const reply = await api(g, path, { method });
+      assert.equal(reply.status, 404, `${method} ${path}`);
+      assert.match(json<{ error: { message: string } }>(reply).error.message, /runs the LLM server/);
+    }
+    assert.equal(g.llm.requests.length, sent, "none reached the LLM server");
+    for (const path of ["/v1/images/generations", "/apis", "/v1/metrics"]) {
+      assert.equal((await api(g, path, { method: "POST", body: "{}" })).status, 200, path);
+    }
+  });
+});
+
 test("a key's generations are counted for the key and its user, wait their turn, and are no workspace's", async () => {
   await withGateway({}, async (g) => {
     const alice = g.ids.alice;

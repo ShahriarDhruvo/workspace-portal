@@ -1,7 +1,8 @@
 // The LLM server's own HTTP API for a user's software (an editor, a script), opened by the user's API keys (the web
 // app's API page). The web app passes /llm/api/* on as it comes (web/app/llm/api), so this answers on the control
-// API's port. Nothing of the LLM server is left out: any path and method goes there as it is, but for the key, and
-// a generation waits its turn and is counted like a workspace's (llm-proxy.ts), for its key as well (key-usage.ts).
+// API's port. Any path and method goes there as it is, but for the key, and a generation waits its turn and is
+// counted like a workspace's (llm-proxy.ts), for its key as well (key-usage.ts). Only the routes that run the server
+// are left out (ADMIN_ROUTES).
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from "node:http";
 import { and, eq, isNull } from "drizzle-orm";
 import { apiKeys, hashSessionToken, users, type PortalDb } from "@portal/core";
@@ -9,6 +10,12 @@ import { sendJson, splitTarget } from "../lib/http-util.ts";
 import { isPlainPath, proxyLlm, sendLlmError, type LlmProxyDeps } from "./llm-proxy.ts";
 
 const PREFIX = "/llm/api";
+
+/**
+ * llama-swap's own routes, in front of the engines on the reference LLM server: they stop and start every model,
+ * cancel others' requests and show everyone's traffic, so they are the admin's, on the LLM server itself.
+ */
+const ADMIN_ROUTES = /^\/(?:api|ui|logs|upstream|comfyui|audiocpp)(?:\/|$)|^\/(?:unload|running|metrics)$/;
 
 export function isLlmApi(pathname: string): boolean {
   return pathname === PREFIX || pathname.startsWith(`${PREFIX}/`);
@@ -26,7 +33,9 @@ export async function serveLlmApi(deps: LlmProxyDeps, req: IncomingMessage, res:
     return sendJson(res, 401, { error: { message, type: "invalid_request_error", code: "invalid_api_key" } }, { "www-authenticate": "Bearer" });
   }
   delete req.headers["x-api-key"];
-  return proxyLlm(deps, req, res, { caller, pathname: pathname.slice(PREFIX.length) || "/", search });
+  const path = pathname.slice(PREFIX.length) || "/";
+  if (ADMIN_ROUTES.test(path)) return sendLlmError(res, 404, "not_found", `${pathname} runs the LLM server and is not available through the portal.`);
+  return proxyLlm(deps, req, res, { caller, pathname: path, search });
 }
 
 /**

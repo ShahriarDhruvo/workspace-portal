@@ -130,6 +130,10 @@ export interface Config {
     apiKey: string;
     maxConcurrency: number;
     maxConcurrencyPerUser: number;
+    /** Image models the LLM server serves on /v1/images/*, the default first (IMAGE_MODELS); empty: none. */
+    imageModels: string[];
+    /** Where the LLM server reports its sessions, llama.cpp style (LLM_SLOTS_PATH). */
+    slotsPath: string;
   };
   search: SearchConfig;
   reader: ReaderConfig;
@@ -331,6 +335,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
       apiKey: text("LLM_API_KEY", ""),
       maxConcurrency: int("LLM_MAX_CONCURRENCY", 3, 1),
       maxConcurrencyPerUser: int("LLM_MAX_CONCURRENCY_PER_USER", 2, 1),
+      imageModels: list("IMAGE_MODELS", "none", /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/, "model ids"),
+      slotsPath: read("LLM_SLOTS_PATH", "/slots", (value) => (/^\/[^\s?#]*$/.test(value) ? value : undefined), "be a path such as /slots"),
     },
     search: {
       url: url("SEARXNG_URL", "http://127.0.0.1:8888"),

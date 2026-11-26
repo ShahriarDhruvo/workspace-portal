@@ -2,7 +2,9 @@
 // ("Read": prompt tokens processed per second) and writes the answer ("Write": generated tokens per second), the
 // totals, and who is waiting. Two sources, joined:
 // - The engine's own sessions, from `GET /slots` (llama.cpp's server and engines derived from it, such as gufo): live
-//   prompt progress and generated-token counts per session, polled every POLL_MS only while someone watches.
+//   prompt progress and generated-token counts per session, polled every POLL_MS only while someone watches. Behind
+//   llama-swap that is /upstream/<model>/slots (LLM_SLOTS_PATH), which answers 409 while the LLM is not loaded and
+//   never starts it.
 // - The gateway's record of each request (llm-requests.ts): whose it is, its queue time and its first token.
 // The engine doesn't say whose request a session serves. It numbers requests (id_task) in the order they arrive, and
 // the gateway forwards them in order, so new sessions are paired, in task order, with the oldest unpaired requests
@@ -176,6 +178,8 @@ export function pairSessions(tracks: Iterable<SessionTrack>, requests: readonly 
 
 export interface LlmMonitorOptions {
   upstreamUrl: string;
+  /** Where the engine reports its sessions, from upstreamUrl: /slots, or llama-swap's /upstream/<model>/slots. */
+  slotsPath?: string;
   apiKey: string;
   queue: LlmQueue;
   requests: LlmRequests;
@@ -334,10 +338,10 @@ export class LlmMonitor {
 
   /** The engine's sessions, or null when it can't say (and the engine state says why). */
   async #fetchSlots(): Promise<EngineSlot[] | null> {
-    const { upstreamUrl, apiKey } = this.#options;
+    const { upstreamUrl, slotsPath = "/slots", apiKey } = this.#options;
     let response: Response;
     try {
-      response = await this.#fetch(`${upstreamUrl}/slots`, {
+      response = await this.#fetch(`${upstreamUrl}${slotsPath}`, {
         headers: apiKey ? { authorization: `Bearer ${apiKey}` } : {},
         signal: AbortSignal.timeout(SLOTS_TIMEOUT_MS),
       });
@@ -348,6 +352,12 @@ export class LlmMonitor {
     if (response.status === 503) {
       await response.body?.cancel();
       this.#setEngine("loading", this.#sessionsReported, this.#engineSessions, "");
+      return null;
+    }
+    // llama-swap: the LLM is stopped (the image models have its memory) or is starting again.
+    if (response.status === 409) {
+      await response.body?.cancel();
+      this.#setEngine("unloaded", false, null, "");
       return null;
     }
     const slots = response.ok ? parseSlots(await response.json().catch(() => null)) : null;

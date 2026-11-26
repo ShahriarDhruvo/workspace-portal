@@ -1108,6 +1108,7 @@ export class FakeEngineHost implements EngineHost {
       state: "active",
       subState: "running",
       ready: true,
+      unloaded: false,
       buildInfo: `${this.version} (abc1234)`,
       previous: this.previous === null ? null : { image: image(this.previous), digest: engineDigest(this.previous), version: this.previous },
       images: [...this.local].map((version) => ({
