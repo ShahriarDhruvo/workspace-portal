@@ -274,6 +274,23 @@ test("the deploy scripts number a workspace as the gateway does", () => {
   assert.equal(bash(`ENV_FILE=${JSON.stringify(env)}; port_ranges`), `${first}-${last} ${first + PREVIEW_PORT_OFFSET}-${last + PREVIEW_PORT_OFFSET}`);
 });
 
+test("docker-compose.yml passes the gateway every variable its configuration reads", () => {
+  const read = new Set<string>();
+  const env = new Proxy({ ...secrets } as NodeJS.ProcessEnv, {
+    get(target, key) {
+      if (typeof key === "string") read.add(key);
+      return Reflect.get(target, key);
+    },
+  });
+  loadConfig(env);
+  const compose = fs.readFileSync(new URL("../../docker-compose.yml", import.meta.url), "utf8");
+  const service = /^  gateway:\n([\s\S]*?)(?=^  \S)/m.exec(compose)?.[1] ?? "";
+  const list = /^    environment: \[([\s\S]*?)\]/m.exec(service)?.[1] ?? "";
+  const passed = new Set([...list.matchAll(/(?<=^|[\s,"])([A-Z][A-Z0-9_]*)(?=[=,\s"]|$)/g)].map((match) => match[1]));
+  assert.ok(read.size > 50 && passed.size > 50, "both lists were found");
+  assert.deepEqual([...read].filter((name) => !passed.has(name)), [], "a setting the gateway's container never gets keeps its default");
+});
+
 test("each kind has a network, bridge and subnet of its own", () => {
   assert.deepEqual(problems({ ...secrets, ONLINE_NETWORK: "workspace-portal-ws" }), ['WORKSPACE_NETWORK and ONLINE_NETWORK must differ (both "workspace-portal-ws")']);
   assert.deepEqual(problems({ ...secrets, ONLINE_BRIDGE: "br-wportal" }), ['WORKSPACE_BRIDGE and ONLINE_BRIDGE must differ (both "br-wportal")']);
