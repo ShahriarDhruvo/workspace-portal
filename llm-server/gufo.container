@@ -1,15 +1,18 @@
 [Unit]
-Description=Qwen3.8 Flash-Next Q4, four 256K sessions (only service on this host)
-Documentation=https://github.com/gufo-org/gufo/blob/v0.35.0/docs/server.md
+Description=Qwen3.8 Flash-Next Q4, four 256K sessions; started and stopped by llama-swap
+Documentation=https://github.com/gufo-org/gufo/blob/v0.37.0/docs/server.md
+# llama-swap starts it on demand and stops it to make room for the image models; it stops with llama-swap.
+BindsTo=llama-swap.service
+After=llama-swap.service
 
 [Container]
 ContainerName=gufo
-Image=ghcr.io/gufo-org/toolboxes/gufo-runtime@sha256:99e9b5471b7a9b007c686c2aa795afaf966744d64e753cb009c89541f9e9c2b6
+Image=ghcr.io/gufo-org/toolboxes/gufo-runtime@sha256:9548e9946c18cab9d135dd5dc2fad47e7bae0285d6240c100bb36a855bb1d4dc
 Pull=missing
 AddDevice=/dev/kfd
 AddDevice=/dev/dri
-# Listens on every interface, without a login: the firewall must let only the portal server reach 8080.
-PublishPort=8080:8080
+# Only llama-swap, on this host, talks to it.
+PublishPort=127.0.0.1:18080:8080
 Volume=/models/qwen3.8-flash-next:/models:ro,z
 # The prompt cache's disk tier, so conversations survive a restart; owned by the container's user (uid 1000).
 Volume=/models/gufo-cache/disk:/cache:Z
@@ -42,10 +45,9 @@ Exec=gufo serve --host 0.0.0.0 --port 8080 --sessions 4 --max-connections 64 --m
       --log-progress
 
 [Service]
-Restart=always
-RestartSec=15
+# Starts only once the image models have let go of the GPU memory it needs.
+ExecStartPre=%h/.local/bin/wait-gpu-memory 90
+# llama-swap starts it again with the next request; systemd must not start it behind llama-swap's back.
+Restart=no
 TimeoutStartSec=600
 TimeoutStopSec=150
-
-[Install]
-WantedBy=default.target

@@ -1,0 +1,67 @@
+# llama-swap on the LLM server: one address (port 8080) for the LLM and the two image models, which do not fit in
+# memory together. A request names its model; llama-swap starts that model's Gufo unit and, when the model belongs
+# to the other group, first stops the running one. It waits for requests in flight to finish before it stops a
+# model, and holds new requests while it swaps. Goes to ~/.config/llama-swap/config.yaml (docs/GUIDE.md).
+# Reference: https://github.com/mostlygeek/llama-swap/blob/v276/docs/config.example.yaml
+
+# Covers the LLM's longest load stage (the first start after an update hashes 86 GB, about 72 s). llama-swap also
+# gives a model it stops for a swap this long to exit.
+healthCheckTimeout: 600
+# Time to stop a model on an unload (portal-hostd's engine updates): the LLM writes its cache to disk first.
+unloadTimeout: 180
+# Requests carry people's prompts: keep no copies of them (captures, its Activity page's bodies).
+captureBuffer: 0
+helpagent:
+  disable: true
+performance:
+  disabled: true
+# Gufo's own limit (--max-request-bytes), for conversations full of images.
+maxRequestBodyMB: 64
+
+upstream:
+  # These paths of /upstream/<model>/ never start a model: a stopped one answers 409. The gateway's live view polls
+  # the LLM's /slots this way. The first entry is llama-swap's default, kept.
+  ignorePaths:
+    - '.*\.(js|json|css|png|gif|jpg|jpeg|ico|txt)$'
+    - '^/(?:slots|metrics|props|ready|health)$'
+
+models:
+  qwen3.8-flash-next:
+    name: Qwen3.8 Flash-Next
+    # The units are podman quadlets (gufo*.container); `start --wait` lasts as long as the unit runs.
+    cmd: systemctl --user start --wait gufo.service
+    cmdStop: systemctl --user stop gufo.service
+    proxy: http://127.0.0.1:18080
+    checkEndpoint: /ready
+  Qwen-Image-2.1-Turbo:
+    name: Qwen-Image-2.1-Turbo
+    cmd: systemctl --user start --wait gufo-image-turbo.service
+    cmdStop: systemctl --user stop gufo-image-turbo.service
+    proxy: http://127.0.0.1:18082
+    checkEndpoint: /ready
+  Qwen-Image-2.1:
+    name: Qwen-Image-2.1
+    cmd: systemctl --user start --wait gufo-image.service
+    cmdStop: systemctl --user stop gufo-image.service
+    proxy: http://127.0.0.1:18081
+    checkEndpoint: /ready
+
+routing:
+  router:
+    use: group
+    settings:
+      groups:
+        llm:
+          swap: true
+          exclusive: true
+          members: [qwen3.8-flash-next]
+        # Both image models may run side by side; each starts with its first request, which loads its weights.
+        # Starting either one stops the LLM first, and the LLM starting stops both.
+        images:
+          swap: false
+          exclusive: true
+          members: [Qwen-Image-2.1-Turbo, Qwen-Image-2.1]
+
+hooks:
+  on_startup:
+    preload: [qwen3.8-flash-next]

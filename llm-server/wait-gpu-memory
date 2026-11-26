@@ -1,0 +1,29 @@
+#!/bin/sh
+# Usage: wait-gpu-memory GIB [SECONDS]
+# Waits until at least GIB GiB of the GPU's memory (amdgpu GTT) is free, at most SECONDS (default 60), then exits 0,
+# or 1 if it never is. The Gufo units run it before they start: a model that starts while the one llama-swap just
+# stopped still holds its memory can fail to load or hang a Strix Halo machine (gufo-org/gufo#1394).
+set -eu
+need_gib=$1
+seconds=${2:-60}
+dev=
+for d in /sys/class/drm/card*/device; do
+  if [ -r "$d/mem_info_gtt_total" ]; then dev=$d; break; fi
+done
+if [ -z "$dev" ]; then
+  echo "wait-gpu-memory: no amdgpu GTT counters, starting without waiting" >&2
+  exit 0
+fi
+need=$((need_gib * 1073741824))
+total=$(cat "$dev/mem_info_gtt_total")
+waited=0
+while :; do
+  free=$((total - $(cat "$dev/mem_info_gtt_used")))
+  [ "$free" -ge "$need" ] && exit 0
+  if [ "$waited" -ge "$seconds" ]; then
+    echo "wait-gpu-memory: $((free / 1073741824)) GiB of GPU memory free after ${seconds} s, ${need_gib} GiB needed" >&2
+    exit 1
+  fi
+  sleep 1
+  waited=$((waited + 1))
+done

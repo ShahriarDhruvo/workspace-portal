@@ -17,7 +17,8 @@ import urllib.error
 import urllib.request
 
 P = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-P.add_argument('--base', default='http://127.0.0.1:8080')
+# Gufo itself: llama-swap, on 8080, passes on neither /slots nor input_tokens. The LLM must be the model it runs.
+P.add_argument('--base', default='http://127.0.0.1:18080')
 P.add_argument('--model', default='qwen3.8-flash-next')
 P.add_argument('--users', type=int, default=4, help='sessions the server has')
 P.add_argument('--target', type=int, default=256000, help='prompt tokens per session')
