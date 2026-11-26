@@ -12,6 +12,8 @@
 //     browser tools, the instructions file the settings name and Superpowers' introduction, and without OpenCode's
 //     own web tools;
 //   * Safety Net refuses a command that destroys work, and a file the model writes is formatted;
+//   * generate_image asks the stand-in for the settings' default image model and saves the image where the model
+//     says, and the session hears when it is saved;
 //   * the routes of the gateway's status check answer as it reads them: a running turn, one that waits for an
 //     approval, and a command left running in the background;
 //   * a terminal's ticket and socket are given to requests without an Origin, as the gateway sends them;
@@ -72,6 +74,11 @@ const model = sample.providers.portal.models[modelId];
 // changes away, then writes a Go file (`goFile`) that gofmt would change.
 const BACKGROUND_PROMPT = "Leave a command running in the background.";
 const TOOLSET_PROMPT = "Throw the changes away, then write a Go file.";
+// Asked to (IMAGE_PROMPT), it calls generate_image once; the stand-in answers with IMAGE_PNG.
+const IMAGE_PROMPT = "Draw the check image.";
+const IMAGE_CALL = { prompt: "A red square", path: "images/check.png" };
+const IMAGE_PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+const imageRequests = [];
 const DESTRUCTIVE_COMMAND = "git reset --hard";
 const GO_AS_WRITTEN = 'package main\nfunc main(){println("check")}\n';
 const GO_FORMATTED = 'package main\n\nfunc main() { println("check") }\n';
@@ -111,6 +118,10 @@ async function serve(req, res) {
     return void res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(Array.isArray(message) ? answers : answers[0]));
   }
   if (req.url === "/fetched") return void res.writeHead(200, { "content-type": "text/plain" }).end("fetched from the workspace");
+  if (req.url === "/llm/v1/images/generations" && req.method === "POST") {
+    imageRequests.push(message);
+    return void res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ created: 1, data: [{ b64_json: IMAGE_PNG.toString("base64") }] }));
+  }
   if (req.url !== "/llm/v1/chat/completions" || req.method !== "POST") return void res.writeHead(404).end();
   // The turn offers tools; the request that names the session offers none and is answered at once.
   const turn = (message.tools ?? []).length > 0;
@@ -118,10 +129,13 @@ async function serve(req, res) {
   const asked = (prompt) => message.messages.some((entry) => entry.role === "user" && JSON.stringify(entry.content).includes(prompt));
   const background = asked(BACKGROUND_PROMPT);
   const toolset = asked(TOOLSET_PROMPT);
-  llmRequests.push({ turn, background, toolset, step: results.length, authorization: req.headers.authorization, body: message });
+  const image = asked(IMAGE_PROMPT);
+  llmRequests.push({ turn, background, toolset, image, step: results.length, authorization: req.headers.authorization, body: message });
   let call = null;
   if (turn && background) {
     if (results.length === 0) call = toolCall("shell", { command: "sleep 300", background: true });
+  } else if (turn && image) {
+    if (results.length === 0) call = toolCall("generate_image", IMAGE_CALL);
   } else if (turn && toolset) {
     if (results.length === 0) call = toolCall("shell", { command: DESTRUCTIVE_COMMAND });
     else if (results.length === 1) call = toolCall("write", { path: goFile, content: GO_AS_WRITTEN });
@@ -316,6 +330,7 @@ async function main() {
   expect(tools.includes("search_web_search"), "the search MCP server's tools are offered by name (search_web_search; codemode false)", tools);
   expect(tools.some((name) => name.startsWith("browser_")), "the browser MCP server's tools are offered by name (browser_*)", tools);
   expect(tools.includes("execute") && tools.includes("shell"), "OpenCode offers its `execute` and `shell` tools, which the rest of this check uses", tools);
+  expect(tools.includes("generate_image"), "OpenCode offers generate_image for the settings' image models (type \"image\")", tools);
   const said = (text) => JSON.stringify(turn.body.messages).split(text).length - 1;
   expect(said(INSTRUCTIONS) === 1, "the request carries the text of the managed `instructions` file, once", said(INSTRUCTIONS));
   expect(said("You have superpowers.") === 1, "the request carries Superpowers' introduction, once", said("You have superpowers."));
@@ -380,6 +395,25 @@ async function main() {
   const written = fs.existsSync(goFile) ? fs.readFileSync(goFile, "utf8") : null;
   expect(written === GO_FORMATTED, "the managed `formatter` has gofmt format a Go file the model writes", written);
   passed("Safety Net refuses a destructive command, and a written file is formatted");
+
+  // A turn that asks for an image: the job runs in the background, saves the file and wakes the session.
+  const [, imageModelId] = /^portal\/(.+)$/.exec(sample.experimental?.image_generate?.model ?? "") ?? [];
+  expect(sample.providers.portal.models[imageModelId]?.type === "image", `${process.argv[2]} names an image model of the provider as experimental.image_generate.model`, sample.experimental);
+  const fourth = (await api("POST", "/api/session", { body: { location: { directory: project } } })).json?.data;
+  expect(typeof fourth?.id === "string", "POST /api/session creates a fourth session", fourth);
+  await api("POST", `/api/session/${fourth.id}/prompt`, { body: { text: IMAGE_PROMPT } });
+  const imageFile = path.join(project, IMAGE_CALL.path);
+  await until("generate_image to save the image where the model said", async () => fs.existsSync(imageFile) && fs.readFileSync(imageFile).equals(IMAGE_PNG));
+  const sent = imageRequests[0];
+  expect(
+    sent?.model === imageModelId && sent.prompt === IMAGE_CALL.prompt && sent.response_format === "b64_json",
+    `generate_image asks <service>/llm/v1/images/generations for ${imageModelId}, the default, with the model's prompt, as base64`,
+    sent,
+  );
+  await until("the session to be told the image is saved", async () =>
+    llmRequests.some((request) => request.image && request.turn && JSON.stringify(request.body.messages).includes(imageFile)),
+  );
+  passed("generate_image makes an image with the default image model, saves it in the project and wakes the session");
   const settled = await providerIds();
   expect(JSON.stringify(settled) === '["portal"]', "the portal's provider is still the only one after a turn", settled);
 

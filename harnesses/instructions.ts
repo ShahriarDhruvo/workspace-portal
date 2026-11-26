@@ -19,8 +19,11 @@ const NETWORK: Record<WorkspaceKind, string> = {
   online: "Network: the internet, for downloads, package registries and git. The LAN and the machine the workspace runs on are out of reach.",
 };
 
-/** A workspace's instructions. Throws AgentConfigError when the admin's file can't be used. */
-export function agentInstructions(config: HarnessConfig, { kind, person, place }: WorkspaceFacts): string {
+/**
+ * A workspace's instructions; `harnessFacts` are list items about the harness's own tools, put after the others.
+ * Throws AgentConfigError when the admin's file can't be used.
+ */
+export function agentInstructions(config: HarnessConfig, { kind, person, place }: WorkspaceFacts, harnessFacts: readonly string[] = []): string {
   const facts = [
     "# This workspace",
     "",
@@ -36,6 +39,7 @@ export function agentInstructions(config: HarnessConfig, { kind, person, place }
     ...(config.workspace.browser
       ? ["- The browser tools run a headless Chromium inside this workspace, where http://localhost:<port> is this workspace: use them to look at what you built."]
       : []),
+    ...harnessFacts,
   ].join("\n");
   const admin = adminInstructions(config.instructionsFile);
   return `${admin === "" ? facts : `${facts}\n\n${admin}`}\n`;

@@ -7,7 +7,7 @@ import type { ModelCatalog } from "../models.ts";
 import { AgentConfigError } from "../shared.ts";
 import { closeServer, listenLocal } from "../testing.ts";
 import { opencodeAuthorization, opencodeDriver, parsePendingCount, parseRunningJobs, parseRunningSessions } from "./driver.ts";
-import { opencodeConfig, renderOpencodeConfig } from "./settings.ts";
+import { opencodeConfig, opencodeFacts, renderOpencodeConfig } from "./settings.ts";
 
 const SERVICE = "http://172.29.0.1:4001";
 const PASSWORD = "container-password";
@@ -22,7 +22,7 @@ const CATALOG: ModelCatalog = {
 };
 
 test("opencodeConfig: one provider through the gateway, the portal's models and default, search in place of OpenCode's web tools", () => {
-  const config = opencodeConfig({ catalog: CATALOG, serviceBaseUrl: SERVICE, browser: true, kind: "private" }) as Record<string, any>;
+  const config = opencodeConfig({ catalog: CATALOG, imageModels: [], serviceBaseUrl: SERVICE, browser: true, kind: "private" }) as Record<string, any>;
   assert.equal(config.update, "disable");
   assert.equal(config.share, "disabled");
   assert.equal(config.model, "portal/big");
@@ -65,18 +65,18 @@ test("opencodeConfig: one provider through the gateway, the portal's models and 
   assert.equal(servers.browser.command[0], "/usr/local/bin/playwright-mcp");
   assert.equal(servers.browser.codemode, false, "the model calls the browser's tools itself");
   assert.deepEqual(servers.browser.timeout, { execution: 120_000 });
-  assert.deepEqual(Object.keys((opencodeConfig({ catalog: CATALOG, serviceBaseUrl: SERVICE, browser: false, kind: "private" }) as Record<string, any>).mcp.servers), ["search"]);
+  assert.deepEqual(Object.keys((opencodeConfig({ catalog: CATALOG, imageModels: [], serviceBaseUrl: SERVICE, browser: false, kind: "private" }) as Record<string, any>).mcp.servers), ["search"]);
 });
 
 test("opencodeConfig: a workspace starts with the image's plugins and skills and with formatting; an Online one with the public MCP servers too", () => {
-  const config = opencodeConfig({ catalog: CATALOG, serviceBaseUrl: SERVICE, browser: true, kind: "private" }) as Record<string, any>;
+  const config = opencodeConfig({ catalog: CATALOG, imageModels: [], serviceBaseUrl: SERVICE, browser: true, kind: "private" }) as Record<string, any>;
   const share = "/usr/local/share/workspace-portal/opencode";
   assert.deepEqual(config.plugins, [`${share}/plugins/superpowers`, `${share}/plugins/safety-net`], "folders of the image: nothing to download");
   assert.deepEqual(config.skills, [`${share}/skills`]);
   assert.deepEqual(config.formatter, {}, "on, and a person's own formatters stay");
   assert.deepEqual(Object.keys(config.mcp.servers), ["search", "browser"], "a Private workspace reaches no public server");
 
-  const online = opencodeConfig({ catalog: CATALOG, serviceBaseUrl: SERVICE, browser: true, kind: "online" }) as Record<string, any>;
+  const online = opencodeConfig({ catalog: CATALOG, imageModels: [], serviceBaseUrl: SERVICE, browser: true, kind: "online" }) as Record<string, any>;
   assert.deepEqual(Object.keys(online.mcp.servers), ["search", "browser", "context7", "grep"]);
   assert.deepEqual(online.mcp.servers.context7, { type: "remote", url: "https://mcp.context7.com/mcp", oauth: false, codemode: false });
   assert.deepEqual(online.mcp.servers.grep, { type: "remote", url: "https://mcp.grep.app", oauth: false, codemode: false });
@@ -93,21 +93,59 @@ test("the image build checks OpenCode against settings as the gateway renders th
       { id: "plain-model", name: "Plain model", contextWindow: 65_536, maxTokens: 8192, image: false, efforts: [], defaultEffort: null },
     ],
   };
-  const rendered = renderOpencodeConfig({ catalog, serviceBaseUrl: "http://service.invalid:4001", browser: true, kind: "private" });
+  const rendered = renderOpencodeConfig({ catalog, imageModels: ["Check-Image"], serviceBaseUrl: "http://service.invalid:4001", browser: true, kind: "private" });
   const checked = fs.readFileSync(new URL("image/check-settings.json", import.meta.url), "utf8");
   // When the renderer changes, the file changes with it (to `rendered`), so that the build checks what workspaces get.
   assert.equal(checked, rendered);
 });
 
+test("opencodeConfig: the LLM server's image models are the provider's, for generate_image, the first its default", () => {
+  const config = opencodeConfig({ catalog: CATALOG, imageModels: ["Image-Turbo", "Image"], serviceBaseUrl: SERVICE, browser: false, kind: "private" }) as Record<string, any>;
+  const { models } = config.providers.portal;
+  assert.deepEqual(Object.keys(models), ["small", "big", "org/free-choice", "Image-Turbo", "Image"]);
+  assert.deepEqual(models.Image, {
+    name: "Image",
+    type: "image",
+    package: "@opencode/ai/providers/openai-compatible/images",
+    capabilities: { input: ["text", "image"], output: ["image"] },
+  });
+  assert.deepEqual(config.experimental, { image_generate: { model: "portal/Image-Turbo" } });
+  assert.equal(config.model, "portal/big", "the chat model stays the default");
+  const without = opencodeConfig({ catalog: CATALOG, imageModels: [], serviceBaseUrl: SERVICE, browser: false, kind: "private" }) as Record<string, any>;
+  assert.equal("experimental" in without, false, "no image models: OpenCode offers no generate_image");
+
+  for (const [imageModels, message] of [
+    [["big"], /"big" is both a chat model and an image model/],
+    [["Image#hd"], /must not contain one/],
+    [["{env:HOME}"], /must not contain \{env: or \{file:/],
+  ] as const) {
+    assert.throws(() => renderOpencodeConfig({ catalog: CATALOG, imageModels, serviceBaseUrl: SERVICE, browser: false, kind: "private" }), (error: unknown) => {
+      assert.ok(error instanceof AgentConfigError);
+      assert.match(error.message, message);
+      return true;
+    });
+  }
+});
+
+test("opencodeFacts: where to save an image and how to show it, which image models there are; nothing without one", () => {
+  assert.deepEqual(opencodeFacts([]), []);
+  const [fact] = opencodeFacts(["Image-Turbo", "Image"]);
+  assert.match(fact!, /^- Images: generate_image makes and edits images\./);
+  assert.match(fact!, /`path` in the project, such as images\/<short-name>\.png/);
+  assert.match(fact!, /!\[<what it shows>\]\(images\/<short-name>\.png\)/);
+  assert.match(fact!, /\(the default is portal\/Image-Turbo\) unless the person asks for another: portal\/Image\.$/);
+  assert.match(opencodeFacts(["Image"])[0]!, /\(the default is portal\/Image\)\.$/);
+});
+
 test("renderOpencodeConfig is JSON; a model OpenCode would rewrite is refused", () => {
-  const text = renderOpencodeConfig({ catalog: CATALOG, serviceBaseUrl: SERVICE, browser: true, kind: "private" });
-  assert.deepEqual(JSON.parse(text), opencodeConfig({ catalog: CATALOG, serviceBaseUrl: SERVICE, browser: true, kind: "private" }));
+  const text = renderOpencodeConfig({ catalog: CATALOG, imageModels: [], serviceBaseUrl: SERVICE, browser: true, kind: "private" });
+  assert.deepEqual(JSON.parse(text), opencodeConfig({ catalog: CATALOG, imageModels: [], serviceBaseUrl: SERVICE, browser: true, kind: "private" }));
   assert.ok(text.endsWith("}\n"));
   assert.equal(text.match(/\{(env|file):/g), null, "nothing for OpenCode to substitute");
 
   for (const [id, name] of [["m", "Model {env:OPENCODE_PASSWORD}"], ["{file:/etc/passwd}", "M"]] as const) {
     const catalog = { defaultModel: id, models: [{ ...CATALOG.models[0]!, id, name }] };
-    assert.throws(() => renderOpencodeConfig({ catalog, serviceBaseUrl: SERVICE, browser: false, kind: "private" }), (error: unknown) => {
+    assert.throws(() => renderOpencodeConfig({ catalog, imageModels: [], serviceBaseUrl: SERVICE, browser: false, kind: "private" }), (error: unknown) => {
       assert.ok(error instanceof AgentConfigError);
       assert.match(error.message, /must not contain \{env: or \{file:/);
       return true;
@@ -115,7 +153,7 @@ test("renderOpencodeConfig is JSON; a model OpenCode would rewrite is refused", 
   }
   // "portal/m#high" is model "m" at its variant "high" to OpenCode.
   const marked = { defaultModel: "small", models: [CATALOG.models[0]!, { ...CATALOG.models[0]!, id: "m#high" }] };
-  assert.throws(() => renderOpencodeConfig({ catalog: marked, serviceBaseUrl: SERVICE, browser: false, kind: "private" }), (error: unknown) => {
+  assert.throws(() => renderOpencodeConfig({ catalog: marked, imageModels: [], serviceBaseUrl: SERVICE, browser: false, kind: "private" }), (error: unknown) => {
     assert.ok(error instanceof AgentConfigError);
     assert.equal(error.message, 'OpenCode reads the "#" in "m#high" as the start of a variant\'s name: a model\'s id must not contain one.');
     return true;

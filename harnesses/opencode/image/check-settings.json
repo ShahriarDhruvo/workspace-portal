@@ -77,8 +77,27 @@
             "context": 65536,
             "output": 8192
           }
+        },
+        "Check-Image": {
+          "name": "Check-Image",
+          "type": "image",
+          "package": "@opencode/ai/providers/openai-compatible/images",
+          "capabilities": {
+            "input": [
+              "text",
+              "image"
+            ],
+            "output": [
+              "image"
+            ]
+          }
         }
       }
+    }
+  },
+  "experimental": {
+    "image_generate": {
+      "model": "portal/Check-Image"
     }
   },
   "policies": [

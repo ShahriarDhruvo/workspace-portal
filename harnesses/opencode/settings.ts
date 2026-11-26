@@ -3,7 +3,8 @@
 // file names wins over a person's own settings (~/.config/opencode) and over any project's opencode.json; everything
 // it leaves out stays theirs (agents, commands, their own MCP servers, plugins and skills, permissions for other
 // tools). It holds what the portal depends on: the portal's models (../models.ts) through the gateway and no other
-// provider, the gateway's search in place of OpenCode's own web tools, and no update or session sharing, which a
+// provider, its image models (IMAGE_MODELS) for OpenCode's generate_image tool, the gateway's search in place of
+// OpenCode's own web tools, and no update or session sharing, which a
 // workspace could not reach or must not use. And what a workspace starts with: the plugins and skills of the image
 // (image/install.sh), formatting after edits, and for an Online workspace two public MCP servers. The keys are
 // OpenCode 2's (`providers`, `policies`, `permissions`, `mcp.servers`, `plugins`, `skills`).
@@ -32,6 +33,8 @@ const ONLINE_MCP = { context7: "https://mcp.context7.com/mcp", grep: "https://mc
 
 interface OpencodeConfigOptions {
   catalog: ModelCatalog;
+  /** The LLM server's image models, the default first (IMAGE_MODELS); OpenCode's generate_image tool uses them. */
+  imageModels: readonly string[];
   /** http://<gateway bridge IP>:<service port>, the only address a Private workspace can reach. */
   serviceBaseUrl: string;
   /** Offer the Playwright MCP browser. */
@@ -41,8 +44,8 @@ interface OpencodeConfigOptions {
 
 /** The managed opencode.json of a workspace, as an object. Throws AgentConfigError for a model OpenCode would misread. */
 export function opencodeConfig(options: OpencodeConfigOptions): Record<string, unknown> {
-  const { catalog, serviceBaseUrl, browser, kind } = options;
-  for (const model of catalog.models) {
+  const { catalog, imageModels, serviceBaseUrl, browser, kind } = options;
+  for (const model of [...catalog.models, ...imageModels.map((id) => ({ id, name: id }))]) {
     const marker = [model.id, model.name].find((text) => /\{(?:env|file):/.test(text));
     if (marker !== undefined) {
       throw new AgentConfigError(`OpenCode would replace "${marker}" in its settings: a model's id and name must not contain {env: or {file:.`);
@@ -51,6 +54,8 @@ export function opencodeConfig(options: OpencodeConfigOptions): Record<string, u
       throw new AgentConfigError(`OpenCode reads the "#" in "${model.id}" as the start of a variant's name: a model's id must not contain one.`);
     }
   }
+  const both = imageModels.find((id) => catalog.models.some((model) => model.id === id));
+  if (both !== undefined) throw new AgentConfigError(`"${both}" is both a chat model and an image model (IMAGE_MODELS): OpenCode takes a model as one or the other.`);
   // codemode false: the model calls these tools itself (search_web_search, search_read_page), as with the other
   // agents, not through a script it would have to write for OpenCode's `execute` tool.
   const servers: Record<string, unknown> = {
@@ -89,9 +94,14 @@ export function opencodeConfig(options: OpencodeConfigOptions): Record<string, u
           headerTimeout: LLM_TIMEOUT_MS,
           chunkTimeout: LLM_TIMEOUT_MS,
         },
-        models: Object.fromEntries(catalog.models.map((model) => [model.id, opencodeModel(model)])),
+        models: Object.fromEntries([
+          ...catalog.models.map((model) => [model.id, opencodeModel(model)]),
+          ...imageModels.map((id) => [id, opencodeImageModel(id)]),
+        ]),
       },
     },
+    // The image model generate_image uses unless the person asks for another.
+    ...(imageModels.length === 0 ? {} : { experimental: { image_generate: { model: `${PROVIDER}/${imageModels[0]}` } } }),
     // No provider but this one, whatever a person or a project configures or signs in to: OpenCode would otherwise
     // offer its own hosted models (it lists them even without a route to them). The later rule wins.
     policies: [
@@ -108,8 +118,35 @@ export function opencodeConfig(options: OpencodeConfigOptions): Record<string, u
   };
 }
 
+/**
+ * What the agent is told about the image tool, with the workspace's other facts (../instructions.ts): without a path
+ * OpenCode saves an image in its temp folder, which the person does not see and a restart empties.
+ */
+export function opencodeFacts(imageModels: readonly string[]): string[] {
+  const [first, ...others] = imageModels;
+  if (first === undefined) return [];
+  const choice = others.length === 0 ? "" : ` unless the person asks for another: ${others.map((id) => `${PROVIDER}/${id}`).join(", ")}`;
+  return [
+    `- Images: generate_image makes and edits images. Give it a \`path\` in the project, such as images/<short-name>.png, so the person finds the file there, and once the image is saved show it in your reply as ![<what it shows>](images/<short-name>.png). Leave \`model\` out (the default is ${PROVIDER}/${first})${choice}.`,
+  ];
+}
+
 export function renderOpencodeConfig(options: OpencodeConfigOptions): string {
   return `${JSON.stringify(opencodeConfig(options), null, 2)}\n`;
+}
+
+/**
+ * An image model: OpenCode keeps it out of the model picker, which offers chat models only, and offers it to its
+ * generate_image tool, which posts to the provider's /images/generations, or /images/edits with images to change.
+ */
+function opencodeImageModel(id: string): Record<string, unknown> {
+  return {
+    name: id,
+    type: "image",
+    // Part of OpenCode itself, like the provider's package.
+    package: "@opencode/ai/providers/openai-compatible/images",
+    capabilities: { input: ["text", "image"], output: ["image"] },
+  };
 }
 
 /**

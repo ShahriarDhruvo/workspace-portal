@@ -7,6 +7,7 @@ import { AGENT_KINDS, AGENT_NAMES, isVersion } from "@portal/core";
 import type { HarnessConfig } from "./harness.ts";
 import { BEARER_SUBPROTOCOL_PREFIXES, driverFor } from "./index.ts";
 import { agentInstructions, INSTRUCTIONS_FILE } from "./instructions.ts";
+import { opencodeFacts } from "./opencode/settings.ts";
 
 test("every harness has a driver of its own kind, port, credential and settings mount", () => {
   for (const kind of AGENT_KINDS) {
@@ -42,11 +43,15 @@ test("every harness's settings hold the agent's instructions, and each harness i
     idleTimeoutMs: 1_800_000,
     uploadLimitBytes: 1024,
     reader: { url: "" },
+    llm: { imageModels: ["Image-Turbo", "Image"] },
     workspace: { kinds: { private: { gatewayIp: "172.29.0.1" }, online: { gatewayIp: "172.30.0.1" } }, browser: true, defaultEffort: null },
   };
   const online = { kind: "online", person: "Ana Lima", place: "Florida, US" } as const;
   const files = (kind: (typeof AGENT_KINDS)[number]) => driverFor(kind).renderSettings(config, online);
-  for (const kind of AGENT_KINDS) assert.equal(files(kind)[INSTRUCTIONS_FILE], agentInstructions(config, online), kind);
+  for (const kind of AGENT_KINDS.filter((kind) => kind !== "opencode")) assert.equal(files(kind)[INSTRUCTIONS_FILE], agentInstructions(config, online), kind);
+  // OpenCode's instructions add its image tool's fact; the other harnesses have no image tool.
+  assert.equal(files("opencode")[INSTRUCTIONS_FILE], agentInstructions(config, online, opencodeFacts(config.llm.imageModels)));
+  assert.match(files("opencode")[INSTRUCTIONS_FILE]!, /\n- Images: generate_image /);
   const file = (kind: (typeof AGENT_KINDS)[number]): string => `${driverFor(kind).settingsMount}/${INSTRUCTIONS_FILE}`;
 
   assert.deepEqual(JSON.parse(files("opencode")["opencode.json"]!).instructions, [file("opencode")], "OpenCode: a file its settings name");

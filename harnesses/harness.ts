@@ -19,6 +19,7 @@ export interface HarnessConfig {
   /** The largest request body into a workspace, and the Web Shell's largest upload. */
   uploadLimitBytes: number;
   reader: { /** "": no read_page tool. */ url: string };
+  llm: { /** Image models the LLM server serves, the default first (IMAGE_MODELS); empty: none. */ imageModels: readonly string[] };
   workspace: {
     kinds: Record<WorkspaceKind, { /** The host's address on the kind's network, where the service API listens. */ gatewayIp: string }>;
     browser: boolean;

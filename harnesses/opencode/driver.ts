@@ -21,7 +21,7 @@ import type { AgentDriver, AgentEndpoint, AgentStatus } from "../harness.ts";
 import { agentInstructions, INSTRUCTIONS_FILE } from "../instructions.ts";
 import { modelCatalog } from "../models.ts";
 import { agentJson, generateCredential, serviceBaseUrl } from "../shared.ts";
-import { OPENCODE_CONFIG_FILE, OPENCODE_SETTINGS_DIR, renderOpencodeConfig } from "./settings.ts";
+import { OPENCODE_CONFIG_FILE, OPENCODE_SETTINGS_DIR, opencodeFacts, renderOpencodeConfig } from "./settings.ts";
 
 /** OpenCode's fixed user name for its HTTP sign-in. */
 const OPENCODE_USER = "opencode";
@@ -84,8 +84,14 @@ export const opencodeDriver: AgentDriver = {
   renderSettings(config, workspace) {
     const { kind } = workspace;
     return {
-      [OPENCODE_CONFIG_FILE]: renderOpencodeConfig({ catalog: modelCatalog(config), serviceBaseUrl: serviceBaseUrl(config, kind), browser: config.workspace.browser, kind }),
-      [INSTRUCTIONS_FILE]: agentInstructions(config, workspace),
+      [OPENCODE_CONFIG_FILE]: renderOpencodeConfig({
+        catalog: modelCatalog(config),
+        imageModels: config.llm.imageModels,
+        serviceBaseUrl: serviceBaseUrl(config, kind),
+        browser: config.workspace.browser,
+        kind,
+      }),
+      [INSTRUCTIONS_FILE]: agentInstructions(config, workspace, opencodeFacts(config.llm.imageModels)),
     };
   },
 
