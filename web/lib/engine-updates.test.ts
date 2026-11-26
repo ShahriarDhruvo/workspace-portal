@@ -36,6 +36,7 @@ function overview(patch: Partial<EngineOverview> = {}, version: string | null = 
       state: "active",
       subState: "running",
       ready: true,
+      unloaded: false,
       buildInfo: null,
       previous: null,
       images: [],
@@ -118,6 +119,9 @@ test("the status badge: not set up, can't reach, updating, update available, up 
   assert.equal(engineStatusBadge(overview(), false).label, "Update available");
   assert.equal(engineStatusBadge(overview({}, "0.34.0"), false).label, "Up to date");
   assert.equal(engineStatusBadge(overview({ releases: null }), false).label, "Latest unknown");
+  const stopped = overview({ engine: { ...overview().engine!, state: "inactive", ready: false, unloaded: true } });
+  assert.deepEqual(engineStatusBadge(stopped, false), { label: "Not loaded", variant: "secondary", pending: false }, "llama-swap stopped it for the image models");
+  assert.equal(engineStatusBadge(overview({ engine: { ...overview().engine!, ready: false } }), false).label, "Starting");
 });
 
 test("one job at a time; the running image can't be removed", () => {

@@ -10,6 +10,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { WarningIcon } from "@/components/ui/icons";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { LiveChart } from "./live-chart";
 import { SessionsTable } from "./sessions-table";
 
@@ -33,6 +34,18 @@ const TOTAL_KEYS = Object.keys(TOTALS) as Total[];
 const ENGINE_BADGES: Record<LlmLive["engine"], ReactNode> = {
   ready: <Badge variant="success">Ready</Badge>,
   loading: <Badge variant="warning">Loading the model</Badge>,
+  unloaded: (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Badge variant="secondary" tabIndex={0}>
+          Not loaded
+        </Badge>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-72">
+        llama-swap stopped the LLM to make room for an image model, or is starting it again. The next LLM request starts it.
+      </TooltipContent>
+    </Tooltip>
+  ),
   offline: <Badge variant="destructive">Engine offline</Badge>,
   unknown: <Badge variant="secondary">Checking</Badge>,
 };

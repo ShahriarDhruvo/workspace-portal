@@ -85,6 +85,8 @@ export function engineStatusBadge(overview: EngineOverview | null, unreachable: 
     return { label: overview.job?.rolledBack ? "Rolling back…" : "Updating…", variant: "info", pending: true };
   }
   if (unreachable) return { label: "Can't reach", variant: "destructive", pending: false };
+  // Behind llama-swap the engine is stopped on purpose while the image models run, and starts with the next request.
+  if (overview.engine?.unloaded) return { label: "Not loaded", variant: "secondary", pending: false };
   if (overview.engine && !overview.engine.ready) return { label: "Starting", variant: "warning", pending: true };
   if (engineUpdateTarget(overview)) return { label: "Update available", variant: "warning", pending: false };
   if (!latestEngineRelease(overview) || !overview.engine?.version) return { label: "Latest unknown", variant: "secondary", pending: false };
