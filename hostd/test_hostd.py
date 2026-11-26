@@ -696,6 +696,9 @@ class FakeEngineState:
         self.pull_started = threading.Event()
         self.calls = []
         self.journal = []   # the engine unit's journal entries, as journalctl -o json gives them
+        self.inactive = set()   # units `systemctl show` reports inactive
+        self.router_loaded = True
+        self.router_calls = []
 
 
 class FakeRunner(H.Runner):
@@ -736,6 +739,8 @@ class FakeRunner(H.Runner):
         if argv[:2] == ['systemctl', '--user']:
             cmd = argv[2]
             if cmd == 'show':
+                if argv[3] in self.s.inactive:
+                    return 0, 'ActiveState=inactive\nSubState=dead\n', ''
                 return 0, 'ActiveState=active\nSubState=running\n', ''
             if cmd == 'daemon-reload':
                 return 0, '', ''
@@ -807,6 +812,43 @@ def fake_engine(case):
     case.runner = FakeRunner(case.state, case.quadlet)
     return H.Engine('gufo.service', case.quadlet, f'http://127.0.0.1:{srv.server_port}', case.root + '/state',
                     case.runner, ready_timeout=1.0, restart_timeout=5, poll=0.05, http_timeout=1.0)
+
+
+class FakeRouterHandler(http.server.BaseHTTPRequestHandler):
+    """llama-swap's routes that hostd uses, over the same FakeEngineState."""
+
+    def log_message(self, *a):
+        pass
+
+    def _send(self, code, body):
+        self.send_response(code)
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        s = self.server.state
+        s.router_calls.append(('GET', self.path))
+        if self.path == '/running':
+            running = [{'model': 'qwen3.8-flash-next', 'state': 'ready'}] if s.router_loaded else []
+            return self._send(200, json.dumps({'running': running}).encode())
+        if self.path == '/upstream/qwen3.8-flash-next/v1/models':
+            with open(self.server.quadlet) as f:
+                s.running = H.quadlet_image(f.read())[1].split('@')[1]
+            s.ready = s.running not in s.never_ready
+            s.router_loaded = True
+            s.inactive.discard('gufo.service')
+            return self._send(200, b'{"data":[]}') if s.ready else self._send(502, b'upstream did not become ready')
+        self._send(404, b'')
+
+    def do_POST(self):
+        s = self.server.state
+        s.router_calls.append(('POST', self.path))
+        if self.path == '/api/models/unload':
+            s.router_loaded, s.ready = False, False
+            s.inactive.update({'gufo.service', 'gufo-image.service'})
+            return self._send(200, b'{"msg":"ok"}')
+        self._send(404, b'')
 
 
 class EngineCase(TmpRoot):
@@ -1036,6 +1078,65 @@ class TestEngine(EngineCase):
                 self.assertEqual(argv[:2], ['systemctl', '--user'])
 
 
+class TestEngineBehindRouter(EngineCase):
+    """The engine behind llama-swap, with an image model's quadlet beside it."""
+
+    def setUp(self):
+        super().setUp()
+        srv = http.server.ThreadingHTTPServer(('127.0.0.1', 0), FakeRouterHandler)
+        srv.state, srv.quadlet = self.state, self.quadlet
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close)
+        self.addCleanup(srv.shutdown)
+        self.engine.router = H.Router(f'http://127.0.0.1:{srv.server_port}', 'qwen3.8-flash-next', http_timeout=1.0)
+        self.image_quadlet = QUADLET.replace('ContainerName=gufo', 'ContainerName=gufo-image')
+        write(self.root, '/quadlets/gufo-image.container', self.image_quadlet)
+        write(self.root, '/quadlets/other.container', '[Container]\nImage=docker.io/library/busybox:1.37\n')
+        self.state.local[f'{REPO}@{D_NEW}'] = self.state.remote[f'{REPO}@{D_NEW}']
+
+    def read(self, name):
+        with open(self.root + '/quadlets/' + name) as f:
+            return f.read()
+
+    def test_companions_share_the_repository(self):
+        self.assertEqual(self.engine.companions(), [self.root + '/quadlets/gufo-image.container'])
+
+    def test_apply_rewrites_every_engine_quadlet_and_restarts_through_llama_swap(self):
+        self.engine.start_apply(f'{REPO}@{D_NEW}', '0.34.0')
+        j = self.wait_job()
+        self.assertEqual(j['phase'], 'succeeded', j)
+        self.assertEqual(self.read('gufo-image.container'), H.quadlet_rewrite(self.image_quadlet, f'{REPO}@{D_NEW}', '0.34.0'))
+        self.assertEqual(self.read('other.container'), '[Container]\nImage=docker.io/library/busybox:1.37\n')
+        self.assertEqual(self.state.running, D_NEW)
+        self.assertFalse(any(c[:3] == ['systemctl', '--user', 'restart'] for c in self.state.calls), 'never behind its back')
+        self.assertEqual([c for c in self.state.router_calls if c[0] == 'POST'], [('POST', '/api/models/unload')])
+        self.assertIn(('GET', '/upstream/qwen3.8-flash-next/v1/models'), self.state.router_calls)
+        self.assertIn('Stopping the models (llama-swap)', j['log'][-6])
+
+    def test_failed_apply_puts_every_quadlet_back(self):
+        self.state.local[f'{REPO}@{D_BAD}'] = self.state.remote[f'{REPO}@{D_BAD}']
+        self.engine.start_apply(f'{REPO}@{D_BAD}', None)
+        j = self.wait_job()
+        self.assertEqual((j['phase'], j['rolledBack']), ('failed', True), j)
+        self.assertIn('llama-swap did not start qwen3.8-flash-next: 502', j['error'])
+        self.assertEqual(self.read('gufo.container'), QUADLET)
+        self.assertEqual(self.read('gufo-image.container'), self.image_quadlet)
+        self.assertEqual(self.state.running, D_OLD)
+
+    def test_unloaded_while_the_image_models_run(self):
+        self.assertFalse(self.engine.status()['unloaded'])
+        self.state.router_loaded, self.state.ready = False, False
+        self.state.inactive.add('gufo.service')
+        st = self.engine.status()
+        self.assertEqual((st['state'], st['ready'], st['unloaded']), ('inactive', False, True))
+
+    def test_delete_refuses_an_image_a_companion_runs(self):
+        write(self.root, '/quadlets/gufo-image.container', QUADLET.replace(D_OLD, D_THIRD))
+        with self.assertRaises(H.ApiError) as c:
+            self.engine.delete_image(D_THIRD)
+        self.assertEqual(c.exception.code, 'image_current')
+
+
 class HttpCase(TmpRoot):
     max_connections = 16
 
@@ -1229,6 +1330,12 @@ class TestConfig(TmpRoot):
         self.assertEqual((c['bind'], c['port'], c['interval_ms'], c['engine_unit']), ('0.0.0.0', 9180, 500, 'gufo.service'))
         self.assertTrue(c['engine_quadlet'].endswith('/.config/containers/systemd/gufo.container'))
         self.assertEqual(c['engine_url'], 'http://127.0.0.1:8080')
+        self.assertIsNone(c['engine_router'])
+        routed = H.config({'ROLE': 'llm', 'ENGINE_UNIT': 'gufo', 'ENGINE_ROUTER_URL': 'http://127.0.0.1:8080',
+                           'ENGINE_ROUTER_MODEL': 'qwen3.8-flash-next'})
+        self.assertEqual(routed['engine_router'], ('http://127.0.0.1:8080', 'qwen3.8-flash-next'))
+        with self.assertRaises(SystemExit):
+            H.config({'ROLE': 'llm', 'ENGINE_UNIT': 'gufo', 'ENGINE_ROUTER_URL': 'http://127.0.0.1:8080'})
         self.assertEqual(H.config({'ROLE': 'portal', 'ENGINE_UNIT': 'gufo.service'})['engine_unit'], '')
         self.assertEqual(H.config({})['bind'], '127.0.0.1')
         for bad in [{'INTERVAL_MS': '100'}, {'INTERVAL_MS': '6000'}, {'ROLE': 'x'}, {'PORT': '0'}]:

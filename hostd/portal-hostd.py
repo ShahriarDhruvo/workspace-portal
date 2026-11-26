@@ -1188,26 +1188,93 @@ class Job:
                     'error': self.error, 'rolledBack': self.rolled_back}
 
 
+class Router:
+    """llama-swap in front of the engine (ENGINE_ROUTER_URL): it starts and stops the engine's units on demand, the
+    LLM's and the image models', and never runs both. So a restart goes through it, and an engine unit that is
+    inactive may only be unloaded while the image models run."""
+
+    def __init__(self, url, model, http_timeout=2.0):
+        self.url, self.model, self.http_timeout = url.rstrip('/'), model, http_timeout
+        self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+    def _call(self, method, path, timeout):
+        req = urllib.request.Request(self.url + path, method=method, data=b'' if method == 'POST' else None)
+        try:
+            with self._opener.open(req, timeout=timeout) as r:
+                return r.status, r.read(65536)
+        except urllib.error.HTTPError as e:
+            with e:
+                return e.code, e.read(4096)
+        except (OSError, ValueError) as e:
+            return None, str(e).encode()
+
+    def loaded(self):
+        """True while llama-swap runs or starts the engine's model, False when it does not, None when it can't say."""
+        status, body = self._call('GET', '/running', self.http_timeout)
+        try:
+            running = json.loads(body).get('running') if status == 200 else None
+        except (ValueError, AttributeError):
+            running = None
+        if not isinstance(running, list):
+            return None
+        return any(isinstance(m, dict) and m.get('model') == self.model and m.get('state') in ('starting', 'ready')
+                   for m in running)
+
+    def unload_all(self, timeout):
+        status, body = self._call('POST', '/api/models/unload', timeout)
+        if status != 200:
+            raise StepError(f'llama-swap did not unload its models: {status or body.decode("utf-8", "replace")}')
+
+    def load(self, timeout):
+        """Has llama-swap start the engine's model (stopping the others first) and returns once the model serves."""
+        status, body = self._call('GET', f'/upstream/{urllib.parse.quote(self.model, safe="")}/v1/models', timeout)
+        if status != 200:
+            said = body.decode('utf-8', 'replace').strip()[-300:]
+            raise StepError(f'llama-swap did not start {self.model}: {status or "no answer"} {said}'.rstrip())
+
+
+def unit_of(quadlet):
+    return os.path.basename(quadlet).removesuffix('.container') + '.service'
+
+
 class Engine:
     def __init__(self, unit, quadlet, url, state_dir, runner=None, ready_timeout=600.0, restart_timeout=900.0,
-                 poll=2.0, http_timeout=2.0):
+                 poll=2.0, http_timeout=2.0, router=None):
         self.unit, self.quadlet, self.url = unit, quadlet, url.rstrip('/')
         self.prev_path = os.path.join(state_dir, unit.removesuffix('.service') + '.container.prev')
         self.state_dir = state_dir
         self.runner = runner or Runner()
         self.ready_timeout, self.restart_timeout = ready_timeout, restart_timeout
         self.poll, self.http_timeout = poll, http_timeout
+        self.router = router
         self.lock = threading.Lock()
         self.job = None
         self._images_cache = (0.0, None)
         self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
-    def _read_quadlet(self):
+    def _read_quadlet(self, path=None):
+        path = path or self.quadlet
         try:
-            with open(self.quadlet, 'rb') as f:
+            with open(path, 'rb') as f:
                 return f.read().decode('utf-8', 'surrogateescape')
         except OSError as e:
-            raise StepError(f'cannot read {self.quadlet}: {e.strerror}')
+            raise StepError(f'cannot read {path}: {e.strerror}')
+
+    def companions(self):
+        """The other quadlets beside the engine's with an image of its repository (the image models' units): they run
+        the version the engine runs, so an apply rewrites them too. Sorted paths."""
+        repo = repository_of(quadlet_image(self._read_quadlet())[1])
+        found = []
+        for path in sorted(glob.glob(os.path.join(glob.escape(os.path.dirname(self.quadlet)), '*.container'))):
+            if os.path.abspath(path) == os.path.abspath(self.quadlet):
+                continue
+            try:
+                image = quadlet_image(self._read_quadlet(path))[1]
+            except StepError:
+                continue
+            if repository_of(image) == repo:
+                found.append(path)
+        return found
 
     def _image(self):
         """The quadlet's Image= value, for an API call: without one the answer is quadlet_invalid."""
@@ -1252,8 +1319,8 @@ class Engine:
         except (ValueError, AttributeError):
             return None
 
-    def unit_state(self):
-        rc, out, _ = self.runner.run(['systemctl', '--user', 'show', self.unit, '-p', 'ActiveState', '-p', 'SubState'], 15)
+    def unit_state(self, unit=None):
+        rc, out, _ = self.runner.run(['systemctl', '--user', 'show', unit or self.unit, '-p', 'ActiveState', '-p', 'SubState'], 15)
         props = dict(line.partition('=')[::2] for line in out.splitlines() if '=' in line)
         state = props.get('ActiveState', '') if rc == 0 else ''
         if state not in ('active', 'activating', 'deactivating', 'inactive', 'failed'):
@@ -1331,6 +1398,8 @@ class Engine:
                                'current': cur_img is i, 'previous': prev_img is i and cur_img is not i})
         state, sub = self.unit_state()
         ready = self.ready()
+        # Behind llama-swap an inactive unit is the normal state while the image models run.
+        unloaded = self.router is not None and state == 'inactive' and self.router.loaded() is False
         previous = None
         if prev_image:
             previous = {'image': prev_image, 'digest': prev_digest,
@@ -1339,7 +1408,7 @@ class Engine:
                 'digest': cur_digest if cur_img else None,
                 'version': cur_img['version'] if cur_img else None,
                 'revision': cur_img['revision'] if cur_img else None,
-                'state': state, 'subState': sub, 'ready': ready,
+                'state': state, 'subState': sub, 'ready': ready, 'unloaded': unloaded,
                 'buildInfo': self.build_info() if ready else None,
                 'previous': previous, 'images': out_images,
                 'job': job_json}
@@ -1427,11 +1496,23 @@ class Engine:
         rc, _, err = self.runner.run(['systemctl', '--user', 'daemon-reload'], 120)
         if rc != 0:
             raise StepError(f'daemon-reload failed: {err.strip() or rc}')
-        job.set_step(f'Restarting {self.unit}')
         since = f'@{int(time.time())}'
-        rc, _, err = self.runner.run(['systemctl', '--user', 'restart', self.unit], self.restart_timeout)
-        if rc != 0:
-            raise StepError(f'restart failed: {err.strip() or rc}{self.engine_said(since)}')
+        if self.router is None:
+            job.set_step(f'Restarting {self.unit}')
+            rc, _, err = self.runner.run(['systemctl', '--user', 'restart', self.unit], self.restart_timeout)
+            if rc != 0:
+                raise StepError(f'restart failed: {err.strip() or rc}{self.engine_said(since)}')
+        else:
+            # llama-swap must see the units go and start them itself: a unit restarted behind its back would run
+            # beside the image models.
+            job.set_step('Stopping the models (llama-swap)')
+            self.router.unload_all(self.restart_timeout)
+            self._wait_stopped([self.unit] + [unit_of(q) for q in self.companions()])
+            job.set_step(f'Starting {self.router.model} (llama-swap)')
+            try:
+                self.router.load(self.ready_timeout)
+            except StepError as e:
+                raise StepError(f'{e}{self.engine_said(since)}')
         job.set_step('Waiting for /ready')
         deadline = time.monotonic() + self.ready_timeout
         while not self.ready():
@@ -1445,6 +1526,17 @@ class Engine:
                 raise StepError(f'build_info is {info!r}, expected it to start with "{version} "')
             job.add(f'build_info {info}')
 
+    def _wait_stopped(self, units):
+        deadline = time.monotonic() + self.restart_timeout
+        while any(self.unit_state(u)[0] not in ('inactive', 'failed') for u in units):
+            if time.monotonic() > deadline:
+                raise StepError(f'{", ".join(units)} did not stop within {self.restart_timeout:.0f} s')
+            time.sleep(self.poll)
+
+    def _write_all(self, texts):
+        for path, data in texts.items():
+            atomic_write(path, data)
+
     def _apply(self, job):
         job.set_step('Checking image')
         if not self.image_exists(job.image):
@@ -1452,6 +1544,12 @@ class Engine:
         text = self._read_quadlet()
         old = text.encode('utf-8', 'surrogateescape')
         new = quadlet_rewrite(text, job.image, job.version).encode('utf-8', 'surrogateescape')
+        # path -> (bytes before, bytes after) of the quadlets beside it that run the same image repository
+        others = {}
+        for path in self.companions():
+            other = self._read_quadlet(path)
+            others[path] = (other.encode('utf-8', 'surrogateescape'),
+                            quadlet_rewrite(other, job.image, job.version).encode('utf-8', 'surrogateescape'))
         job.set_step('Saving current quadlet')
         os.makedirs(self.state_dir, exist_ok=True)
         try:
@@ -1461,14 +1559,14 @@ class Engine:
             saved_prev = None
         atomic_write(self.prev_path, old, 0o600)
         try:
-            job.set_step('Writing quadlet')
-            atomic_write(self.quadlet, new)
+            job.set_step('Writing quadlet' if not others else f'Writing {len(others) + 1} quadlets')
+            self._write_all({self.quadlet: new, **{p: n for p, (_, n) in others.items()}})
             self._restart_and_verify(job, job.version)
         except (StepError, OSError) as e:
             job.add(f'failed: {e}')
             job.set_step('Rolling back')
             try:
-                atomic_write(self.quadlet, old)
+                self._write_all({self.quadlet: old, **{p: o for p, (o, _) in others.items()}})
                 self._restart_and_verify(job, None)
                 job.rolled_back = True
                 job.error = str(e)
@@ -1503,7 +1601,8 @@ class Engine:
         target = image_with(imgs, digest)
         if target is None:
             raise ApiError(404, 'not_found', 'no such local image of the engine repository')
-        if target is image_with(imgs, digest_of(current)):
+        in_use = [current] + [quadlet_image(self._read_quadlet(p))[1] for p in self.companions()]
+        if any(target is image_with(imgs, digest_of(image)) for image in in_use):
             raise ApiError(409, 'image_current', 'this is the engine image in use')
         rc, out, err = self.runner.run(self.runner.podman(['rmi', f'{repo}@{digest}']), 300)
         self._images_cache = (0.0, None)
@@ -1757,8 +1856,13 @@ def config(env):
     home = pwd.getpwuid(os.getuid()).pw_dir
     quadlet = env.get('ENGINE_QUADLET', '').strip() or (
         os.path.join(home, '.config/containers/systemd', unit.removesuffix('.service') + '.container') if unit else '')
+    router_url = env.get('ENGINE_ROUTER_URL', '').strip() if unit else ''
+    router_model = env.get('ENGINE_ROUTER_MODEL', '').strip() if unit else ''
+    if bool(router_url) != bool(router_model):
+        raise SystemExit('portal-hostd: ENGINE_ROUTER_URL and ENGINE_ROUTER_MODEL go together')
     return {'role': role, 'bind': bind, 'port': port, 'interval_ms': interval, 'engine_unit': unit,
             'engine_quadlet': quadlet, 'engine_url': env.get('ENGINE_URL', '').strip() or 'http://127.0.0.1:8080',
+            'engine_router': (router_url, router_model) if router_url else None,
             'state_dir': os.path.join(home, '.local/state/portal-hostd'),
             'root': env.get('HOSTD_ROOT', '')}
 
@@ -1780,7 +1884,8 @@ def build(cfg, token):
     host = Host(Fs(cfg['root']), cfg['role'], cfg['interval_ms'], cfg['engine_unit'] or None)
     engine = None
     if cfg['engine_unit']:
-        engine = Engine(cfg['engine_unit'], cfg['engine_quadlet'], cfg['engine_url'], cfg['state_dir'])
+        router = Router(*cfg['engine_router']) if cfg['engine_router'] else None
+        engine = Engine(cfg['engine_unit'], cfg['engine_quadlet'], cfg['engine_url'], cfg['state_dir'], router=router)
     return App(host, Sampler(host, cfg['interval_ms'] / 1000.0), Meter(host), token, engine)
 
 
@@ -1807,7 +1912,8 @@ def main(argv):
     src = app.host.sources()
     log(f'portal-hostd: role={cfg["role"]} listening on {cfg["bind"]}:{cfg["port"]} interval={cfg["interval_ms"]}ms '
         f'perf={src["perf"]} bandwidth={src["bandwidth"]} power={src["power"]} gpuBusy={src["gpuBusy"]} '
-        f'energy={"on" if app.meter.energy is not None else "off"} engine={cfg["engine_unit"] or "-"}')
+        f'energy={"on" if app.meter.energy is not None else "off"} engine={cfg["engine_unit"] or "-"}'
+        f'{" router=" + cfg["engine_router"][0] if cfg["engine_router"] else ""}')
     sd_notify('READY=1')
     try:
         server.serve_forever(poll_interval=None)  # no periodic wakeups

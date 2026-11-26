@@ -2,10 +2,12 @@
 # portal-hostd installer, both roles. Idempotent; run as root. See hostd/README.md.
 #   sudo bash hostd/install.sh portal [--token-stdin] [--port 9180]
 #   sudo bash hostd/install.sh llm --portal <portal server IPv4> [--engine-unit gufo.service|none]
-#                                  [--engine-user USER] [--token-stdin] [--port 9180]
+#                                  [--engine-user USER] [--engine-url URL] [--engine-router URL MODEL|none]
+#                                  [--token-stdin] [--port 9180]
 #   sudo bash hostd/install.sh uninstall
 # --token-stdin reads the token as one line from stdin (an argument would show in /proc/*/cmdline).
 # Without it an existing /etc/portal-hostd/token is kept, else a new one is generated.
+# --engine-router: llama-swap's address and the engine's model there; a re-run without it keeps the conf's.
 set -euo pipefail
 
 SRC_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -17,7 +19,7 @@ TOKEN_FILE=$CONF_DIR/token
 UNIT_FILE=$PREFIX/etc/systemd/system/portal-hostd.service
 UNIT="portal-hostd.service"
 
-usage() { sed -n '3,8s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 2; }
+usage() { sed -n '3,10s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 2; }
 die() { echo "install.sh: $*" >&2; exit 1; }
 warn() { echo "install.sh: warning: $*" >&2; }
 say() { echo "install.sh: $*"; }
@@ -107,7 +109,7 @@ case $role in
     *) die "unknown role '$role' (portal, llm or uninstall)" ;;
 esac
 
-token_stdin=0 port=9180 portal="" engine_unit="" engine_user="${SUDO_USER:-}"
+token_stdin=0 port=9180 portal="" engine_unit="" engine_user="${SUDO_USER:-}" engine_url="" router_url="" router_model=""
 while [[ $# -gt 0 ]]; do
     case $1 in
         --token-stdin) token_stdin=1; shift ;;
@@ -115,6 +117,11 @@ while [[ $# -gt 0 ]]; do
         --portal) portal=${2:?--portal needs a value}; shift 2 ;;
         --engine-unit) engine_unit=${2:?--engine-unit needs a value}; shift 2 ;;
         --engine-user) engine_user=${2:?--engine-user needs a value}; shift 2 ;;
+        --engine-url) engine_url=${2:?--engine-url needs a value}; shift 2 ;;
+        --engine-router)
+            router_url=${2:?--engine-router needs URL MODEL, or none}
+            if [[ $router_url == none ]]; then router_model=none; shift 2
+            else router_model=${3:?--engine-router needs URL MODEL}; shift 3; fi ;;
         -h | --help) usage ;;
         *) die "unknown option $1" ;;
     esac
@@ -144,15 +151,23 @@ if [[ $role == llm ]]; then
             die "linger is off for $engine_user (sudo loginctl enable-linger $engine_user)"
         state_dir=$home/.local/state/portal-hostd
         runuser -u "$engine_user" -- install -d -m 0700 "$state_dir"
-        engine_url=$(conf_get ENGINE_URL)   # a re-run keeps the conf's ENGINE_URL and INTERVAL_MS
+        # A re-run keeps the conf's ENGINE_URL, router and INTERVAL_MS unless options say otherwise.
+        engine_url=${engine_url:-$(conf_get ENGINE_URL)}
+        if [[ -z $router_url ]]; then router_url=$(conf_get ENGINE_ROUTER_URL) router_model=$(conf_get ENGINE_ROUTER_MODEL); fi
         role_conf=("ENGINE_UNIT=$engine_unit" "ENGINE_QUADLET=$quadlet" "ENGINE_URL=${engine_url:-http://127.0.0.1:8080}")
+        if [[ -n $router_url && $router_url != none ]]; then
+            [[ $router_url =~ ^https?://[^[:space:]]+$ && $router_model =~ ^[^[:space:]/]+$ ]] ||
+                die "--engine-router needs an http(s) URL and a model id"
+            role_conf+=("ENGINE_ROUTER_URL=$router_url" "ENGINE_ROUTER_MODEL=$router_model")
+            behind=", behind llama-swap at $router_url"
+        fi
         identity="User=$engine_user
 Group=$(id -gn "$engine_user")
 Environment=XDG_RUNTIME_DIR=/run/user/$uid DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus
 ReadWritePaths=$qdir $state_dir"
         protect_home="ProtectHome=read-only"
         after=" user@$uid.service"
-        say "engine control: $engine_unit (quadlet $quadlet, user $engine_user)"
+        say "engine control: $engine_unit (quadlet $quadlet, user $engine_user${behind:-})"
     fi
     role_conf+=("FIREWALL_SOURCE=$portal")
 fi

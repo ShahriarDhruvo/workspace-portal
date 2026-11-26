@@ -29,6 +29,8 @@ sudo bash hostd/install.sh uninstall
 | `--portal IPv4` | `llm` only, required: the one address the firewall lets in |
 | `--engine-unit UNIT` | `llm` only: the engine's systemd user unit, or `none`. Default: `gufo.service` if the engine user has `~/.config/containers/systemd/gufo.container`, else none |
 | `--engine-user USER` | `llm` only: the user who owns the quadlet. Default: `$SUDO_USER` |
+| `--engine-url URL` | `llm` only: the engine's own address (`ENGINE_URL`). Default: the conf's, else `http://127.0.0.1:8080` |
+| `--engine-router URL MODEL` | `llm` only: the engine runs behind [llama-swap](../llm-server/README.md) at URL, as model MODEL; `none` removes it. Default: the conf's |
 
 What the installer does:
 
@@ -47,7 +49,7 @@ The installer creates `~/.local/state/portal-hostd` (0700) for that user; the qu
 
 ## Configuration
 
-`/etc/portal-hostd/hostd.conf` is a systemd EnvironmentFile and holds no secret. After editing it: `sudo systemctl restart portal-hostd`. A re-run of the installer keeps `INTERVAL_MS` and `ENGINE_URL` and rewrites the rest.
+`/etc/portal-hostd/hostd.conf` is a systemd EnvironmentFile and holds no secret. After editing it: `sudo systemctl restart portal-hostd`. A re-run of the installer keeps `INTERVAL_MS`, `ENGINE_URL` and the `ENGINE_ROUTER_*` pair unless its options say otherwise, and rewrites the rest.
 
 | Key | Meaning |
 |---|---|
@@ -56,6 +58,7 @@ The installer creates `~/.local/state/portal-hostd` (0700) for that user; the qu
 | `INTERVAL_MS` | Time between samples, 250..5000, default 500 |
 | `ENGINE_UNIT`, `ENGINE_QUADLET` | `llm` with engine control: the user unit and its quadlet file |
 | `ENGINE_URL` | The engine's own HTTP address, default `http://127.0.0.1:8080`: `/ready` and `/props` are asked there |
+| `ENGINE_ROUTER_URL`, `ENGINE_ROUTER_MODEL` | Both or neither: llama-swap's address and the engine's model there. With them an apply restarts the engine through llama-swap, rewrites the image models' quadlets too, and `GET /v1/engine` says `unloaded: true` while llama-swap has the engine stopped |
 | `FIREWALL_SOURCE` | The `--portal` address, kept so that the installer can find its firewalld rule again |
 
 Logs: `journalctl -u portal-hostd`.
@@ -101,7 +104,7 @@ HTTP/1.1. Every request but `GET /v1/health` needs `Authorization: Bearer <token
 | `GET /v1/sample` | One sample: `t`, `cpu`, `gpu`, `memory`, `power`, `fans`, `throttling`, `net`, `disk`. Rates are `null` in the first sample after idle. Keeps the sampler running for 5 s |
 | `GET /v1/stream` | Server-sent events: `event: info` once, then `event: sample` every `INTERVAL_MS`, and `: ping` after 15 s without one. At most 4 streams. A slow reader gets the newest sample, not every one |
 | `GET /v1/meter` | `instance`, `startedAt`, `t`, `energyJ`, `rxBytes`, `txBytes`: totals since this daemon started, as of its last tick (`t`). `instance` is random per start. `energyJ` is `null` without a power source, the bytes without a physical interface |
-| `GET /v1/engine` | Unit state, `ready`, `buildInfo`, the quadlet's image, the previous one, the local images of its repository (the listing is cached for 5 s) and the last job |
+| `GET /v1/engine` | Unit state, `ready`, `unloaded` (behind llama-swap), `buildInfo`, the quadlet's image, the previous one, the local images of its repository (the listing is cached for 5 s) and the last job |
 | `POST /v1/engine/pull` `{"image": "<repository>@sha256:<64 hex>"}` | 202 and the job. The repository must be the quadlet's |
 | `POST /v1/engine/apply` `{"image": ..., "version": "X.Y.Z" or null}` | 202 and the job. The image must have been pulled |
 | `POST /v1/engine/cancel` | `{"cancelled": true or false}`: only a running pull can be cancelled |
@@ -127,11 +130,15 @@ An apply, which is also how to go back to an older image, runs these steps; each
 1. Check that the image is local.
 2. Save the quadlet as `~/.local/state/portal-hostd/<unit name>.container.prev`.
 3. Rewrite the quadlet: only the `Image=` value changes and, with a version, the `/vX.Y.Z/` part of `Documentation=`.
-4. `systemctl --user daemon-reload` and `restart`.
+   Behind llama-swap, also every other quadlet in its folder whose `Image=` is of the same repository (the image
+   models), so that all of them run one release.
+4. `systemctl --user daemon-reload` and `restart`. Behind llama-swap instead: `POST /api/models/unload`, wait for
+   every rewritten unit to stop, then `GET /upstream/<model>/v1/models`, on which llama-swap starts the engine and
+   answers once it is ready. A unit restarted behind llama-swap's back would run beside the image models.
 5. Wait up to 10 minutes for the engine's `/ready` to answer 200.
 6. With a version: check that `build_info` in the engine's `/props` starts with it.
 
-If step 3 or a later one fails, the old quadlet is written back and the unit restarted; the job ends `failed`, with `rolledBack: true` once the old engine answers `/ready` again. If that fails too, `rolledBack` stays `false` and `error` names both failures. When the engine did not start or answer `/ready`, `error` ends with its own last 10 log lines since the restart (`journalctl --user -u <unit>`, systemd's lines left out): why it did not start.
+If step 3 or a later one fails, the old quadlets are written back and the engine restarted the same way; the job ends `failed`, with `rolledBack: true` once the old engine answers `/ready` again. If that fails too, `rolledBack` stays `false` and `error` names both failures. When the engine did not start or answer `/ready`, `error` ends with its own last 10 log lines since the restart (`journalctl --user -u <unit>`, systemd's lines left out): why it did not start.
 
 ## Run it locally
 
