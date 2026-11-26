@@ -566,11 +566,15 @@ sudo bash ~/workspace-portal/llm-server/fans/install.sh uninstall
 *LLM server*
 
 Pulls Gufo 0.35.0 and installs the service that serves the model with four 256K sessions, MTP and vision. The
-service starts at boot and restarts itself after a crash.
+service starts at boot and restarts itself after a crash. It keeps conversations on disk as well as in RAM, so
+after a restart an agent's next turn resumes instead of reading its whole conversation again.
 
 **LLM server**:
 
 ```sh
+mkdir /models/gufo-cache
+mkdir /models/gufo-cache/disk /models/gufo-cache/home
+podman unshare chown 1000:1000 /models/gufo-cache/disk /models/gufo-cache/home
 podman pull "$(sed -n 's/^Image=//p' ~/workspace-portal/llm-server/gufo.container)"
 mkdir -p ~/.config/containers/systemd
 cp ~/workspace-portal/llm-server/gufo.container ~/.config/containers/systemd/
@@ -611,13 +615,30 @@ load_completed kind=text elapsed_ms=15936 ... sessions=4 context_tokens=262144 s
 > Summarizing a 93,700-token document took 26,300 tokens of thinking and a 26,000-token answer at the highest
 > effort, 390 and 7,500 at `low` ([measurements](MEASUREMENTS.md#replies-and-thinking)).
 
+> The disk cache (`--cache-disk`) takes up to 32 GiB in `/models/gufo-cache/disk`. Gufo runs as user 1000 in its
+> container, hence `podman unshare chown`. A conversation that no longer fits the 4 GiB in RAM, or that a restart
+> cut off, resumes from there: Gufo's docs give 1.8 s instead of about 50 s for a 24,866-token prompt. Gufo writes
+> each conversation once, then what each turn adds. The conversations stay there as the model's token ids until
+> the cache needs the room; deleting a person's data in the portal does not remove them. With the disk cache on,
+> Gufo hashes the model files when it starts and keeps the result in `/models/gufo-cache/home`, so only the first
+> start pays for it. On btrfs, run `chattr +m /models/gufo-cache` right after the first `mkdir`, or btrfs tries
+> to compress every file the cache writes.
+
 <a id="layouts"></a>
 
 <details>
 <summary>Other session layouts</summary>
 
-Change `--sessions` and `--context` in `~/.config/containers/systemd/gufo.container`, then run `systemctl --user
-daemon-reload` and `systemctl --user restart gufo.service`.
+Change `--sessions` and `--context` in `~/.config/containers/systemd/gufo.container`, then run the lines below.
+What the disk cache holds was made for the old layout: Gufo cannot use it and does not delete it, so they empty
+it while the service is stopped.
+
+```sh
+systemctl --user daemon-reload
+systemctl --user stop gufo.service
+podman unshare sh -c 'rm -rf /models/gufo-cache/disk/*'
+systemctl --user start gufo.service
+```
 
 | Layout | Flags | Use it when |
 |---|---|---|

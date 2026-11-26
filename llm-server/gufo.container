@@ -11,6 +11,12 @@ AddDevice=/dev/dri
 # Listens on every interface, without a login: the firewall must let only the portal server reach 8080.
 PublishPort=8080:8080
 Volume=/models/qwen3.8-flash-next:/models:ro,z
+# The prompt cache's disk tier, so conversations survive a restart; owned by the container's user (uid 1000).
+Volume=/models/gufo-cache/disk:/cache:Z
+# With the disk tier on, Gufo hashes the model files at start and keeps the result here, so a restart skips it.
+Volume=/models/gufo-cache/home:/home/gufo/.cache:Z
+# Time to finish the cache writes already queued after SIGTERM; podman's own default is 10 s.
+StopTimeout=120
 HealthCmd=curl -fsS -o /dev/null http://127.0.0.1:8080/ready
 HealthInterval=30s
 HealthTimeout=10s
@@ -29,6 +35,8 @@ Exec=gufo serve --host 0.0.0.0 --port 8080 --sessions 4 --max-connections 64 --m
       --reasoning-budget 32000 \
       --served-model-name qwen3.8-flash-next \
       --cache-ram-bytes 4294967296 \
+      --cache-disk /cache \
+      --cache-disk-bytes 34359738368 \
       --max-pending 32 \
       --stall-timeout-ms 600000 \
       --log-progress
@@ -37,7 +45,7 @@ Exec=gufo serve --host 0.0.0.0 --port 8080 --sessions 4 --max-connections 64 --m
 Restart=always
 RestartSec=15
 TimeoutStartSec=600
-TimeoutStopSec=30
+TimeoutStopSec=150
 
 [Install]
 WantedBy=default.target
