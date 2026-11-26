@@ -318,6 +318,7 @@ account, the same user's included. State is per listener: nothing carries betwee
 | Route | Does |
 |---|---|
 | `POST /llm/v1/chat/completions`, `/completions`, `/embeddings` | forwarded to `LLM_UPSTREAM_URL/v1/...` |
+| `POST /llm/v1/images/generations`, `/llm/v1/images/edits` | the same; OpenCode's `generate_image` uses them (`IMAGE_MODELS`) |
 | `GET /llm/v1/models`, `/llm/v1/models/<id>` | the same |
 | `POST /mcp/search` | MCP over streamable HTTP, stateless: `web_search`, and `read_page` when a reader is set |
 
@@ -325,7 +326,10 @@ account, the same user's included. State is per listener: nothing carries betwee
   endpoint (files, batches, fine-tuning) would be every workspace's to use.
 - **Queue** (`llm-queue.ts`): generation requests take a slot, at most `LLM_MAX_CONCURRENCY` in all and
   `LLM_MAX_CONCURRENCY_PER_USER` each, first come first served; a user at the limit does not hold up the users
-  behind. An engine update pauses the queue, and requests wait instead of failing.
+  behind. An engine update pauses the queue, and requests wait instead of failing. An image request is a
+  generation like any other: behind llama-swap it holds its slot while the LLM is swapped out.
+- **Shown URLs**: what a chat request shows the model is noted for `read_page`; an image request's prompt is the
+  model's own writing and is not.
 - **Usage**: token counts are read from a copy of the answer as it streams (`monitor/usage.ts`) into
   `llm_usage` and the workspace's session row: the answer's `usage`, or for a stream that was not asked for
   one what the engine's closing `timings` say. Prompts and answers are not stored.
@@ -371,10 +375,11 @@ client --(key)--> web app  app/llm/api/[[...path]]/route.ts
   `x-api-key` (Anthropic's clients). It holds while it is not revoked and its user is active without a temporary
   password; anything else gets 401 `invalid_api_key` in OpenAI's error shape. `OPTIONS` passes without a key,
   because a browser's preflight carries none.
-- **Every path is passed on**, where a workspace gets five: the API stands in for the LLM server's own, and its
+- **Every path is passed on**, where a workspace gets seven: the API stands in for the LLM server's own, and its
   caller is a user, not an agent that a web page can talk into things. With a hosted provider behind
   `LLM_UPSTREAM_URL`, a key so opens all of that provider's API on the portal's account. WebSocket upgrades
-  are not passed.
+  are not passed, nor llama-swap's own routes (`ADMIN_ROUTES`: `/api`, `/ui`, `/logs`, `/upstream`, `/unload`,
+  `/running`, `/metrics`), which stop models, cancel others' requests and show everyone's traffic: 404.
 - **Queue and counting** are the workspaces' (`service/llm-proxy.ts`). A `POST` is a generation unless its path
   only counts or formats a prompt (`NOT_A_GENERATION`): it waits for a slot within the same limit per user,
   counts in `llm_usage`, and counts per key and day in `api_key_usage` (`monitor/key-usage.ts`) where a
@@ -482,7 +487,10 @@ The admin writes the models as Qwen Code settings (`config/models/`, JSON with c
   offers hosted models of its own; a session that names one fails), no update and no session sharing, its
   `webfetch` and `websearch` tools off, the `fetch` of its `execute` tool with them, the MCP server `search`
   (plus `browser` with `WORKSPACE_BROWSER`), whose tools the model calls by name, and its
-  [toolset](#opencodes-toolset). The image adds
+  [toolset](#opencodes-toolset). With `IMAGE_MODELS` the provider also has those models as `type: "image"`, which
+  OpenCode keeps out of its model picker and gives to its `generate_image` tool, the first as
+  `experimental.image_generate.model`; the instructions then say to save an image under `images/` in the project
+  and show it in the reply (`opencodeFacts`). The image adds
   `OPENCODE_DISABLE_MODELS_FETCH`: its list of the world's models stays the one it ships with. A model's efforts
   are its variants in OpenCode's picker, and its default effort goes with every request for which no variant
   was picked. A start is refused (`AgentConfigError`) when a model's id or name contains `{env:` or `{file:`,
@@ -602,6 +610,9 @@ container; the steps hostd runs are in [hostd/README.md](../hostd/README.md). Ph
 `GET /control/live` (`monitor/live.ts`) is a server-sent event stream for Admin > Usage: `init` once, then a
 `frame` every 500 ms with both servers' readings, the LLM sessions and the queue. At most 8 viewers; a slow
 one skips frames. What feeds it (hostd's streams, the engine's `/slots`) runs only while someone watches.
+`LLM_SLOTS_PATH` says where `/slots` is: behind llama-swap `/upstream/<model>/slots`, which answers 409 instead of
+starting the LLM while it is stopped for the image models or starting again; the engine's state is then
+`unloaded`.
 These parts of `gateway/src/monitor/` run all the time:
 
 - **Energy meter**: every 30 s it reads each hostd's running totals and books the increase to the local day in

@@ -203,7 +203,7 @@ list no longer names the web console:
 ```
 
 If the first line names another zone, such as `public` on a minimal install, use that name where [step
-8](#8-start-the-model) says `FedoraServer`. The rules for the model and the portal come with steps 8 and 11.
+8](#8-start-the-models) says `FedoraServer`. The rules for the model and the portal come with steps 8 and 11.
 
 <details>
 <summary>Opening a port yourself, and keeping the web console</summary>
@@ -561,28 +561,52 @@ sudo bash ~/workspace-portal/llm-server/fans/install.sh uninstall
 
 </details>
 
-### 8. Start the model
+### 8. Start the models
 
 *LLM server*
 
-Pulls Gufo 0.35.0 and installs the service that serves the model with four 256K sessions, MTP and vision. The
-service starts at boot and restarts itself after a crash. It keeps conversations on disk as well as in RAM, so
-after a restart an agent's next turn resumes instead of reading its whole conversation again.
+Installs [llama-swap](https://github.com/mostlygeek/llama-swap) and Gufo 0.37.0 with three models: the LLM with four
+256K sessions, MTP and vision, and two image models, Qwen-Image-2.1 and its eight-step Turbo. They don't fit in
+memory together, so llama-swap gives all three one address, port 8080, and runs the model a request names: the LLM
+from boot on, an image model when an image is asked for, the LLM again with the next chat request. It stops the
+running model first, once its requests have finished. The LLM keeps conversations on disk as well as in RAM, so
+after a swap or a restart an agent's next turn resumes instead of reading its whole conversation again.
 
 **LLM server**:
 
 ```sh
-mkdir /models/gufo-cache
+mkdir /models/gufo-cache /models/gufo-models
+chattr +m /models/gufo-cache /models/gufo-models
 mkdir /models/gufo-cache/disk /models/gufo-cache/home
 podman unshare chown 1000:1000 /models/gufo-cache/disk /models/gufo-cache/home
-podman pull "$(sed -n 's/^Image=//p' ~/workspace-portal/llm-server/gufo.container)"
-mkdir -p ~/.config/containers/systemd
-cp ~/workspace-portal/llm-server/gufo.container ~/.config/containers/systemd/
-systemctl --user daemon-reload
-systemctl --user start gufo.service
+GUFO_IMAGE=$(sed -n 's/^Image=//p' ~/workspace-portal/llm-server/gufo.container)
+podman pull "$GUFO_IMAGE"
+podman run --rm --user 0 -e GUFO_MODELS_DIR=/models -v /models/gufo-models:/models:z "$GUFO_IMAGE" \
+  sh -c 'gufo model install qwen-image-2.1-turbo && gufo model install qwen-image-2.1'
 ```
 
-Gufo has no login of its own. This lets the portal server, and nobody else, reach port 8080.
+**You should see** both downloads end without an error. Together they are 65.6 GB; the test machine took 27
+minutes.
+
+**LLM server**:
+
+```sh
+curl -fLo /tmp/llama-swap.tar.gz \
+  https://github.com/mostlygeek/llama-swap/releases/download/v276/llama-swap_276_linux_amd64.tar.gz
+echo '37493a0f725e407a3a96cf26927cc04c3e544b9a55a1141e267510901f74aef8  /tmp/llama-swap.tar.gz' | sha256sum -c
+mkdir -p ~/.local/bin ~/.config/llama-swap ~/.config/systemd/user ~/.config/containers/systemd
+tar -xzf /tmp/llama-swap.tar.gz -C ~/.local/bin llama-swap
+cd ~/workspace-portal/llm-server
+install -m 755 wait-gpu-memory ~/.local/bin/
+cp gufo.container gufo-image.container gufo-image-turbo.container ~/.config/containers/systemd/
+cp llama-swap.yaml ~/.config/llama-swap/config.yaml
+cp llama-swap.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now llama-swap.service
+```
+
+Neither Gufo nor llama-swap has a login. The models listen on this machine only (ports 18080 to 18082); this lets
+the portal server, and nobody else, reach llama-swap on port 8080.
 
 **LLM server**:
 
@@ -595,34 +619,59 @@ sudo firewall-cmd --reload
 **LLM server**, check:
 
 ```sh
-journalctl --user -u gufo.service | grep -o 'load_completed.*' | tail -1
-curl -s http://127.0.0.1:8080/props \
+until curl -s http://127.0.0.1:8080/running | grep -q '"state":"ready"'; do sleep 2; done
+curl -s http://127.0.0.1:8080/running | jq -c '[.running[] | {model, state}]'
+curl -s http://127.0.0.1:18080/props \
   | jq -c '{total_slots, build_info, n_ctx: .default_generation_settings.n_ctx, vision: .modalities.vision}'
+curl -s http://127.0.0.1:8080/v1/images/generations -H 'Content-Type: application/json' \
+  -d '{"model":"Qwen-Image-2.1-Turbo","prompt":"A red ceramic teapot on a wooden table","seed":42}' \
+  | jq -r '.data[0].b64_json' | base64 -d > /tmp/teapot.png && file /tmp/teapot.png
+curl -s http://127.0.0.1:8080/running | jq -c '[.running[] | {model, state}]'
 ```
 
 **You should see**
 
 ```text
-load_completed kind=text elapsed_ms=15936 ... sessions=4 context_tokens=262144 speculative=mtp ...
-{"total_slots":4,"build_info":"0.35.0 (0260e11)","n_ctx":262144,"vision":true}
+[{"model":"qwen3.8-flash-next","state":"ready"}]
+{"total_slots":4,"build_info":"0.37.0 (684b716)","n_ctx":262144,"vision":true}
+/tmp/teapot.png: PNG image data, 1024 x 1024, 8-bit/color RGBA, non-interlaced
+[{"model":"Qwen-Image-2.1-Turbo","state":"ready"}]
 ```
 
-> The first block returns once the model is loaded and healthy: after about 2 minutes on the test machine: 99
-> seconds for the 3.6 GB image, 17 for the model. Each session has 262,144 tokens, all the model takes, for
-> everything: instructions, tools, history, thinking and the answer. Qwen Code asks for replies of up to 64,000
-> tokens, and a client that names no limit gets the same (`--max-tokens`). Thinking is part of a reply and ends
-> after 32,000 tokens (`--reasoning-budget`), which leaves the other half of a full reply for the answer.
-> Summarizing a 93,700-token document took 26,300 tokens of thinking and a 26,000-token answer at the highest
-> effort, 390 and 7,500 at `low` ([measurements](MEASUREMENTS.md#replies-and-thinking)).
+The next chat request stops Turbo and starts the LLM again. Measured on the test machine, with the model files
+already in the page cache:
+
+| What happens | Time to the answer |
+|---|---|
+| llama-swap starts at boot and loads the LLM | 18 s |
+| An image from Turbo, the LLM stopped first | 26.5 s |
+| An image from Qwen-Image-2.1 (40 steps), started beside Turbo | 96.7 s |
+| A chat request, both image models stopped first | 17.3 s |
+
+> Each session has 262,144 tokens, all the model takes, for everything: instructions, tools, history, thinking and
+> the answer. Qwen Code asks for replies of up to 64,000 tokens, and a client that names no limit gets the same
+> (`--max-tokens`). Thinking is part of a reply and ends after 32,000 tokens (`--reasoning-budget`), which leaves
+> the other half of a full reply for the answer. Summarizing a 93,700-token document took 26,300 tokens of thinking
+> and a 26,000-token answer at the highest effort, 390 and 7,500 at `low` ([measurements](MEASUREMENTS.md#replies-and-thinking)).
+
+> **Swaps.** llama-swap waits for the requests in flight to finish before it stops a model, without a time limit,
+> and holds new requests meanwhile. So an image waits for every running LLM request, and chat requests wait for
+> the image. Both image models can run at once (63 GiB together), each starting with its first request; images
+> are 1024 × 1024 unless a request sets `size`. Each Gufo unit first waits, up to 60 seconds, until the memory the
+> previous model used is free again (`wait-gpu-memory`: 90 GiB for the LLM, 40 for an image model): a model that
+> loads while the last one still lets go can fail to load or hang a Strix Halo machine
+> ([gufo#1394](https://github.com/gufo-org/gufo/issues/1394)).
+
+> **Licence.** Qwen-Image-2.1 and its Turbo are under the Qwen Research License, not Gufo's MIT licence: they may
+> be used for research and other non-commercial work only.
 
 > The disk cache (`--cache-disk`) takes up to 32 GiB in `/models/gufo-cache/disk`. Gufo runs as user 1000 in its
 > container, hence `podman unshare chown`. A conversation that no longer fits the 4 GiB in RAM, or that a restart
-> cut off, resumes from there: Gufo's docs give 1.8 s instead of about 50 s for a 24,866-token prompt. Gufo writes
-> each conversation once, then what each turn adds. The conversations stay there as the model's token ids until
-> the cache needs the room; deleting a person's data in the portal does not remove them. With the disk cache on,
-> Gufo hashes the model files when it starts and keeps the result in `/models/gufo-cache/home`, so only the first
-> start pays for it. On btrfs, run `chattr +m /models/gufo-cache` right after the first `mkdir`, or btrfs tries
-> to compress every file the cache writes.
+> or a swap cut off, resumes from there: Gufo's docs give 1.8 s instead of about 50 s for a 24,866-token prompt.
+> Gufo writes each conversation once, then what each turn adds. The conversations stay there as the model's token
+> ids until the cache needs the room; deleting a person's data in the portal does not remove them. With the disk
+> cache on, Gufo hashes the model files when it starts and keeps the result in `/models/gufo-cache/home`, so only
+> the first start pays for it. `chattr +m` stops btrfs from compressing what the cache and the downloads write.
 
 <a id="layouts"></a>
 
@@ -631,13 +680,13 @@ load_completed kind=text elapsed_ms=15936 ... sessions=4 context_tokens=262144 s
 
 Change `--sessions` and `--context` in `~/.config/containers/systemd/gufo.container`, then run the lines below.
 What the disk cache holds was made for the old layout: Gufo cannot use it and does not delete it, so they empty
-it while the service is stopped.
+it while the models are stopped.
 
 ```sh
 systemctl --user daemon-reload
-systemctl --user stop gufo.service
+systemctl --user stop llama-swap.service
 podman unshare sh -c 'rm -rf /models/gufo-cache/disk/*'
-systemctl --user start gufo.service
+systemctl --user start llama-swap.service
 ```
 
 | Layout | Flags | Use it when |
@@ -710,7 +759,8 @@ curl -sSN http://127.0.0.1:8080/v1/chat/completions -H 'Content-Type: applicatio
 
 **Full load.** Sends a 256,000-token prompt into all four sessions at the same moment, makes each one find three
 keys in it and pass them to a tool, and watches memory while it runs. The run takes about 11 minutes and occupies
-the whole server, so do it before anyone depends on it.
+the whole server, so do it before anyone depends on it. It talks to Gufo directly, on port 18080, so the LLM must be
+the model llama-swap runs: after the tool call above it is.
 
 **LLM server**:
 
@@ -821,10 +871,12 @@ sed -i \
   -e 's|^LLM_UPSTREAM_URL=.*|LLM_UPSTREAM_URL=http://LLM_IP:8080|' \
   -e 's|^LLM_MAX_CONCURRENCY=.*|LLM_MAX_CONCURRENCY=4|' \
   -e 's|^LLM_MAX_CONCURRENCY_PER_USER=.*|LLM_MAX_CONCURRENCY_PER_USER=3|' \
+  -e 's|^IMAGE_MODELS=.*|IMAGE_MODELS=Qwen-Image-2.1-Turbo,Qwen-Image-2.1|' \
+  -e 's|^LLM_SLOTS_PATH=.*|LLM_SLOTS_PATH=/upstream/qwen3.8-flash-next/slots|' \
   -e 's|^WORKSPACE_MEMORY=.*|WORKSPACE_MEMORY=2304m|' \
   -e 's|^WORKSPACE_CPUS=.*|WORKSPACE_CPUS=1.5|' \
   -e 's|^MAX_RUNNING_WORKSPACES=.*|MAX_RUNNING_WORKSPACES=3|' .env
-curl -s -o /dev/null -w 'model server: %{http_code}\n' http://LLM_IP:8080/ready
+curl -s -o /dev/null -w 'model server: %{http_code}\n' http://LLM_IP:8080/health
 sudo bash deploy/install.sh
 ```
 
@@ -959,8 +1011,9 @@ curl -s http://PORTAL_IP:3000/llm/api/v1/models -H 'Authorization: Bearer YOUR_A
 {"object":"list","data":[{"id":"qwen3.8-flash-next","object":"model","created":1795049585,"owned_by":"gufo","context_length":262144,"architecture":{"input_modalities":["text","image"]}}]}
 ```
 
-Everything behind `/llm/api` is Gufo's own API, passed on as it is: Chat Completions, Responses, Anthropic's
-Messages and the rest. Software that speaks Anthropic's API takes `http://PORTAL_IP:3000/llm/api` as its base URL.
+Everything behind `/llm/api` is what llama-swap passes on to Gufo: Chat Completions, Responses, Anthropic's
+Messages, embeddings and images. Software that speaks Anthropic's API takes `http://PORTAL_IP:3000/llm/api` as its
+base URL. llama-swap's own routes, which stop models and show everyone's traffic, are left out.
 The page counts for each key and day the requests, the tokens in and out and the energy with its cost, and
 **Revoke** stops a key at once.
 
@@ -991,13 +1044,14 @@ installer above; this adds the LLM server's.
 **LLM server**:
 
 ```sh
-sudo bash ~/workspace-portal/hostd/install.sh llm --portal PORTAL_IP
+sudo bash ~/workspace-portal/hostd/install.sh llm --portal PORTAL_IP --engine-url http://127.0.0.1:18080 \
+  --engine-router http://127.0.0.1:8080 qwen3.8-flash-next
 ```
 
 **You should see**, as the last lines:
 
 ```text
-install.sh: engine control: gufo.service (quadlet /home/YOUR_LOGIN/.config/containers/systemd/gufo.container, user YOUR_LOGIN)
+install.sh: engine control: gufo.service (quadlet /home/YOUR_LOGIN/.config/containers/systemd/gufo.container, user YOUR_LOGIN, behind llama-swap at http://127.0.0.1:8080)
 install.sh: firewalld: zone FedoraServer now lets PORTAL_IP reach tcp/9180
 install.sh: portal-hostd (re)started
 install.sh: health check passed (role llm, port 9180)
@@ -1077,6 +1131,8 @@ do: Docker clears the limit of project 1 each time it starts.
 | `WORKSPACE_CPUS=1.5` | Sized for a 2-core machine. Raise it on a bigger one. |
 | `LLM_MAX_CONCURRENCY=4` | Matches the four sessions. More requests wait in the portal instead of in Gufo. |
 | `LLM_MAX_CONCURRENCY_PER_USER=3` | One person with many subagents cannot take every session. |
+| `IMAGE_MODELS=Qwen-Image-2.1-Turbo,Qwen-Image-2.1` | The image models of [step 8](#8-start-the-models), the default first. OpenCode gets its `generate_image` tool with them: asked for an image, the agent saves it in the project as `images/<name>.png` and shows it in its reply. Turbo is the default; the agent uses Qwen-Image-2.1 when the person asks for it. Images share the LLM's queue, and while one is made the LLM is stopped ([swaps](#8-start-the-models)). OpenCode's model picker lists chat models only, so the image models are not in it. `none` turns images off. |
+| `LLM_SLOTS_PATH=/upstream/qwen3.8-flash-next/slots` | Where **Admin > Usage** reads the LLM's sessions through llama-swap. It never starts the LLM: while an image is made, Usage shows *Not loaded*. |
 | `DEFAULT_REASONING_EFFORT=low` | The default. Every new agent session starts at low effort, which answers faster; raise it inside a session for a hard task. `medium` and `xhigh` are this model's other two efforts. |
 | `WORKSPACE_AGENTS=qwen,dsh,opencode` | The default: the agents people choose from, the first being a new person's. One that is left out is off everywhere: Home does not show it, its ports are closed, its image is not built, and a workspace of it that still runs is stopped. Its people's files stay, and are there again when it comes back. `WORKSPACE_AGENTS=opencode` offers OpenCode alone. |
 | `system-defaults.json` | Not in `.env`: Qwen Code's defaults, in `/srv/workspace-portal/config/models`, with the model and its context of 262,144 tokens. It names no `max_tokens`, so Qwen Code asks for replies of 64,000 tokens and continues one that was cut off, and it sets `autoCompactThreshold` to 0.7, so Qwen Code compacts a conversation at 183,500 tokens and a whole reply always fits behind it. `sudo bash deploy/models.sh show` prints it and `install` replaces it; workspaces read it at their next start. |
@@ -1174,10 +1230,11 @@ sessions live, and **Admin > Users** the running workspaces; these are the comma
 
 | LLM server | What it does |
 |---|---|
-| `systemctl --user status gufo.service --no-pager` | State and uptime of the model. |
-| `journalctl --user -u gufo.service -f` | Live log. |
-| `curl -s http://127.0.0.1:8080/slots \| jq -c '[.[] \| .is_processing]'` | Which of the four sessions are busy. |
-| `systemctl --user restart gufo.service` | Restart. Requests in progress are lost. |
+| `curl -s http://127.0.0.1:8080/running \| jq -c '[.running[] \| {model, state}]'` | Which models run: the LLM, or one or both image models. |
+| `systemctl --user status llama-swap.service --no-pager` | State and uptime of llama-swap, which starts and stops the models. |
+| `journalctl --user -u llama-swap -u gufo -u gufo-image-turbo -u gufo-image -f` | Live log of llama-swap and the models. |
+| `curl -s http://127.0.0.1:18080/slots \| jq -c '[.[] \| .is_processing]'` | Which of the four sessions are busy, while the LLM runs. |
+| `systemctl --user restart llama-swap.service` | Restart; the LLM loads again. Requests in progress are lost. |
 | `grep . /sys/class/ec_su_axb35/apu/power_mode /sys/class/ec_su_axb35/temp1/temp /sys/class/ec_su_axb35/fan[12]/{rpm,duty}` | Power profile, controller temperature, fan speeds and duty. |
 | `btop` `nvtop` | CPU, RAM and swap. GPU load and memory. |
 | `systemctl status portal-hostd --no-pager` | portal-hostd, which feeds **Admin > Usage** and **Energy** and carries out Gufo updates. |
@@ -1202,13 +1259,14 @@ sessions live, and **Admin > Users** the running workspaces; these are the comma
 ```sh
 systemctl --failed --no-legend; systemctl --user --failed --no-legend
 podman ps --format '{{.Names}} {{.Status}}'
+systemctl --user is-active llama-swap
 systemctl is-active m5-fans portal-hostd
 cat /sys/class/ec_su_axb35/apu/power_mode
 sudo firewall-cmd --zone=FedoraServer --list-rich-rules
 sudo journalctl -b -u undervolt.service -o cat | grep coall
 ```
 
-**Good:** no failed units, `gufo Up ... (healthy)`, two services `active`, `performance`, two firewall rules naming
+**Good:** no failed units, `gufo Up ... (healthy)`, three services `active`, `performance`, two firewall rules naming
 the portal server, for ports 8080 and 9180, and, with the undervolt of [step 10](#10-cpu-undervolt), `Successfully
 set coall to 1048526`.
 
@@ -1235,9 +1293,10 @@ sudo reboot
 with their notes and marks breaking changes. The new image downloads, running requests finish while new ones wait
 in the portal (up to 15 minutes, or **Restart now**), then Gufo restarts and must report the new version. If it
 does not come up, the previous version is put back by itself, and the failed update ends with Gufo's own last log
-lines: why it did not start. To go back to an older version later, pick it under **Package images**. By hand:
-replace the image digest in `~/.config/containers/systemd/gufo.container`, then `systemctl --user daemon-reload` and
-`systemctl --user restart gufo.service`.
+lines: why it did not start. An update changes the image of all three models; llama-swap stops them and starts the
+LLM, and the image models start with the next image. To go back to an older version later, pick it under **Package
+images**. By hand: replace the image digest in the three `~/.config/containers/systemd/gufo*.container` files, then
+`systemctl --user daemon-reload` and `curl -X POST http://127.0.0.1:8080/api/models/unload`.
 
 </details>
 
@@ -1249,7 +1308,7 @@ The model can be downloaded again. What cannot, on the portal server: `~/workspa
 every person's files and chat history, and `config/` the model settings and the agent versions. Copy it with
 numeric owners and modes, because each workspace's files belong to a user ID of their own, and stop the portal
 while `db/` is copied: `sudo docker compose down`, afterwards `sudo docker compose up -d`. On the LLM server only
-`~/.config/containers/systemd/gufo.container`.
+`~/.config/containers/systemd/gufo*.container` and `~/.config/llama-swap/config.yaml`.
 
 </details>
 
@@ -1368,10 +1427,12 @@ sudo bash deploy/verify-isolation.sh
 | Linux shows only about 62 GB | UMA is still at 64 GB. Redo the first command of [step 5](#5-unlock-the-memory) and reboot. |
 | GTT total is about half the RAM | The kernel options are not active. Check `cat /proc/cmdline`; they apply after a reboot. |
 | `gufo.service` stays `activating` | It loads the model and waits for the first health check: 17 to 18 seconds on the test machine. |
-| Gufo is restarted while loading | Loading took over 10 minutes, usually a slow disk. Raise `TimeoutStartSec` in `gufo.container`. |
+| Gufo is stopped while loading | Loading took over 10 minutes, usually a slow disk. Raise `TimeoutStartSec` in `gufo.container` and `healthCheckTimeout` in `~/.config/llama-swap/config.yaml`. |
+| An image takes minutes before it starts | llama-swap stops the LLM only once every running LLM request has ended, and agents' requests can run for minutes. `curl -s http://127.0.0.1:8080/running` shows what runs. |
+| A unit fails with `wait-gpu-memory: ... GiB needed` | The model before it still held the memory after 60 seconds. `journalctl --user -u gufo -u gufo-image-turbo -u gufo-image` says why; the next request of that model tries again. |
 | The model disappears under load | Read `journalctl --user -u gufo.service` and `sudo journalctl -k -b`. Exit status 75 is the stall timeout: nothing progressed for 10 minutes. An out-of-memory kill means something else is running on the LLM server, or the layout is too big. |
 | HTTP 429 from the model | More than 32 requests are waiting. Let the queue drain. |
-| An agent thinks for minutes and stops without an answer | The reply ran out during the thinking. `gufo.container` must have its `--reasoning-budget` ([step 8](#8-start-the-model)), and `sudo bash deploy/models.sh show` must list an `autoCompactThreshold` and no `max_tokens`. |
+| An agent thinks for minutes and stops without an answer | The reply ran out during the thinking. `gufo.container` must have its `--reasoning-budget` ([step 8](#8-start-the-models)), and `sudo bash deploy/models.sh show` must list an `autoCompactThreshold` and no `max_tokens`. |
 | An agent never gets an answer | All four sessions are busy with long prompts, and a long prompt slows everyone who arrives after it. Look at `/slots` (see [Day to day](#day-to-day)). |
 | The load test in step 9 says `FAIL` | A failed session says why on its own line; the line of readings shows whether all sessions ran at once, how much memory was left, and whether anything was swapped or killed. |
 | The installer in step 7 says `refusing` or `Secure Boot is not off` | The first names what differs from the tested board and BIOS (AXB35-02, 3.11): the check is deliberate, stay on the firmware's fan control. For the second, switch Secure Boot off in the BIOS ([step 1](#1-install-fedora-server)) and run the installer again. |
@@ -1384,7 +1445,7 @@ sudo bash deploy/verify-isolation.sh
 | `read_page only opens pages you were shown` | The agent took the address from memory or made it up. Have it search first, paste the address into the chat, or change `READER_URL_POLICY` ([step 11](#settings)). |
 | `read_page`: `The site refused the request` | That site turns automated readers away. The agent has to use another source. |
 | `read_page`: `The page reader is busy` | It reads two pages at a time and the rest wait up to 30 seconds. The agent can ask again. |
-| The portal cannot reach the model | From the portal server, `curl http://LLM_IP:8080/ready` must answer. If not, the firewall rule in [step 8](#8-start-the-model) names the wrong address. |
+| The portal cannot reach the model | From the portal server, `curl http://LLM_IP:8080/health` must answer `OK`. If not, the firewall rule in [step 8](#8-start-the-models) names the wrong address. |
 | A program on the API gets `401` with `Incorrect API key` | The key was mistyped or revoked, or its account is disabled or still has a temporary password. The API page lists the working keys with their last four characters; create a new one there. |
 | A program on the API gives up before an answer comes | Its request was waiting for a session, or the model was still reading a long prompt: nothing is sent in that time. **Admin > Usage** shows the busy sessions; give the program a longer timeout ([step 11](#the-api-for-your-own-software)). |
 | The portal's HTTPS address does not open | The device is not signed in to the tailnet, or Tailscale is down on the portal server: `tailscale status` there. `sudo tailscale serve status \| head` must list the portal's ports; `sudo bash deploy/tailscale-https.sh` writes them again. |
@@ -1478,14 +1539,17 @@ fan service is running and that the vents have space on all sides. How each was 
 | Part | Version on the test machines |
 |---|---|
 | LLM server | Ryzen AI Max+ 395, 128 GB, board AXB35-02, BIOS 3.11 (May 8, 2026); Fedora 44 Server, kernel 7.3.4-200.fc44, Mesa 26.2.6, Podman 5.8.9, crun 1.30 |
-| Engine | [Gufo 0.35.0](https://github.com/gufo-org/gufo/releases/tag/v0.35.0) (build 0260e11), image digest `sha256:99e9b547...f9e9c2b6` |
+| Engine | [Gufo 0.37.0](https://github.com/gufo-org/gufo/releases/tag/v0.37.0) (build 684b716), image digest `sha256:9548e994...5bb1d4dc` |
+| Model router | [llama-swap v276](https://github.com/mostlygeek/llama-swap/releases/tag/v276) (57b2c19) |
 | Model | [Qwen3.8-Flash-Next](https://huggingface.co/Qwen/Qwen3.8-Flash-Next), [UD-Q4_K_XL from Unsloth](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/tree/f5d175de2cf7f720d45d6064019a81fcf056e986) with the Q8_0 n-gram table, shared Q8 MTP, BF16 vision projector; downloaded with huggingface_hub 2.4.0 and hf-xet 1.8.0 |
+| Image models | [Qwen-Image-2.1](https://huggingface.co/Qwen/Qwen-Image-2.1/tree/b3179ad355be050328e483a9dfdd9e60cd62adfa) (b3179ad) and [Qwen-Image-2.1-Turbo](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo/tree/fc13ba1986fcb905854dc8de2f52eee395f49b5b) (fc13ba1), BF16, installed with `gufo model install`; Qwen Research License (non-commercial) |
 | Fan driver | `llm-server/fans/ec_su_axb35.c` in the repository, version m5-1: reduced from [cmetz/ec-su_axb35-linux](https://github.com/cmetz/ec-su_axb35-linux/tree/f62c2c228959a08683273a26ef3afd8991e69f6d) at f62c2c2, duty registers after [FanControl.AXB35](https://github.com/crmaris/FanControl.AXB35) |
 | CPU undervolt | [RyzenAdj](https://github.com/FlyGoat/RyzenAdj) 0.18.0 (527cacc) from [COPR shdwchn10/ryzenadj](https://copr.fedorainfracloud.org/coprs/shdwchn10/ryzenadj/), with its `ryzen_smu` driver (d298366) |
 | Portal server | Pentium G4400T (2 cores), 8 GB; Fedora 45 Server, kernel 7.3.4-300.fc45, moby-engine 29.9.3, Tailscale 1.102.5 |
 | Portal | [Workspace Portal](https://github.com/ShahriarDhruvo/workspace-portal), [Qwen Code](https://github.com/QwenLM/qwen-code) 0.28.0 (a fresh install builds 0.27.0; updated under **Admin > Updates**), DeepSeek Harness 0.2.2-rc.1, OpenCode 2.4.1 (the only agent enabled on the test server since November 24, 2026), [SearXNG](https://github.com/searxng/searxng) 2026.11.12. Page reader: [Defuddle](https://github.com/kepano/defuddle) 0.19.6, pypdfium2 5.15.2 |
 
-Further reading: [Gufo server options](https://github.com/gufo-org/gufo/blob/v0.35.0/docs/server.md) · [amdgpu
+Further reading: [Gufo server options](https://github.com/gufo-org/gufo/blob/v0.37.0/docs/server.md) · [llama-swap
+configuration](https://github.com/mostlygeek/llama-swap/blob/v276/docs/config.example.yaml) · [amdgpu
 kernel parameters](https://docs.kernel.org/gpu/amdgpu/module-parameters.html) · [kyuz0's Strix Halo
 toolboxes](https://github.com/kyuz0/amd-strix-halo-toolboxes) · [strixhalo.wiki](https://strixhalo.wiki/) ·
 [Hardware Busters on the test machine's fans](https://hwbusters.com/?p=116224) · [Tailscale on

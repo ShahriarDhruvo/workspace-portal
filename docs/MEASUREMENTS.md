@@ -431,6 +431,31 @@ Tried once more on November 9 at Q8 with newer engines:
 - llama.cpp is the only engine that fits six 256K sessions of it, at 11 tok/s for one user and 6 each with six.
 - Halogen wrote 17 tok/s for one user and served six requests one after another.
 
+## Image models
+
+Measured on November 26, 2026 with Gufo 0.37.0 and llama-swap v276 (step 8 of the guide), one request at a time,
+1024 × 1024, the model files already in the page cache. Times are from sending the request to the whole answer.
+
+| Request | Time | Of which Gufo's own (text encoder, denoising, VAE) |
+|---|--:|---|
+| llama-swap starts at boot, the LLM loads | 18 s | loading 15.4 s |
+| Turbo image, 8 steps, the LLM stopped first | 26.5 s | 6.3 + 17.5 + 1.0 = 24.8 s |
+| The same again after a swap | 26.6 s | |
+| Qwen-Image-2.1 image, 40 steps, started beside Turbo | 96.7 s | 5.9 + 88.5 + 1.1 = 95.5 s |
+| A chat request, both image models stopped first | 17.3 s | loading 15.3 s |
+| An engine update through llama-swap (hostd), unload to version check | 16 s | |
+
+The weights reach the GPU with each model's first request after a start, which is in the image rows above.
+llama-swap's own part of a swap was under 2 seconds.
+
+| Running | GPU memory in use (GTT) |
+|---|--:|
+| The LLM, four 256K sessions | 95.8 GiB |
+| Turbo | 31.7 GiB |
+| Turbo and Qwen-Image-2.1 | 63 GiB |
+
+Downloading both image models (65.6 GB) with `gufo model install` took 26 minutes 54 seconds, at about 41 MB/s.
+
 ## Portal server
 
 ### Workspace memory
