@@ -20,7 +20,7 @@ and reads the audit log.
 
 Whichever agent runs it, a workspace has the compilers and tools for Node.js, Python, Go, Rust, C and C++, Bash
 and PowerShell: they are in the image, because a Private workspace can download nothing
-([the list](docs/GUIDE.md#11-workspace-portal)). OpenCode also starts with plugins, skills, formatting after edits
+([the list](docs/GUIDE.md#10-workspace-portal)). OpenCode also starts with plugins, skills, formatting after edits
 and, in an Online workspace, two public MCP servers: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#opencodes-toolset)
 lists them and what was left out.
 

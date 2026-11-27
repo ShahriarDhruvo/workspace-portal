@@ -13,17 +13,17 @@ _spec.loader.exec_module(F)
 
 class Curve(unittest.TestCase):
     def test_rising(self):
-        expected = {59: 0, 60: 40, 62: 40, 63: 40, 64: 45, 70: 55, 75: 60, 80: 70, 84: 75, 85: 80, 89: 80, 90: 95, 110: 95}
+        expected = {59: 0, 60: 50, 62: 60, 65: 75, 69: 95, 70: 99, 85: 99, 110: 99}
         self.assertEqual({temp: F.target_duty(temp, 0) for temp in expected}, expected)
 
     def test_falling_holds_until_the_lower_threshold(self):
-        self.assertEqual([F.target_duty(temp, 95) for temp in (89, 87, 86)], [95, 95, 80])
-        self.assertEqual([F.target_duty(temp, 40) for temp in (59, 55, 54)], [40, 40, 0])
-        self.assertEqual(F.target_duty(89, 80), 80)
+        self.assertEqual([F.target_duty(temp, 99) for temp in (69, 67, 66)], [99, 99, 80])
+        self.assertEqual([F.target_duty(temp, 50) for temp in (59, 55, 54)], [50, 50, 0])
+        self.assertEqual(F.target_duty(69, 95), 95)
 
-    def test_never_between_1_and_39_or_above_95(self):
-        duties = {F.target_duty(temp, previous) for temp in range(0, 126) for previous in (0, 40, 80, 95)}
-        self.assertTrue(all(duty == 0 or 40 <= duty <= 95 for duty in duties), duties)
+    def test_never_between_1_and_39_or_above_99(self):
+        duties = {F.target_duty(temp, previous) for temp in range(0, 126) for previous in (0, 50, 95, 99)}
+        self.assertTrue(all(duty == 0 or 40 <= duty <= 99 for duty in duties), duties)
 
 
 class Sensors(unittest.TestCase):
@@ -65,7 +65,7 @@ class Duty(unittest.TestCase):
             F.write_duty(80, ec)
         self.assertFalse((ec / 'fan1' / 'duty').exists())
 
-    def test_without_readings_95_and_sigterm_releases_both_fans(self):
+    def test_without_readings_99_and_sigterm_releases_both_fans(self):
         ec, held = self.ec(0), []
         self.addCleanup(signal.signal, signal.SIGTERM, signal.getsignal(signal.SIGTERM))
 
@@ -77,7 +77,7 @@ class Duty(unittest.TestCase):
         with mock.patch.multiple(F, EC=ec, temperature=mock.Mock(side_effect=RuntimeError), write_duty=lambda duty: Duty.real(duty, ec)), \
              mock.patch.object(F.time, 'sleep', sleep), mock.patch.object(F.sys, 'stderr'), self.assertRaises(SystemExit) as stopped:
             F.main()
-        self.assertEqual((stopped.exception.code, held), (0, ['95\n', '95\n']))
+        self.assertEqual((stopped.exception.code, held), (0, ['99\n', '99\n']))
         self.assertEqual([(ec / fan / 'duty').read_text() for fan in F.FANS], ['0\n', '0\n'])
 
 

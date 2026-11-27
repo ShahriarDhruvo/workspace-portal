@@ -17,26 +17,31 @@ numbers led to are in [`llm-server/`](../llm-server).
 | UMA, the GPU's fixed memory | 512 MB | Linux sees 124.9 GiB. The machine shipped at 64 GB fixed, which leaves Linux about 62. |
 | GTT limit, RAM the GPU may borrow | 124 GiB | The model and all four sessions sit on the GPU: 111.5 GiB in use. |
 | IOMMU | off | Other owners report 5-15% faster prompt reading. Not compared here; every number was taken with it off. |
-| Power profile | Performance | 120 W sustained, 160 W peak. 132 W can be forced but is slower. |
-| Fan curve | up to 95% | Chip about 6 °C cooler. Reading holds 1,760-1,787 tok/s instead of sagging to as low as 1,484 after long load: up to 20% faster when hot. |
+| Power profile | Performance | 120 W sustained, 140 W slow, 160 W peak, 98 °C. |
+| Power and temperature limits | The firmware's maximum | Asked for 180 W and 100 °C, it keeps 132 W sustained, 140 W slow, 160 W peak and 98 °C. Since November 27, 2026; see [Freezes](#freezes) for its heat. |
+| CPU undervolt | Curve offset -25 | 3.7% more CPU work at the same power. -50 gives 8% at 11 W less and 9 °C cooler, but froze the machine five times ([Freezes](#freezes)). |
+| Fan curve | 99% from 70 °C | Up to 95% before November 27: chip about 6 °C cooler than on firmware fans. Reading holds 1,760-1,787 tok/s instead of sagging to as low as 1,484 after long load: up to 20% faster when hot. |
+| Cooling under the machine | A laptop cooler, its fan at 3,500 rpm | Since November 27, 2026; not measured alone. |
 | CPU governor | performance | TuneD profile `accelerator-performance`. Baseline for all numbers. |
-| CPU undervolt | Curve offset -50 | 9% more CPU work at 5 W less and 4 °C cooler. Prompt reading gains about 1%. |
 | N-gram table | 8.5 bits a value (Q8_0) | Predicts like the full-precision table, which is 48 GB larger. Wikitext is predicted 0.3% better than with the 4.5-bit table of the Q4 files, code the same. Same memory and speed; 26 GB more on the SSD. |
 | Speculative decoding | MTP | A helper file drafts tokens ahead and about 80% are accepted. Writing runs at 51 to 79 tok/s, half of the runs at 62 to 67 (99 runs with three n-gram tables, November 20 and 21, 2026), against 24 to 27 on llama.cpp without it. |
 
 ## Levers tried and left alone
 
-`ryzenadj` comes with the [CPU undervolt](#cpu-undervolt); its settings last until the next reboot. Stock limits
-(`sudo ryzenadj --info`): STAPM 120 W, fast limit 160 W, slow limit 140 W, temperature limit 98 °C.
+`ryzenadj` is [RyzenAdj](https://github.com/FlyGoat/RyzenAdj) 0.18.0 from
+[COPR shdwchn10/ryzenadj](https://copr.fedorainfracloud.org/coprs/shdwchn10/ryzenadj/), with its `ryzen_smu` driver;
+its settings last until the next reboot. Stock limits (`sudo ryzenadj --info`): STAPM 120 W, fast limit 160 W, slow
+limit 140 W, temperature limit 98 °C.
 
 | Lever | Result | Verdict |
 |---|---|---|
-| More power<br>`sudo ryzenadj --stapm-limit=140000` | The firmware caps the sustained limit at 132 W: ask for 140 and it reads back 132. At 132 W it was slower, 1,741 and 1,667 tok/s against 1,787 at 120 W. It drew 4-6 W more, ran 2-3 °C hotter and spent more time throttled at 98 °C. | slower |
-| Higher temperature limit<br>`sudo ryzenadj --tctl-temp=100` | Reads back as 98 °C, the maximum this firmware allows. | locked |
-| Lower temperature limit<br>`sudo ryzenadj --tctl-temp=90` | Works. The chip peaks at 90 °C and the fans run about 8% slower. Prompt reading drops 2.2%. A limit of 95 °C cost 3.6% in a second back-to-back test. | costs speed |
-| Fans at 100% | Worse than 95%. Once hot, fan 1 slows to an average of 2,150 rpm while fan 2 holds 4,350, and the chip runs at 87-89 °C instead of 83. | worse |
+| More power<br>`sudo ryzenadj --stapm-limit=180000` | The firmware caps the sustained limit at 132 W, the slow one at 140 W and the fast one at 160 W, whatever is asked (again November 27). Before the 99% fan curve and the laptop cooler, 132 W was slower: 1,741 and 1,667 tok/s against 1,787 at 120 W, 4-6 W more, 2-3 °C hotter, more time throttled at 98 °C. | in use since November 27 |
+| Higher temperature limit<br>`sudo ryzenadj --tctl-temp=100` | Reads back as 98 °C, the maximum this firmware allows (again November 27). The skin limits are refused: `set_apu_skin_temp_limit is not supported on this family`. | locked |
+| Lower temperature limit<br>`sudo ryzenadj --tctl-temp=90` | Works. The chip peaks at 90 °C and the fans run about 8% slower. Prompt reading drops 2.2%. A limit of 95 °C cost 3.6% in a second back-to-back test. November 26, one 59,000-token prompt from cold: 3% slower, yet the chip overshot to 95 °C, the GPU to 97 °C and power to 176 W, hotter than the 120 W limit ([Freezes](#freezes)). | costs speed |
+| Fans at 100% | Worse than 99%. On November 27, cold, both held about 4,400 rpm for 25 seconds, then fell and cycled between 1,260 and 2,560 rpm for the rest of 2 minutes. Earlier, hot, fan 1 averaged 2,150 rpm and the chip ran at 87-89 °C instead of 83. The driver refuses 100. | worse |
 | GPU overclock<br>`sudo ryzenadj --gfx-clk=3000` | `set_gfx_clk is rejected by SMU`. The driver's own limit is 2,900 MHz and it refuses 3,000 as well. Under AI load the GPU averages 2,680-2,750 MHz, below its cap. | locked |
 | GPU clock forced to maximum | 1,739 tok/s, the same as stock. Idle power doubles from 7.5 to 15.6 W. | no gain |
+| Power limit 100 W | Prompt reading 10% slower, the chip peaks at 82 °C. | costs speed |
 | GPU undervolt<br>`sudo ryzenadj --set-cogfx=1048526` | `set_cogfx is not supported on this family` | locked |
 | CPU overclock | No BIOS option, and `ryzenadj` has no clock or voltage control for this chip. | locked |
 | RAM speed | Rated for 8,533 MT/s, runs at 8,000. The firmware sets that at power-on; there is no setting in the BIOS or in Linux. The most it could add is 6.7% writing speed. | locked |
@@ -54,8 +59,9 @@ numbers led to are in [`llm-server/`](../llm-server).
   bandwidth, not on temperature.
 - The upstream driver's stock fan settings do nothing on BIOS 3.11: the firmware's top fan level is only about
   3,000 rpm.
-- Fan speed by duty: 40% to 75%, about 2,500 to 3,800 rpm; 80%, about 3,900 rpm; 95%, about 4,300 rpm. With the
-  firmware in control right after a load: 2,120 and 2,321 rpm.
+- Fan speed by duty: 40% to 75%, about 2,500 to 3,800 rpm; 80%, about 3,900 rpm; 95%, about 4,300 rpm; 99%, 4,454
+  and 4,341 rpm on average over 2 minutes, never under 4,300, the top speed. With the firmware in control right
+  after a load: 2,120 and 2,321 rpm. The third fan, about 1,000 rpm under load, has no duty register.
 - Burn-in on stock fans, 30 minutes of `stress-ng` on all cores and an hour of `stressapptest` over 108 GB:
   about 98 °C in the CPU test, about 95 °C in the RAM test. Both passed at full length on November 17, 2026.
 
@@ -69,33 +75,131 @@ numbers led to are in [`llm-server/`](../llm-server).
 
 ## CPU undervolt
 
-In use on the test machine since November 18, 2026 (`llm-server/undervolt.service`). Of the other numbers in
-this file only those of four 256K sessions were taken with it. The same 45-second all-core test, twice each way,
-kernel 7.3.4:
+A curve offset of -25 on every core since November 27, 2026, set at each boot by `llm-server/apu-tuning.service`.
+-50 was in use November 18 to 26 and again on November 27, and the machine froze five times with it
+([Freezes](#freezes)). The same 45-second all-core test (`stress-ng --cpu 32 --cpu-method matrixprod --verify`)
+from 50 °C, November 27, at the firmware's maximum limits, kernel 7.3.4; fans at 99% from 85 °C for none and the
+offsets from -50, from 70 °C for the others:
 
-| | Work | Clock | Power | Temperature |
+| Offset | Work | Clock | Power | Chip, peak |
 |---|---|---|---|---|
-| Stock | 23,369 and 23,395 operations a second | 4,540 MHz | 128 W | 98 °C, the chip's limit |
-| Curve offset -50 | 25,481 and 25,477 | 4,950 MHz | 123 W | 94 °C |
+| none | 24,034 and 23,811 operations a second | 4,662 and 4,626 MHz | 141 and 137 W | 98 °C, the chip's limit |
+| -10 | 24,096 | 4,680 MHz | 132 W | 98 °C |
+| -20 | 24,546 | 4,769 MHz | 132 W | 98 °C |
+| -25 | 24,805 | 4,820 MHz | 133 W | 98 °C |
+| -30 | 25,008 | 4,859 MHz | 133 W | 98 °C |
+| -40 | 25,344 | 4,927 MHz | 131 W | 96 °C |
+| -50 | 25,775 and 25,725 | 5,016 and 5,003 MHz | 128 and 127 W | 89 °C |
+| -70 | 25,743 | 5,009 MHz | 127 W | |
+| -100 | 25,744 | 5,008 MHz | 127 W | |
 
-- 9% more work at 5 W less and 4 °C cooler. Prompt reading gained about 1% on kernel 7.2.15, from 1,815 and
-  1,819 tok/s to 1,836 and 1,832: the GPU does most of that work, and it has no such setting.
-- -55 through -200 are accepted but behave exactly like -50 (kernel 7.2.15).
-- With the offset on, November 18: all cores checked their arithmetic for 5 minutes and each of the 16 cores
-  alone for 30 seconds, twice, without an error, and the tests of four 256K sessions under [Load](#load) ran.
-  After a reboot the unit set the offset 8 seconds into the boot, and the same all-core test gave 25,490
-  operations a second. It was not run for days.
+- Down to -30 the chip stays at its power and temperature limits and the offset becomes clock, about 1.5% more
+  work for each 10. From -40 the cores near their top clock and the chip runs cooler. No arithmetic errors at
+  any offset. -70 and -100 are accepted and change nothing, as -55 through -200 did on November 18 (kernel
+  7.2.15): -50 is the floor.
+- -25 keeps half the gain of -50 on half its voltage cut. Whether it never freezes cannot be tested quickly: at
+  -50, ten minutes of random load changes and the full-load test passed, and the freezes came hours or days
+  apart.
+- The GPU, which does most of the LLM's work, has no such setting: RyzenAdj answers `set_cogfx is not supported
+  on this family`, and the driver's `pp_od_clk_voltage` offers only the clock range, 600 to 2,900 MHz.
+- Prompt reading gained about 1% on kernel 7.2.15, from 1,815 and 1,819 tok/s to 1,836 and 1,832.
+- November 18, with the offset on: all cores checked their arithmetic for 5 minutes and each of the 16 cores
+  alone for 30 seconds, twice, without an error.
 - November 20, with the offset on, a 102 GB download came out with one bit changed and btrfs reported no
-  error, so the bit changed in memory or in the CPU before it reached the disk. Not traced: a day of the checks
-  above, with and without the offset, would show whether the offset is to blame.
-- Set with [RyzenAdj](https://github.com/FlyGoat/RyzenAdj) 0.18.0 from
-  [COPR shdwchn10/ryzenadj](https://copr.fedorainfracloud.org/coprs/shdwchn10/ryzenadj/):
-  `sudo ryzenadj --set-coall=1048526`, which is 1048576 minus the offset and lasts until a reboot. The package
-  builds a kernel driver, `ryzen_smu`, in the minute after its install; the command works with and without it.
-- Every chip is different. Check the arithmetic on all cores and on each core alone
-  (`stress-ng --cpu-method matrixprod --verify`), and run the full-load test (`llm-server/acceptance.py`) with
-  the offset on before installing the unit. After a freeze or a failed check, a reboot clears the offset
-  unless the unit is enabled.
+  error, so the bit changed in memory or in the CPU before it reached the disk.
+- Set by hand with `sudo ryzenadj --set-coall=1048551`, which is 1048576 minus the offset and lasts until a reboot.
+
+## Freezes
+
+The LLM server stopped under LLM load on November 19, 2026 at 06:43 UTC and November 26 at 19:10 UTC. On
+November 26 it froze and was switched off by hand; November 19 looks the same in the log. A third boot, at 19:16
+UTC, ended 13 seconds in, while the LLM loaded. Each following boot logged `x86/amd: Previous system reset
+reason [0x00200800]: ACPI power state transition occurred`, which is what holding the power button leaves. The 22
+boots before them, November 3 to 18, all logged `[0x00080800]: software wrote 0x6 to reset control register
+0xCF9`, an ordinary reboot. Two more freezes followed on November 27, below.
+
+- Both came while writing a reply, just after prompts of 129,553 and 116,102 tokens. The log, written every
+  second while writing, stops mid-reply (at token 351 on November 26) with no kernel message, and the portal lost
+  the server 15 seconds later. The owner found it not answering and switched it off about 6 minutes later.
+- Writing draws far less power than reading a prompt, so heat is an unlikely trigger.
+- Not memory: a minute before the second, Gufo logged 21.8 GiB of RAM free and its own memory at 3.2 GiB.
+- Rare: between the first two the machine read 1,018 prompts of over 50,000 tokens, each holding the chip at its
+  temperature limit (table below), in 7 days without a freeze.
+- The BIOS reports version 3.11 of May 8, 2026, the date of Bosgame's BIOS file 1.09, with power firmware
+  100.7.0 (`smu fw version` in `dmesg`).
+- The same silent freeze, the log cut mid-line, no hang message, a hard power-off needed, is described on Strix
+  Halo with power firmware 100.6.0. There AMD is reported to have confirmed a race in the power firmware's
+  command handling, with a fix in progress and no date
+  ([Framework wiki](https://framework.wiki/docs/problems/desktop-gpu-hangs/), seen November 27, 2026).
+- Bosgame's newer BIOS 1.10 of November 4, 2026, from Bosgame support with no changelog, carries power firmware
+  100.16.0 ([Strix Halo wiki](https://strixhalo.wiki/Hardware/Boards/Sixunited_AXB35/Firmware/)). On it one
+  owner's M5 still reset or froze within hours of GPU-only LLM runs, with ROCm and with Vulkan, until the fabric
+  clock was held at 1,000 MHz or more: 29.5 and 33.9 hours clean, and removing the floor brought the failures
+  back ([ROCm/TheRock#9973](https://github.com/ROCm/TheRock/issues/9973), comments of November 22 and 24, 2026).
+  One owner, not confirmed by AMD. That BIOS is flashed from Windows, and a failed flash needs a chip programmer.
+  Neither the BIOS nor the floor was tried here.
+- Other Bosgame M5 owners report hard power-offs during long LLM runs, one on BIOS 3.11 in the Performance
+  profile, twice in 4 days ([Hardware Busters](https://hwbusters.com/systems/bosgame-m5-fan-control-broken-as-shipped-so-i-fixed-it-with-a-free-plugin/),
+  seen November 26, 2026).
+- November 27 at 04:08 UTC, a minute after a reboot, with the offset at -50 and the firmware's maximum limits
+  applied at boot, the machine hung during a 25-second all-core CPU load; the LLM had just loaded. The watchdog
+  reset it 30 seconds later, the next boot logged `[0x02000800]: hardware watchdog timer expired`, and it was
+  back in about 90 seconds. That boot's log ends 18 seconds before the last command it answered: a hang loses the
+  log's last seconds, so the 13-second boot of November 26 may have run longer.
+- November 27 at 04:25 UTC, 11 minutes into the full-load test with -50, the firmware's maximum limits and the
+  99% fan curve, the chip at its 98 °C limit and the GPU at 104 °C: the power firmware stopped answering
+  (`amdgpu: SMU: No response msg_reg: f resp_reg: 0`). The machine kept running, but Gufo saw no progress and
+  after 10 minutes gave up (`event=device_lost`), all four replies came back empty, and a GPU reset failed (`MES
+  might be in unrecoverable state`). The fan service lost the GPU's temperature and held 99%, as designed. Two
+  loggers were each asking the power firmware for readings every second through RyzenAdj, on top of
+  portal-hostd's one request every 2 seconds. The reboot then hung at its last step, and the watchdog did not
+  reset it in 20 minutes: the power button was needed.
+- The same test again at 05:01 UTC, the same settings, with a logger that asks the power firmware nothing: both
+  verdicts `PASS`. Five seconds after it ended, at 05:20, as the load fell away, the machine froze; the watchdog
+  reset it and it was back in 90 seconds.
+- All five freezes came with the CPU undervolt at -50: two while writing a reply, one during a boot, and two
+  right as a load started or ended. None came in the 22 boots of November 3 to 18, before it, nor between its
+  removal on November 26 and its return on November 27.
+- Since 05:39 UTC, November 27, the offset is -25 ([CPU undervolt](#cpu-undervolt)): the full-load test passed,
+  and ten minutes of random load changes, bursts on all cores or one with short LLM replies alongside, ran 158
+  bursts without a fault. The same ten minutes at -50 had passed too, so only time will show.
+- The chipset's watchdog now reboots the machine after a 30-second hang, so a freeze ends in a reboot that logs
+  `hardware watchdog timer expired`. A hang of the whole chip may stop the watchdog too; then the power button is
+  still needed.
+
+Heat while reading one prompt of about 59,000 random tokens and writing 1,500, from 45 °C (kernel 7.3.4, Gufo
+0.37.0). November 26 with the offset at -50, fans up to 95%, no cooler under the machine; November 27 with the
+settings in use:
+
+| APU limits: sustained / slow / fast | Reading | Writing | Chip, peak | GPU, peak | ACPI zone, peak |
+|---|---|---|---|---|---|
+| 120 / 140 / 160 W, the Performance profile | 1,824 tok/s | 87.5 tok/s | 102 °C | 104 °C | 98 °C |
+| 120 / 120 / 120 W | 1,718 | 86.0 | 93 °C | 91 °C | 88 °C |
+| 100 / 100 / 100 W | 1,643 | 77.5 | 82 °C | 82 °C | 80 °C |
+| 132 / 140 / 160 W, the firmware's maximum; offset -25, fans 99% from 70 °C, laptop cooler | 1,828 | 79.2 | 98 °C | not read | 98 °C |
+
+- At the Performance profile the chip reaches its 98 °C limit 5 seconds into the prompt and stays there; the
+  ACPI zone climbs from 46 to 98 °C in 15 seconds. The kernel would only act at that zone's critical point,
+  110 °C.
+- One run each. Writing speed varies with the random text, so its drop at 100 W is uncertain.
+- November 27 the chip reaches its 98 °C limit 7 seconds into the prompt. The GPU's temperature was not read:
+  every reading is a request to the power firmware.
+
+The full-load test (`llm-server/acceptance.py`), four 256K prompts at once and a follow-up each:
+
+| Settings | First words of the four | Power, average | Chip, average and peak | Verdict |
+|---|---|---|---|---|
+| November 26: 120 W cap, no offset, fans 95% from 90 °C | 309, 322, 642, 662 s | 118 W | 88 °C, 94 °C | `PASS` |
+| November 27: the firmware's maximum, -50, fans 99% from 85 °C, two loggers asking the power firmware every second | 288, 300, 617, 636 s | 134 W | 97 °C, 98 °C | `FAIL`: the power firmware stopped answering |
+| The same, with a logger that asks it nothing | 287, 299, 606, 625 s | 133 W | 97.5 °C, 98 °C | `PASS`, then a freeze 5 s after |
+| November 27: the firmware's maximum, -25, fans 99% from 70 °C, laptop cooler | 294, 306, 628, 647 s | 132 W | 97.7 °C, 99 °C | `PASS`, then 10 minutes of load changes without a fault |
+
+- Power in the first two rows is the socket power the GPU driver reports, in the others the CPU's own package
+  counter (RAPL), which asks the power firmware nothing.
+- Each run took about 19 minutes, not 11: the follow-ups often found their session's memory reclaimed and read
+  their prompt again (Gufo 0.37.0's log), so their times vary from 150 to 480 seconds whatever the settings.
+- With the firmware's maximum the chip sits at its 98 °C limit for 95% of the run, both fans at their top speed;
+  first words come 2 to 5% sooner than at the 120 W cap.
 
 ## Memory
 

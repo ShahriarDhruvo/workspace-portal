@@ -1,0 +1,14 @@
+[Unit]
+Description=APU: curve offset -25 on every core, power and temperature limits at the firmware's maximum
+Documentation=https://github.com/ShahriarDhruvo/workspace-portal/blob/main/docs/MEASUREMENTS.md#cpu-undervolt
+# Selecting a power profile resets the limits, and the fan service selects Performance: so after it.
+After=m5-fans.service
+
+[Service]
+Type=oneshot
+# 1048576 minus 25. -50, the deepest that does anything, froze the machine five times. The firmware keeps at most
+# 132 W sustained, 140 W slow, 160 W fast and 98 °C (BIOS 3.11), whatever is asked. All of it lasts until a reboot.
+ExecStart=/usr/bin/ryzenadj --set-coall=1048551 --stapm-limit=180000 --slow-limit=180000 --fast-limit=180000 --tctl-temp=100
+
+[Install]
+WantedBy=multi-user.target

@@ -11,16 +11,15 @@ from pathlib import Path
 
 EC = Path('/sys/class/ec_su_axb35')
 FANS = ('fan1', 'fan2')
+FULL = 99  # top speed: at 100 the EC lets both fans fall to half speed or less
 
 
 def target_duty(temp, previous):
     """Percent for a temperature in °C; 0 leaves the fans to the firmware."""
-    if temp >= 90 or previous == 95 and temp >= 87:
-        return 95
-    if temp >= 85:
-        return 80
+    if temp >= 70 or previous == FULL and temp >= 67:
+        return FULL
     if temp >= 60 or previous > 0 and temp >= 55:
-        return max(40, 40 + (temp - 60) * 8 // 5) // 5 * 5
+        return min(95, max(50, 50 + (temp - 60) * 5))
     return 0
 
 
@@ -61,8 +60,8 @@ def main():
                 blind = False
             except RuntimeError as exc:
                 if not blind:
-                    print(f'{exc}: 95% until they return', file=sys.stderr, flush=True)
-                duty, blind = 95, True
+                    print(f'{exc}: {FULL}% until they return', file=sys.stderr, flush=True)
+                duty, blind = FULL, True
             write_duty(duty)
             time.sleep(2)
     finally:

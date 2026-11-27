@@ -92,7 +92,8 @@ static ssize_t duty_store(struct device *dev, struct device_attribute *attr, con
 	unsigned int duty;
 	int ret;
 
-	if (kstrtouint(buf, 10, &duty) || (duty && (duty < 40 || duty > 95)))
+	/* At 100 both fans fall to 1,300-2,500 rpm after about 25 seconds; 99 holds their top speed. */
+	if (kstrtouint(buf, 10, &duty) || (duty && (duty < 40 || duty > 99)))
 		return -EINVAL;
 	mutex_lock(&duty_lock);
 	ret = write_duty_verified(fan, duty);

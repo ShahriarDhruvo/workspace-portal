@@ -43,8 +43,8 @@ it was not tried with busy sandboxes next to the model. Free memory in each layo
 
 ## Before you start
 
-- **The LLM server:** a Strix Halo machine (Ryzen AI Max+ 395) with 128 GB. [Step 7](#7-fans-and-power-profile),
-  fans and power profile, runs on the tested board and BIOS only.
+- **The LLM server:** a Strix Halo machine (Ryzen AI Max+ 395) with 128 GB. [Step 7](#7-fans-power-and-watchdog),
+  fans, power and watchdog, runs on the tested board and BIOS only.
 - **A second PC** for part 3: any x86-64 machine with 8 GB of RAM.
 - **A USB stick** with [Fedora Server](https://fedoraproject.org/server/download/) for both machines, and your own
   PC with SSH. The LLM server was measured on [Fedora
@@ -203,7 +203,7 @@ list no longer names the web console:
 ```
 
 If the first line names another zone, such as `public` on a minimal install, use that name where [step
-8](#8-start-the-models) says `FedoraServer`. The rules for the model and the portal come with steps 8 and 11.
+8](#8-start-the-models) says `FedoraServer`. The rules for the model and the portal come with steps 8 and 10.
 
 <details>
 <summary>Opening a port yourself, and keeping the web console</summary>
@@ -281,7 +281,7 @@ check from [step 9](#9-test-it) again afterwards.
 
 ## Part 2: LLM server
 
-The Strix Halo machine. Steps 4 to 10.
+The Strix Halo machine. Steps 4 to 9.
 
 ### 4. Tools and CPU profile
 
@@ -478,13 +478,13 @@ fourth file as not matching: the Hub lists Unsloth's own under that name.
 > License](https://huggingface.co/Qwen/Qwen3.8-Flash-Next/blob/main/LICENSE). Selling it as a paid AI service needs
 > a separate licence; read the text for anything beyond your own use.
 
-### 7. Fans and power profile
+### 7. Fans, power and watchdog
 
 *LLM server · tested board only*
 
 Builds the driver for the board's controller chip with DKMS and starts one service. It holds a fan curve that
-follows the hotter of CPU and GPU up to 95%, and selects the firmware's Performance profile (120 W sustained, 160 W
-peak) whenever it starts. The installer refuses any board or BIOS but the tested one, and a machine with Secure
+follows the hotter of CPU and GPU, both main fans at their top speed from 70 °C, and selects the firmware's
+Performance profile (120 W sustained, 160 W peak) whenever it starts. The installer refuses any board or BIOS but the tested one, and a machine with Secure
 Boot on; the firmware then keeps the fans.
 
 **LLM server**:
@@ -496,7 +496,7 @@ sudo bash ~/workspace-portal/llm-server/fans/install.sh
 **You should see**, as the last line:
 
 ```text
-install.sh: module m5-1, profile performance, fan curve running
+install.sh: module m5-2, profile performance, fan curve running
 ```
 
 **LLM server**, check:
@@ -511,7 +511,7 @@ grep . /sys/class/ec_su_axb35/apu/power_mode /sys/class/ec_su_axb35/fan[12]/rpm 
 
 ```text
 active
-ec_su_axb35/m5-1, 7.3.4-200.fc44.x86_64, x86_64: installed
+ec_su_axb35/m5-2, 7.3.4-200.fc44.x86_64, x86_64: installed
 /sys/class/ec_su_axb35/apu/power_mode:performance
 /sys/class/ec_su_axb35/fan1/rpm:0
 /sys/class/ec_su_axb35/fan2/rpm:0
@@ -523,6 +523,37 @@ ec_su_axb35/m5-1, 7.3.4-200.fc44.x86_64, x86_64: installed
 > still. Under load they get clearly louder than stock. The curve is listed in
 > [llm-server/README.md](../llm-server/README.md), what it gains in [MEASUREMENTS.md](MEASUREMENTS.md#fans).
 
+Then raise the chip's limits to the most the firmware allows, give every CPU core a curve offset of -25, and turn
+on the watchdog. Asked for 180 W and 100 °C, the firmware keeps 132 W sustained, 140 W for minutes, 160 W in
+bursts and 98 °C. The offset gives 3.7% more CPU work at the same power; prompt reading gains about 1% at most,
+as the GPU does that work. -50, the deepest that does anything, gives 8% but froze the test machine five times
+([what is known](MEASUREMENTS.md#freezes)). If the machine freezes with -25, delete `--set-coall=1048551` from
+the unit. The watchdog resets the machine once the kernel has hung for 30 seconds, so a hang ends in a reboot, and
+the next boot says so.
+
+**LLM server**:
+
+```sh
+sudo dnf copr enable -y shdwchn10/ryzenadj
+sudo dnf install -y ryzenadj
+sudo install -m 644 ~/workspace-portal/llm-server/apu-tuning.service /etc/systemd/system/
+sudo install -D -m 644 ~/workspace-portal/llm-server/watchdog.conf /etc/systemd/system.conf.d/watchdog.conf
+sudo systemctl daemon-reload
+sudo systemctl enable --now apu-tuning.service
+sudo systemctl daemon-reexec
+```
+
+**LLM server**, check:
+
+```sh
+sudo ryzenadj --info | grep -E 'STAPM LIMIT|PPT LIMIT (FAST|SLOW)|THM LIMIT'
+systemctl show -p RuntimeWatchdogUSec
+cat /sys/class/watchdog/watchdog0/state
+```
+
+**You should see** the limits `132.000`, `160.000`, `140.000` and `98.000`, then `RuntimeWatchdogUSec=30s` and
+`active`.
+
 > **Other machines with this board** were not tested: the upstream driver's README lists the GMKtec EVO-X2, FEVM
 > FA-EX9, Peladn YO1, NIMO AI MiniPC and Corsair AI Workstation 300. The duty registers this driver writes are not
 > part of the upstream driver, so do not edit the board check to get past it.
@@ -532,7 +563,7 @@ ec_su_axb35/m5-1, 7.3.4-200.fc44.x86_64, x86_64: installed
 
 | Profile | Sustained / peak | Cost |
 |---|---|---|
-| `performance` | 120 W / 160 W | Fastest. Used for every number in this guide. |
+| `performance` | 120 W / 160 W; 132 W / 160 W with the unit above | Fastest. Used for every number in this guide. |
 | `balanced` | 85 W / 120 W | Less heat and noise. |
 | `quiet` | 55 W / 100 W | Prompt reading 28% slower. |
 
@@ -544,9 +575,11 @@ Switch live, until the next boot:
 echo balanced | sudo tee /sys/class/ec_su_axb35/apu/power_mode
 ```
 
-To keep another profile across boots, change the word `performance` in `/etc/systemd/system/m5-fans.service`, then
-run `sudo systemctl daemon-reload` and `sudo systemctl restart m5-fans.service`. Running the installer again puts
-`performance` back.
+To keep another profile across boots, change the word `performance` in `/etc/systemd/system/m5-fans.service`, run
+`sudo systemctl disable apu-tuning.service`, whose limits would undo the quieter profile, then `sudo systemctl
+daemon-reload` and `sudo systemctl restart m5-fans.service`. Running the installer again puts `performance` back.
+Switching a profile also resets the power limits: after switching back to `performance` by hand, `sudo systemctl
+start apu-tuning.service` raises them again.
 
 Undo: removes the driver, the fan curve and its service, and the firmware has the fans again. The power profile
 stays as it is, so switch it with the line above first if you want another.
@@ -695,7 +728,7 @@ systemctl --user start llama-swap.service
 | **7 × 128K** | `--sessions 7 --context 131072` | More people or subagents at once, with shorter conversations. An eighth session is refused at load. |
 | **3 × 256K** | `--sessions 3 --context 262144` | Agents on the same machine. |
 
-For another layout, set `LLM_MAX_CONCURRENCY` in [step 11](#11-workspace-portal) to its sessions, and after that
+For another layout, set `LLM_MAX_CONCURRENCY` in [step 10](#10-workspace-portal) to its sessions, and after that
 step give the agents its context (here 131072):
 
 **Portal server**:
@@ -758,7 +791,7 @@ curl -sSN http://127.0.0.1:8080/v1/chat/completions -H 'Content-Type: applicatio
 ```
 
 **Full load.** Sends a 256,000-token prompt into all four sessions at the same moment, makes each one find three
-keys in it and pass them to a tool, and watches memory while it runs. The run takes about 11 minutes and occupies
+keys in it and pass them to a tool, and watches memory while it runs. The run takes about 19 minutes and occupies
 the whole server, so do it before anyone depends on it. It talks to Gufo directly, on port 18080, so the LLM must be
 the model llama-swap runs: after the tool call above it is.
 
@@ -771,85 +804,23 @@ python3 ~/workspace-portal/llm-server/acceptance.py
 **You should see** one line per session, one line of readings, and both verdicts:
 
 ```text
-Prompts: 4 of 255997 to 255999 tokens. Sending them all at once.
-user 0: first word after 636.2 s, follow-up after 0.9 s: PASS
+Prompts: 4 of 255997 to 256000 tokens. Sending them all at once.
+user 0: first word after 293.5 s, follow-up after 289.3 s: PASS
 ...
-Sessions busy at once: 4 of 4. Lowest free memory: 6.5 GiB. Swap pages moved: 1. Killed for memory: 0. Hottest: 99 °C.
+Sessions busy at once: 4 of 4. Lowest free memory: 13.2 GiB. Swap pages moved: 0. Killed for memory: 0. Hottest: 103 °C.
 FUNCTIONAL PASS
 CAPACITY PASS
 ```
 
-> For the first three minutes the chip runs at its limit of about 100 °C with the fans at 95%; then it holds 88-89
-> °C.
-
-### 10. CPU undervolt
-
-*LLM server · optional · about 30 min*
-
-Lowers the voltage of every CPU core by 50 steps of the chip's voltage curve with
-[RyzenAdj](https://github.com/FlyGoat/RyzenAdj). The cores then run cooler and clock higher inside the same power
-limit: 9% more work in an all-core test, at 94 °C instead of 98 °C. Prompt reading gains about 1%, because the GPU
-does most of that work and has no such setting. Of the clock and voltage settings [tried on this
-machine](MEASUREMENTS.md#levers-tried-and-left-alone) it is the only one the firmware accepts. Every chip is
-different, and a core with too little voltage miscalculates or freezes the machine. So the offset is first set
-until the next reboot, then checked, and only then set at every boot.
-
-**LLM server**:
-
-```sh
-sudo dnf copr enable -y shdwchn10/ryzenadj
-sudo dnf install -y ryzenadj stress-ng
-sudo ryzenadj --set-coall=1048526
-```
-
-**You should see**, as the last line; the number is 1048576 minus the offset:
-
-```text
-Successfully set coall to 1048526
-```
-
-**Check it.** All cores check their own arithmetic for 5 minutes, then each of the 16 cores alone for 30 seconds
-(CPUs 0 to 15 are one thread of each), then the full-load test of [step 9](#9-test-it) runs once more.
-
-**LLM server**:
-
-```sh
-stress-ng --cpu 0 --cpu-method matrixprod --verify --timeout 5m
-for cpu in $(seq 0 15); do
-  taskset -c $cpu stress-ng --cpu 1 --cpu-method matrixprod --verify --timeout 30s
-done 2>&1 | grep -c 'failed: 0'
-python3 ~/workspace-portal/llm-server/acceptance.py
-```
-
-**You should see** `passed: 32: cpu (32)` with `failed: 0`, then `16`, then `FUNCTIONAL PASS` and `CAPACITY PASS`.
-
-**Keep it**, once all three passed. This service sets the offset at every boot.
-
-**LLM server**:
-
-```sh
-sudo install -m 644 ~/workspace-portal/llm-server/undervolt.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now undervolt.service
-sudo journalctl -b -u undervolt.service -o cat | grep coall
-```
-
-**You should see**
-
-```text
-Successfully set coall to 1048526
-```
-
-> **If a check fails or the machine freezes,** reboot: that clears the offset as long as the service is not
-> enabled. Then try a smaller offset, for example -30, which is `--set-coall=1048546`, and put the number that
-> passed into `/etc/systemd/system/undervolt.service`. To go back to stock, run `sudo systemctl disable
-> undervolt.service` and reboot.
+> With the limits of step 7 the chip holds its 98 °C limit for most of the run, both fans at their top speed. The
+> follow-ups' times vary from about 150 to 480 seconds: Gufo often reclaims a waiting session's memory, and the
+> follow-up then reads its prompt again.
 
 ## Part 3: Portal server
 
-The small second PC. Steps 11 and 12.
+The small second PC. Steps 10 and 11.
 
-### 11. Workspace Portal
+### 10. Workspace Portal
 
 *Portal server · about 12 min*
 
@@ -1177,7 +1148,7 @@ are made from them.
 
 </details>
 
-### 12. HTTPS and remote access
+### 11. HTTPS and remote access
 
 *Portal server · optional*
 
@@ -1245,7 +1216,7 @@ sessions live, and **Admin > Users** the running workspaces; these are the comma
 | `sudo docker compose logs -f gateway web reader` | Live log. Every search and page read is a line of the gateway's. |
 | `sudo docker compose logs searxng 2>&1 \| grep -E 'ERROR\|WARNING' \| grep -v botdetection \| tail -20` | What went wrong in the search engine: which engine failed, and why. |
 | `sudo docker ps --filter label=workspace-portal.workspace=1 --format '{{.Names}} {{.Label "workspace-portal.agent"}} {{.Status}}'` | Running workspaces and their agents. |
-| `sudo docker compose up -d` | Applies a change made in `.env`. Some settings need the installer instead: see [step 11](#settings). |
+| `sudo docker compose up -d` | Applies a change made in `.env`. Some settings need the installer instead: see [step 10](#settings). |
 | `sudo bash deploy/verify-isolation.sh` | Tests the sandboxes, the search engine and the page reader again. Must end with `failed 0`. |
 | `systemctl status workspace-portal-firewall --no-pager` | The firewall around the workspaces, the search engine and the page reader. Docker starts only once it is loaded. |
 | `sudo systemctl reload workspace-portal-firewall` | Loads its rules again. Reload, never restart: a restart stops Docker and every workspace with it. |
@@ -1262,13 +1233,13 @@ podman ps --format '{{.Names}} {{.Status}}'
 systemctl --user is-active llama-swap
 systemctl is-active m5-fans portal-hostd
 cat /sys/class/ec_su_axb35/apu/power_mode
+sudo ryzenadj --info | grep -E 'STAPM LIMIT|THM LIMIT'
+cat /sys/class/watchdog/watchdog0/state
 sudo firewall-cmd --zone=FedoraServer --list-rich-rules
-sudo journalctl -b -u undervolt.service -o cat | grep coall
 ```
 
-**Good:** no failed units, `gufo Up ... (healthy)`, three services `active`, `performance`, two firewall rules naming
-the portal server, for ports 8080 and 9180, and, with the undervolt of [step 10](#10-cpu-undervolt), `Successfully
-set coall to 1048526`.
+**Good:** no failed units, `gufo Up ... (healthy)`, three services `active`, `performance`, the limits `132.000` and
+`98.000`, the watchdog `active`, and two firewall rules naming the portal server, for ports 8080 and 9180.
 
 </details>
 
@@ -1277,7 +1248,7 @@ set coall to 1048526`.
 <details>
 <summary>Updating the LLM server</summary>
 
-**After a kernel update**, `dkms status` must list `ec_su_axb35/m5-1` as installed for the new kernel, and the
+**After a kernel update**, `dkms status` must list `ec_su_axb35/m5-2` as installed for the new kernel, and the
 speed check from [step 9](#9-test-it) should still show the same numbers. If the new kernel misbehaves, boot the
 previous one:
 
@@ -1328,7 +1299,7 @@ sudo bash deploy/verify-isolation.sh
 ```
 
 **You should see** `Workspace Portal is running.` within 3 minutes, or after the time of [step
-11](#11-workspace-portal) when the update changes what every agent's image starts from, and `failed 0` about 6.5
+10](#10-workspace-portal) when the update changes what every agent's image starts from, and `failed 0` about 6.5
 minutes later. Running workspaces keep running, and an open browser tab carries on without a reload.
 
 <details>
@@ -1348,7 +1319,7 @@ would look for the new ports.
 cd ~/workspace-portal && sudo bash -c 'source deploy/lib.sh && firewalld_rules remove'
 ```
 
-**Portal server**, only if the portal is behind HTTPS ([step 12](#12-https-and-remote-access)):
+**Portal server**, only if the portal is behind HTTPS ([step 11](#11-https-and-remote-access)):
 
 ```sh
 cd ~/workspace-portal && sudo bash deploy/tailscale-https.sh off
@@ -1430,6 +1401,7 @@ sudo bash deploy/verify-isolation.sh
 | Gufo is stopped while loading | Loading took over 10 minutes, usually a slow disk. Raise `TimeoutStartSec` in `gufo.container` and `healthCheckTimeout` in `~/.config/llama-swap/config.yaml`. |
 | An image takes minutes before it starts | llama-swap stops the LLM only once every running LLM request has ended, and agents' requests can run for minutes. `curl -s http://127.0.0.1:8080/running` shows what runs. |
 | A unit fails with `wait-gpu-memory: ... GiB needed` | The model before it still held the memory after 60 seconds. `journalctl --user -u gufo -u gufo-image-turbo -u gufo-image` says why; the next request of that model tries again. |
+| The LLM server switched itself off or froze | On the next boot, `sudo journalctl -k -b \| grep 'reset reason'`. `hardware watchdog timer expired`: the kernel hung and the watchdog of [step 7](#7-fans-power-and-watchdog) rebooted it. `ACPI power state transition occurred`: the power went off without Linux, or someone switched it off. `software wrote 0x6`: an ordinary reboot. `sudo journalctl -b -1 -n 50` shows what it was doing, less its last seconds, which a hang loses. A CPU offset of -50 froze the test machine five times; step 7 sets -25. Delete `--set-coall=1048551` from `/etc/systemd/system/apu-tuning.service` and reboot to rule it out. [MEASUREMENTS.md](MEASUREMENTS.md#freezes) has what is known. |
 | The model disappears under load | Read `journalctl --user -u gufo.service` and `sudo journalctl -k -b`. Exit status 75 is the stall timeout: nothing progressed for 10 minutes. An out-of-memory kill means something else is running on the LLM server, or the layout is too big. |
 | HTTP 429 from the model | More than 32 requests are waiting. Let the queue drain. |
 | An agent thinks for minutes and stops without an answer | The reply ran out during the thinking. `gufo.container` must have its `--reasoning-budget` ([step 8](#8-start-the-models)), and `sudo bash deploy/models.sh show` must list an `autoCompactThreshold` and no `max_tokens`. |
@@ -1437,17 +1409,17 @@ sudo bash deploy/verify-isolation.sh
 | The load test in step 9 says `FAIL` | A failed session says why on its own line; the line of readings shows whether all sessions ran at once, how much memory was left, and whether anything was swapped or killed. |
 | The installer in step 7 says `refusing` or `Secure Boot is not off` | The first names what differs from the tested board and BIOS (AXB35-02, 3.11): the check is deliberate, stay on the firmware's fan control. For the second, switch Secure Boot off in the BIOS ([step 1](#1-install-fedora-server)) and run the installer again. |
 | `/sys/class/ec_su_axb35` is missing | The driver is not loaded, usually because DKMS has not built it for a new kernel. `dkms status ec_su_axb35` must say `installed` for the running kernel; `sudo dkms autoinstall` builds it, and the fan service loads it within 10 seconds. |
-| The installer in step 11 ends with `the stack did not become healthy` | One of the four containers did not come up. `sudo docker compose ps` names it and `sudo docker compose logs NAME` says why. Run the installer again afterwards. |
+| The installer in step 10 ends with `the stack did not become healthy` | One of the four containers did not come up. `sudo docker compose ps` names it and `sudo docker compose logs NAME` says why. Run the installer again afterwards. |
 | Portal chat: `404 model ... is not served` | The model name in `system-defaults.json` must be `qwen3.8-flash-next`, the name Gufo serves. |
 | An agent dies on its first tool call | `WORKSPACE_MEMORY` is too small. Qwen Code needs about 1.9 GB for a moment; use 2 GiB or more. |
 | No **Preview** button, or a server listed as on localhost only | The button shows while a web server runs in the workspace, a few seconds after it starts. The server must listen on all addresses (`0.0.0.0`; Vite and Next.js need `--host 0.0.0.0` or `-H 0.0.0.0`). In a Private workspace the preview loads nothing from other sites, so an app that takes scripts or fonts from a CDN stays incomplete there. The preview shows one server of a workspace at a time: opening another switches its open tabs to that one. |
 | Agents report no search results | The answer names the engines that did not answer. They sit out for 10 to 60 minutes and come back by themselves. |
-| `read_page only opens pages you were shown` | The agent took the address from memory or made it up. Have it search first, paste the address into the chat, or change `READER_URL_POLICY` ([step 11](#settings)). |
+| `read_page only opens pages you were shown` | The agent took the address from memory or made it up. Have it search first, paste the address into the chat, or change `READER_URL_POLICY` ([step 10](#settings)). |
 | `read_page`: `The site refused the request` | That site turns automated readers away. The agent has to use another source. |
 | `read_page`: `The page reader is busy` | It reads two pages at a time and the rest wait up to 30 seconds. The agent can ask again. |
 | The portal cannot reach the model | From the portal server, `curl http://LLM_IP:8080/health` must answer `OK`. If not, the firewall rule in [step 8](#8-start-the-models) names the wrong address. |
 | A program on the API gets `401` with `Incorrect API key` | The key was mistyped or revoked, or its account is disabled or still has a temporary password. The API page lists the working keys with their last four characters; create a new one there. |
-| A program on the API gives up before an answer comes | Its request was waiting for a session, or the model was still reading a long prompt: nothing is sent in that time. **Admin > Usage** shows the busy sessions; give the program a longer timeout ([step 11](#the-api-for-your-own-software)). |
+| A program on the API gives up before an answer comes | Its request was waiting for a session, or the model was still reading a long prompt: nothing is sent in that time. **Admin > Usage** shows the busy sessions; give the program a longer timeout ([step 10](#the-api-for-your-own-software)). |
 | The portal's HTTPS address does not open | The device is not signed in to the tailnet, or Tailscale is down on the portal server: `tailscale status` there. `sudo tailscale serve status \| head` must list the portal's ports; `sudo bash deploy/tailscale-https.sh` writes them again. |
 | The portal does not come up after a reboot | Docker waits for the workspace firewall and stays down if it fails to load. `systemctl status workspace-portal-firewall --no-pager` says why; `sudo bash deploy/install.sh` writes it again. |
 | Online cannot be picked | The card says why. **Online workspaces are turned off on this portal**: `.env` says `ONLINE_WORKSPACES=off`, or the workspace firewall is not loaded (see the row above). **Online workspaces aren't enabled for this account**: the switch on that person's page under **Admin > Users** is off. |
@@ -1464,7 +1436,7 @@ fan service is running and that the vents have space on all sides. How each was 
 | Writing, one user | **51-79 tok/s** | 99 answers, half of them at 62 to 67. Varies with how many drafted tokens are accepted |
 | Writing, four users at once | **about 20 tok/s each**, 70 in total | 8,000-token prompts; measured with a four-session layout on Gufo 0.28.1 |
 | Writing, six and eight users on those four sessions | 20 and 18 tok/s each | The extra users wait for a free session: up to 90 s and 114 s to the first word |
-| Reading a prompt | **1,760-1,787 tok/s** | 32,000-token prompts, machine hot, fans at 80-95% |
+| Reading a prompt | **1,760-1,787 tok/s** | 32,000-token prompts, machine hot, fans at 80-95%, before the limits and fan curve of November 27 in [step 7](#7-fans-power-and-watchdog) |
 | A 90,000-token prompt | about 55 s to the first word | One user |
 | Four 256,000-token prompts at once | 10.6-10.7 min to the first word | The full-load test of step 9. Follow-up turns: 0.7-1.0 s |
 | A turn in a long agent session | 0.6 s to the first word, 53 tok/s | Median of 278 agent requests; history served from cache |
@@ -1473,7 +1445,7 @@ fan service is running and that the vents have space on all sides. How each was 
 | After a reboot | Gufo answers after 32 s, the portal after 22 s | Counted from the start of the kernel; nothing to start by hand on either server |
 | Raw photo, whole answer | 147 s (12 MP), 353 s (16.8 MP) | Idle server, image sent to the API at full size. Qwen Code shrinks images to 1,568 pixels on the long edge first, which is quick |
 | Chip power | 121-128 W under load, about 7 W idle | The chip's own sensor, not a wall meter |
-| Chip temperature under load | 83-89 °C average | Fans at 80-95%; 86-94 °C on firmware fans. At its limit, 98-101 °C, for the first three minutes of the full-load test |
+| Chip temperature under load | 97-98 °C average | The full-load test with the limits and fans of step 7: at the chip's 98 °C limit for 95% of it. Before them, with the Performance profile's limits and fans at 80-95%, 83-89 °C; 86-94 °C on firmware fans |
 | Free memory, LLM server | 9.6 GiB after load, 6.5 GiB with four full prompts at once | 4.7 GiB while four raw 12 MP photos were read. The full-load run moved 1 page to swap, the other tests none |
 | Cancelling a reply | session free 0.5 s later | Three clients dropped mid-reply. With three sessions busy, a fourth request waited 5 s for its first word |
 
@@ -1504,25 +1476,25 @@ fan service is running and that the vents have space on all sides. How each was 
   conversation shortened more than once, and a reply cut off at the real limit of 64,000 tokens (it was forced
   at 1,500).
 - All three agents since the workspace image holds the toolchains. The times and the count of [step
-  11](#11-workspace-portal) are the portal server's with OpenCode alone; with three agents, before that image, the
+  10](#10-workspace-portal) are the portal server's with OpenCode alone; with three agents, before that image, the
   isolation check made 492 checks in 12 minutes. The images of Qwen Code and DeepSeek Harness were built on the
   portal server and removed again; on a development machine each was started as a workspace runs and answered the
   gateway's readiness check, with a stand-in for the model at most and without a browser.
 - A workspace of its own for every agent, with Qwen Code or DeepSeek Harness in a browser. The portal server got
   that layout on November 24, 2026, with every person's files deleted: the half minute of [step
-  12](#12-https-and-remote-access) is from that run, with three agents (9 seconds with one), and a workspace of each
+  11](#11-https-and-remote-access) is from that run, with three agents (9 seconds with one), and a workspace of each
   agent was started, stopped and erased through the gateway. Not run: those two agents' pages in a browser on the
   new ports, `tailscale-https.sh off` on them, and the update from the old layout as [Update the
   portal](#update-the-portal) writes it (the server's old ports were closed with `tailscale serve reset`, and
   nobody's files were moved).
 - The page reader under many agents at once. It was tested with one agent of each kind and with six pages at a
   time.
-- [Step 12](#12-https-and-remote-access) from its first line. Tailscale was already installed and signed in, so
+- [Step 11](#11-https-and-remote-access) from its first line. Tailscale was already installed and signed in, so
   only `tailscale-https.sh` ran, on and off. Over HTTPS the portal, both kinds of workspace, Qwen Code, DeepSeek
   Harness and a web preview were then used from a PC of the same tailnet, on the server's LAN and from another
   network.
 - The [API](#the-api-for-your-own-software) at the portal's LAN address, and an editor on it. The test portal
-  answers over HTTPS only ([step 12](#12-https-and-remote-access)). There curl, the OpenAI libraries for Python
+  answers over HTTPS only ([step 11](#11-https-and-remote-access)). There curl, the OpenAI libraries for Python
   (3.55.1) and Node (7.60.0) and Anthropic's for Python (2.10.0) used it with a key, and 56 of 61 different
   requests got the same answer as from Gufo itself; the other five differ in a redirect for a trailing slash, a
   timestamp, the case of header names and a WebSocket request, which is closed.
@@ -1530,9 +1502,6 @@ fan service is running and that the vents have space on all sides. How each was 
   emulated Pixel 7; no iPhone was at hand.
 - A kernel update on the LLM server with this fan driver. DKMS has built it for the running kernel only.
 - Fan noise and power at the wall. No meters were at hand.
-- The undervolt of [step 10](#10-cpu-undervolt) for longer than a day, and a kernel update with it. After a reboot
-  its service set the offset again. Without RyzenAdj's kernel driver, which a new kernel needs built again, it was
-  started by hand only.
 
 ## Versions and sources
 
@@ -1543,8 +1512,8 @@ fan service is running and that the vents have space on all sides. How each was 
 | Model router | [llama-swap v276](https://github.com/mostlygeek/llama-swap/releases/tag/v276) (57b2c19) |
 | Model | [Qwen3.8-Flash-Next](https://huggingface.co/Qwen/Qwen3.8-Flash-Next), [UD-Q4_K_XL from Unsloth](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/tree/f5d175de2cf7f720d45d6064019a81fcf056e986) with the Q8_0 n-gram table, shared Q8 MTP, BF16 vision projector; downloaded with huggingface_hub 2.4.0 and hf-xet 1.8.0 |
 | Image models | [Qwen-Image-2.1](https://huggingface.co/Qwen/Qwen-Image-2.1/tree/b3179ad355be050328e483a9dfdd9e60cd62adfa) (b3179ad) and [Qwen-Image-2.1-Turbo](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo/tree/fc13ba1986fcb905854dc8de2f52eee395f49b5b) (fc13ba1), BF16, installed with `gufo model install`; Qwen Research License (non-commercial) |
-| Fan driver | `llm-server/fans/ec_su_axb35.c` in the repository, version m5-1: reduced from [cmetz/ec-su_axb35-linux](https://github.com/cmetz/ec-su_axb35-linux/tree/f62c2c228959a08683273a26ef3afd8991e69f6d) at f62c2c2, duty registers after [FanControl.AXB35](https://github.com/crmaris/FanControl.AXB35) |
-| CPU undervolt | [RyzenAdj](https://github.com/FlyGoat/RyzenAdj) 0.18.0 (527cacc) from [COPR shdwchn10/ryzenadj](https://copr.fedorainfracloud.org/coprs/shdwchn10/ryzenadj/), with its `ryzen_smu` driver (d298366) |
+| Fan driver | `llm-server/fans/ec_su_axb35.c` in the repository, version m5-2: reduced from [cmetz/ec-su_axb35-linux](https://github.com/cmetz/ec-su_axb35-linux/tree/f62c2c228959a08683273a26ef3afd8991e69f6d) at f62c2c2, duty registers after [FanControl.AXB35](https://github.com/crmaris/FanControl.AXB35) |
+| APU tuning | [RyzenAdj](https://github.com/FlyGoat/RyzenAdj) 0.18.0 (527cacc) from [COPR shdwchn10/ryzenadj](https://copr.fedorainfracloud.org/coprs/shdwchn10/ryzenadj/), with its `ryzen_smu` driver (d298366) |
 | Portal server | Pentium G4400T (2 cores), 8 GB; Fedora 45 Server, kernel 7.3.4-300.fc45, moby-engine 29.9.3, Tailscale 1.102.5 |
 | Portal | [Workspace Portal](https://github.com/ShahriarDhruvo/workspace-portal), [Qwen Code](https://github.com/QwenLM/qwen-code) 0.28.0 (a fresh install builds 0.27.0; updated under **Admin > Updates**), DeepSeek Harness 0.2.2-rc.1, OpenCode 2.4.1 (the only agent enabled on the test server since November 24, 2026), [SearXNG](https://github.com/searxng/searxng) 2026.11.12. Page reader: [Defuddle](https://github.com/kepano/defuddle) 0.19.6, pypdfium2 5.15.2 |
 
