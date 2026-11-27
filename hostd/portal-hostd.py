@@ -1249,8 +1249,8 @@ class Job:
 
 class Router:
     """llama-swap in front of the engine (ENGINE_ROUTER_URL): it starts and stops the engine's units on demand, the
-    LLM's and the image models', and never runs both. So a restart goes through it, and an engine unit that is
-    inactive may only be unloaded while the image models run."""
+    LLM's and the other models', and never runs the LLM beside an exclusive one. So a restart goes through it, and an
+    engine unit that is inactive may only be unloaded while another model runs."""
 
     def __init__(self, url, model, http_timeout=2.0):
         self.url, self.model, self.http_timeout = url.rstrip('/'), model, http_timeout
@@ -1402,7 +1402,7 @@ class Engine:
             raise StepError(f'cannot read {path}: {e.strerror}')
 
     def companions(self):
-        """The other quadlets beside the engine's with an image of its repository (the image models' units): they run
+        """The other quadlets beside the engine's with an image of its repository (the other Gufo models'): they run
         the version the engine runs, so an apply rewrites them too. Sorted paths."""
         repo = repository_of(quadlet_image(self._read_quadlet())[1])
         found = []
@@ -1493,7 +1493,7 @@ class Engine:
                                'current': cur_img is i, 'previous': prev_img is i and cur_img is not i})
         state, sub = self.unit_state()
         ready = self.ready()
-        # Behind llama-swap an inactive unit is the normal state while the image models run.
+        # Behind llama-swap an inactive unit is the normal state while another model runs.
         unloaded = self.router is not None and state == 'inactive' and self.router.loaded() is False
         previous = None
         if prev_image:
@@ -1601,7 +1601,7 @@ class Engine:
                 raise StepError(f'restart failed: {err.strip() or rc}{self.engine_said(since)}')
         else:
             # llama-swap must see the units go and start them itself: a unit restarted behind its back would run
-            # beside the image models.
+            # beside the other models.
             job.set_step('Stopping the models (llama-swap)')
             self.router.unload_all(self.restart_timeout)
             self._wait_stopped([self.unit] + [unit_of(q) for q in self.companions()])

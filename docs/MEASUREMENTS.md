@@ -537,8 +537,46 @@ Tried once more on November 9 at Q8 with newer engines:
 
 ## Image models
 
-Measured on November 26, 2026 with Gufo 0.37.0 and llama-swap v276 (step 8 of the guide), one request at a time,
-1024 × 1024, the model files already in the page cache. Times are from sending the request to the whole answer.
+### Ming-Image-0.2-Design
+
+Measured on November 27, 2026 on kernel 7.3.4: Ming-Image's own code at d561511 with its weights at 3538f4c in
+BF16, on AMD's PyTorch 2.14.0 for ROCm 10.2.0, served by `llm-server/apps/ming/ming-images.py` (its default 12
+steps), one request at a time, the weights in the page cache. Times run from sending the request to the whole
+answer. GPU memory is the GTT counter and free memory MemAvailable, read every 0.25 s.
+
+| Request | Time | GPU memory at most |
+|---|--:|--:|
+| Through llama-swap, 1024 × 1024, the LLM stopped first | 51.3 s | 95.9 GiB, both for a moment |
+| 1024 × 1024, loaded | 30.4 to 30.7 s | 53.3 GiB |
+| 1344 × 768 | 30.3 s | |
+| A poster with a headline and a line of small text | 30.6 s | |
+| Two images in one request (`n` 2) | 61.6 s | |
+| An edit of a 1024 × 1024 image | 78.9 s | 53.0 GiB |
+| 2048 × 2048, the VAE decoding in tiles | 190.1 to 190.7 s | 53.7 GiB |
+| 2048 × 2048, decoded whole | 195.2 s | 89.0 GiB |
+| Qwen3-TTS beside Ming-Image, 3 s of speech | 4.0 s | 54.6 GiB |
+| 1024 × 1024 with Qwen3-TTS loaded | 30.8 s | 60.9 GiB |
+| A chat request after it, Ming-Image stopped first | 19.4 s | |
+
+- The server is ready 17.9 s after it starts, with 46.4 GiB in use; the swap from the LLM adds about 21 s.
+- The same seed and request gave a byte-identical image again. Text came out letter for letter: "BLUE HOUR" and
+  "Friday 9 PM · Harbor Hall" at 1024 and at 2048. Asked to make the teapot cobalt blue and put a white cup beside
+  it, the edit changed the colour and kept the rest of the picture; the cup was there already. Its wood and glaze
+  came out coarser and over-sharpened, unlike the image it started from.
+- Decoding 2048 × 2048 whole takes 35 GiB more than the 48.4 GiB the denoising needs. In tiles of 1024 pixels, 896
+  apart, it takes 2.3 GiB more, and the image differs from the whole one by 0.12 of 255 on average, 17 at most, in
+  0.001% of its pixels by more than 8. The server tiles images larger than 1024 pixels on a side.
+- PyTorch keeps what an image took for the next one unless it is told to give it back; the server gives it back
+  after each image, so a loaded, idle Ming-Image holds 46.4 GiB.
+- Both of PyTorch's attention kernels (flash and memory-efficient) run on gfx1151 without
+  `TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL`, 250 ms each for 16,384 tokens of 30 heads.
+- The weights take 52.9 GB on disk, the program with its Python packages 6.8 GiB.
+
+### Qwen-Image-2.1 and Turbo on Gufo, before Ming-Image
+
+For comparison. Measured on November 26, 2026 with Gufo 0.37.0 and llama-swap v276 (the guide's step 8 then), one
+request at a time, 1024 × 1024, the model files already in the page cache. Times are from sending the request to the
+whole answer.
 
 | Request | Time | Of which Gufo's own (text encoder, denoising, VAE) |
 |---|--:|---|

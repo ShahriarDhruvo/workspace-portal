@@ -1,7 +1,7 @@
 [Unit]
 Description=Qwen3.8 Flash-Next Q4, four 256K sessions; started and stopped by llama-swap
 Documentation=https://github.com/gufo-org/gufo/blob/v0.37.0/docs/server.md
-# llama-swap starts it on demand and stops it to make room for the image models; it stops with llama-swap.
+# llama-swap starts it on demand and stops it to make room for the image and media models; it stops with llama-swap.
 BindsTo=llama-swap.service
 After=llama-swap.service
 
@@ -45,7 +45,7 @@ Exec=gufo serve --host 0.0.0.0 --port 8080 --sessions 4 --max-connections 64 --m
       --log-progress
 
 [Service]
-# Starts only once the image models have let go of the GPU memory it needs.
+# Starts only once the image or media model llama-swap stopped has let go of the GPU memory it needs.
 ExecStartPre=%h/.local/bin/wait-gpu-memory 90
 # llama-swap starts it again with the next request; systemd must not start it behind llama-swap's back.
 Restart=no

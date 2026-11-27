@@ -1,5 +1,5 @@
 [Unit]
-Description=llama-swap: the LLM and the image models behind port 8080, started and stopped on demand
+Description=llama-swap: the LLM, the image model and the media models behind port 8080, started and stopped on demand
 Documentation=https://github.com/mostlygeek/llama-swap#readme
 
 [Service]

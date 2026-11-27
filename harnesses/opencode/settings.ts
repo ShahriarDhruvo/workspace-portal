@@ -160,11 +160,15 @@ export function opencodeFacts(media: MediaRegistry): string[] {
   if (kinds.length === 0) return [];
   const facts: string[] = [];
   const beside = besideLlmIds(media);
-  const image = media.image;
-  if (image) {
+  if (media.image) {
     const fast = mediaModel(media, "image", "fast")!;
+    const quality = mediaModel(media, "image", "quality")!;
+    const model =
+      quality.model === fast.model
+        ? `Leave its \`model\` out: one model makes every image (${PROVIDER}/${fast.model})`
+        : `Its \`model\` is the tier: leave it out for the fast one (${PROVIDER}/${fast.model}), or give ${PROVIDER}/${quality.model} for the quality one`;
     facts.push(
-      `- Images: generate_image makes and edits images. Give it a \`path\` in the project, such as images/<short-name>.png, so the person finds the file there, and once the image is saved show it in your reply as ![<what it shows>](images/<short-name>.png). Its \`model\` is the tier: leave it out for the fast one (${PROVIDER}/${fast.model})${image.quality && image.quality.model !== fast.model ? `, or give ${PROVIDER}/${image.quality.model} for the quality one` : ""}.`,
+      `- Images: generate_image makes and edits images. Give it a \`path\` in the project, such as images/<short-name>.png, so the person finds the file there, and once the image is saved show it in your reply as ![<what it shows>](images/<short-name>.png). ${model}.`,
     );
   }
   const tools = kinds.filter((kind) => kind !== "image");

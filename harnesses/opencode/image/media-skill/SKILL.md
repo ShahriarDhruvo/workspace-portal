@@ -10,7 +10,8 @@ every other model is loaded alone, and changing model takes from half a minute t
 long track is being made nobody's LLM requests are answered, yours included. So plan everything first, make all the
 parts of one kind together, and check each part before the next phase depends on it.
 
-Each kind has two tiers (your instructions list them, and `list_media_models` says which are loaded now):
+Each kind has two tiers (your instructions list them, and `list_media_models` says which are loaded now). A kind with
+one model, as your instructions say, uses it for both:
 
 - **fast**: drafts, tries, storyboards, keyframes to test, checking speech. Minutes instead of tens of minutes.
 - **quality**: the final version of a part, once the person has seen and approved its draft, or when they ask for the
@@ -31,7 +32,7 @@ Then show the person the plan as a table and wait for their answer:
 
 | Step | Asset | Tier & model | Why | Est. time |
 |---|---|---|---|---|
-| 1 | 4 keyframes | fast, Qwen-Image 2.1 Turbo | drafts to pick from | about 2 min |
+| 1 | 4 keyframes | Ming-Image 0.2 Design, one model for both tiers | drafts to pick from | about 2.5 min |
 | 2 | 4 clips, 5 s each | fast, MiniMax H3 fast preset | try the motion | about 15 min, the server busy |
 
 Take the times from your instructions, add a model swap where the model changes, and add up the total. End with:
@@ -46,7 +47,8 @@ Do the phases in this order, and finish one before starting the next. Never alte
 1. **Keyframes** (generate_image). One image per shot, at the shot's aspect ratio (1344x768 shots: ask for a wide
    image such as 1344x768). Draft them with the fast image model. Open every image and check it against its shot:
    subject, composition, style, that faces and hands are right, that there is no stray text. Make again (another
-   prompt or seed) what does not match. Make the final keyframes with the quality image model.
+   prompt or seed) what does not match. Make the final keyframes with the quality image model; when one model makes
+   every image, the drafts the person approves are the final keyframes.
 2. **Speech** (synthesize_speech). One call per line and speaker. Give each speaker one voice for the whole piece: the
    same built-in `voice`, the same `voice_description` and `seed`, or the same `reference_audio`. The fast tier runs
    beside you and stops nothing; use the quality tier for the final narration when the person wants the most natural

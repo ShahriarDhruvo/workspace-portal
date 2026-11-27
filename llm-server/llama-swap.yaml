@@ -1,4 +1,4 @@
-# llama-swap on the AI server: one address (port 8080) for the LLM, the two image models and the media models,
+# llama-swap on the AI server: one address (port 8080) for the LLM, the image model and the media models,
 # which do not fit in memory together. A request names its model; llama-swap starts that model's unit and, when the
 # model belongs to an exclusive group, first stops the models of the other groups. The everyday speech models are the
 # exception: they start beside whatever runs, the LLM included (group `speech`). It waits for requests in flight to
@@ -37,16 +37,11 @@ models:
     cmdStop: systemctl --user stop gufo.service
     proxy: http://127.0.0.1:18080
     checkEndpoint: /ready
-  Qwen-Image-2.1-Turbo:
-    name: Qwen-Image-2.1-Turbo
-    cmd: systemctl --user start --wait gufo-image-turbo.service
-    cmdStop: systemctl --user stop gufo-image-turbo.service
-    proxy: http://127.0.0.1:18082
-    checkEndpoint: /ready
-  Qwen-Image-2.1:
-    name: Qwen-Image-2.1
-    cmd: systemctl --user start --wait gufo-image.service
-    cmdStop: systemctl --user stop gufo-image.service
+  # Ming's own code in PyTorch (llm-server/media/ming.service): Gufo does not run it.
+  Ming-Image-0.2-Design:
+    name: Ming-Image-0.2-Design
+    cmd: systemctl --user start --wait ming.service
+    cmdStop: systemctl --user stop ming.service
     proxy: http://127.0.0.1:18081
     checkEndpoint: /ready
   # The media models (llm-server/media/ and the gufo-*.container quadlets), as llm-server/media.json names them.
@@ -128,12 +123,12 @@ routing:
           swap: true
           exclusive: true
           members: [qwen3.8-flash-next]
-        # Both image models may run side by side; each starts with its first request, which loads its weights.
-        # Starting either one stops the LLM first, and the LLM starting stops both.
+        # The image model starts with its first request, which loads its weights; starting it stops the LLM first,
+        # and the LLM starting stops it.
         images:
-          swap: false
+          swap: true
           exclusive: true
-          members: [Qwen-Image-2.1-Turbo, Qwen-Image-2.1]
+          members: [Ming-Image-0.2-Design]
         # One media model at a time, with nothing beside it but an everyday speech model: H3 holds up to 40 GiB while
         # it denoises, and vLLM takes the cache it is given (vllm-sov.container caps it so one speech model fits).
         media:

@@ -263,7 +263,7 @@ export class LlmMonitor {
     const byId = new Map(active.map((request) => [request.id, request]));
     const sessions: LlmSession[] = [];
     const served = new Set<number>();
-    // Behind llama-swap: the LLM is stopped while the image models have its memory, or is starting again.
+    // Behind llama-swap: the LLM is stopped while an image or media model has its memory, or is starting again.
     const llmStopped = this.#engine === "unloaded";
     const behind = queuedBehind(active);
 
@@ -411,7 +411,7 @@ export class LlmMonitor {
       this.#setEngine("loading", this.#sessionsReported, this.#engineSessions, "");
       return null;
     }
-    // llama-swap: the LLM is stopped (the image models have its memory) or is starting again.
+    // llama-swap: the LLM is stopped (an image or media model has its memory) or is starting again.
     if (response.status === 409) {
       await response.body?.cancel();
       this.#setEngine("unloaded", false, null, "");

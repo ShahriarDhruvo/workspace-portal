@@ -1,0 +1,23 @@
+[Unit]
+Description=Ming-Image-0.2-Design, text to image and image editing on 127.0.0.1:18081; started and stopped by llama-swap
+Documentation=https://github.com/inclusionAI/Ming-Image
+BindsTo=llama-swap.service
+After=llama-swap.service
+
+[Service]
+EnvironmentFile=/etc/ai-studio/cache.env
+# No GEMM tuning: TunableOp tunes each new matrix shape, and every new prompt length and image size brings some.
+# UnsetEnvironment= is applied last; Environment= could not override the EnvironmentFile.
+UnsetEnvironment=PYTORCH_TUNABLEOP_ENABLED
+Environment=MIOPEN_FIND_MODE=FAST
+Environment=PYTHONUNBUFFERED=1
+# current links to the installed build (llm-server/apps/ming/install.sh), named after its commit.
+WorkingDirectory=/opt/ai-studio/ming/current
+# Starts only once the model llama-swap stopped has let go of its GPU memory (measured peak 53.7 GiB: 46.4 GiB of
+# weights, the rest while it makes an image).
+ExecStartPre=%h/.local/bin/wait-gpu-memory 55
+ExecStart=/opt/ai-studio/ming/current/.venv/bin/python /opt/ai-studio/ming/current/ming-images.py
+Restart=no
+# Covers ExecStartPre only: the unit counts as started once Python runs, and llama-swap then polls /ready.
+TimeoutStartSec=90
+TimeoutStopSec=30

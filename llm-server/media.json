@@ -3,7 +3,8 @@
 // It becomes PORTAL_DATA_DIR/config/models/media.json; the gateway reads it when it starts (models.sh restarts it).
 //
 // Each kind has a "fast" model, for drafts and everyday work, and a "quality" one, for final work; the agent picks
-// the tier of each call (opencode/image/media-tools). A model's fields:
+// the tier of each call (opencode/image/media-tools). A kind with one model, as image here, names it under one tier,
+// and both tiers use it. A model's fields:
 //   model      the id llama-swap serves it under                      name     its name for people
 //   time       how long it takes, in words, measured (docs/MEASUREMENTS.md)
 //   bestFor    what it is the better choice for                       besideLlm  it runs beside the LLM: no swap
@@ -18,16 +19,10 @@
 {
   "image": {
     "fast": {
-      "model": "Qwen-Image-2.1-Turbo",
-      "name": "Qwen-Image 2.1 Turbo",
-      "time": "about 25 s an image at 1024x1024",
-      "bestFor": "drafts, storyboards, keyframes to try, everyday pictures"
-    },
-    "quality": {
-      "model": "Qwen-Image-2.1",
-      "name": "Qwen-Image 2.1",
-      "time": "about 95 s an image at 1024x1024",
-      "bestFor": "final images and keyframes, text in a picture, fine detail"
+      "model": "Ming-Image-0.2-Design",
+      "name": "Ming-Image 0.2 Design",
+      "time": "about 30 s an image at 1024x1024, about 3 min at 2048x2048, 80 s for an edit; 20 s more for the model swap",
+      "bestFor": "every image, drafts and finals: keyframes, posters, product shots, UI designs, text in a picture"
     }
   },
   "video": {

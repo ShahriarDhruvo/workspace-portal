@@ -70,7 +70,7 @@ test("Qwen3-TTS's PCM becomes a 24 kHz mono 16-bit WAV", () => {
 
 test("list_media_models shows each tier's model, what it is for, and whether it is loaded", () => {
   const listing = lib.mediaListing(reference, ["qwen3.8-flash-next", "qwen3-tts-1.7b-design"]);
-  assert.deepEqual(listing.models.image.fast, { model: "portal/Qwen-Image-2.1-Turbo", name: "Qwen-Image 2.1 Turbo", best_for: reference.image!.fast!.bestFor, time: reference.image!.fast!.time, beside_llm: false, loaded: false });
+  assert.deepEqual(listing.models.image.fast, { model: "portal/Ming-Image-0.2-Design", name: "Ming-Image 0.2 Design", best_for: reference.image!.fast!.bestFor, time: reference.image!.fast!.time, beside_llm: false, loaded: false });
   assert.equal(listing.models.speech.tool, "synthesize_speech");
   assert.equal(listing.models.speech.fast.loaded, true, "its design model is loaded");
   assert.equal(listing.models.speech.quality.clones_voices, true);

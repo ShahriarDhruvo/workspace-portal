@@ -61,7 +61,7 @@ The installer creates `~/.local/state/portal-hostd` (0700) for that user; the qu
 | `INTERVAL_MS` | Time between samples, 250..5000, default 500 |
 | `ENGINE_UNIT`, `ENGINE_QUADLET` | `llm` with engine control: the user unit and its quadlet file |
 | `ENGINE_URL` | The engine's own HTTP address, default `http://127.0.0.1:8080`: `/ready` and `/props` are asked there |
-| `ENGINE_ROUTER_URL`, `ENGINE_ROUTER_MODEL` | Both or neither: llama-swap's address and the engine's model there. With them an apply restarts the engine through llama-swap, rewrites the image models' quadlets too, and `GET /v1/engine` says `unloaded: true` while llama-swap has the engine stopped |
+| `ENGINE_ROUTER_URL`, `ENGINE_ROUTER_MODEL` | Both or neither: llama-swap's address and the engine's model there. With them an apply restarts the engine through llama-swap, rewrites the other Gufo models' quadlets too, and `GET /v1/engine` says `unloaded: true` while llama-swap has the engine stopped |
 | `APPS_FILE` | `llm` with engine control: the programs it updates, `/usr/local/lib/portal-hostd/apps/apps.json`; empty: none (`--apps none`). Each program's `install.sh` is in `<id>/` beside it |
 | `FIREWALL_SOURCE` | The `--portal` address, kept so that the installer can find its firewalld rule again |
 
@@ -139,11 +139,11 @@ An apply, which is also how to go back to an older image, runs these steps; each
 1. Check that the image is local.
 2. Save the quadlet as `~/.local/state/portal-hostd/<unit name>.container.prev`.
 3. Rewrite the quadlet: only the `Image=` value changes and, with a version, the `/vX.Y.Z/` part of `Documentation=`.
-   Behind llama-swap, also every other quadlet in its folder whose `Image=` is of the same repository (the image
-   models), so that all of them run one release.
+   Behind llama-swap, also every other quadlet in its folder whose `Image=` is of the same repository (the video,
+   speech and transcription models), so that all of them run one release.
 4. `systemctl --user daemon-reload` and `restart`. Behind llama-swap instead: `POST /api/models/unload`, wait for
    every rewritten unit to stop, then `GET /upstream/<model>/v1/models`, on which llama-swap starts the engine and
-   answers once it is ready. A unit restarted behind llama-swap's back would run beside the image models.
+   answers once it is ready. A unit restarted behind llama-swap's back would run beside the other models.
 5. Wait up to 10 minutes for the engine's `/ready` to answer 200.
 6. With a version: check that `build_info` in the engine's `/props` starts with it.
 

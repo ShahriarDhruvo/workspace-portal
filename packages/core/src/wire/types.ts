@@ -276,7 +276,7 @@ export interface EngineStatus {
   state: string;
   subState: string;
   ready: boolean;
-  /** Behind llama-swap: the engine is stopped on purpose, to make room for the image models, and starts on demand. */
+  /** Behind llama-swap: the engine is stopped on purpose, to make room for an image or media model, and starts on demand. */
   unloaded: boolean;
   buildInfo: string | null;
   previous: { image: string; digest: string | null; version: string | null } | null;
@@ -506,7 +506,7 @@ export interface HostLive {
   today: HostToday | null;
 }
 
-/** unloaded: behind llama-swap, the LLM is stopped while the image models run, or is starting again. */
+/** unloaded: behind llama-swap, the LLM is stopped while an image or media model runs, or is starting again. */
 export type EngineState = "ready" | "loading" | "unloaded" | "offline" | "unknown";
 /** What the image and media models make (media.json's kinds). */
 export type GenerationKind = "image" | "video" | "music" | "speech" | "transcription";

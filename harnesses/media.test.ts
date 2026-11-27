@@ -21,7 +21,7 @@ test("the reference AI server's registry and the empty default parse", () => {
   assert.equal(reference.video?.fast?.model, "minimax-h3");
   assert.deepEqual(reference.video?.fast?.request, { gufo: { preset: "fast" } });
   assert.equal(reference.speech?.fast?.voices?.ryan, "male, English");
-  assert.deepEqual(imageModels(reference), ["Qwen-Image-2.1-Turbo", "Qwen-Image-2.1"]);
+  assert.deepEqual(imageModels(reference), ["Ming-Image-0.2-Design"], "one image model, under the fast tier");
   assert.deepEqual([...besideLlmIds(reference)].sort(), ["qwen3-asr-1.7b", "qwen3-tts-1.7b", "qwen3-tts-1.7b-clone", "qwen3-tts-1.7b-design"]);
   assert.deepEqual(mediaModelIds(reference, "video"), ["minimax-h3"], "the same model under both tiers once");
   assert.deepEqual(mediaModelIds(reference, "speech"), ["qwen3-tts-1.7b", "qwen3-tts-1.7b-clone", "qwen3-tts-1.7b-design", "fish-s2-pro"]);

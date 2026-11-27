@@ -152,7 +152,7 @@ test("opencodeFacts: where to save an image and how to show it, and its model by
   assert.match(fact!, /`path` in the project, such as images\/<short-name>\.png/);
   assert.match(fact!, /!\[<what it shows>\]\(images\/<short-name>\.png\)/);
   assert.match(fact!, /leave it out for the fast one \(portal\/Image-Turbo\), or give portal\/Image for the quality one\.$/);
-  assert.match(opencodeFacts(images("Image"))[0]!, /leave it out for the fast one \(portal\/Image\)\.$/);
+  assert.match(opencodeFacts(images("Image"))[0]!, /Leave its `model` out: one model makes every image \(portal\/Image\)\.$/);
   assert.match(tiers!, /^- Media models, by tier: `fast` for drafts/);
   assert.doesNotMatch(tiers!, /The media tools take the tier/, "images alone: no media tools");
   assert.equal(protocol, undefined, "no media tools: nothing about plans");
