@@ -160,8 +160,8 @@ export function ServerBodySkeleton({ busyLabel }: { busyLabel?: string }) {
         <div className={METRIC_GRID}>
           <Skeleton className="h-[86.4px] rounded-lg @lg:h-[110.4px]" />
           <Skeleton className="h-[86.4px] rounded-lg @lg:h-[110.4px]" />
-          <Skeleton className="h-[127px] rounded-lg @[22rem]:h-[111px] @lg:h-[110.4px]" />
-          <Skeleton className="h-[127px] rounded-lg @[22rem]:h-[111px] @lg:h-[111px]" />
+          <Skeleton className="h-[111px] rounded-lg @lg:h-[110.4px]" />
+          <Skeleton className="h-[111px] rounded-lg" />
           <Skeleton className="col-span-2 h-[98.4px] rounded-lg @lg:h-[111px]" />
         </div>
         <div className={cn(DETAIL_GRID, "border-t pt-4")}>

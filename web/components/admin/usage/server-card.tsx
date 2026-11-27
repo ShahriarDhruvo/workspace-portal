@@ -144,20 +144,29 @@ function Readings({ host, sample, history, now }: { host: HostLive; sample: Host
   );
 }
 
+// The quiet facts' size: 12 px, smaller in a phone's narrow tile (down to 10 px) so that Disk's longest pair,
+// "R 999 MB/s  W 999 MB/s" (130 px at 12 px in Noto Sans, 3% added for other system fonts, and the 6 px gap),
+// stays on one line. A tile is a container, so 100cqi is its width inside the padding.
+const FACT_SIZE = "clamp(10px, calc((100cqi - 6px) * 12 / 134), 12px)";
+
 /**
  * One metric: a figure, a bar when it is a share of a whole (null: unknown, an empty bar) and at most two quiet
- * facts, never wrapped by their length, so the tiles keep their height whatever the figures.
+ * facts on one line, so the tiles keep their height whatever the figures.
  */
 function Metric({ label, value, unit, share, children }: { label: string; value: string; unit?: string; share?: number | null; children?: ReactNode }) {
   return (
-    <section className="flex min-w-0 flex-col gap-2 rounded-lg bg-muted/40 p-3">
+    <section className="@container flex min-w-0 flex-col gap-2 rounded-lg bg-muted/40 p-3">
       <h3 className="text-12 text-muted-foreground">{label}</h3>
       <p className="text-22 font-semibold tabular-nums">
         {value}
         {unit ? <span className="ml-1 text-13 font-normal text-muted-foreground">{unit}</span> : null}
       </p>
       {share !== undefined ? <Progress value={share ?? 0} aria-label={`${label} used`} /> : null}
-      {children ? <p className="flex flex-col gap-x-2 overflow-hidden text-12 whitespace-nowrap text-muted-foreground tabular-nums @[22rem]:flex-row">{children}</p> : null}
+      {children ? (
+        <p className="flex flex-wrap gap-x-1.5 text-12 whitespace-nowrap text-muted-foreground tabular-nums" style={{ fontSize: FACT_SIZE }}>
+          {children}
+        </p>
+      ) : null}
     </section>
   );
 }
