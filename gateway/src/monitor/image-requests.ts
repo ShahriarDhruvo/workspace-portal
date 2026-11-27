@@ -17,13 +17,21 @@ export interface ImageAsk {
 }
 
 /**
+ * A multipart form's text field `name`, its value matching `value`: header lines may follow its Content-Disposition.
+ * The parameter itself, not a file's `filename="model"`.
+ */
+export function formField(name: string, value: string): RegExp {
+  return new RegExp(`[;\\s]name="${name}"[^\\r\\n]*\\r\\n(?:[^\\r\\n]+\\r\\n)*\\r\\n(${value})\\r\\n`);
+}
+
+/**
  * Reads `model` and `n` from the start of an image request's body, JSON or multipart (an edit), chunk by chunk as it
  * streams by. `onAsk` hears each change.
  */
 export function imageAskReader(contentType: string | undefined, models: readonly string[], onAsk: (ask: ImageAsk) => void): (chunk: Buffer) => void {
   const form = /^multipart\/form-data/i.test(contentType ?? "");
-  const modelField = form ? /name="model"\r\n\r\n([^\r\n]{1,200})\r\n/ : /"model"\s*:\s*"([^"\\]{1,200})"/;
-  const countField = form ? /name="n"\r\n\r\n(\d{1,3})\r\n/ : /"n"\s*:\s*(\d{1,3})\b/;
+  const modelField = form ? formField("model", "[^\\r\\n]{1,200}") : /"model"\s*:\s*"([^"\\]{1,200})"/;
+  const countField = form ? formField("n", "\\d{1,12}") : /"n"\s*:\s*(\d{1,12})\b/;
   let text = "";
   let last: ImageAsk = { model: null, images: 1 };
   return (chunk) => {

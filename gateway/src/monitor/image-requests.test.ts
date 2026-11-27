@@ -16,7 +16,12 @@ test("the model and the number of images are read from a JSON or multipart body,
   assert.deepEqual(read("application/json", ['{"prompt":"a teapot","mod', 'el": "Qwen-Image-2.1-Turbo","n":3}']), [{ model: "Qwen-Image-2.1-Turbo", images: 3 }]);
   const form = '--b\r\nContent-Disposition: form-data; name="model"\r\n\r\nQwen-Image-2.1\r\n--b\r\nContent-Disposition: form-data; name="n"\r\n\r\n2\r\n--b--';
   assert.deepEqual(read("multipart/form-data; boundary=b", [form.slice(0, 50), form.slice(50)]), [{ model: "Qwen-Image-2.1", images: 2 }]);
+  const typed = '--b\r\nContent-Disposition: form-data; name="model"\r\nContent-Type: text/plain\r\n\r\nQwen-Image-2.1\r\n--b--';
+  assert.deepEqual(read("multipart/form-data; boundary=b", [typed]), [{ model: "Qwen-Image-2.1", images: 1 }], "a field with its own headers");
+  const file = '--b\r\nContent-Disposition: form-data; name="image"; filename="model"\r\n\r\nQwen-Image-2.1\r\n--b--';
+  assert.deepEqual(read("multipart/form-data; boundary=b", [file]), [], "a file named model is no model field");
   assert.deepEqual(read("application/json", ['{"model":"gpt-image-1","n":50}']), [{ model: null, images: 10 }], "an unknown model is not shown; n is capped");
+  assert.deepEqual(read("application/json", ['{"model":"Qwen-Image-2.1","n":1000}']), [{ model: "Qwen-Image-2.1", images: 10 }], "however large");
   assert.deepEqual(read("application/json", ['{"prompt":"x"}']), [], "nothing found: one image of no known model");
 });
 
