@@ -209,18 +209,27 @@ def rapl_events(fs, labels):
     return evs
 
 
+def cpu_list(text):
+    """A sysfs CPU list ("0-15", "0,2,4-7") -> [CPU numbers]."""
+    out = []
+    for part in filter(None, (text or '').strip().split(',')):
+        lo, _, hi = part.partition('-')
+        out.extend(range(int(lo), int(hi or lo) + 1))
+    return out
+
+
 class PerfGroup:
     """One perf group (all events on one PMU), read with a single read() syscall. events: [(label, spec,
-    factor)], where the factor converts a count into the reported unit."""
+    factor)], where the factor converts a count into the reported unit. cpu: where it counts; default the first
+    CPU of the PMU's cpumask."""
 
-    def __init__(self, fs, pmu, events):
+    def __init__(self, fs, pmu, events, cpu=None):
         base = pmu_dir(pmu)
         t = fs.int(base + '/type')
         if t is None:
             raise PerfUnavailable(f'no PMU {pmu}')
-        mask = (fs.text(base + '/cpumask') or '').strip()
-        m = re.match(r'(\d+)', mask)
-        self.type, self.cpu = t, int(m.group(1)) if m else 0
+        mask = cpu_list(fs.text(base + '/cpumask'))
+        self.type, self.cpu = t, cpu if cpu is not None else mask[0] if mask else 0
         self.labels = [e[0] for e in events]
         self.factors = [e[2] for e in events]
         self.configs = [pmu_encode(fs, pmu, e[1]) for e in events]
@@ -258,6 +267,44 @@ class PerfGroup:
             except OSError:
                 pass
         self.fds = []
+
+
+class PerCpuGroups:
+    """The same perf group opened on each of several CPUs, for counters kept per CPU (the msr PMU's, which has
+    no cpumask). read() -> one reading (or None) per CPU, in order."""
+
+    def __init__(self, fs, pmu, events, cpus):
+        self.groups = [PerfGroup(fs, pmu, events, cpu) for cpu in cpus]
+
+    def open(self):
+        if all(g.open() for g in self.groups):
+            return True
+        self.close()
+        return False
+
+    def read(self):
+        return [g.read() for g in self.groups]
+
+    def close(self):
+        for g in self.groups:
+            g.close()
+
+
+def busy_clocks(prev, cur, usage):
+    """From per-CPU readings of the msr PMU's tsc, aperf and mperf: each CPU's average clock in MHz while it ran
+    since the last reading (TSC rate x aperf/mperf, turbostat's Bzy_MHz), for the CPUs more than BUSY_PCT busy,
+    and their average weighted by the time each ran. -> ([MHz or None per CPU], MHz or None)."""
+    mhz, num, den = [None] * len(usage), 0.0, 0
+    for i, (p, c, u) in enumerate(zip(prev or [], cur or [], usage)):
+        if p is None or c is None or u is None or u <= BUSY_PCT:
+            continue
+        ns = c[0] - p[0]
+        tsc, aperf, mperf = (b - a for a, b in zip(p[2], c[2]))
+        if ns > 0 and tsc > 0 and mperf > 0:
+            mhz[i] = round(tsc / ns * 1000 * aperf / mperf)
+            num += tsc / ns * 1000 * aperf
+            den += mperf
+    return mhz, round(num / den) if den else None
 
 
 def perf_rates(group, prev, cur, dt):
@@ -527,14 +574,8 @@ class Host:
         self.stat = Src(fs.p('/proc/stat'), 65536)
         self.meminfo = Src(fs.p('/proc/meminfo'), 8192)
         self.ncpu = len(re.findall(r'^cpu\d+\s', fs.text('/proc/stat') or '', re.M)) or os.cpu_count() or 1
-        cpus, cpufreq = range(self.ncpu), '/sys/devices/system/cpu/cpu%d/cpufreq/'
-        self.freq = [Src(fs.p(cpufreq % i + 'scaling_cur_freq'), 64) for i in cpus]
         self.cpu_model, self.cores, self.threads = self._cpuinfo()
-        # amd-pstate reports scaling_min_freq, not a measurement, for a CPU that was idle at the last tick:
-        # exactly that value counts as unknown.
-        amd_pstate = (fs.text(cpufreq % 0 + 'scaling_driver') or '').startswith('amd-pstate')
-        self.freq_fallback = [fs.int(cpufreq % i + 'scaling_min_freq') for i in cpus] if amd_pstate else None
-        maxes = [m for i in cpus if (m := fs.int(cpufreq % i + 'cpuinfo_max_freq'))]
+        maxes = [m for i in range(self.ncpu) if (m := fs.int(f'/sys/devices/system/cpu/cpu{i}/cpufreq/cpuinfo_max_freq'))]
         self.cpu_max_mhz = max(maxes) // 1000 if maxes else None
         self.cpu_temp = self._cpu_temp()
         self.gpu, self.gpu_name = self._gpu()
@@ -605,21 +646,23 @@ class Host:
         """The perf groups this host has and this process may open (CAP_PERFMON)."""
         fs = self.fs
         named = lambda pmu, event: pmu_event(fs, pmu, event)[0]
-        wanted = {}     # name -> (PMU, its events)
+        wanted = {}     # name -> what builds the group, which raises PerfUnavailable when the host lacks it
         if self.amd:    # Strix Halo data fabric: DRAM channels 0, 4, 8, 12 (of 16) per direction, 64 B per beat, x4
-            wanted['df'] = ('amd_df', lambda: [(f'{rw}{n}', f'event={0x1f + 0x40 * n},umask={umask}', 256.0)
-                                               for rw, umask in (('rd', '0xffe'), ('wr', '0x7ff')) for n in (0, 4, 8, 12)])
+            wanted['df'] = lambda: PerfGroup(fs, 'amd_df', [(f'{rw}{n}', f'event={0x1f + 0x40 * n},umask={umask}', 256.0)
+                                                            for rw, umask in (('rd', '0xffe'), ('wr', '0x7ff')) for n in (0, 4, 8, 12)])
         # Intel client IMC: free-running counters of 64-byte lines
-        wanted['imc'] = ('uncore_imc', lambda: [('rd', named('uncore_imc', 'data_reads'), 64.0),
-                                                ('wr', named('uncore_imc', 'data_writes'), 64.0)])
+        wanted['imc'] = lambda: PerfGroup(fs, 'uncore_imc', [('rd', named('uncore_imc', 'data_reads'), 64.0),
+                                                             ('wr', named('uncore_imc', 'data_writes'), 64.0)])
         if not self.amd:
-            wanted['rapl'] = ('power', lambda: rapl_events(fs, ('pkg', 'ram', 'cores', 'gpu')))
+            wanted['rapl'] = lambda: PerfGroup(fs, 'power', rapl_events(fs, ('pkg', 'ram', 'cores', 'gpu')))
         if isinstance(self.gpu, IntelGpu):
-            wanted['i915'] = ('i915', lambda: [('rcs0', named('i915', 'rcs0-busy'), 1.0)])
+            wanted['i915'] = lambda: PerfGroup(fs, 'i915', [('rcs0', named('i915', 'rcs0-busy'), 1.0)])
+        wanted['clock'] = lambda: PerCpuGroups(fs, 'msr', [(e, named('msr', e), 1.0) for e in ('tsc', 'aperf', 'mperf')],
+                                               range(self.ncpu))
         groups = {}
-        for name, (pmu, events) in wanted.items():
+        for name, build in wanted.items():
             try:
-                group = PerfGroup(fs, pmu, events())
+                group = build()
             except PerfUnavailable:
                 continue
             if group.open():
@@ -716,7 +759,6 @@ class Host:
     def read(self):
         raw = {'mono': time.monotonic(), 't': now_ms(), 'gen': self.perf_gen}
         raw['agg'], raw['per'] = self._stat()
-        raw['freq'] = [s.int() for s in self.freq]
         raw['mem'] = self._meminfo()
         raw['temp'] = self.cpu_temp.int() if self.cpu_temp else None
         g = self.gpu
@@ -749,13 +791,7 @@ class Host:
                 a, b = prev['per'].get(i), cur['per'].get(i)
                 if a and b and b[0] > a[0]:
                     core_usage[i] = r1(min(100.0, max(0.0, 100.0 * ((b[0] - a[0]) - (b[1] - a[1])) / (b[0] - a[0]))))
-        core_mhz = [None] * n       # of the busy CPUs only; their average is weighted by usage
-        wsum = wmhz = 0.0
-        for i, (f, u) in enumerate(zip(cur['freq'], core_usage)):
-            if f and u is not None and u > BUSY_PCT and not (self.freq_fallback and f == self.freq_fallback[i]):
-                core_mhz[i] = round(f / 1000)
-                wsum += u
-                wmhz += u * core_mhz[i]
+        core_mhz, mhz = busy_clocks(prev and prev.get('perf_clock'), cur.get('perf_clock'), core_usage)
         temp = r2(cur['temp'], 1000)
 
         gpu = throttling = None
@@ -792,7 +828,7 @@ class Host:
         total, avail = mem.get('MemTotal', 0) * 1024, mem.get('MemAvailable', 0) * 1024
         return {
             't': cur['t'],
-            'cpu': {'usage': usage, 'mhz': round(wmhz / wsum) if wsum > 0 else None,
+            'cpu': {'usage': usage, 'mhz': mhz,
                     'mhzPeak': max((m for m in core_mhz if m is not None), default=None), 'tempC': temp,
                     'powerW': cpu_power, 'coreUsage': core_usage, 'coreMhz': core_mhz},
             'gpu': gpu,

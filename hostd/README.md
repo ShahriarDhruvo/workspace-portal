@@ -70,7 +70,7 @@ The files a sample reads are opened once, kept open and read with `pread`; no sa
 | Reading | AMD APU (amdgpu) | Intel (i915) |
 |---|---|---|
 | CPU usage, per logical CPU too | `/proc/stat` | same |
-| CPU clock | `cpufreq/scaling_cur_freq` of the CPUs more than 1% busy, weighted by their usage | same |
+| CPU clock | `msr` perf PMU per CPU: TSC rate × aperf/mperf, each CPU's average clock while it ran (turbostat's busy MHz), of the CPUs more than 1% busy, weighted by the time each ran | same |
 | CPU temperature | hwmon `k10temp` | hwmon `coretemp`, the package |
 | GPU usage, clock, temperature, power | `gpu_metrics` (format 3.0) | usage from the i915 PMU `rcs0-busy`, else the time not in RC6; clock from `gt_act_freq_mhz`; the CPU package's temperature; RAPL's GPU share as power |
 | GPU memory | `mem_info_vram_used`, `mem_info_vram_total` | none |
@@ -89,7 +89,7 @@ A source that is missing gives `null` in the sample; `sources` in `/v1/info` nam
 
 - `portal` role, and `llm` without engine control: `DynamicUser=yes`, `ProtectHome=yes`.
 - `llm` with engine control: runs as the engine user, with `ProtectHome=read-only` and write access to the quadlet directory and `~/.local/state/portal-hostd` only.
-- The only capability is `CAP_PERFMON`, for the perf PMUs. Without it there is no memory bandwidth, no Intel power and energy, and Intel GPU usage comes from RC6.
+- The only capability is `CAP_PERFMON`, for the perf PMUs. Without it there is no CPU clock, no memory bandwidth, no Intel power and energy, and Intel GPU usage comes from RC6.
 - The unit also sets `NoNewPrivileges`, `ProtectSystem=strict`, `PrivateTmp`, `PrivateDevices`, `ProtectKernelModules`, `ProtectControlGroups`, `RestrictNamespaces`, `LockPersonality`, `MemoryDenyWriteExecute`, `RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX`, `MemoryMax=64M`, `CPUQuota=20%`, `TasksMax=32`, `Nice=10`.
 - Engine commands run in the engine user's systemd manager, not in this service: `systemctl --user ...` and `systemd-run --user --wait --pipe --quiet --collect podman ...`. Under `NoNewPrivileges` the service could not run rootless podman itself.
 

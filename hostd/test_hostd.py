@@ -92,7 +92,6 @@ def make_amd(root, ncpu=4):
     write(root, '/proc/sys/kernel/osrelease', '7.2.15-200.fc44.x86_64\n')
     write(root, '/etc/os-release', 'NAME="Fedora Linux"\nPRETTY_NAME="Fedora Linux 44 (Server Edition)"\n')
     for i in range(ncpu):
-        write(root, f'/sys/devices/system/cpu/cpu{i}/cpufreq/scaling_cur_freq', '2000000\n')
         write(root, f'/sys/devices/system/cpu/cpu{i}/cpufreq/cpuinfo_max_freq', '5187500\n')
     write(root, '/sys/class/hwmon/hwmon3/name', 'k10temp\n')
     write(root, '/sys/class/hwmon/hwmon3/temp1_input', '48250\n')
@@ -122,7 +121,6 @@ def make_intel(root, ncpu=2):
     write(root, '/proc/sys/kernel/osrelease', '7.2.11-300.fc45.x86_64\n')
     write(root, '/etc/os-release', 'PRETTY_NAME="Fedora Linux 45 (Server Edition)"\n')
     for i in range(ncpu):
-        write(root, f'/sys/devices/system/cpu/cpu{i}/cpufreq/scaling_cur_freq', '800000\n')
         write(root, f'/sys/devices/system/cpu/cpu{i}/cpufreq/cpuinfo_max_freq', '2900000\n')
     h = '/sys/class/hwmon/hwmon1'
     write(root, h + '/name', 'coretemp\n')
@@ -281,6 +279,19 @@ class TestPerfEncoding(TmpRoot):
         with self.assertRaises(H.PerfUnavailable):
             H.PerfGroup(H.Fs(self.root), 'amd_df', [('x', 'event=1', 1.0)])
 
+    def test_cpu_list(self):
+        self.assertEqual(H.cpu_list('0-3,8,10-11\n'), [0, 1, 2, 3, 8, 10, 11])
+        self.assertEqual(H.cpu_list(None), [])
+
+    def test_busy_clocks_weighted_by_time_running(self):
+        usage = [100.0, 25.0, 0.5, None]
+        prev = [(0, 0, [0, 0, 0])] * 4
+        # 1 s at a 3 GHz TSC: cpu0 ran all of it at 4.5 GHz, cpu1 a quarter at 3 GHz; cpu2 is under BUSY_PCT
+        cur = [(10**9, 10**9, [3 * 10**9, 45 * 10**8, 3 * 10**9]), (10**9, 10**9, [3 * 10**9, 75 * 10**7, 75 * 10**7]),
+               (10**9, 10**9, [3 * 10**9, 10**6, 10**6]), None]
+        self.assertEqual(H.busy_clocks(prev, cur, usage), ([4500, 3000, None, None], round((4500 * 4 + 3000) / 5)))
+        self.assertEqual(H.busy_clocks(None, cur, usage), ([None] * 4, None))
+
     def test_rates_and_multiplex_correction(self):
         g = FakeGroup(['rd', 'wr'], [64.0, 64.0])
         prev = (1000, 1000, [0, 0])
@@ -330,15 +341,18 @@ class TestHostAmd(TmpRoot):
 
     def test_rates_clocks_and_values(self):
         a = self.host.read()
-        # cpu1 fully busy at 5098 MHz, cpu3 at 50 % at 3000 MHz, others idle
+        # cpu1 fully busy at 5098 MHz, cpu3 at 50 % at 3000 MHz, others idle; the TSC counts at 3 GHz
         write(self.root, '/proc/stat', proc_stat([(100, 1050), (150, 1000), (100, 1050), (125, 1025)]))
-        write(self.root, '/sys/devices/system/cpu/cpu1/cpufreq/scaling_cur_freq', '5098000\n')
-        write(self.root, '/sys/devices/system/cpu/cpu3/cpufreq/scaling_cur_freq', '3000000\n')
         write(self.root, '/sys/class/drm/card1/device/gpu_metrics',
               gpu_metrics_blob(activity=97, gfxclk=2720, gfx_temp=6150, gfx_mw=55200, socket_mw=156200, core_mw=6100,
                                throttle=(0, 11, 0, 0, 0, 0, 0)), 'wb')
         b = self.host.read()
         b['mono'] = a['mono'] + 0.5
+        a['perf_clock'] = [(0, 0, [0, 0, 0])] * 4
+        b['perf_clock'] = [(5 * 10**8, 5 * 10**8, [1_500_000_000, 0, 0]),
+                           (5 * 10**8, 5 * 10**8, [1_500_000_000, 2_549_000_000, 1_500_000_000]),
+                           (5 * 10**8, 5 * 10**8, [1_500_000_000, 0, 0]),
+                           (5 * 10**8, 5 * 10**8, [1_500_000_000, 750_000_000, 750_000_000])]
         s = self.host.compute(a, b, self.host.fans.read())
         cpu = s['cpu']
         self.assertEqual(cpu['coreUsage'], [0.0, 100.0, 0.0, 50.0])
@@ -360,19 +374,6 @@ class TestHostAmd(TmpRoot):
         self.assertEqual(s['fans'][0], {'label': 'Fan 1', 'rpm': 1200, 'duty': 40})
         self.assertEqual(s['fans'][2], {'label': 'Fan 3', 'rpm': 0, 'duty': None})
         json.dumps(s, allow_nan=False)
-
-    def test_amd_pstate_fallback_value_ignored(self):
-        write(self.root, '/sys/devices/system/cpu/cpu0/cpufreq/scaling_driver', 'amd-pstate-epp\n')
-        for i in range(4):
-            write(self.root, f'/sys/devices/system/cpu/cpu{i}/cpufreq/scaling_min_freq', '2000000\n')
-        host = H.Host(H.Fs(self.root), 'llm', 500)
-        a = host.read()
-        write(self.root, '/proc/stat', proc_stat([(102, 1098), (150, 1050), (100, 1100), (100, 1100)]))
-        write(self.root, '/sys/devices/system/cpu/cpu1/cpufreq/scaling_cur_freq', '4900000\n')
-        b = host.read()
-        s = host.compute(a, b)
-        self.assertEqual(s['cpu']['coreMhz'], [None, 4900, None, None])   # cpu0 is busy but reports the fallback
-        self.assertEqual((s['cpu']['mhz'], s['cpu']['mhzPeak']), (4900, 4900))
 
     def test_df_bandwidth_from_group(self):
         g = FakeGroup(['rd0', 'rd4', 'rd8', 'rd12', 'wr0', 'wr4', 'wr8', 'wr12'], [256.0] * 8)
