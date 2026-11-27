@@ -270,11 +270,14 @@ class PerfGroup:
 
 
 class PerCpuGroups:
-    """The same perf group opened on each of several CPUs, for counters kept per CPU (the msr PMU's, which has
-    no cpumask). read() -> one reading (or None) per CPU, in order."""
+    """The same perf group opened on each of several CPUs, for counters kept per CPU or per core (the msr PMU's,
+    which has no cpumask; power_core's, one CPU of each core in its cpumask). read() -> one reading (or None) per
+    CPU, in order."""
 
     def __init__(self, fs, pmu, events, cpus):
         self.groups = [PerfGroup(fs, pmu, events, cpu) for cpu in cpus]
+        if not self.groups:
+            raise PerfUnavailable(f'{pmu}: no CPUs')
 
     def open(self):
         if all(g.open() for g in self.groups):
@@ -647,14 +650,17 @@ class Host:
         fs = self.fs
         named = lambda pmu, event: pmu_event(fs, pmu, event)[0]
         wanted = {}     # name -> what builds the group, which raises PerfUnavailable when the host lacks it
+        if self.amd:    # RAPL energy of each core: the cores' power
+            wanted['cores'] = lambda: PerCpuGroups(fs, 'power_core', [('core', *pmu_event(fs, 'power_core', 'energy-core'))],
+                                                   cpu_list(fs.text(pmu_dir('power_core') + '/cpumask')))
         if self.amd:    # Strix Halo data fabric: DRAM channels 0, 4, 8, 12 (of 16) per direction, 64 B per beat, x4
             wanted['df'] = lambda: PerfGroup(fs, 'amd_df', [(f'{rw}{n}', f'event={0x1f + 0x40 * n},umask={umask}', 256.0)
                                                             for rw, umask in (('rd', '0xffe'), ('wr', '0x7ff')) for n in (0, 4, 8, 12)])
         # Intel client IMC: free-running counters of 64-byte lines
         wanted['imc'] = lambda: PerfGroup(fs, 'uncore_imc', [('rd', named('uncore_imc', 'data_reads'), 64.0),
                                                              ('wr', named('uncore_imc', 'data_writes'), 64.0)])
-        if not self.amd:
-            wanted['rapl'] = lambda: PerfGroup(fs, 'power', rapl_events(fs, ('pkg', 'ram', 'cores', 'gpu')))
+        # RAPL: the package (an APU's is CPU, GPU and the rest of the chip), and on Intel DRAM, cores and GPU
+        wanted['rapl'] = lambda: PerfGroup(fs, 'power', rapl_events(fs, ('pkg', 'ram', 'cores', 'gpu')))
         if isinstance(self.gpu, IntelGpu):
             wanted['i915'] = lambda: PerfGroup(fs, 'i915', [('rcs0', named('i915', 'rcs0-busy'), 1.0)])
         wanted['clock'] = lambda: PerCpuGroups(fs, 'msr', [(e, named('msr', e), 1.0) for e in ('tsc', 'aperf', 'mperf')],
@@ -684,10 +690,10 @@ class Host:
 
     def sources(self):
         groups = self.groups
+        power = 'rapl' if 'rapl' in groups else 'socket' if self.amd else None
         if self.amd:
-            power, gpu_busy = 'socket', 'activity'
+            gpu_busy = 'activity'
         else:
-            power = 'rapl' if 'rapl' in groups else None
             gpu_busy = 'pmu' if 'i915' in groups else 'awake' if self.gpu and self.gpu.rc6 else None
         bw = 'amd_df' if 'df' in groups else 'uncore_imc' if 'imc' in groups else None
         return {'perf': self.perf_ok, 'bandwidth': bw, 'power': power, 'gpuBusy': gpu_busy}
@@ -696,7 +702,7 @@ class Host:
         if self._info is None:      # all of it but the inventory stays as it is
             m = re.search(r'^PRETTY_NAME="?(.*?)"?$', self.fs.text('/etc/os-release') or '', re.M)
             src = self.sources()
-            power_label = {'socket': 'APU socket power', 'rapl': 'CPU package + DRAM (RAPL)'}.get(src['power'])
+            power_label = {'socket': 'APU socket power', 'rapl': 'APU package (RAPL)' if self.amd else 'CPU package + DRAM (RAPL)'}.get(src['power'])
             self._info = {
                 'hostname': socket.gethostname().split('.')[0],
                 'role': self.role,
@@ -783,6 +789,13 @@ class Host:
         def rates(name):
             return perf_rates(self.groups.get(name), prev and prev.get('perf_' + name), cur.get('perf_' + name), dt)
 
+        def summed(name):   # a PerCpuGroups' first event, added up over its CPUs; None unless all have a rate
+            group, a, b = self.groups.get(name), prev and prev.get('perf_' + name), cur.get('perf_' + name)
+            if group is None or not a or not b:
+                return None
+            each = [perf_rates(g, p, c, dt) for g, p, c in zip(group.groups, a, b)]
+            return None if any(r is None for r in each) else sum(r[0] for r in each)
+
         usage, core_usage = None, [None] * n
         if prev and prev['agg'] and cur['agg']:
             dtot, didle = cur['agg'][0] - prev['agg'][0], cur['agg'][1] - prev['agg'][1]
@@ -794,22 +807,27 @@ class Host:
         core_mhz, mhz = busy_clocks(prev and prev.get('perf_clock'), cur.get('perf_clock'), core_usage)
         temp = r2(cur['temp'], 1000)
 
+        rapl = rates('rapl')
+        rapl = dict(zip(self.groups['rapl'].labels, rapl)) if rapl else {}
+        watts = r2(rapl['pkg'] + rapl.get('ram', 0.0)) if 'pkg' in rapl else None
+        dram = r2(rapl.get('ram'))
         gpu = throttling = None
         if self.amd:
             gm = cur['gm'] or {}
             act = gm.get('average_gfx_activity')
-            cpu_power, dram = r2(gm.get('average_all_core_power'), 1000), None
-            gpu_power, watts = r2(gm.get('average_gfx_power'), 1000), r2(gm.get('average_socket_power'), 1000)
+            cpu_power, gpu_power = r2(summed('cores')), r2(gm.get('average_gfx_power'), 1000)
+            # no perf: the firmware's own figures in gpu_metrics, the same within 0.1% under a steady load
+            if 'cores' not in self.groups:
+                cpu_power = r2(gm.get('average_all_core_power'), 1000)
+            if 'rapl' not in self.groups:
+                watts = r2(gm.get('average_socket_power'), 1000)
             gpu = {'usage': act if act is not None and act <= 100 else None, 'mhz': gm.get('average_gfxclk_frequency'),
                    'tempC': r2(gm.get('temperature_gfx'), 100), 'powerW': gpu_power,
                    'memUsedBytes': cur['vram'], 'memTotalBytes': self.gpu.vram_total}
             if gm and prev and prev['gm']:
                 throttling = any(c > p for p, c in zip(prev['gm']['throttle'], gm['throttle']))
         else:
-            rapl = rates('rapl')
-            rapl = dict(zip(self.groups['rapl'].labels, rapl)) if rapl else {}
-            cpu_power, dram, gpu_power = r2(rapl.get('cores')), r2(rapl.get('ram')), r2(rapl.get('gpu'))
-            watts = r2(rapl['pkg'] + rapl.get('ram', 0.0)) if 'pkg' in rapl else None
+            cpu_power, gpu_power = r2(rapl.get('cores')), r2(rapl.get('gpu'))
             if self.gpu is not None:
                 busy, i915 = None, rates('i915')
                 if i915:
@@ -976,10 +994,10 @@ class Sampler:
 
 class Meter:
     """Running totals since this hostd started, for GET /v1/meter, kept whether or not anyone watches: the
-    energy behind the samples' power.watts and the bytes on the physical interfaces. Energy is the APU's socket
-    power integrated over time, or the RAPL package + DRAM counters; None without either. The sources are the
-    meter's own and stay open: the sampler's perf groups close when nobody watches, and a RAPL counter begins
-    again at zero when opened."""
+    energy behind the samples' power.watts and the bytes on the physical interfaces. Energy is the RAPL package
+    (+ DRAM) counters; without them an APU's socket power integrated over time (each gpu_metrics read is a request
+    to its power firmware, so only then), else None. The counters are the meter's own and stay open: the sampler's
+    perf groups close when nobody watches, and a RAPL counter begins again at zero when opened."""
 
     def __init__(self, host, period=METER_PERIOD):
         self.instance = secrets.token_hex(8)
@@ -987,9 +1005,8 @@ class Meter:
         self.period = period
         self.net = Counters(host.fs, *NET)
         self.gpu_metrics = self.rapl = None
-        if host.amd:
-            self.gpu_metrics = Src(host.gpu.metrics.path, 1024)
-        elif 'rapl' in host.groups:
+        self._socket = host.gpu.metrics.path if host.amd else None   # the fallback, opened only when needed
+        if 'rapl' in host.groups:
             try:
                 self.rapl = PerfGroup(host.fs, 'power', rapl_events(host.fs, ('pkg', 'ram')))
             except PerfUnavailable:
@@ -1005,8 +1022,10 @@ class Meter:
 
     def start(self):
         if self.rapl is not None and not self.rapl.open():
-            log('meter: cannot open the RAPL counters; energy is not measured')
+            log('meter: cannot open the RAPL counters; ' + ('energy from gpu_metrics' if self._socket else 'energy is not measured'))
             self.rapl = None
+        if self.rapl is None and self._socket:
+            self.gpu_metrics = Src(self._socket, 1024)
         if self.gpu_metrics is not None or self.rapl is not None:
             self.energy = 0.0
         self.tick()

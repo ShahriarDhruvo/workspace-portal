@@ -229,6 +229,22 @@ class FakeGroup:
         return (1, 1, list(self.counts)) if self.fds and self.counts is not None else None
 
 
+class FakeCpuGroups:
+    """Stands in for a PerCpuGroups: the tests set each reading themselves."""
+
+    def __init__(self, n, labels, factors):
+        self.groups = [FakeGroup(labels, factors) for _ in range(n)]
+
+    def open(self):
+        return True
+
+    def close(self):
+        pass
+
+    def read(self):
+        return None
+
+
 class TestDecode(unittest.TestCase):
     def test_gpu_metrics_v3(self):
         gm = H.decode_gpu_metrics(gpu_metrics_blob(activity=97, socket_mw=156200))
@@ -332,7 +348,8 @@ class TestHostAmd(TmpRoot):
         self.assertIsNone(s['cpu']['mhz'])
         self.assertIsNone(s['throttling'])
         self.assertEqual(s['gpu']['tempC'], 49.5)            # instantaneous values are there already
-        self.assertEqual(s['power']['watts'], 7.58)
+        self.assertEqual(s['power']['watts'], 7.58)          # no perf: the figures in gpu_metrics
+        self.assertEqual(s['cpu']['powerW'], 0.49)
         self.assertEqual(s['fans'], [{'label': 'Fan 1', 'rpm': None, 'duty': None},
                                      {'label': 'Fan 2', 'rpm': None, 'duty': None},
                                      {'label': 'Fan 3', 'rpm': None, 'duty': None}])
@@ -340,15 +357,20 @@ class TestHostAmd(TmpRoot):
         self.assertIsNone(s['disk'])
 
     def test_rates_clocks_and_values(self):
+        self.host.groups['cores'] = FakeCpuGroups(2, ['core'], [2 ** -32])
+        self.host.groups['rapl'] = FakeGroup(['pkg'], [2 ** -32])
         a = self.host.read()
         # cpu1 fully busy at 5098 MHz, cpu3 at 50 % at 3000 MHz, others idle; the TSC counts at 3 GHz
         write(self.root, '/proc/stat', proc_stat([(100, 1050), (150, 1000), (100, 1050), (125, 1025)]))
         write(self.root, '/sys/class/drm/card1/device/gpu_metrics',
-              gpu_metrics_blob(activity=97, gfxclk=2720, gfx_temp=6150, gfx_mw=55200, socket_mw=156200, core_mw=6100,
+              gpu_metrics_blob(activity=97, gfxclk=2720, gfx_temp=6150, gfx_mw=55200, socket_mw=150000, core_mw=6100,
                                throttle=(0, 11, 0, 0, 0, 0, 0)), 'wb')
         b = self.host.read()
         b['mono'] = a['mono'] + 0.5
         a['perf_clock'] = [(0, 0, [0, 0, 0])] * 4
+        a['perf_rapl'], b['perf_rapl'] = (0, 0, [0]), (1, 1, [int(78.1 * 2 ** 32)])   # 156.2 W, not the socket's 150
+        a['perf_cores'] = [(0, 0, [0])] * 2     # 1.5 J and 1.55 J in 0.5 s: 6.1 W
+        b['perf_cores'] = [(1, 1, [int(1.5 * 2 ** 32)]), (1, 1, [int(1.55 * 2 ** 32)])]
         b['perf_clock'] = [(5 * 10**8, 5 * 10**8, [1_500_000_000, 0, 0]),
                            (5 * 10**8, 5 * 10**8, [1_500_000_000, 2_549_000_000, 1_500_000_000]),
                            (5 * 10**8, 5 * 10**8, [1_500_000_000, 0, 0]),
@@ -366,6 +388,8 @@ class TestHostAmd(TmpRoot):
                                     'memUsedBytes': 192184320, 'memTotalBytes': 1073741824})
         self.assertEqual(s['power'], {'watts': 156.2, 'parts': {'gpu': 55.2, 'cpu': 6.1, 'dram': None}})
         self.assertTrue(s['throttling'])
+        self.assertEqual(self.host.sources()['power'], 'rapl')
+        self.assertEqual(self.host.info()['power'], {'label': 'APU package (RAPL)'})
         mem = s['memory']
         self.assertEqual(mem['gpuBytes'], 116784360 * 1024)
         self.assertEqual(mem['usedBytes'], (130479124 - 6103420) * 1024)
@@ -517,7 +541,19 @@ class TestNetDisk(TmpRoot):
 
 
 class TestMeter(TmpRoot):
-    def test_amd_socket_power_is_integrated(self):
+    def test_amd_rapl_package(self):
+        make_amd(self.root)
+        m = H.Meter(H.Host(H.Fs(self.root), 'llm', 500), period=3600)
+        group = FakeGroup(['pkg'], [2 ** -32])
+        m.rapl = group
+        m.start()
+        self.assertIsNone(m.gpu_metrics)                    # gpu_metrics is not read at all
+        group.counts = [12 * 2 ** 32]
+        m.tick()
+        self.assertEqual(m.snapshot()['energyJ'], 12.0)
+        m.stop()
+
+    def test_amd_without_rapl_integrates_socket_power(self):
         make_amd(self.root)
         m = H.Meter(H.Host(H.Fs(self.root), 'llm', 500), period=3600)
         m.start()

@@ -74,14 +74,14 @@ The files a sample reads are opened once, kept open and read with `pread`; no sa
 | CPU temperature | hwmon `k10temp` | hwmon `coretemp`, the package |
 | GPU usage, clock, temperature, power | `gpu_metrics` (format 3.0) | usage from the i915 PMU `rcs0-busy`, else the time not in RC6; clock from `gt_act_freq_mhz`; the CPU package's temperature; RAPL's GPU share as power |
 | GPU memory | `mem_info_vram_used`, `mem_info_vram_total` | none |
-| Power | `gpu_metrics` socket power, with the cores' and the GPU's shares | RAPL perf PMU: package + DRAM, with the cores' and the GPU's shares |
+| Power | RAPL perf PMU: the package (CPU, GPU and the rest of the chip); the cores' share from the `power_core` perf PMU, each core's RAPL energy; the GPU's from `gpu_metrics`. Without perf, all three from `gpu_metrics` | RAPL perf PMU: package + DRAM, with the cores' and the GPU's shares |
 | Memory | `/proc/meminfo`; `gpuBytes` is its `GPUActive` | `/proc/meminfo` |
 | Memory bandwidth | `amd_df` perf PMU: DRAM read and write beats | `uncore_imc` perf PMU: data reads and writes |
 | Fans | `/sys/class/ec_su_axb35/fanN/rpm` and `duty`, every 3 s in a thread of their own (an EC read is slow) | none |
 | Network | `/proc/net/dev` bytes of the interfaces with hardware behind them (`/sys/class/net/IF/device`): not lo, bridges, veth or tunnels | same |
 | Disk I/O | `/proc/diskstats` sectors of the whole disks (`/sys/block/DEV/device`): no partitions, loop, zram, dm or md | same |
 | Disk space | `statvfs` of the filesystems on local block devices in `/proc/self/mounts`, one per device, at most every 5 s in a thread of its own | same |
-| Energy total | the socket power integrated at every meter tick | a RAPL perf group of the meter's own: package + DRAM |
+| Energy total | a RAPL perf group of the meter's own: the package. Without perf, the `gpu_metrics` socket power integrated at every meter tick, every 2 s whether or not anyone watches; each read of `gpu_metrics` is a request to the chip's power firmware | a RAPL perf group of the meter's own: package + DRAM |
 
 A source that is missing gives `null` in the sample; `sources` in `/v1/info` names the ones in use.
 
