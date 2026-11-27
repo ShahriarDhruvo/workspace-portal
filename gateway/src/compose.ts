@@ -16,6 +16,8 @@ import { EnergyPrices, type FetchText } from "./monitor/energy-prices.ts";
 import { fenceCheck, type FenceState } from "@portal/container";
 import { createRegistryClient, EngineReleases, type RegistryClient } from "./updates/engine-releases.ts";
 import { createEngineHost, EngineUpdater, type EngineHost } from "./updates/engine-updater.ts";
+import { AppReleases } from "./updates/app-releases.ts";
+import { AppUpdater, createAppHost, type AppHost } from "./updates/app-updater.ts";
 import { createGitHubReleases, type GitHubReleases } from "./updates/github-releases.ts";
 import { HostMonitor } from "./monitor/host-monitor.ts";
 import { hostdClient } from "./monitor/hostd.ts";
@@ -46,7 +48,10 @@ export interface Seams {
   engineHost?: EngineHost | null;
   engineRegistry?: RegistryClient;
   engineNotes?: GitHubReleases;
+  /** How often the engine's and the other software's updates ask portal-hostd about its job. */
   enginePollMs?: number;
+  /** null: the AI server has no portal-hostd. */
+  appHost?: AppHost | null;
   search?: SearchBackend;
   reader?: ReaderBackend | null;
   /** Downloads the electricity prices. */
@@ -144,6 +149,19 @@ export function compose(
     log,
     now,
     pollMs: seams.enginePollMs,
+    busy: () => apps.running,
+  });
+  // The other software on the AI server (llm-server/apps.json): llama-swap and the media models' servers.
+  const apps: AppUpdater = new AppUpdater({
+    config,
+    host: seams.appHost !== undefined ? seams.appHost : hostd.llm && createAppHost(hostd.llm),
+    releases: new AppReleases({ registry: seams.engineRegistry ?? createRegistryClient(), github: seams.engineNotes ?? createGitHubReleases(), log, now }),
+    queue: llm,
+    db,
+    log,
+    now,
+    pollMs: seams.enginePollMs,
+    busy: () => engine.running,
   });
 
   const search = seams.search ?? searchBackend(config.search, log);
@@ -167,7 +185,8 @@ export function compose(
     prices,
     live,
     engine,
-    control: createControlServer({ config, db, manager, versions, updater, engine, llm, requests, live, prices, sessions, connections, log }),
+    apps,
+    control: createControlServer({ config, db, manager, versions, updater, engine, apps, llm, requests, live, prices, sessions, connections, log }),
     createAgentServer: createAgentServerFactory({ config, manager, sessions, connections, log }),
     createPreviewServer: createPreviewServerFactory({ config, manager, sessions, connections, log }),
     /** A service listener for one kind's network. */

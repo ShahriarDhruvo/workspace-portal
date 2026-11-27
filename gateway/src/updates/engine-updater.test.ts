@@ -12,7 +12,7 @@ import { CANCELLED, EngineUpdater, GATEWAY_STOPPED } from "./engine-updater.ts";
 import { HostdError } from "../monitor/hostd.ts";
 import { LlmQueue } from "../service/llm-queue.ts";
 
-function setup(options: { host?: FakeEngineHost | null; drainMinutes?: number } = {}) {
+function setup(options: { host?: FakeEngineHost | null; drainMinutes?: number; busy?: () => boolean } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-updater-"));
   const config = loadConfig({ GATEWAY_CONTROL_SECRET: "c".repeat(32), PORTAL_DATA_DIR: dir, ENGINE_DRAIN_MINUTES: String(options.drainMinutes ?? 15) });
   const db = openDatabase(config.dbFile);
@@ -29,6 +29,7 @@ function setup(options: { host?: FakeEngineHost | null; drainMinutes?: number } 
     log: quiet,
     now: () => clock.now,
     pollMs: 2,
+    busy: options.busy,
   });
   const audits = () => db.select().from(auditLog).all().map((row) => ({ action: row.action, details: JSON.parse(row.details ?? "null") }));
   const done = () => waitFor(() => (updater.snapshot()?.finishedAt != null ? updater.snapshot() : null), "the engine job to finish");
@@ -175,10 +176,24 @@ test("cancel during the download or the drain leaves the engine as it was; Resta
   assert.equal(updater.restartNow(), true);
   const restarted = await done();
   assert.equal(restarted!.phase, "succeeded");
-  assert.ok(restarted!.log.some((line) => line.startsWith("Restarting now on request; 1 running")));
+  assert.ok(restarted!.log.some((line) => line.startsWith("Restarting now on request; 1 request will be cut off")));
   assert.equal(await updater.cancel(), false, "nothing to cancel");
   assert.equal(updater.restartNow(), false);
   running();
+  cleanup();
+});
+
+test("the drain waits for a video job, which holds no request slot", async () => {
+  const { updater, host, queue, done, cleanup } = setup();
+  const video = queue.hold();
+  await updater.startUpdate({ version: "0.34.0", actorUserId: null });
+  const draining = await waitFor(() => (updater.snapshot()?.phase === "draining" ? updater.snapshot() : null), "the drain");
+  assert.deepEqual(draining!.drain && [draining.drain.inFlight, draining.drain.video], [0, true]);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(host.calls, [`pull ${ENGINE_REPOSITORY}@${engineDigest("0.34.0")}`], "no restart while a video is made");
+  video();
+  assert.equal((await done())!.phase, "succeeded");
+  assert.ok(updater.snapshot()!.log.some((line) => line.includes("0 requests and a video job still running")));
   cleanup();
 });
 
@@ -190,7 +205,7 @@ test("the drain ends at ENGINE_DRAIN_MINUTES; shutdown records a running job as 
   clock.now += 60_000;
   const finished = await done();
   assert.equal(finished!.phase, "succeeded");
-  assert.ok(finished!.log.some((line) => line.startsWith("Still 1 running after 1 minutes")));
+  assert.ok(finished!.log.some((line) => line.startsWith("Still 1 request running after 1 minutes")));
   running();
 
   host.jobPolls = 1_000_000;
@@ -232,5 +247,12 @@ test("removing an engine image: not while a job runs, not the running one", asyn
   await assert.rejects(updater.removeImage(engineDigest("0.31.0")), { status: 409, code: "image_current", message: "The engine runs this image." });
   host.removeImage = () => Promise.reject(new HostdError(null, "unreachable", "http://llm:9180: connect ECONNREFUSED"));
   await assert.rejects(updater.removeImage(engineDigest("0.31.0")), { status: 502, code: "hostd_failed", message: "portal-hostd on the AI server: http://llm:9180: connect ECONNREFUSED" });
+  cleanup();
+});
+
+test("nothing starts while an update of the other software on the AI server runs (one hostd job at a time)", async () => {
+  const { updater, cleanup } = setup({ busy: () => true });
+  await assert.rejects(updater.startUpdate({ version: "0.34.0", actorUserId: null }), { status: 409, code: "app_job_running" });
+  await assert.rejects(updater.removeImage(engineDigest("0.30.0")), { status: 409, code: "app_job_running" });
   cleanup();
 });

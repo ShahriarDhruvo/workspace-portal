@@ -15,6 +15,14 @@ export type OnlineAccess = "allowed" | "off" | "not_allowed";
 /** Why a workspace counts as working: "task" (the agent reports work), "llm" (a model request), "cpu" (sustained CPU); null when it is not. */
 export type BusyReason = "task" | "llm" | "cpu" | null;
 
+/** An update's drain: it waits for the requests in flight and for a video job, which holds no request slot. */
+export interface UpdateDrain {
+  since: number;
+  deadline: number;
+  inFlight: number;
+  video: boolean;
+}
+
 /** GET /control/workspaces → workspaces[], GET /control/workspaces/:id, and the answers of start, stop, attach, release. */
 export interface WorkspaceInfo {
   userId: number;
@@ -292,8 +300,8 @@ export interface EngineUpdateJob extends UpdateJob<EngineUpdatePhase> {
   image: string | null;
   /** hostd put the previous image back after the new one failed. */
   rolledBack: boolean;
-  /** While draining: since when, until when at most, and how many requests are still running. */
-  drain: { since: number; deadline: number; inFlight: number } | null;
+  /** While draining: since when, until when at most, how many requests are still running, and whether a video job is. */
+  drain: UpdateDrain | null;
   /** The update can still be cancelled with nothing changed. */
   cancellable: boolean;
 }
@@ -306,6 +314,107 @@ export interface EngineOverview {
   engine: EngineStatus | null;
   releases: EngineReleaseList | null;
   job: EngineUpdateJob | null;
+  drainMinutes: number;
+}
+
+/** Where an app's releases come from (llm-server/apps.json): `tag`'s first group is the version. */
+export interface AppReleaseSource {
+  /** A pattern over the tags (GitHub's for a dir app, the registry's for an image app). */
+  tag: string;
+  /** owner/name: a dir app's releases, an image app's release notes (tag v<version>). */
+  github?: string;
+  /** Prereleases are offered too. */
+  prerelease?: boolean;
+}
+
+/** An installed version of an app on the AI server. */
+export interface AppVersion {
+  version: string;
+  /** An image app's image (repository@sha256:...); null for a dir app. */
+  image: string | null;
+  createdAt: number | null;
+  sizeBytes: number | null;
+  current: boolean;
+  previous: boolean;
+}
+
+/** portal-hostd's view of an app it updates (GET /v1/apps → apps[]). */
+export interface AppStatus {
+  id: string;
+  name: string;
+  /** dir: versions side by side, `current` a symlink; image: a quadlet of its own. */
+  kind: "dir" | "image";
+  unit: string;
+  /** The llama-swap model it serves; null for llama-swap itself. */
+  model: string | null;
+  releases: AppReleaseSource;
+  version: string | null;
+  previous: string | null;
+  state: string;
+  subState: string | null;
+  /** Why its versions could not be read; null when they could. */
+  error: string | null;
+  versions: AppVersion[];
+  /** An image app's image repository. */
+  repository?: string | null;
+}
+
+/** portal-hostd's job for an app: an install (a download or a build) or a switch. */
+export interface AppHostJob {
+  id: string;
+  kind: "install" | "apply";
+  app: string;
+  image: string | null;
+  version: string | null;
+  phase: "running" | "succeeded" | "failed" | "cancelled";
+  step: string;
+  log: string[];
+  startedAt: number;
+  finishedAt: number | null;
+  error: string | null;
+  rolledBack: boolean;
+}
+
+/** One version in an app's release list. */
+export interface AppRelease {
+  version: string;
+  /** An image app's tag of that version; null for a dir app. */
+  tag: string | null;
+  /** The newest release offered. */
+  latest: boolean;
+  notes: ReleaseNotes | null;
+}
+
+export interface AppReleaseList {
+  /** Where they come from: owner/name on GitHub, or the image repository. */
+  source: string;
+  /** The newest releases, and the versions installed, newest first. */
+  releases: AppRelease[];
+  checkedAt: number | null;
+  error: string | null;
+}
+
+/** An app update's phases: installing (skipped when installed) → draining → restarting → succeeded, or failed, or cancelled while installing or draining. */
+export type AppUpdatePhase = "installing" | "draining" | "restarting" | "succeeded" | "failed" | "cancelled";
+
+/** POST /control/apps/:id/update, and GET /control/apps → job. */
+export interface AppUpdateJob extends UpdateJob<AppUpdatePhase> {
+  app: string;
+  appName: string;
+  step: string;
+  /** hostd switched back after the new version failed to start. */
+  rolledBack: boolean;
+  drain: UpdateDrain | null;
+  cancellable: boolean;
+}
+
+/** GET /control/apps[?refresh=1]. */
+export interface AppsOverview {
+  /** off: no portal-hostd for the AI server; offline: it can't be reached; no_apps: it updates no other software. */
+  state: "off" | "offline" | "no_apps" | "ok";
+  error: string | null;
+  apps: Array<{ status: AppStatus; releases: AppReleaseList }>;
+  job: AppUpdateJob | null;
   drainMinutes: number;
 }
 

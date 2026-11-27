@@ -22,7 +22,7 @@ interface RowAction {
   onClick: (from: HTMLElement) => void;
 }
 
-/** One version in a card's Package images table (agentPackageRows, enginePackageRows). */
+/** One version in a card's Package images table (agentPackageRows, enginePackageRows, appPackageRows). */
 export interface PackageImageRow {
   version: string;
   /** What new workspaces start with (the agents), or what runs (the engine). */
@@ -31,11 +31,11 @@ export interface PackageImageRow {
   publishedAt: number | null;
   /** Its GitHub release; null: no Release notes button. */
   notes: ReleaseNotes | null;
-  /** Its image on the server and the image's size (null: unknown); null when it is built or downloaded first. */
+  /** Its image (or install) on the server and its size (null: unknown); null when it is built, downloaded or installed first. */
   image: { sizeBytes: number | null } | null;
   /** Workspaces using its image: the agents' table only. */
   inUse?: number;
-  /** Use…, Download… (the engine), Build…, Rebuild… (the agents); null for none (the engine's running version). */
+  /** Use…, Download…, Install… (the AI server's), Build…, Rebuild… (the agents); null for none (the version in use). */
   action: RowAction | null;
   /** Remove… for an image that isn't current; blocked while something still needs it. */
   remove: RowAction | null;
@@ -44,10 +44,14 @@ export interface PackageImageRow {
 interface PackageImagesProps {
   /** The card's product: the release notes' title. */
   name: string;
+  /** The section's title, "Package images" by default; "Versions" for a program installed as files. */
+  title?: string;
+  /** The column that says what is on the server: "Image" by default, "Installed" for files. */
+  column?: string;
   rows: PackageImageRow[];
   /** The current row's badge: "Current" (an agent's) or "Running" (the engine's). */
   currentLabel: string;
-  /** A row without an image: "Build first" or "Download first". */
+  /** A row without an image: "Build first", "Download first" or "Install first". */
   missingLabel: string;
   /** Where the images are, in the folded summary: "this server", "the AI server". */
   where: string;
@@ -63,19 +67,30 @@ interface PackageImagesProps {
  * The Package images section of each Updates card, folded by default, newest version first. Release notes open in
  * a dialog here; the other buttons are the card's.
  */
-export function PackageImages({ name, rows, currentLabel, missingLabel, where, workspaces = false, empty, triggerRef }: PackageImagesProps) {
+export function PackageImages({
+  name,
+  title = "Package images",
+  column = "Image",
+  rows,
+  currentLabel,
+  missingLabel,
+  where,
+  workspaces = false,
+  empty,
+  triggerRef,
+}: PackageImagesProps) {
   const { rows: page, pagination } = usePagination(rows);
   const notes = useDialog<ReleaseNotesTarget | null>(null);
   const columns = workspaces ? 7 : 6;
 
   return (
-    <VersionSection title="Package images" summary={packageSummary(rows, where)} triggerRef={triggerRef}>
+    <VersionSection title={title} summary={packageSummary(rows, where)} triggerRef={triggerRef}>
       <DataTable footer={<DataTablePagination {...pagination} label={`${name} images pages`} />}>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
             <DataTableHead>Version</DataTableHead>
             <DataTableHead>Released</DataTableHead>
-            <DataTableHead>Image</DataTableHead>
+            <DataTableHead>{column}</DataTableHead>
             {workspaces ? <DataTableHead align="right">Workspaces</DataTableHead> : null}
             <DataTableHead colSpan={3}>
               <span className="sr-only">Actions</span>

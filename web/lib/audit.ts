@@ -24,11 +24,20 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   engine_updated: "Gufo updated",
   engine_update_failed: "Gufo update failed",
   engine_image_removed: "Gufo image removed",
+  app_updated: "Program updated",
+  app_update_failed: "Program update failed",
+  app_version_removed: "Program version removed",
   energy_price_location_set: "Changed electricity price location",
   workspace_files_erased: "Erased workspace files",
   user_online_access_changed: "Changed Online access",
   api_key_created: "Created API key",
   api_key_revoked: "Revoked API key",
+};
+
+const CANCELLED_LABELS: Partial<Record<string, string>> = {
+  agent_update_failed: "Agent update cancelled",
+  engine_update_failed: "Gufo update cancelled",
+  app_update_failed: "Program update cancelled",
 };
 
 function isKnownAction(action: string): action is AuditAction {
@@ -57,6 +66,9 @@ const DETAIL_LABELS: Record<string, string> = {
   kind: "Type",
   rolledBack: "Rolled back",
   digest: "Digest",
+  // Updates of the other software on the AI server (written by the gateway) and version removals: app (its id in
+  // llm-server/apps.json, such as llama-swap), from/to or version, rolledBack.
+  app: "Program",
   // A new user's Online permission, and a change of it.
   onlineAllowed: "Online workspace",
   allowed: "Allowed",
@@ -72,13 +84,11 @@ function humanize(key: string): string {
 /**
  * `workspace_stopped` is written by the gateway: with the admin as actor for Stop/deactivate, without one for
  * idle/logout stops. An update the admin cancelled is written as failed with the error "Cancelled" (agents) or
- * "Cancelled." (the engine): it reads as cancelled.
+ * "Cancelled." (Gufo, the other software): it reads as cancelled.
  */
 export function auditActionLabel(action: string, hasActor: boolean, details: string | null = null): string {
   if (action === "workspace_stopped" && hasActor) return "Stopped workspace";
-  if ((action === "agent_update_failed" || action === "engine_update_failed") && wasCancelled(details)) {
-    return action === "agent_update_failed" ? "Agent update cancelled" : "Gufo update cancelled";
-  }
+  if (Object.hasOwn(CANCELLED_LABELS, action) && wasCancelled(details)) return CANCELLED_LABELS[action]!;
   return isKnownAction(action) ? ACTION_LABELS[action] : humanize(action);
 }
 

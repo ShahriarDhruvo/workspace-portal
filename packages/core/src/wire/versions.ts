@@ -85,6 +85,17 @@ export function isNewerVersion(candidate: string, current: string): boolean {
   return (compareVersions(candidate, current) ?? 0) > 0;
 }
 
+/** Compares runs of digits as numbers: llama-swap's 277 after 99, a rocm10 tag after a rocm7.9 one. */
+const NATURAL = new Intl.Collator("en", { numeric: true });
+
+/**
+ * Orders the versions of the other software on the AI server (llm-server/apps.json): semver by its precedence (a
+ * release after its prereleases), anything else, such as llama-swap's release numbers, with digits as numbers.
+ */
+export function compareAppVersions(a: string, b: string): number {
+  return compareVersions(a, b) ?? NATURAL.compare(a, b);
+}
+
 /** Newest first; versions that can't be ordered go last, in text order. */
 export function byNewestVersion(a: string, b: string): number {
   const order = compareVersions(b, a);

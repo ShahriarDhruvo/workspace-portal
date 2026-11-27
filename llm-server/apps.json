@@ -1,0 +1,41 @@
+{
+  "llama-swap": {
+    "name": "llama-swap",
+    "kind": "dir",
+    "root": "~/.local/lib/llama-swap",
+    "unit": "llama-swap.service",
+    "check": "http://127.0.0.1:8080/health",
+    "releases": { "github": "mostlygeek/llama-swap", "tag": "^v([0-9]+)$" }
+  },
+  "vllm": {
+    "name": "vLLM",
+    "kind": "image",
+    "quadlet": "vllm-sov.container",
+    "model": "sov-transcribe-1",
+    "releases": { "tag": "^rocm[0-9.]+-torch[0-9.]+-vllm([0-9]+\\.[0-9]+\\.[0-9]+)$", "github": "vllm-project/vllm" }
+  },
+  "fish-speech": {
+    "name": "Fish Speech",
+    "kind": "dir",
+    "root": "/opt/ai-studio/fish-speech",
+    "unit": "fish-speech.service",
+    "model": "fish-s2-pro",
+    "releases": { "github": "fishaudio/fish-speech", "tag": "^v(.+)$", "prerelease": true }
+  },
+  "acestep": {
+    "name": "ACE-Step",
+    "kind": "dir",
+    "root": "/opt/ai-studio/acestep",
+    "unit": "acestep.service",
+    "model": "acestep-1.5-xl-base",
+    "releases": { "github": "ace-step/ACE-Step-1.5", "tag": "^v(.+)$" }
+  },
+  "ltx": {
+    "name": "LTX-2",
+    "kind": "dir",
+    "root": "/opt/ai-studio/ltx",
+    "unit": "ltx.service",
+    "model": "ltx-2.5-distilled",
+    "releases": { "github": "Lightricks/LTX-2", "tag": "^v(.+)$" }
+  }
+}

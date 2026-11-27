@@ -4,19 +4,20 @@ import { useCallback, useSyncExternalStore } from "react";
 import type { UpdateJob } from "@portal/core/wire";
 import { isJobActive } from "@/lib/update-jobs";
 
-// The gateway shows its last finished job (of the agents, and of Gufo) until it restarts; once the admin
+// The gateway shows its last finished job (of the agents, of Gufo, and of the other software) until it restarts; once the admin
 // has read the outcome, this browser stops showing it. Only the latest dismissal of each kind is kept: a newer job
 // has another id and shows again.
 
-export type DismissedKind = "agents" | "engine";
+export type DismissedKind = "agents" | "engine" | "apps";
 
 const KEYS: Record<DismissedKind, string> = {
   agents: "portal.admin.agents.dismissedJob",
   engine: "portal.admin.engine.dismissedJob",
+  apps: "portal.admin.apps.dismissedJob",
 };
 const listeners = new Set<() => void>();
 /** The dismissals for this page's lifetime, should the browser refuse storage (private mode). */
-const dismissedHere: Record<DismissedKind, string | null> = { agents: null, engine: null };
+const dismissedHere: Record<DismissedKind, string | null> = { agents: null, engine: null, apps: null };
 
 function subscribe(onChange: () => void): () => void {
   listeners.add(onChange);

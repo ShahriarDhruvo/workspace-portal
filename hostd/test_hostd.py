@@ -1427,6 +1427,10 @@ exit 0
     'ip': '#!/bin/bash\necho "$4 via 192.168.10.1 dev eth0 src 192.168.10.14 uid 0"\n',
     'restorecon': '#!/bin/bash\nexit 0\n',
     'journalctl': '#!/bin/bash\nexit 0\n',
+    # the engine user "llm": uid 0 is the caller outside `unshare -r`, so files can be given to it
+    'getent': '#!/bin/bash\n[[ $1 == passwd && $2 == llm ]] && echo "llm:x:0:0::$STUB_HOME:/bin/bash"\n',
+    'id': '#!/bin/bash\necho llm\n',
+    'runuser': '#!/bin/bash\nwhile [[ $1 != -- ]]; do shift; done\nshift\nexec "$@"\n',
 }
 
 
@@ -1481,7 +1485,7 @@ class TestInstaller(TmpRoot):
 
     def run_install(self, *args, stdin=''):
         env = dict(os.environ, PATH=self.bin + os.pathsep + os.environ.get('PATH', '/usr/bin'),
-                   STUB_STATE=self.state, HOSTD_TEST_PREFIX=self.prefix)
+                   STUB_STATE=self.state, HOSTD_TEST_PREFIX=self.prefix, STUB_HOME=os.path.join(self.root, 'home'))
         env.pop('SUDO_USER', None)
         return subprocess.run(['unshare', '-r', 'bash', os.path.join(self.src, 'install.sh'), *args],
                               input=stdin, capture_output=True, text=True, env=env, timeout=60)
@@ -1589,6 +1593,394 @@ class TestInstaller(TmpRoot):
         with open(os.path.join(self.state, 'rules')) as f:
             self.assertEqual(f.read(), '')
 
+    def test_llm_with_engine_and_apps(self):
+        home = os.path.join(self.root, 'home')
+        write(home, '/.config/containers/systemd/gufo.container', '[Container]\nImage=x\n')
+        write(self.prefix, '/var/lib/systemd/linger/llm', '')
+        apps = apps_json(self.root)
+        apps['llama-swap']['root'] = '~/.local/lib/llama-swap'
+        write(self.root, '/llm-server/apps.json', json.dumps(apps))
+        for app_id in ('llama-swap', 'fish-speech', 'acestep'):
+            write(self.root, f'/llm-server/apps/{app_id}/install.sh', '#!/bin/sh\n')
+            os.chmod(f'{self.root}/llm-server/apps/{app_id}/install.sh', 0o755)
+        write(self.root, '/llm-server/apps/fish-speech/fish-speech-openai.py', '# adapter\n')
+        os.makedirs(self.root + '/opt/acestep')   # there already: kept as it is
+        install = lambda *more: self.run_install('llm', '--portal', '192.168.10.11', '--engine-user', 'llm',
+                                                 '--port', str(self.port), *more)
+        r = install()
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        self.assertIn('updates of other software: llama-swap fish-speech vllm acestep', r.stdout)
+        self.assertIn('APPS_FILE=/usr/local/lib/portal-hostd/apps/apps.json\n', self.read('etc/portal-hostd/hostd.conf'))
+        lib = os.path.join(self.prefix, 'usr/local/lib/portal-hostd/apps')
+        self.assertEqual(json.loads(read(lib + '/apps.json')), apps)
+        self.assertTrue(os.access(lib + '/llama-swap/install.sh', os.X_OK))
+        self.assertEqual(read(lib + '/fish-speech/fish-speech-openai.py'), '# adapter\n')
+        for root in (home + '/.local/lib/llama-swap', self.root + '/opt/fish-speech', self.root + '/opt/acestep'):
+            self.assertTrue(os.path.isdir(root), root)
+        unit = self.read('etc/systemd/system/portal-hostd.service')
+        self.assertIn(f'ReadWritePaths={home}/.config/containers/systemd {home}/.local/state/portal-hostd '
+                      f'-{home}/.local/lib/llama-swap -{self.root}/opt/fish-speech -{self.root}/opt/acestep\n', unit)
+        self.assertIn('ProtectHome=read-only', unit)
+        self.assertEqual(self.restarts(), 1)
 
-if __name__ == '__main__':
-    unittest.main()
+        # A changed apps.json restarts the daemon (it reads the file at start); an app's script does not.
+        apps['acestep']['name'] = 'ACE-Step 1.5'
+        write(self.root, '/llm-server/apps.json', json.dumps(apps))
+        self.assertEqual((install().returncode, self.restarts()), (0, 2))
+        write(self.root, '/llm-server/apps/llama-swap/install.sh', '#!/bin/sh\necho new\n')
+        self.assertEqual((install().returncode, self.restarts()), (0, 2))
+        self.assertEqual(read(lib + '/llama-swap/install.sh'), '#!/bin/sh\necho new\n')
+
+        # A bad apps.json fails the install before anything changes.
+        write(self.root, '/llm-server/apps.json', json.dumps({'Bad Id': {}}))
+        r = install()
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("app 'Bad Id'", r.stderr)
+        self.assertEqual(json.loads(read(lib + '/apps.json')), apps)
+
+        # --apps none turns them off, and a re-run without --apps keeps that.
+        r = install('--apps', 'none')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('no updates of other software', r.stdout)
+        self.assertIn('APPS_FILE=\n', self.read('etc/portal-hostd/hostd.conf'))
+        self.assertFalse(os.path.exists(lib))
+        self.assertNotIn(' -', self.read('etc/systemd/system/portal-hostd.service').split('ReadWritePaths=')[1].split('\n')[0])
+        self.assertEqual(install().returncode, 0)
+        self.assertIn('APPS_FILE=\n', self.read('etc/portal-hostd/hostd.conf'))
+        self.assertEqual(self.restarts(), 3)
+
+
+
+# --- other software (llm-server/apps.json)
+
+VLLM = 'docker.io/kyuz0/vllm-therock-gfx1151'
+V_OLD = 'sha256:' + '1a' * 32
+V_NEW = 'sha256:' + '2b' * 32
+V_BAD = 'sha256:' + '3c' * 32
+VLLM_TAG = 'rocm10.0.0-torch2.11.0-vllm{}'
+
+
+def read(path):
+    with open(path, encoding='utf-8') as f:
+        return f.read()
+
+
+def apps_json(root):
+    return {
+        'llama-swap': {'name': 'llama-swap', 'kind': 'dir', 'root': '~/lib/llama-swap', 'unit': 'llama-swap.service',
+                       'check': 'http://127.0.0.1:1/health',
+                       'releases': {'github': 'mostlygeek/llama-swap', 'tag': '^v([0-9]+)$'}},
+        'fish-speech': {'name': 'Fish Speech', 'kind': 'dir', 'root': root + '/opt/fish-speech',
+                        'unit': 'fish-speech.service', 'model': 'fish-s2-pro',
+                        'releases': {'github': 'fishaudio/fish-speech', 'tag': '^v(.+)$'}},
+        'vllm': {'name': 'vLLM', 'kind': 'image', 'quadlet': 'vllm-sov.container', 'model': 'sov-transcribe-1',
+                 'releases': {'tag': '^rocm[0-9.]+-torch[0-9.]+-vllm([0-9]+[.][0-9]+[.][0-9]+)$'}},
+        'acestep': {'name': 'ACE-Step', 'kind': 'dir', 'root': root + '/opt/acestep', 'unit': 'acestep.service',
+                    'model': 'acestep-1.5-xl', 'releases': {'github': 'ace-step/ACE-Step-1.5', 'tag': '^v(.+)$'}},
+    }
+
+
+class FakeAppsState:
+    def __init__(self, root):
+        self.root = root
+        self.local = {V_OLD: VLLM_TAG.format('0.32.0'), V_THIRD_IMAGE: VLLM_TAG.format('0.31.0')}
+        self.remote = {VLLM_TAG.format('0.33.0'): V_NEW, VLLM_TAG.format('0.34.0'): V_BAD}
+        self.broken = {'2.0.0', '0.34.0'}        # versions that never become ready
+        self.failing_installs = {'9.9.9'}
+        self.calls, self.router_calls = [], []
+        self.running = set()                    # models llama-swap runs
+        self.healthy = True                      # the check URL of the app without a model
+        self.journal = []
+
+
+V_THIRD_IMAGE = 'sha256:' + '4d' * 32
+
+
+class FakeAppsRunner(H.Runner):
+    def __init__(self, state):
+        self.s = state
+
+    def _images(self):
+        return json.dumps([{'Id': d[7:] * 1, 'RepoDigests': [f'{VLLM}@{d}'], 'Digest': d, 'Names': [f'{VLLM}:{tag}'],
+                            'Size': 3_100_000_000, 'Labels': {}, 'Created': 1795000000 + i}
+                           for i, (d, tag) in enumerate(self.s.local.items())])
+
+    def run(self, argv, timeout):
+        self.s.calls.append(argv)
+        if argv[:6] == self.PODMAN:
+            args = argv[argv.index('podman') + 1:]
+            if args[:3] == ['images', '--format', 'json']:
+                return 0, self._images(), ''
+            if args[:2] == ['image', 'inspect']:
+                tag = args[2].split(':', 1)[1] if ':' in args[2].rsplit('/', 1)[-1] else None
+                digest = next((d for d, t in self.s.local.items() if t == tag), None)
+                return (0, json.dumps([f'{VLLM}@{digest}']), '') if digest else (125, '', 'no such image')
+            if args[0] == 'rmi':
+                digest = args[1].split('@', 1)[1]
+                return (0, 'Untagged', '') if self.s.local.pop(digest, None) else (1, '', 'no such image')
+            return 125, '', 'unexpected podman call'
+        if argv[:2] == ['journalctl', '--user']:
+            return 0, ''.join(json.dumps(entry) + '\n' for entry in self.s.journal), ''
+        if argv[:2] == ['systemctl', '--user']:
+            if argv[2] == 'show':
+                active = argv[3] in {'llama-swap.service'} | {MODEL_UNITS[m] for m in self.s.running}
+                return 0, 'ActiveState=active\nSubState=running\n' if active else 'ActiveState=inactive\nSubState=dead\n', ''
+            if argv[2] in ('daemon-reload', 'stop'):
+                return 0, '', ''
+            if argv[2] == 'restart':
+                self.s.healthy = os.readlink(self.s.root + '/home/lib/llama-swap/current') not in self.s.broken
+                return 0, '', ''
+        return 127, '', 'unexpected command'
+
+    def stream(self, argv, on_line, timeout):
+        self.s.calls.append(argv)
+        args = argv[6:]
+        unit = args.pop(0)
+        assert unit.startswith('--unit=portal-hostd-'), argv
+        if args[0] == 'podman':
+            tag = args[2].split(':', 1)[1]
+            on_line('Trying to pull ' + args[2])
+            if tag not in self.s.remote:
+                return 125
+            self.s.local[self.s.remote[tag]] = tag
+            return 0
+        script, version, dest = args
+        on_line(f'installing {version}')
+        if version in self.s.failing_installs:
+            os.makedirs(dest)
+            return 1
+        os.makedirs(dest)
+        write(dest, '/bin/app', version)
+        return 0
+
+
+MODEL_UNITS = {'fish-s2-pro': 'fish-speech.service', 'sov-transcribe-1': 'vllm-sov.service',
+               'acestep-1.5-xl': 'acestep.service', 'qwen3.8-flash-next': 'gufo.service'}
+
+
+class FakeAppsRouter(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def _send(self, code, body):
+        self.send_response(code)
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        s = self.server.state
+        s.router_calls.append(('GET', self.path))
+        if self.path == '/health':
+            return self._send(200 if s.healthy else 503, b'OK')
+        if self.path == '/running':
+            return self._send(200, json.dumps({'running': [{'model': m, 'state': 'ready'} for m in s.running]}).encode())
+        model = self.path.split('/')[2]
+        version = {'fish-s2-pro': lambda: os.readlink(s.root + '/opt/fish-speech/current'),
+                   'sov-transcribe-1': lambda: s.local.get(H.quadlet_image(read(s.root + '/quadlets/vllm-sov.container'))[1].split('@')[1], '').rsplit('vllm', 1)[-1],
+                   'qwen3.8-flash-next': lambda: 'llm'}[model]()
+        if version in s.broken:
+            return self._send(502, b'upstream did not become ready')
+        s.running = {model}
+        return self._send(404, b'')   # a media model need not serve /v1/models
+
+    def do_POST(self):
+        s = self.server.state
+        s.router_calls.append(('POST', self.path))
+        s.running = set()
+        self._send(200, b'{"msg":"ok"}')
+
+
+def make_apps(case):
+    """An H.Apps over llm-server/apps.json's apps under case.root: two installed dir apps and an image app."""
+    case.state = FakeAppsState(case.root)
+    srv = http.server.ThreadingHTTPServer(('127.0.0.1', 0), FakeAppsRouter)
+    srv.state = case.state
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    case.addCleanup(srv.server_close)
+    case.addCleanup(srv.shutdown)
+    url = f'http://127.0.0.1:{srv.server_port}'
+    spec = apps_json(case.root)
+    spec['llama-swap']['check'] = url + '/health'
+    write(case.root, '/apps/apps.json', json.dumps(spec))
+    for app_id in spec:
+        write(case.root, f'/apps/{app_id}/install.sh', '#!/bin/sh\n')
+        os.chmod(f'{case.root}/apps/{app_id}/install.sh', 0o755)
+    for root, version in (('/home/lib/llama-swap', '276'), ('/opt/fish-speech', '1.5.1')):
+        write(case.root, f'{root}/{version}/{H.APP_MARKER}', version + '\n')
+        os.symlink(version, case.root + root + '/current')
+    write(case.root, '/opt/fish-speech/2.0.0/' + H.APP_MARKER, '2.0.0\n')
+    write(case.root, '/opt/fish-speech/3.0.0/' + H.APP_MARKER, '3.0.0\n')
+    write(case.root, '/opt/fish-speech/half/bin/app', '')   # no marker: an install cut short
+    write(case.root, '/quadlets/vllm-sov.container', f'[Container]\nImage={VLLM}@{V_OLD}\n')
+    return H.Apps(H.load_apps(case.root + '/apps/apps.json', case.root + '/home', case.root + '/quadlets'),
+                  case.root + '/state', FakeAppsRunner(case.state), H.Router(url, 'qwen3.8-flash-next', http_timeout=1.0),
+                  ready_timeout=1.0, restart_timeout=2.0, poll=0.02, http_timeout=1.0)
+
+
+class AppsCase(TmpRoot):
+    def setUp(self):
+        super().setUp()
+        self.apps = make_apps(self)
+
+    def wait_job(self):
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            j = self.apps.job
+            if j and j.phase != 'running':
+                return j.to_json()
+            time.sleep(0.02)
+        self.fail('job did not finish')
+
+    def status(self, app_id):
+        return next(a for a in self.apps.status()['apps'] if a['id'] == app_id)
+
+
+class TestAppsConfig(TmpRoot):
+    def load(self, spec):
+        write(self.root, '/apps.json', json.dumps(spec))
+        return H.load_apps(self.root + '/apps.json', '/home/u', '/home/u/.config/containers/systemd')
+
+    def test_paths_and_units(self):
+        apps = self.load(apps_json('/srv'))
+        self.assertEqual(apps['llama-swap']['root'], '/home/u/lib/llama-swap')
+        self.assertEqual(apps['llama-swap']['install'], self.root + '/llama-swap/install.sh')
+        self.assertEqual(apps['vllm']['quadlet'], '/home/u/.config/containers/systemd/vllm-sov.container')
+        self.assertEqual(apps['vllm']['unit'], 'vllm-sov.service')
+
+    def test_refuses_what_it_could_not_act_on(self):
+        good = apps_json('/srv')
+        for change, why in [
+            ({'vllm': {**good['vllm'], 'model': None}}, 'needs quadlet'),
+            ({'acestep': {**good['acestep'], 'root': '/'}}, 'root must be'),
+            ({'llama-swap': {**good['llama-swap'], 'check': None}}, 'needs check'),
+            ({'acestep': {**good['acestep'], 'releases': {'tag': '^v.+$'}}}, 'needs a group'),
+            ({'Bad_Id': good['acestep']}, 'the id must be'),
+            ({'acestep': {**good['acestep'], 'kind': 'zip'}}, 'kind must be'),
+        ]:
+            with self.subTest(why), self.assertRaises(SystemExit) as c:
+                self.load({**good, **change})
+            self.assertIn(why, str(c.exception))
+
+
+class TestApps(AppsCase):
+    def test_status_lists_installed_apps_and_their_versions(self):
+        ids = [a['id'] for a in self.apps.status()['apps']]
+        self.assertEqual(ids, ['llama-swap', 'fish-speech', 'vllm'], 'acestep is not installed here')
+        fish = self.status('fish-speech')
+        self.assertEqual((fish['version'], fish['model'], fish['state']), ('1.5.1', 'fish-s2-pro', 'inactive'))
+        self.assertEqual([v['version'] for v in fish['versions']], ['1.5.1', '2.0.0', '3.0.0'], 'not the one cut short')
+        vllm = self.status('vllm')
+        self.assertEqual((vllm['version'], vllm['repository']), ('0.32.0', VLLM))
+        self.assertEqual(sorted(v['version'] for v in vllm['versions']), ['0.31.0', '0.32.0'])
+        self.assertEqual(vllm['releases']['tag'], apps_json('')['vllm']['releases']['tag'], 'the gateway reads releases here')
+
+    def test_install_builds_the_version_beside_the_others(self):
+        self.apps.start_install('fish-speech', {'version': '3.1.0'})
+        j = self.wait_job()
+        self.assertEqual((j['phase'], j['app']), ('succeeded', 'fish-speech'), j)
+        self.assertIn('installing 3.1.0', ' '.join(j['log']))
+        self.assertEqual(read(self.root + '/opt/fish-speech/3.1.0/' + H.APP_MARKER), '3.1.0\n')
+        self.assertFalse(os.path.exists(self.root + '/opt/fish-speech/3.1.0.part'))
+        self.assertEqual(os.readlink(self.root + '/opt/fish-speech/current'), '1.5.1', 'an install switches nothing')
+        with self.assertRaises(H.ApiError) as c:
+            self.apps.start_install('fish-speech', {'version': '3.1.0'})
+        self.assertEqual(c.exception.code, 'installed')
+
+    def test_failed_install_leaves_nothing(self):
+        self.apps.start_install('fish-speech', {'version': '9.9.9'})
+        j = self.wait_job()
+        self.assertEqual((j['phase'], j['error']), ('failed', 'install.sh exited with status 1'))
+        self.assertFalse(os.path.exists(self.root + '/opt/fish-speech/9.9.9.part'))
+
+    def test_apply_switches_starts_the_model_and_serves_the_llm_again(self):
+        self.apps.start_apply('fish-speech', {'version': '3.0.0'})
+        j = self.wait_job()
+        self.assertEqual(j['phase'], 'succeeded', j)
+        self.assertEqual(os.readlink(self.root + '/opt/fish-speech/current'), '3.0.0')
+        gets = [c[1] for c in self.state.router_calls if c[0] == 'GET' and c[1] != '/running']
+        self.assertEqual(gets, ['/upstream/fish-s2-pro/v1/models', '/upstream/qwen3.8-flash-next/v1/models'])
+        fish = self.status('fish-speech')
+        self.assertEqual((fish['version'], fish['previous']), ('3.0.0', '1.5.1'))
+
+    def test_a_version_that_does_not_start_is_switched_back(self):
+        self.state.journal = [{'_COMM': 'python', 'MESSAGE': 'HIP error: invalid device function'}]
+        self.apps.start_apply('fish-speech', {'version': '2.0.0'})
+        j = self.wait_job()
+        self.assertEqual((j['phase'], j['rolledBack']), ('failed', True), j)
+        self.assertIn('llama-swap did not start fish-s2-pro: 502', j['error'])
+        self.assertIn('Fish Speech said:\nHIP error: invalid device function', j['error'])
+        self.assertEqual(os.readlink(self.root + '/opt/fish-speech/current'), '1.5.1')
+        self.assertIsNone(self.status('fish-speech')['previous'], 'nothing new ran')
+        self.assertEqual(self.state.running, {'qwen3.8-flash-next'}, 'the LLM serves again')
+
+    def test_an_app_without_a_model_restarts_its_unit_and_waits_for_its_check(self):
+        write(self.root, '/home/lib/llama-swap/277/' + H.APP_MARKER, '277\n')
+        self.apps.start_apply('llama-swap', {'version': '277'})
+        j = self.wait_job()
+        self.assertEqual(j['phase'], 'succeeded', j)
+        self.assertIn(['systemctl', '--user', 'restart', 'llama-swap.service'], self.state.calls)
+        write(self.root, '/home/lib/llama-swap/2.0.0/' + H.APP_MARKER, '2.0.0\n')
+        self.apps.start_apply('llama-swap', {'version': '2.0.0'})
+        j = self.wait_job()
+        self.assertEqual((j['phase'], j['rolledBack']), ('failed', True), j)
+        self.assertEqual(os.readlink(self.root + '/home/lib/llama-swap/current'), '277')
+
+    def test_image_app_pulls_by_tag_checks_the_digest_and_rewrites_its_quadlet(self):
+        tag = VLLM_TAG.format('0.33.0')
+        with self.assertRaises(H.ApiError) as c:
+            self.apps.start_install('vllm', {'version': '0.33.0', 'image': f'{VLLM}@{V_NEW}', 'tag': VLLM_TAG.format('0.32.0')})
+        self.assertEqual(c.exception.code, 'invalid_tag')
+        self.apps.start_install('vllm', {'version': '0.33.0', 'image': f'{VLLM}@{V_NEW}', 'tag': tag})
+        self.assertEqual(self.wait_job()['phase'], 'succeeded')
+        self.apps.start_apply('vllm', {'version': '0.33.0'})
+        j = self.wait_job()
+        self.assertEqual(j['phase'], 'succeeded', j)
+        self.assertEqual(read(self.root + '/quadlets/vllm-sov.container'), f'[Container]\nImage={VLLM}@{V_NEW}\n')
+        self.assertIn(['systemctl', '--user', 'daemon-reload'], self.state.calls)
+        self.assertEqual(self.status('vllm')['previous'], '0.32.0')
+
+    def test_image_app_refuses_a_tag_that_moved(self):
+        self.state.remote[VLLM_TAG.format('0.33.0')] = V_BAD
+        self.apps.start_install('vllm', {'version': '0.33.0', 'image': f'{VLLM}@{V_NEW}', 'tag': VLLM_TAG.format('0.33.0')})
+        j = self.wait_job()
+        self.assertEqual(j['phase'], 'failed')
+        self.assertIn('check for updates again', j['error'])
+
+    def test_remove_keeps_what_runs(self):
+        with self.assertRaises(H.ApiError) as c:
+            self.apps.remove('fish-speech', '1.5.1')
+        self.assertEqual(c.exception.code, 'version_current')
+        self.assertEqual(self.apps.remove('fish-speech', '2.0.0'), {'ok': True})
+        self.assertFalse(os.path.exists(self.root + '/opt/fish-speech/2.0.0'))
+        self.assertEqual(self.apps.remove('vllm', '0.31.0'), {'ok': True})
+        self.assertNotIn(V_THIRD_IMAGE, self.state.local)
+        with self.assertRaises(H.ApiError) as c:
+            self.apps.remove('fish-speech', '../../etc')
+        self.assertEqual(c.exception.code, 'invalid_version')
+
+    def test_one_job_at_a_time_with_the_engine(self):
+        self.apps.others.append(lambda: True)
+        with self.assertRaises(H.ApiError) as c:
+            self.apps.start_apply('fish-speech', {'version': '3.0.0'})
+        self.assertEqual(c.exception.code, 'job_running')
+
+
+class TestHttpApps(HttpCase):
+    def test_without_apps(self):
+        self.assertEqual(self.req('GET', '/v1/apps')[0], 404)
+
+    def test_routes(self):
+        self.app.apps = apps = make_apps(self)
+        status, body = self.req('GET', '/v1/apps')
+        self.assertEqual((status, [a['id'] for a in body['apps']], body['job']), (200, ['llama-swap', 'fish-speech', 'vllm'], None))
+        status, body = self.req('POST', '/v1/apps/fish-speech/apply', {'version': '3.0.0'})
+        self.assertEqual((status, body['kind'], body['app']), (202, 'apply', 'fish-speech'))
+        deadline = time.time() + 10
+        while apps.running() and time.time() < deadline:
+            time.sleep(0.02)
+        self.assertEqual(self.req('GET', '/v1/apps')[1]['job']['phase'], 'succeeded')
+        self.assertEqual(self.req('DELETE', '/v1/apps/fish-speech/versions/2.0.0'), (200, {'ok': True}))
+        self.assertEqual(self.req('POST', '/v1/apps/cancel'), (200, {'cancelled': False}))
+        self.assertEqual(self.req('POST', '/v1/apps/nope/install', {'version': '1'})[1]['error'], 'no_app')
+        self.assertEqual(self.req('GET', '/v1/apps/fish-speech/apply')[0], 405)

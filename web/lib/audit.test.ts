@@ -65,6 +65,11 @@ test("Gufo updates, failures and image removals", () => {
   assert.equal(auditActionLabel("agent_update_failed", true, '{"agent":"qwen","error":"Cancelled"}'), "Agent update cancelled");
   assert.equal(auditActionLabel("agent_update_failed", true, '{"agent":"qwen","error":"Cancelled by a restart"}'), "Agent update failed");
   assert.equal(auditActionLabel("engine_image_removed", true), "Gufo image removed");
+  assert.equal(auditActionLabel("app_updated", true), "Program updated");
+  assert.equal(auditActionLabel("app_update_failed", true, '{"app":"llama-swap","from":"276","to":"277","error":"Cancelled.","rolledBack":false}'), "Program update cancelled");
+  assert.equal(auditActionLabel("app_update_failed", false, '{"app":"vllm","error":"not ready"}'), "Program update failed");
+  assert.equal(auditActionLabel("app_version_removed", true), "Program version removed");
+  assert.equal(formatAuditDetails(JSON.stringify({ app: "llama-swap", from: "276", to: "277" })), "Program: llama-swap · From: 276 · To: 277");
   assert.equal(
     formatAuditDetails(JSON.stringify({ from: "0.34.0", to: "0.31.0" })),
     "From: 0.34.0 · To: 0.31.0",

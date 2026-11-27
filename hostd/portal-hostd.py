@@ -11,6 +11,7 @@ import os
 import pwd
 import re
 import secrets
+import shutil
 import signal
 import socket
 import socketserver
@@ -1177,8 +1178,11 @@ class Runner:
 
     PODMAN = ['systemd-run', '--user', '--wait', '--pipe', '--quiet', '--collect']
 
+    def in_user_manager(self, argv, unit=None):
+        return self.PODMAN + ([f'--unit={unit}'] if unit else []) + list(argv)
+
     def podman(self, args, unit=None):
-        return self.PODMAN + ([f'--unit={unit}'] if unit else []) + ['podman'] + list(args)
+        return self.in_user_manager(['podman'] + list(args), unit)
 
     def run(self, argv, timeout):
         try:
@@ -1217,9 +1221,9 @@ class Runner:
 
 
 class Job:
-    def __init__(self, kind, image, version):
+    def __init__(self, kind, image, version, app=None):
         self.id = secrets.token_hex(3)
-        self.kind, self.image, self.version = kind, image, version
+        self.kind, self.image, self.version, self.app = kind, image, version, app
         self.phase, self.step = 'running', 'Starting'
         self.log = deque(maxlen=200)
         self.started_at, self.finished_at = now_ms(), None
@@ -1237,7 +1241,7 @@ class Job:
 
     def to_json(self):
         with self.lock:
-            return {'id': self.id, 'kind': self.kind, 'image': self.image, 'version': self.version,
+            return {'id': self.id, 'kind': self.kind, 'app': self.app, 'image': self.image, 'version': self.version,
                     'phase': self.phase, 'step': self.step, 'log': list(self.log),
                     'startedAt': self.started_at, 'finishedAt': self.finished_at,
                     'error': self.error, 'rolledBack': self.rolled_back}
@@ -1263,8 +1267,8 @@ class Router:
         except (OSError, ValueError) as e:
             return None, str(e).encode()
 
-    def loaded(self):
-        """True while llama-swap runs or starts the engine's model, False when it does not, None when it can't say."""
+    def state(self, model):
+        """llama-swap's state of `model` ("starting", "ready", ...), "" when it does not run it, None when it can't say."""
         status, body = self._call('GET', '/running', self.http_timeout)
         try:
             running = json.loads(body).get('running') if status == 200 else None
@@ -1272,8 +1276,12 @@ class Router:
             running = None
         if not isinstance(running, list):
             return None
-        return any(isinstance(m, dict) and m.get('model') == self.model and m.get('state') in ('starting', 'ready')
-                   for m in running)
+        return next((m.get('state') or '' for m in running if isinstance(m, dict) and m.get('model') == model), '')
+
+    def loaded(self):
+        """True while llama-swap runs or starts the engine's model, False when it does not, None when it can't say."""
+        state = self.state(self.model)
+        return None if state is None else state in ('starting', 'ready')
 
     def unload_all(self, timeout):
         status, body = self._call('POST', '/api/models/unload', timeout)
@@ -1287,9 +1295,82 @@ class Router:
             said = body.decode('utf-8', 'replace').strip()[-300:]
             raise StepError(f'llama-swap did not start {self.model}: {status or "no answer"} {said}'.rstrip())
 
+    def start(self, model, timeout):
+        """Has llama-swap start another model (a media model, which may not serve /v1/models): any answer from the
+        model will do, as long as llama-swap then reports it ready (its own health check passed)."""
+        status, body = self._call('GET', f'/upstream/{urllib.parse.quote(model, safe="")}/v1/models', timeout)
+        if status is None or status in (502, 503, 504) or self.state(model) != 'ready':
+            said = body.decode('utf-8', 'replace').strip()[-300:]
+            raise StepError(f'llama-swap did not start {model}: {status or "no answer"} {said}'.rstrip())
+
 
 def unit_of(quadlet):
     return os.path.basename(quadlet).removesuffix('.container') + '.service'
+
+
+def unit_said(runner, unit, since, who='the engine'):
+    """A unit's own last log lines since `since` (journalctl's @epoch), systemd's lines left out."""
+    rc, out, _ = runner.run(['journalctl', '--user', '-u', unit, '--since', since,
+                             '-n', '200', '-o', 'json', '--no-pager'], 15)
+    said = []
+    for line in out.splitlines() if rc == 0 else []:
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if entry.get('_COMM') != 'systemd' and isinstance(entry.get('MESSAGE'), str):
+            said.append(entry['MESSAGE'])
+    return f'; {who} said:\n' + '\n'.join(said[-ENGINE_LOG_LINES:]) if said else ''
+
+
+def unit_state(runner, unit):
+    rc, out, _ = runner.run(['systemctl', '--user', 'show', unit, '-p', 'ActiveState', '-p', 'SubState'], 15)
+    props = dict(line.partition('=')[::2] for line in out.splitlines() if '=' in line)
+    state = props.get('ActiveState', '') if rc == 0 else ''
+    if state not in ('active', 'activating', 'deactivating', 'inactive', 'failed'):
+        state = 'unknown'
+    return state, (props.get('SubState') or None) if rc == 0 else None
+
+
+def podman_images(runner):
+    """`podman images` as JSON, a list of dicts; StepError when podman fails."""
+    rc, out, err = runner.run(runner.podman(['images', '--format', 'json']), 60)
+    if rc != 0:
+        raise StepError(f'podman images failed: {err.strip() or rc}')
+    try:
+        return json.loads(out or '[]') or []
+    except ValueError:
+        raise StepError('podman images returned invalid JSON')
+
+
+def images_of(listing, repository):
+    """The local images of repository in a podman listing, deduplicated by ID, newest first, with their tags."""
+    seen, result = set(), []
+    for im in listing:
+        iid = im.get('Id') or im.get('ID') or ''
+        if iid in seen:
+            continue
+        refs = list(im.get('RepoDigests') or [])
+        digests = [r.split('@', 1)[1] for r in refs if r.startswith(repository + '@')]
+        names = im.get('Names') or im.get('RepoTags') or []
+        if not digests and not any(n.startswith((repository + ':', repository + '@')) for n in names):
+            continue
+        seen.add(iid)
+        labels = im.get('Labels') or {}
+        rev = labels.get('org.gufo.engine.revision') or labels.get('org.opencontainers.image.revision')
+        created = im.get('Created')
+        # RepoDigests is sorted and, for a multi-arch image, also holds the platform manifest digest;
+        # podman's Digest field is the one the image was pulled by (the index digest a quadlet names).
+        primary = im.get('Digest')
+        result.append({'id': iid[:12], 'digests': digests,
+                       'digest': primary if primary in digests else (digests[0] if digests else None),
+                       'tags': [n[len(repository) + 1:] for n in names if n.startswith(repository + ':')],
+                       'version': labels.get('org.opencontainers.image.version') or None,
+                       'revision': None if not rev or rev == 'unknown' else rev,
+                       'createdAt': int(created) * 1000 if isinstance(created, (int, float)) else None,
+                       'sizeBytes': im.get('Size')})
+    result.sort(key=lambda x: x['createdAt'] or 0, reverse=True)
+    return result
 
 
 class Engine:
@@ -1304,8 +1385,13 @@ class Engine:
         self.router = router
         self.lock = threading.Lock()
         self.job = None
+        # Callables that say another job on this host is running (the apps'): one job at a time.
+        self.others = []
         self._images_cache = (0.0, None)
         self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+    def running(self):
+        return self.job is not None and self.job.phase == 'running'
 
     def _read_quadlet(self, path=None):
         path = path or self.quadlet
@@ -1351,18 +1437,7 @@ class Engine:
         return self._http('/ready')[0] == 200
 
     def engine_said(self, since):
-        """The engine's own last log lines since `since` (journalctl's @epoch), systemd's lines left out."""
-        rc, out, _ = self.runner.run(['journalctl', '--user', '-u', self.unit, '--since', since,
-                                      '-n', '200', '-o', 'json', '--no-pager'], 15)
-        said = []
-        for line in out.splitlines() if rc == 0 else []:
-            try:
-                entry = json.loads(line)
-            except ValueError:
-                continue
-            if entry.get('_COMM') != 'systemd' and isinstance(entry.get('MESSAGE'), str):
-                said.append(entry['MESSAGE'])
-        return '; the engine said:\n' + '\n'.join(said[-ENGINE_LOG_LINES:]) if said else ''
+        return unit_said(self.runner, self.unit, since)
 
     def build_info(self):
         st, body = self._http('/props')
@@ -1375,50 +1450,15 @@ class Engine:
             return None
 
     def unit_state(self, unit=None):
-        rc, out, _ = self.runner.run(['systemctl', '--user', 'show', unit or self.unit, '-p', 'ActiveState', '-p', 'SubState'], 15)
-        props = dict(line.partition('=')[::2] for line in out.splitlines() if '=' in line)
-        state = props.get('ActiveState', '') if rc == 0 else ''
-        if state not in ('active', 'activating', 'deactivating', 'inactive', 'failed'):
-            state = 'unknown'
-        return state, (props.get('SubState') or None) if rc == 0 else None
+        return unit_state(self.runner, unit or self.unit)
 
     def images(self, repository, fresh=False):
         """Local images of repository, deduplicated by ID, newest first (podman listing cached 5 s)."""
         t, cached = self._images_cache
         if fresh or cached is None or time.monotonic() - t > STATUS_CACHE:
-            rc, out, err = self.runner.run(self.runner.podman(['images', '--format', 'json']), 60)
-            if rc != 0:
-                raise StepError(f'podman images failed: {err.strip() or rc}')
-            try:
-                cached = json.loads(out or '[]') or []
-            except ValueError:
-                raise StepError('podman images returned invalid JSON')
+            cached = podman_images(self.runner)
             self._images_cache = (time.monotonic(), cached)
-        seen, result = set(), []
-        for im in cached:
-            iid = im.get('Id') or im.get('ID') or ''
-            if iid in seen:
-                continue
-            refs = list(im.get('RepoDigests') or [])
-            digests = [r.split('@', 1)[1] for r in refs if r.startswith(repository + '@')]
-            names = im.get('Names') or im.get('RepoTags') or []
-            if not digests and not any(n.startswith((repository + ':', repository + '@')) for n in names):
-                continue
-            seen.add(iid)
-            labels = im.get('Labels') or {}
-            rev = labels.get('org.gufo.engine.revision') or labels.get('org.opencontainers.image.revision')
-            created = im.get('Created')
-            # RepoDigests is sorted and, for a multi-arch image, also holds the platform manifest digest;
-            # podman's Digest field is the one the image was pulled by (the index digest a quadlet names).
-            primary = im.get('Digest')
-            result.append({'id': iid[:12], 'digests': digests,
-                           'digest': primary if primary in digests else (digests[0] if digests else None),
-                           'version': labels.get('org.opencontainers.image.version') or None,
-                           'revision': None if not rev or rev == 'unknown' else rev,
-                           'createdAt': int(created) * 1000 if isinstance(created, (int, float)) else None,
-                           'sizeBytes': im.get('Size')})
-        result.sort(key=lambda x: x['createdAt'] or 0, reverse=True)
-        return result
+        return images_of(cached, repository)
 
     def image_exists(self, image):
         rc, _, _ = self.runner.run(self.runner.podman(['image', 'exists', image]), 60)
@@ -1476,8 +1516,10 @@ class Engine:
             raise ApiError(400, 'wrong_repository', f'repository must be {repo}')
 
     def _busy(self):
-        if self.job is not None and self.job.phase == 'running':
+        if self.running():
             raise ApiError(409, 'job_running', 'another engine job is running')
+        if any(other() for other in self.others):
+            raise ApiError(409, 'job_running', 'an update of other software on this host is running')
 
     def _start(self, job, target):
         with self.lock:
@@ -1666,6 +1708,484 @@ class Engine:
         return {'ok': True}
 
 
+# Other software on this host that the portal upgrades (llm-server/apps.json): each app is a "dir" (versions side by
+# side under its root, `current` a symlink to one, each built by the app's install.sh) or an "image" (a quadlet of its
+# own, like the engine's). An apply switches, starts the app the way it runs (its model through llama-swap, or its
+# unit), and switches back when that fails.
+APP_ID_RE = re.compile(r'[a-z0-9][a-z0-9-]{0,31}')
+APP_VERSION_RE = re.compile(r'[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}')
+TAG_RE = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}')
+APP_MARKER = '.portal-version'    # written into a version's directory once its install.sh succeeded
+APP_INSTALL_TIMEOUT = 3 * 3600
+
+
+def load_apps(path, home, quadlet_dir):
+    """apps.json -> {id: app}; SystemExit on anything this daemon could not act on safely."""
+    try:
+        with open(path, encoding='utf-8') as f:
+            raw = json.load(f)
+    except (OSError, ValueError) as e:
+        raise SystemExit(f'portal-hostd: cannot read {path}: {e}')
+    if not isinstance(raw, dict):
+        raise SystemExit(f'portal-hostd: {path} must be an object of apps by id')
+    apps = {}
+    for app_id, a in raw.items():
+        def bad(why):
+            raise SystemExit(f'portal-hostd: {path}: app {app_id!r}: {why}')
+        if not APP_ID_RE.fullmatch(app_id) or not isinstance(a, dict):
+            bad('the id must be lowercase letters, digits and dashes, and the app an object')
+        if not isinstance(a.get('name'), str) or not a['name'].strip():
+            bad('name is required')
+        releases = a.get('releases')
+        if not isinstance(releases, dict) or not isinstance(releases.get('tag'), str):
+            bad('releases.tag (a pattern whose first group is the version) is required')
+        try:
+            tag = re.compile(releases['tag'])
+        except re.error as e:
+            bad(f'releases.tag: {e}')
+        if tag.groups < 1:
+            bad('releases.tag needs a group: the version')
+        model = a.get('model')
+        if model is not None and (not isinstance(model, str) or not model.strip() or '/' in model):
+            bad('model must be a llama-swap model id')
+        app = {'id': app_id, 'name': a['name'], 'kind': a.get('kind'), 'model': model, 'tag': tag,
+               'releases': releases, 'check': a.get('check')}
+        if app['kind'] == 'dir':
+            root, unit = a.get('root'), a.get('unit')
+            if not isinstance(root, str) or not isinstance(unit, str) or not unit.endswith('.service'):
+                bad('a dir app needs root and unit (a .service)')
+            root = os.path.normpath(home + root[1:] if root.startswith('~/') else root)
+            if not os.path.isabs(root) or root in ('/', home):
+                bad('root must be an absolute path of its own')
+            app.update(root=root, unit=unit, install=os.path.join(os.path.dirname(path), app_id, 'install.sh'))
+            if model is None and not (isinstance(app['check'], str) and app['check'].startswith('http://')):
+                bad('an app without a model needs check, its http:// health URL')
+        elif app['kind'] == 'image':
+            quadlet = a.get('quadlet')
+            if not isinstance(quadlet, str) or '/' in quadlet or not quadlet.endswith('.container') or model is None:
+                bad('an image app needs quadlet (a .container file name) and model')
+            app.update(quadlet=os.path.join(quadlet_dir, quadlet), unit=unit_of(quadlet))
+        else:
+            bad('kind must be dir or image')
+        apps[app_id] = app
+    return apps
+
+
+def atomic_symlink(target, path):
+    tmp = os.path.join(os.path.dirname(path), f'.{os.path.basename(path)}.hostd-tmp')
+    try:
+        os.unlink(tmp)
+    except FileNotFoundError:
+        pass
+    os.symlink(target, tmp)
+    os.replace(tmp, path)
+
+
+class Apps:
+    def __init__(self, apps, state_dir, runner=None, router=None, ready_timeout=900.0, restart_timeout=900.0,
+                 poll=2.0, http_timeout=2.0):
+        self.apps, self.state_dir = apps, state_dir
+        self.runner = runner or Runner()
+        self.router = router
+        self.ready_timeout, self.restart_timeout = ready_timeout, restart_timeout
+        self.poll, self.http_timeout = poll, http_timeout
+        self.lock = threading.Lock()
+        self.job = None
+        self.others = []   # like Engine.others: the engine's job
+        self._listing = (0.0, None)
+        self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+    def _images(self, repository, fresh=False):
+        t, cached = self._listing
+        if fresh or cached is None or time.monotonic() - t > STATUS_CACHE:
+            cached = podman_images(self.runner)
+            self._listing = (time.monotonic(), cached)
+        return images_of(cached, repository)
+
+    def running(self):
+        return self.job is not None and self.job.phase == 'running'
+
+    def present(self, app):
+        """Installed on this host: a dir app's `current`, an image app's quadlet."""
+        return os.path.islink(os.path.join(app['root'], 'current')) if app['kind'] == 'dir' else os.path.isfile(app['quadlet'])
+
+    def _app(self, app_id):
+        app = self.apps.get(app_id)
+        if app is None or not self.present(app):
+            raise ApiError(404, 'no_app', f'no app {app_id!r} on this host')
+        return app
+
+    def _prev_path(self, app):
+        return os.path.join(self.state_dir, app['id'] + '.prev')
+
+    def _previous(self, app):
+        try:
+            with open(self._prev_path(app), encoding='utf-8') as f:
+                version = f.read().strip()
+            return version if APP_VERSION_RE.fullmatch(version) else None
+        except OSError:
+            return None
+
+    # --- what is installed
+
+    def _dir_versions(self, app):
+        try:
+            names = sorted(os.listdir(app['root']))
+        except OSError:
+            return []
+        found = []
+        for name in names:
+            path = os.path.join(app['root'], name)
+            if not APP_VERSION_RE.fullmatch(name) or os.path.islink(path) or not os.path.isdir(path):
+                continue
+            try:
+                with open(os.path.join(path, APP_MARKER), encoding='utf-8') as f:
+                    if f.read().strip() != name:
+                        continue
+                created = int(os.stat(os.path.join(path, APP_MARKER)).st_mtime * 1000)
+            except OSError:
+                continue
+            found.append({'version': name, 'image': None, 'createdAt': created, 'sizeBytes': None})
+        return found
+
+    def _dir_current(self, app):
+        try:
+            target = os.readlink(os.path.join(app['root'], 'current'))
+        except OSError:
+            return None
+        name = os.path.basename(os.path.normpath(target))
+        return name if APP_VERSION_RE.fullmatch(name) else None
+
+    def _quadlet(self, app):
+        try:
+            with open(app['quadlet'], 'rb') as f:
+                text = f.read().decode('utf-8', 'surrogateescape')
+        except OSError as e:
+            raise StepError(f'cannot read {app["quadlet"]}: {e.strerror}')
+        return text, quadlet_image(text)[1]
+
+    def _version_of(self, app, tags):
+        for tag in sorted(tags):
+            m = app['tag'].fullmatch(tag)
+            if m and m.group(1) and APP_VERSION_RE.fullmatch(m.group(1)):
+                return m.group(1), tag
+        return None, None
+
+    def _image_versions(self, app, fresh=False):
+        _, image = self._quadlet(app)
+        repo = repository_of(image)
+        found = []
+        for im in self._images(repo, fresh):
+            version, tag = self._version_of(app, im['tags'])
+            if version is not None and im['digest']:
+                found.append({'version': version, 'image': f'{repo}@{im["digest"]}', 'tag': tag,
+                              'digests': im['digests'], 'createdAt': im['createdAt'], 'sizeBytes': im['sizeBytes']})
+        return found
+
+    def _image_current(self, app, versions):
+        _, image = self._quadlet(app)
+        digest = digest_of(image)
+        if digest:
+            return next((v['version'] for v in versions if digest in v['digests']), None)
+        version, _ = self._version_of(app, [image.rsplit(':', 1)[-1]] if ':' in image.rsplit('/', 1)[-1] else [])
+        return version
+
+    def _versions(self, app, fresh=False):
+        """-> (installed versions, the current one)"""
+        if app['kind'] == 'dir':
+            return self._dir_versions(app), self._dir_current(app)
+        versions = self._image_versions(app, fresh)
+        return versions, self._image_current(app, versions)
+
+    def status(self):
+        job = self.job
+        job_json = job.to_json() if job else None
+        out = []
+        for app in self.apps.values():
+            if not self.present(app):
+                continue
+            try:
+                versions, current = self._versions(app)
+                error = None
+            except StepError as e:
+                versions, current, error = [], None, str(e)
+            previous = self._previous(app)
+            state, sub = unit_state(self.runner, app['unit'])
+            entry = {'id': app['id'], 'name': app['name'], 'kind': app['kind'], 'unit': app['unit'],
+                     'model': app['model'], 'releases': app['releases'], 'version': current,
+                     'previous': previous if previous != current else None, 'state': state, 'subState': sub,
+                     'error': error,
+                     'versions': [{'version': v['version'], 'image': v['image'], 'createdAt': v['createdAt'],
+                                   'sizeBytes': v['sizeBytes'], 'current': v['version'] == current,
+                                   'previous': v['version'] == previous and v['version'] != current}
+                                  for v in versions]}
+            if app['kind'] == 'image':
+                entry['repository'] = repository_of(self._quadlet(app)[1]) if error is None else None
+            out.append(entry)
+        return {'apps': out, 'job': job_json}
+
+    # --- jobs
+
+    def _busy(self):
+        if self.running():
+            raise ApiError(409, 'job_running', 'another update is running')
+        if any(other() for other in self.others):
+            raise ApiError(409, 'job_running', 'an engine job is running')
+
+    def _start(self, job, target):
+        with self.lock:
+            self._busy()
+            self.job = job
+            snapshot = job.to_json()
+        threading.Thread(target=self._wrap, args=(job, target), name='job-' + job.id, daemon=True).start()
+        return snapshot
+
+    def _wrap(self, job, target):
+        try:
+            target(job, self.apps[job.app])
+        except (StepError, OSError) as e:
+            job.add(f'failed: {e}')
+            job.phase, job.error = 'failed', str(e)
+        except Exception as e:
+            job.add(f'internal error: {type(e).__name__}: {e}')
+            job.phase, job.error = 'failed', f'internal error: {e}'
+        finally:
+            self._listing = (0.0, None)
+            job.finished_at = now_ms()
+            if job.phase == 'running':
+                job.phase = 'succeeded'
+
+    def _version(self, body):
+        version = body.get('version')
+        if not isinstance(version, str) or not APP_VERSION_RE.fullmatch(version):
+            raise ApiError(400, 'invalid_version', 'version must be 1-64 letters, digits and . + _ -')
+        return version
+
+    def start_install(self, app_id, body):
+        app = self._app(app_id)
+        version = self._version(body)
+        self._busy()
+        versions, _ = self._versions_or_503(app)
+        if any(v['version'] == version for v in versions):
+            raise ApiError(409, 'installed', f'{version} is installed already')
+        if app['kind'] == 'dir':
+            if not os.access(app['install'], os.X_OK):
+                raise ApiError(500, 'no_install_script', f'{app["install"]} is missing or not executable')
+            return self._start(Job('install', None, version, app_id), self._install_dir)
+        image, tag = body.get('image'), body.get('tag')
+        repo = repository_of(self._quadlet(app)[1])
+        if not isinstance(image, str) or not IMAGE_RE.fullmatch(image) or IMAGE_RE.fullmatch(image).group('repo') != repo:
+            raise ApiError(400, 'invalid_image', f'image must be {repo}@sha256:<64 hex>')
+        m = app['tag'].fullmatch(tag) if isinstance(tag, str) and TAG_RE.fullmatch(tag) else None
+        if m is None or m.group(1) != version:
+            raise ApiError(400, 'invalid_tag', f'tag must be the image tag of {version}')
+        job = Job('install', image, version, app_id)
+        job.tag = tag
+        return self._start(job, self._install_image)
+
+    def _versions_or_503(self, app):
+        try:
+            return self._versions(app, fresh=True)
+        except StepError as e:
+            raise ApiError(503, 'podman_failed', str(e))
+
+    def _stop_transient(self, job):
+        return self.runner.run(['systemctl', '--user', 'stop', f'portal-hostd-{job.id}.service'], 60)
+
+    def _install_dir(self, job, app):
+        dest = os.path.join(app['root'], job.version)
+        part = dest + '.part'
+        shutil.rmtree(part, ignore_errors=True)
+        job.set_step(f'Installing {app["name"]} {job.version}')
+        argv = self.runner.in_user_manager([app['install'], job.version, part], unit=f'portal-hostd-{job.id}')
+        rc = self.runner.stream(argv, job.add, APP_INSTALL_TIMEOUT)
+        if rc < 0:
+            self._stop_transient(job)
+        if job.cancel_requested or rc != 0 or not os.path.isdir(part):
+            shutil.rmtree(part, ignore_errors=True)
+            if job.cancel_requested:
+                job.phase, job.step, job.error = 'cancelled', 'Cancelled', 'cancelled by request'
+                job.add('cancelled')
+            else:
+                job.phase, job.error = 'failed', f'install.sh exited with status {rc}' if rc else 'install.sh made nothing'
+                job.add(job.error)
+            return
+        with open(os.path.join(part, APP_MARKER), 'w', encoding='utf-8') as f:
+            f.write(job.version + '\n')
+        os.rename(part, dest)
+        job.set_step('Installed')
+
+    def _install_image(self, job, app):
+        repo = repository_of(self._quadlet(app)[1])
+        ref = f'{repo}:{job.tag}'
+        job.set_step(f'Pulling {ref}')
+        rc = self.runner.stream(self.runner.podman(['pull', ref], unit=f'portal-hostd-{job.id}'), job.add, 3600)
+        if rc < 0:
+            self._stop_transient(job)
+        if job.cancel_requested:
+            job.phase, job.step, job.error = 'cancelled', 'Cancelled', 'cancelled by request'
+            job.add('cancelled')
+            return
+        if rc != 0:
+            job.phase, job.error = 'failed', f'podman pull exited with status {rc}'
+            job.add(job.error)
+            return
+        # The tag must still name the image the portal chose.
+        rc, out, err = self.runner.run(self.runner.podman(['image', 'inspect', ref, '--format', '{{json .RepoDigests}}']), 60)
+        try:
+            digests = json.loads(out) if rc == 0 else []
+        except ValueError:
+            digests = []
+        if job.image not in (digests or []):
+            job.phase, job.error = 'failed', f'{ref} is not {job.image.split("@", 1)[1]} any more: check for updates again'
+            job.add(job.error)
+            return
+        job.set_step('Pulled')
+
+    def cancel(self):
+        job = self.job
+        if job is None or job.phase != 'running' or job.kind != 'install':
+            return {'cancelled': False}
+        job.cancel_requested = True
+        rc, _, err = self._stop_transient(job)
+        if rc != 0:
+            job.cancel_requested = False
+            job.add(f'cancel failed: {err.strip()}')
+            return {'cancelled': False}
+        return {'cancelled': True}
+
+    def start_apply(self, app_id, body):
+        app = self._app(app_id)
+        version = self._version(body)
+        self._busy()
+        versions, current = self._versions_or_503(app)
+        if version == current:
+            raise ApiError(409, 'version_current', f'{version} runs already')
+        if not any(v['version'] == version for v in versions):
+            raise ApiError(409, 'not_installed', f'install {version} first')
+        return self._start(Job('apply', None, version, app_id), self._apply)
+
+    def _apply(self, job, app):
+        if app['kind'] == 'dir':
+            link = os.path.join(app['root'], 'current')
+            old = os.readlink(link)
+            new = job.version
+
+            def switch(target):
+                atomic_symlink(target, link)
+        else:
+            old, _ = self._quadlet(app)
+            versions, _ = self._versions(app)
+            target = next(v for v in versions if v['version'] == job.version)
+            job.image = target['image']
+            new = quadlet_rewrite(old, target['image'], None)
+
+            def switch(text):
+                atomic_write(app['quadlet'], text.encode('utf-8', 'surrogateescape'))
+                rc, _, err = self.runner.run(['systemctl', '--user', 'daemon-reload'], 120)
+                if rc != 0:
+                    raise StepError(f'daemon-reload failed: {err.strip() or rc}')
+        before = self._dir_current(app) if app['kind'] == 'dir' else self._image_current(app, self._versions(app)[0])
+        try:
+            job.set_step(f'Switching to {job.version}')
+            switch(new)
+            self._restart(job, app)
+        except (StepError, OSError) as e:
+            job.add(f'failed: {e}')
+            job.set_step('Rolling back')
+            try:
+                switch(old)
+                self._restart(job, app)
+                job.rolled_back, job.error = True, str(e)
+                job.add('rolled back to the previous version')
+                job.set_step('Failed; the previous version runs again')
+            except (StepError, OSError) as e2:
+                job.error = f'{e}; rollback failed too: {e2}'
+                job.add(f'rollback failed: {e2}')
+                job.set_step('Failed; the rollback failed too')
+            job.phase = 'failed'
+            self._serve_llm(job)
+            return
+        if before:
+            os.makedirs(self.state_dir, exist_ok=True)
+            atomic_write(self._prev_path(app), (before + '\n').encode(), 0o600)
+        self._serve_llm(job)
+        job.set_step('Done')
+
+    def _restart(self, job, app):
+        since = f'@{int(time.time())}'
+        if app['model']:
+            if self.router is None:
+                raise StepError('no llama-swap to start the model through (ENGINE_ROUTER_URL)')
+            job.set_step('Stopping the models (llama-swap)')
+            self.router.unload_all(self.restart_timeout)
+            deadline = time.monotonic() + self.restart_timeout
+            while unit_state(self.runner, app['unit'])[0] not in ('inactive', 'failed'):
+                if time.monotonic() > deadline:
+                    raise StepError(f'{app["unit"]} did not stop within {self.restart_timeout:.0f} s')
+                time.sleep(self.poll)
+            job.set_step(f'Starting {app["model"]} (llama-swap)')
+            try:
+                self.router.start(app['model'], self.ready_timeout)
+            except StepError as e:
+                raise StepError(f'{e}{unit_said(self.runner, app["unit"], since, app["name"])}')
+            return
+        job.set_step(f'Restarting {app["unit"]}')
+        rc, _, err = self.runner.run(['systemctl', '--user', 'restart', app['unit']], self.restart_timeout)
+        if rc != 0:
+            raise StepError(f'restart failed: {err.strip() or rc}{unit_said(self.runner, app["unit"], since, app["name"])}')
+        job.set_step(f'Waiting for {app["check"]}')
+        deadline = time.monotonic() + self.ready_timeout
+        while not self._healthy(app['check']):
+            if time.monotonic() > deadline:
+                raise StepError(f'{app["check"]} did not answer 200 within {self.ready_timeout:.0f} s'
+                                f'{unit_said(self.runner, app["unit"], since, app["name"])}')
+            time.sleep(self.poll)
+
+    def _healthy(self, url):
+        try:
+            with self._opener.open(url, timeout=self.http_timeout) as r:
+                return r.status == 200
+        except urllib.error.HTTPError as e:
+            e.close()
+            return False
+        except (OSError, ValueError):
+            return False
+
+    def _serve_llm(self, job):
+        """Leaves the host as the portal expects it: llama-swap serving the LLM."""
+        if self.router is None:
+            return
+        job.set_step(f'Starting {self.router.model} (llama-swap)')
+        try:
+            self.router.load(self.ready_timeout)
+        except StepError as e:
+            job.add(f'warning: {e}')
+
+    def remove(self, app_id, version):
+        app = self._app(app_id)
+        if not isinstance(version, str) or not APP_VERSION_RE.fullmatch(version):
+            raise ApiError(400, 'invalid_version', 'no such version')
+        self._busy()
+        versions, current = self._versions_or_503(app)
+        target = next((v for v in versions if v['version'] == version), None)
+        if target is None:
+            raise ApiError(404, 'not_found', f'{version} is not installed')
+        if version == current:
+            raise ApiError(409, 'version_current', f'{version} runs now')
+        if app['kind'] == 'dir':
+            path = os.path.join(app['root'], version)
+            # The marker first, so a removal cut short leaves no version that looks whole.
+            os.unlink(os.path.join(path, APP_MARKER))
+            shutil.rmtree(path)
+        else:
+            rc, out, err = self.runner.run(self.runner.podman(['rmi', target['image']]), 300)
+            self._listing = (0.0, None)
+            if rc != 0:
+                raise ApiError(409, 'rmi_failed', (err or out).strip()[-500:] or f'podman rmi exited with {rc}')
+        return {'ok': True}
+
+
 class _DeadlineReader:
     """Stands in for rfile (http.server only calls these two) so that the request line, the headers and the
     body must arrive within HEADER_TIMEOUT in total."""
@@ -1786,6 +2306,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         ('POST', '/v1/engine/apply'): lambda self, app, body: self.send_json(
             202, app.need_engine().start_apply(body.get('image'), body.get('version'))),
         ('POST', '/v1/engine/cancel'): lambda self, app, body: self.send_json(200, app.need_engine().cancel()),
+        ('GET', '/v1/apps'): lambda self, app, body: self.send_json(200, app.need_apps().status()),
+        ('POST', '/v1/apps/cancel'): lambda self, app, body: self.send_json(200, app.need_apps().cancel()),
     }
 
     def route(self):
@@ -1804,6 +2326,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             handler = self.ROUTES.get((method, path))
             if handler is not None:
                 return handler(self, app, body)
+            if path.startswith('/v1/apps/'):
+                return self.route_app(app, method, path[len('/v1/apps/'):], body)
             if path.startswith('/v1/engine/images/'):
                 if method != 'DELETE':
                     raise ApiError(405, 'method_not_allowed', 'use DELETE')
@@ -1822,6 +2346,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.send_error_json(500, 'internal', f'{type(e).__name__}')
             except OSError:
                 self.close_connection = True
+
+    def route_app(self, app, method, rest, body):
+        """/v1/apps/<id>/install, /v1/apps/<id>/apply (POST), /v1/apps/<id>/versions/<version> (DELETE)."""
+        apps = app.need_apps()
+        parts = [urllib.parse.unquote(p) for p in rest.split('/')]
+        if len(parts) == 2 and parts[1] in ('install', 'apply'):
+            if method != 'POST':
+                raise ApiError(405, 'method_not_allowed', 'use POST')
+            start = apps.start_install if parts[1] == 'install' else apps.start_apply
+            return self.send_json(202, start(parts[0], body))
+        if len(parts) == 3 and parts[1] == 'versions':
+            if method != 'DELETE':
+                raise ApiError(405, 'method_not_allowed', 'use DELETE')
+            return self.send_json(200, apps.remove(parts[0], parts[2]))
+        raise ApiError(404, 'not_found', 'no such endpoint')
 
     do_GET = do_POST = do_DELETE = route
 
@@ -1863,8 +2402,8 @@ class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
 
 class App:
-    def __init__(self, host, sampler, meter, token, engine=None):
-        self.host, self.sampler, self.meter, self.engine = host, sampler, meter, engine
+    def __init__(self, host, sampler, meter, token, engine=None, apps=None):
+        self.host, self.sampler, self.meter, self.engine, self.apps = host, sampler, meter, engine, apps
         self.token = token.encode()
 
     def authorized(self, header):
@@ -1874,6 +2413,11 @@ class App:
         if self.engine is None:
             raise ApiError(404, 'no_engine', 'this host has no engine control')
         return self.engine
+
+    def need_apps(self):
+        if self.apps is None:
+            raise ApiError(404, 'no_apps', 'this host updates no other software (APPS_FILE)')
+        return self.apps
 
 
 def load_token():
@@ -1915,7 +2459,8 @@ def config(env):
     router_model = env.get('ENGINE_ROUTER_MODEL', '').strip() if unit else ''
     if bool(router_url) != bool(router_model):
         raise SystemExit('portal-hostd: ENGINE_ROUTER_URL and ENGINE_ROUTER_MODEL go together')
-    return {'role': role, 'bind': bind, 'port': port, 'interval_ms': interval, 'engine_unit': unit,
+    apps_file = env.get('APPS_FILE', '').strip() if unit else ''
+    return {'role': role, 'bind': bind, 'port': port, 'interval_ms': interval, 'engine_unit': unit, 'apps_file': apps_file,
             'engine_quadlet': quadlet, 'engine_url': env.get('ENGINE_URL', '').strip() or 'http://127.0.0.1:8080',
             'engine_router': (router_url, router_model) if router_url else None,
             'state_dir': os.path.join(home, '.local/state/portal-hostd'),
@@ -1937,11 +2482,19 @@ def sd_notify(msg):
 
 def build(cfg, token):
     host = Host(Fs(cfg['root']), cfg['role'], cfg['interval_ms'], cfg['engine_unit'] or None)
-    engine = None
+    engine = apps = None
     if cfg['engine_unit']:
         router = Router(*cfg['engine_router']) if cfg['engine_router'] else None
         engine = Engine(cfg['engine_unit'], cfg['engine_quadlet'], cfg['engine_url'], cfg['state_dir'], router=router)
-    return App(host, Sampler(host, cfg['interval_ms'] / 1000.0), Meter(host), token, engine)
+        if cfg['apps_file']:
+            home = pwd.getpwuid(os.getuid()).pw_dir
+            apps = Apps(load_apps(cfg['apps_file'], home, os.path.dirname(cfg['engine_quadlet'])), cfg['state_dir'],
+                        router=router)
+            engine.others.append(apps.running)
+            apps.others.append(engine.running)
+            # One job at a time on this host: each checks the other's and starts its own under the same lock.
+            apps.lock = engine.lock
+    return App(host, Sampler(host, cfg['interval_ms'] / 1000.0), Meter(host), token, engine, apps)
 
 
 def main(argv):
@@ -1967,7 +2520,8 @@ def main(argv):
     src = app.host.sources()
     log(f'portal-hostd: role={cfg["role"]} listening on {cfg["bind"]}:{cfg["port"]} interval={cfg["interval_ms"]}ms '
         f'perf={src["perf"]} bandwidth={src["bandwidth"]} power={src["power"]} gpuBusy={src["gpuBusy"]} '
-        f'energy={"on" if app.meter.energy is not None else "off"} engine={cfg["engine_unit"] or "-"}'
+        f'energy={"on" if app.meter.energy is not None else "off"} engine={cfg["engine_unit"] or "-"} '
+        f'apps={",".join(app.apps.apps) if app.apps else "-"}'
         f'{" router=" + cfg["engine_router"][0] if cfg["engine_router"] else ""}')
     sd_notify('READY=1')
     try:

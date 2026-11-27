@@ -1,10 +1,11 @@
 [Unit]
 Description=llama-swap: the LLM and the image models behind port 8080, started and stopped on demand
-Documentation=https://github.com/mostlygeek/llama-swap/blob/v276/README.md
+Documentation=https://github.com/mostlygeek/llama-swap#readme
 
 [Service]
 # Listens on every interface, without a login: the firewall must let only the portal server reach 8080.
-ExecStart=%h/.local/bin/llama-swap -config %h/.config/llama-swap/config.yaml -listen 0.0.0.0:8080
+# current: the release Admin > Updates switched to, among those side by side in ~/.local/lib/llama-swap.
+ExecStart=%h/.local/lib/llama-swap/current/llama-swap -config %h/.config/llama-swap/config.yaml -listen 0.0.0.0:8080
 Restart=always
 RestartSec=5
 # llama-swap stops the models itself (cmdStop), so systemd signals only it; the LLM may take 120 s to stop.

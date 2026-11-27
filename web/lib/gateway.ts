@@ -7,6 +7,8 @@ import type {
   AgentUpdateRequest,
   AgentVersionsOverview,
   ApiError,
+  AppsOverview,
+  AppUpdateJob,
   EnergyPriceStatus,
   EngineOverview,
   EngineUpdateJob,
@@ -35,6 +37,8 @@ const STOP_TIMEOUT_MS = 30_000;
 const REGISTRY_TIMEOUT_MS = 45_000;
 /** Removing an image is Docker deleting its layers. */
 const IMAGE_REMOVE_TIMEOUT_MS = 30_000;
+/** What portal-hostd removes on the AI server: an image, or an installed version's directory (the gateway waits 120 s). */
+const HOST_REMOVE_TIMEOUT_MS = 130_000;
 
 export class GatewayError extends Error {
   readonly status: number;
@@ -179,7 +183,25 @@ export const gateway = {
   restartEngineNow: () => call<{ ok: boolean }>("POST", "/control/engine/restart-now"),
   /** Refused for the image the engine runs and while a job runs. */
   removeEngineImage: (digest: string) =>
-    call<{ ok: true }>("DELETE", `/control/engine/images/${encodeURIComponent(digest)}`, { timeoutMs: IMAGE_REMOVE_TIMEOUT_MS }),
+    call<{ ok: true }>("DELETE", `/control/engine/images/${encodeURIComponent(digest)}`, { timeoutMs: HOST_REMOVE_TIMEOUT_MS }),
+  /**
+   * The other software on the AI server (llm-server/apps.json): each program's versions and releases, and the running
+   * or last update job (docs/ARCHITECTURE.md, "Updates of the other software"). `refresh` asks GitHub and the registry again.
+   */
+  apps: ({ refresh = false }: { refresh?: boolean } = {}) =>
+    call<AppsOverview>("GET", `/control/apps${refresh ? "?refresh=1" : ""}`, { timeoutMs: REGISTRY_TIMEOUT_MS }),
+  /** Starts switching `app` to an exact version, installed first when it isn't. The gateway audits the outcome. */
+  updateApp: (app: string, version: string, actorUserId: number) =>
+    call<AppUpdateJob>("POST", `/control/apps/${encodeURIComponent(app)}/update`, { body: { version, actorUserId }, timeoutMs: REGISTRY_TIMEOUT_MS }),
+  /** false: too late (restarting or finished). */
+  cancelAppUpdate: () => call<{ cancelled: boolean }>("POST", "/control/apps/cancel"),
+  /** Ends the drain: restarts even though requests still run (they are cut off). false: not draining. */
+  restartAppNow: () => call<{ ok: boolean }>("POST", "/control/apps/restart-now"),
+  /** Refused for the version in use and while a job runs. */
+  removeAppVersion: (app: string, version: string) =>
+    call<{ ok: true }>("DELETE", `/control/apps/${encodeURIComponent(app)}/versions/${encodeURIComponent(version)}`, {
+      timeoutMs: HOST_REMOVE_TIMEOUT_MS,
+    }),
 };
 
 // The one place that turns failures into words: toApiError for people (JSON routes, pages, dialogs),

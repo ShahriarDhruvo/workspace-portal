@@ -1,6 +1,6 @@
 "use client";
 
-import { AGENT_NAMES, type AgentVersionsOverview, type EngineOverview } from "@portal/core/wire";
+import { AGENT_NAMES, type AgentVersionsOverview, type AppsOverview, type EngineOverview } from "@portal/core/wire";
 import type { ActionContext } from "@/lib/agent-versions";
 import type { Loaded } from "@/lib/update-jobs";
 import { PageHeading } from "@/components/layout/page-heading";
@@ -10,6 +10,7 @@ import { RefreshIcon } from "@/components/ui/icons";
 import { Spinner } from "@/components/ui/spinner";
 import { AgentCard } from "./agent-card";
 import { JobAnnouncer } from "./agent-job";
+import { AppCards } from "./app-card";
 import { EngineCard } from "./engine-card";
 import { usePolled } from "./use-polled";
 import { UnreachableAlert, VersionCard } from "./version-card";
@@ -17,19 +18,23 @@ import { UnreachableAlert, VersionCard } from "./version-card";
 interface UpdatesConsoleProps {
   initialAgents: Loaded<AgentVersionsOverview>;
   initialEngine: Loaded<EngineOverview>;
+  initialApps: Loaded<AppsOverview>;
 }
 
 /**
- * The Updates page: one card each for Gufo and the enabled agents. Each part polls its own route; "Check
- * for updates" asks the registries again for both.
+ * The Updates page: one card each for Gufo, the other software on the AI server and the enabled agents. Each part
+ * polls its own route; "Check for updates" asks the registries again for all of them.
  */
-export function UpdatesConsole({ initialAgents, initialEngine }: UpdatesConsoleProps) {
+export function UpdatesConsole({ initialAgents, initialEngine, initialApps }: UpdatesConsoleProps) {
   const agents = usePolled(initialAgents, "/api/admin/agents");
   const engine = usePolled(initialEngine, "/api/admin/engine");
+  const apps = usePolled(initialApps, "/api/admin/apps");
   const versions = agents.data.data;
   const job = versions?.job ?? null;
   const context: ActionContext = { job, offline: agents.data.error !== null };
-  const checked = [versions?.checkedAt, engine.data.data?.releases?.checkedAt].filter((at): at is number => typeof at === "number");
+  const checked = [versions?.checkedAt, engine.data.data?.releases?.checkedAt, apps.data.data?.apps[0]?.releases.checkedAt].filter(
+    (at): at is number => typeof at === "number",
+  );
 
   return (
     <>
@@ -38,14 +43,15 @@ export function UpdatesConsole({ initialAgents, initialEngine }: UpdatesConsoleP
         actions={
           <RegistryCheck
             checkedAt={checked.length > 0 ? Math.min(...checked) : null}
-            checking={agents.refreshing || engine.refreshing}
-            onCheck={() => void Promise.all([agents.refresh(), engine.refresh()])}
+            checking={agents.refreshing || engine.refreshing || apps.refreshing}
+            onCheck={() => void Promise.all([agents.refresh(), engine.refresh(), apps.refresh()])}
           />
         }
       />
       <JobAnnouncer job={job} name={job ? AGENT_NAMES[job.agent] : ""} />
       <div className="flex flex-col gap-4">
-        <EngineCard data={engine.data} onChanged={engine.pollNow} />
+        <EngineCard data={engine.data} appJob={apps.data.data?.job ?? null} onChanged={engine.pollNow} />
+        <AppCards data={apps.data} engineJob={engine.data.data?.job ?? null} onChanged={apps.pollNow} />
         {versions ? (
           versions.agents.map((agent) => (
             <AgentCard

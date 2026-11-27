@@ -3,23 +3,27 @@
 #   sudo bash hostd/install.sh portal [--token-stdin] [--port 9180]
 #   sudo bash hostd/install.sh llm --portal <portal server IPv4> [--engine-unit gufo.service|none]
 #                                  [--engine-user USER] [--engine-url URL] [--engine-router URL MODEL|none]
-#                                  [--token-stdin] [--port 9180]
+#                                  [--apps on|none] [--token-stdin] [--port 9180]
 #   sudo bash hostd/install.sh uninstall
 # --token-stdin reads the token as one line from stdin (an argument would show in /proc/*/cmdline).
 # Without it an existing /etc/portal-hostd/token is kept, else a new one is generated.
 # --engine-router: llama-swap's address and the engine's model there; a re-run without it keeps the conf's.
+# --apps: updates of the other software in llm-server/apps.json (on by default with engine control); a re-run
+# without it keeps the conf's choice.
 set -euo pipefail
 
 SRC_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 PREFIX=${HOSTD_TEST_PREFIX:-}   # set by test_hostd.py only
 LIB_DIR=$PREFIX/usr/local/lib/portal-hostd
+APPS_FILE=/usr/local/lib/portal-hostd/apps/apps.json   # as the daemon sees it; apps.json and each app's <id>/
+APPS_SRC=$SRC_DIR/../llm-server
 CONF_DIR=$PREFIX/etc/portal-hostd
 CONF=$CONF_DIR/hostd.conf
 TOKEN_FILE=$CONF_DIR/token
 UNIT_FILE=$PREFIX/etc/systemd/system/portal-hostd.service
 UNIT="portal-hostd.service"
 
-usage() { sed -n '3,10s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 2; }
+usage() { sed -n '3,12s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 2; }
 die() { echo "install.sh: $*" >&2; exit 1; }
 warn() { echo "install.sh: warning: $*" >&2; }
 say() { echo "install.sh: $*"; }
@@ -70,7 +74,9 @@ fw_add() {  # fw_add IP PORT: add the rule to the zone of the interface that rou
 }
 
 state_hash() {  # of what a running daemon depends on; a file not there yet adds nothing
-    { cat "$LIB_DIR/portal-hostd.py" "$UNIT_FILE" "$CONF" "$TOKEN_FILE" 2>/dev/null || true; } | sha256sum | cut -d' ' -f1
+    # The apps' install scripts run anew each time; apps.json is read at start.
+    { cat "$LIB_DIR/portal-hostd.py" "$UNIT_FILE" "$CONF" "$TOKEN_FILE" "$LIB_DIR/apps/apps.json" 2>/dev/null || true; } |
+        sha256sum | cut -d' ' -f1
 }
 
 wait_health() {  # wait_health PORT: 20 tries of GET /v1/health, half a second apart
@@ -98,6 +104,7 @@ uninstall() {
     rm -rf "$CONF_DIR" "$LIB_DIR"
     say "removed portal-hostd (unit, $CONF_DIR, $LIB_DIR$( [[ -n $ip ]] && echo ', firewalld rule' ))."
     say "an engine user's ~/.local/state/portal-hostd (saved previous quadlet) is kept; delete it by hand if unwanted."
+    say "the other software's installed versions (llm-server/apps.json's roots) are kept."
 }
 
 [[ $EUID -eq 0 ]] || die "run as root (sudo bash hostd/install.sh ...)"
@@ -109,7 +116,7 @@ case $role in
     *) die "unknown role '$role' (portal, llm or uninstall)" ;;
 esac
 
-token_stdin=0 port=9180 portal="" engine_unit="" engine_user="${SUDO_USER:-}" engine_url="" router_url="" router_model=""
+token_stdin=0 port=9180 portal="" engine_unit="" engine_user="${SUDO_USER:-}" engine_url="" router_url="" router_model="" apps=""
 while [[ $# -gt 0 ]]; do
     case $1 in
         --token-stdin) token_stdin=1; shift ;;
@@ -122,6 +129,10 @@ while [[ $# -gt 0 ]]; do
             router_url=${2:?--engine-router needs URL MODEL, or none}
             if [[ $router_url == none ]]; then router_model=none; shift 2
             else router_model=${3:?--engine-router needs URL MODEL}; shift 3; fi ;;
+        --apps)
+            apps=${2:?--apps needs on or none}
+            [[ $apps == on || $apps == none ]] || die "--apps needs on or none"
+            shift 2 ;;
         -h | --help) usage ;;
         *) die "unknown option $1" ;;
     esac
@@ -130,13 +141,13 @@ done
 [[ -f $SRC_DIR/portal-hostd.py && -f $SRC_DIR/portal-hostd.service ]] || die "run this from the repo (hostd/ files missing)"
 command -v python3 >/dev/null || die "python3 is required"
 
-bind=127.0.0.1 identity="DynamicUser=yes" protect_home="ProtectHome=yes" after="" role_conf=()
+bind=127.0.0.1 identity="DynamicUser=yes" protect_home="ProtectHome=yes" after="" role_conf=() apps_on=0
 if [[ $role == llm ]]; then
     bind=0.0.0.0
     [[ $portal =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || die "llm role needs --portal <portal server IPv4>"
     if [[ $engine_unit != none ]]; then
         [[ -n $engine_user && $engine_user != root ]] || die "pass --engine-user (the user that owns the engine quadlet)"
-        IFS=: read -r _ _ uid _ _ home _ < <(getent passwd "$engine_user") || die "no such user $engine_user"
+        IFS=: read -r _ _ uid gid _ home _ < <(getent passwd "$engine_user") || die "no such user $engine_user"
         qdir=$home/.config/containers/systemd
         if [[ -z $engine_unit && ! -f $qdir/gufo.container ]]; then engine_unit=none; fi
     fi
@@ -161,10 +172,48 @@ if [[ $role == llm ]]; then
             role_conf+=("ENGINE_ROUTER_URL=$router_url" "ENGINE_ROUTER_MODEL=$router_model")
             behind=", behind llama-swap at $router_url"
         fi
+        # Without --apps a re-run keeps the conf's choice: an empty APPS_FILE= line is "none".
+        if [[ -z $apps ]]; then
+            if [[ -f $CONF ]] && grep -qx 'APPS_FILE=' "$CONF"; then apps=none; else apps=on; fi
+        fi
+        writable="$qdir $state_dir"
+        if [[ $apps == on ]]; then
+            [[ -f $APPS_SRC/apps.json && -d $APPS_SRC/apps ]] || die "llm-server/apps.json or llm-server/apps/ missing (or pass --apps none)"
+            # The daemon's own check of apps.json, so a bad one fails here and not at its start. Prints the ids on one
+            # line, then each dir app's root. -B: no root-owned __pycache__ in the checkout.
+            listing=$(python3 -I -B -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("hostd", sys.argv[1]); hostd = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(hostd)
+apps = hostd.load_apps(*sys.argv[2:])
+print(" ".join(apps))
+for app in apps.values():
+    if app["kind"] == "dir": print(app["root"])
+' "$SRC_DIR/portal-hostd.py" "$APPS_SRC/apps.json" "$home" "$qdir") || die "llm-server/apps.json: see above"
+            { read -r app_ids; mapfile -t roots; } <<<"$listing"
+            for root in "${roots[@]}"; do
+                [[ $root != *[[:space:]]* ]] || die "llm-server/apps.json: the root '$root' has a space"
+                if [[ -d $root ]]; then
+                    [[ $(stat -c %u "$root") == "$uid" ]] || warn "$root is not owned by $engine_user: its updates will fail"
+                elif [[ $root == "$home"/* ]]; then
+                    runuser -u "$engine_user" -- mkdir -p "$root"
+                else
+                    mkdir -p "${root%/*}"
+                    install -d -o "$uid" -g "$gid" -m 0755 "$root"
+                fi
+                writable+=" -$root"   # "-": a root deleted by hand does not keep the daemon from starting
+            done
+            role_conf+=("APPS_FILE=$APPS_FILE")
+            apps_on=1
+            say "updates of other software: $app_ids"
+        else
+            say "no updates of other software (--apps none)"
+            role_conf+=("APPS_FILE=")
+        fi
         identity="User=$engine_user
 Group=$(id -gn "$engine_user")
 Environment=XDG_RUNTIME_DIR=/run/user/$uid DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus
-ReadWritePaths=$qdir $state_dir"
+ReadWritePaths=$writable"
         protect_home="ProtectHome=read-only"
         after=" user@$uid.service"
         say "engine control: $engine_unit (quadlet $quadlet, user $engine_user${behind:-})"
@@ -193,6 +242,16 @@ printf '%s\n' "# portal-hostd configuration (written by hostd/install.sh; not se
 install -m 0755 "$SRC_DIR/portal-hostd.py" "$LIB_DIR/portal-hostd.py"
 python3 -I -m py_compile "$LIB_DIR/portal-hostd.py" || warn "could not precompile (the service compiles at start instead)"
 install -m 0644 "$SRC_DIR/README.md" "$LIB_DIR/README.md"
+rm -rf "$LIB_DIR/apps.new"
+if [[ $apps_on == 1 ]]; then
+    # apps.json beside each app's directory (install.sh and the files it copies), as the daemon expects them.
+    (umask 022 && mkdir "$LIB_DIR/apps.new" && cp "$APPS_SRC/apps.json" "$LIB_DIR/apps.new/" &&
+        cp -R "$APPS_SRC/apps/." "$LIB_DIR/apps.new/")
+    rm -rf "$LIB_DIR/apps"
+    mv "$LIB_DIR/apps.new" "$LIB_DIR/apps"
+else
+    rm -rf "$LIB_DIR/apps"
+fi
 unit=$(<"$SRC_DIR/portal-hostd.service")
 unit=${unit//@ROLE@/$role}
 unit=${unit//@AFTER@/$after}

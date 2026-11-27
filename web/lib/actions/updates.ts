@@ -2,13 +2,14 @@
 
 import { writeAudit } from "@portal/core";
 import { agentActionError } from "../agent-versions";
+import { appActionError, appVersionRefSchema } from "../app-updates";
 import { getDb } from "../db";
 import { engineActionError, engineImageSchema, engineVersionSchema } from "../engine-updates";
 import { attempt, gateway } from "../gateway";
 import { requireAdmin } from "../session";
 import { agentImageSchema, agentUpdateSchema, fieldErrors, type ActionResult } from "../validation";
 
-// The Updates page's actions, for the agents and Gufo. Each re-checks the admin role and validates its
+// The Updates page's actions, for the agents, Gufo and the other software on the AI server. Each re-checks the admin role and validates its
 // input; the gateway refuses what it can't do (one job at a time, an image in use) and audits updates itself,
 // attributed to actorUserId. Image removals are audited here. The page polls for a job's progress.
 
@@ -95,5 +96,47 @@ export async function removeEngineImage(digest: string, version: string | null):
   if (result.ok) {
     writeAudit(getDb(), { action: "engine_image_removed", actorUserId: session.user.id, details: { version: parsed.data.version, digest: parsed.data.digest } });
   }
+  return result;
+}
+
+/** Starts switching a program on the AI server to `version`, newer or older: the exact version the dialog showed. */
+export async function updateApp(app: string, version: string): Promise<ActionResult> {
+  const session = await requireAdmin();
+  const parsed = appVersionRefSchema.safeParse({ app, version });
+  if (!parsed.success) return { ok: false, message: Object.values(fieldErrors(parsed.error))[0] ?? "Unknown version." };
+  return attempt(
+    () => gateway.updateApp(parsed.data.app, parsed.data.version, session.user.id),
+    (error) => appActionError("update", error),
+  );
+}
+
+/** Cancels the job while it installs or drains; nothing changes. */
+export async function cancelAppUpdate(): Promise<ActionResult> {
+  return ask(
+    async () => (await gateway.cancelAppUpdate()).cancelled,
+    (error) => appActionError("cancel", error),
+    "Too late to cancel: the program is restarting, or the job has finished.",
+  );
+}
+
+/** Ends the drain: the program restarts now, cutting off the requests still running. */
+export async function restartAppNow(): Promise<ActionResult> {
+  return ask(
+    async () => (await gateway.restartAppNow()).ok,
+    (error) => appActionError("restart", error),
+    "The job is no longer waiting for requests: it is restarting, or has finished.",
+  );
+}
+
+/** Removes an installed version of a program from the AI server (not the one in use). */
+export async function removeAppVersion(app: string, version: string): Promise<ActionResult> {
+  const session = await requireAdmin();
+  const parsed = appVersionRefSchema.safeParse({ app, version });
+  if (!parsed.success) return { ok: false, message: "Unknown version." };
+  const result = await attempt(
+    () => gateway.removeAppVersion(parsed.data.app, parsed.data.version),
+    (error) => appActionError("remove", error),
+  );
+  if (result.ok) writeAudit(getDb(), { action: "app_version_removed", actorUserId: session.user.id, details: parsed.data });
   return result;
 }

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { byNewestVersion, compareVersions, findVersion, isNewerVersion, isStableVersion, isVersion } from "./versions.ts";
+import { byNewestVersion, compareAppVersions, compareVersions, findVersion, isNewerVersion, isStableVersion, isVersion } from "./versions.ts";
 
 test("isVersion accepts npm versions and nothing that could leave an image tag or a KEY=VALUE line", () => {
   for (const good of ["0.27.4", "0.2.2-rc.3", "0.27.2-nightly.20261113.6f754be654", "1.0.0-alpha", "10.20.30", "0.28.1-beta.2"]) {
@@ -66,4 +66,12 @@ test("byNewestVersion sorts newest first, unordered versions last", () => {
     ["0.27.0", "1.2.3.4", "0.28.0-rc.1", "0.28.0", "0.9.1"].sort(byNewestVersion),
     ["0.28.0", "0.28.0-rc.1", "0.27.0", "0.9.1", "1.2.3.4"],
   );
+});
+
+test("compareAppVersions orders semver by precedence and anything else with digits as numbers", () => {
+  assert.equal(compareAppVersions("277", "99"), 1, "llama-swap's release numbers");
+  assert.equal(compareAppVersions("3.0.0", "3.0.0-beta"), 1);
+  assert.equal(compareAppVersions("0.1.8", "0.1.10"), -1);
+  assert.equal(compareAppVersions("rocm10.0.0-torch2.11.0-vllm0.33.0", "rocm7.9.0-torch2.10.0-vllm0.33.0"), 1);
+  assert.equal(compareAppVersions("276", "276"), 0);
 });

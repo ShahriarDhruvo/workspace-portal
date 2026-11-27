@@ -2,7 +2,6 @@
 // quadlet (hostd/README.md). The engine serves during the download; during the drain and the restart new LLM requests
 // wait in the gateway's queue. hostd puts the old image back when the new one does not serve.
 import crypto from "node:crypto";
-import { setTimeout as delay } from "node:timers/promises";
 import {
   isStableVersion,
   type EngineJob,
@@ -14,14 +13,14 @@ import {
 } from "@portal/core";
 import type { Config } from "../config.ts";
 import { EngineReleaseError, EngineReleases } from "./engine-releases.ts";
-import { HostdClient, HostdError } from "../monitor/hostd.ts";
+import { HostdClient, HostdError, REMOVE_TIMEOUT_MS } from "../monitor/hostd.ts";
 import type { LlmQueue } from "../service/llm-queue.ts";
 import { HttpError } from "../lib/http-util.ts";
 import { errorMessage, type Logger } from "../lib/log.ts";
+import { Cancelled, drainQueue, drainRunning, followHostJob, type JobControl } from "./host-update.ts";
 import { appendLog, finishJob } from "./update-job.ts";
 
 const POLL_MS = 1_000;
-const DRAIN_POLL_MS = 250;
 const PULL_TIMEOUT_MS = 60 * 60_000;
 /**
  * Longer than hostd's worst case, so the gateway never gives up (and lets held requests through) while hostd still
@@ -35,6 +34,9 @@ export const GATEWAY_STOPPED = "The gateway stopped during the update; check the
 export const invalidVersion = (): HttpError => new HttpError(400, "invalid_version", "version must be a release version, like 0.34.0.");
 const unavailable = (message: string): HttpError => new HttpError(503, "engine_unavailable", message);
 const jobRunning = (): HttpError => new HttpError(409, "engine_job_running", "An engine update is running. Wait for it to finish, or cancel it.");
+/** hostd runs one job at a time, the engine's or another program's. */
+export const otherJobRunning = (): HttpError =>
+  new HttpError(409, "app_job_running", "An update of other software on the AI server is running. Wait for it to finish, or cancel it.");
 
 /** What the updater needs from the AI server's portal-hostd. */
 export interface EngineHost {
@@ -52,7 +54,7 @@ export function createEngineHost(client: HostdClient): EngineHost {
     apply: (image, version) => client.post<EngineJob>("/v1/engine/apply", { image, version }),
     cancel: async () => (await client.post<{ cancelled: boolean }>("/v1/engine/cancel")).cancelled === true,
     removeImage: async (digest) => {
-      await client.delete(`/v1/engine/images/${encodeURIComponent(digest)}`);
+      await client.delete(`/v1/engine/images/${encodeURIComponent(digest)}`, REMOVE_TIMEOUT_MS);
     },
   };
 }
@@ -68,6 +70,8 @@ export interface EngineUpdaterOptions {
   now?: () => number;
   /** Test hook: how long the loops wait between polls. */
   pollMs?: number;
+  /** Another updater through the same portal-hostd (the other software's) runs a job. */
+  busy?: () => boolean;
 }
 
 export class EngineUpdater {
@@ -77,8 +81,7 @@ export class EngineUpdater {
   #job: EngineUpdateJob | null = null;
   /** The hostd job the current phase follows, for its live log. */
   #hostJob: EngineJob | null = null;
-  #cancelRequested = false;
-  #restartNow = false;
+  #control: JobControl = { cancelRequested: false, restartNow: false };
 
   constructor(options: EngineUpdaterOptions) {
     this.#options = options;
@@ -110,7 +113,7 @@ export class EngineUpdater {
     const job = this.#job;
     if (job === null) return null;
     const live = this.#hostJob && job.finishedAt === null ? this.#hostJob.log : [];
-    return { ...job, log: [...job.log, ...live].slice(-LOG_LINES), drain: job.drain && { ...job.drain, inFlight: this.#options.queue.inFlight } };
+    return { ...job, log: [...job.log, ...live].slice(-LOG_LINES), drain: job.drain && { ...job.drain, ...drainRunning(this.#options.queue) } };
   }
 
   /**
@@ -123,6 +126,7 @@ export class EngineUpdater {
     if (!isStableVersion(version)) throw invalidVersion();
     if (host === null) throw unavailable("The AI server's portal-hostd is not set up (HOSTD_LLM_URL, HOSTD_LLM_TOKEN).");
     if (this.running) throw jobRunning();
+    if (this.#options.busy?.()) throw otherJobRunning();
     const engine = await host.status().catch((error: unknown) => {
       throw unavailable(error instanceof HostdError && error.code === "no_engine" ? error.message : `The AI server's portal-hostd can't be reached: ${errorMessage(error)}`);
     });
@@ -132,10 +136,10 @@ export class EngineUpdater {
       throw error instanceof EngineReleaseError ? new HttpError(404, "version_not_found", error.message) : error;
     }));
     if (this.running) throw jobRunning();
+    if (this.#options.busy?.()) throw otherJobRunning();
     const image = `${engine.repository}@${digest}`;
     const reuse = local != null;
-    this.#cancelRequested = false;
-    this.#restartNow = false;
+    this.#control = { cancelRequested: false, restartNow: false };
     this.#hostJob = null;
     const job: EngineUpdateJob = {
       id: crypto.randomBytes(6).toString("hex"),
@@ -164,7 +168,7 @@ export class EngineUpdater {
   async cancel(): Promise<boolean> {
     const job = this.#job;
     if (!job || job.finishedAt !== null || !job.cancellable) return false;
-    this.#cancelRequested = true;
+    this.#control.cancelRequested = true;
     if (job.phase === "pulling") await this.#options.host?.cancel().catch(() => false);
     return true;
   }
@@ -172,7 +176,7 @@ export class EngineUpdater {
   /** Ends the drain now: the engine restarts even though requests are still running. */
   restartNow(): boolean {
     if (this.#job?.phase !== "draining" || this.#job.finishedAt !== null) return false;
-    this.#restartNow = true;
+    this.#control.restartNow = true;
     return true;
   }
 
@@ -180,6 +184,7 @@ export class EngineUpdater {
   async removeImage(digest: string): Promise<void> {
     if (!/^sha256:[0-9a-f]{64}$/.test(digest)) throw new HttpError(400, "invalid_digest", "digest must be sha256:<64 hex digits>.");
     if (this.running) throw jobRunning();
+    if (this.#options.busy?.()) throw otherJobRunning();
     const host = this.#options.host;
     if (host === null) throw unavailable("The AI server's portal-hostd is not set up.");
     await host.removeImage(digest).catch((error: unknown) => {
@@ -226,34 +231,23 @@ export class EngineUpdater {
     if (job.reuse) return this.#note(job, `Using the image already on the AI server (${image}).`);
     this.#phase(job, "pulling", `Downloading ${job.toVersion}`, true);
     const pulled = await this.#follow(job, await host.pull(image), host, PULL_TIMEOUT_MS);
-    if (pulled.phase === "cancelled" || this.#cancelRequested) throw new Cancelled();
+    if (pulled.phase === "cancelled" || this.#control.cancelRequested) throw new Cancelled();
     if (pulled.phase !== "succeeded") throw new Error(pulled.error ?? "The download failed.");
   }
 
   /** Holds new requests and waits for the running ones (or the deadline, or "Restart now"). */
   async #drain(job: EngineUpdateJob): Promise<void> {
     const { queue, config } = this.#options;
-    const since = this.#now();
-    const deadline = since + config.engine.drainMs;
-    queue.pause();
-    job.drain = { since, deadline, inFlight: queue.inFlight };
-    this.#phase(job, "draining", "Waiting for running requests to finish", true);
-    this.#note(job, `New LLM requests wait in the portal's queue; ${queue.inFlight} still running.`);
-    while (queue.inFlight > 0) {
-      if (this.#cancelRequested || job.finishedAt !== null) throw new Cancelled();
-      if (this.#restartNow) {
-        this.#note(job, `Restarting now on request; ${queue.inFlight} running request(s) will be cut off.`);
-        break;
-      }
-      if (this.#now() >= deadline) {
-        this.#note(job, `Still ${queue.inFlight} running after ${Math.round(config.engine.drainMs / 60_000)} minutes; restarting anyway.`);
-        break;
-      }
-      await delay(Math.min(DRAIN_POLL_MS, this.#pollMs));
-    }
-    if (this.#cancelRequested || job.finishedAt !== null) throw new Cancelled();
-    job.drain = null;
-    job.cancellable = false;
+    await drainQueue({
+      job,
+      queue,
+      drainMs: config.engine.drainMs,
+      control: this.#control,
+      now: this.#now,
+      pollMs: this.#pollMs,
+      started: () => this.#phase(job, "draining", "Waiting for running requests to finish", true),
+      note: (line) => this.#note(job, line),
+    });
   }
 
   #phase(job: EngineUpdateJob, phase: EngineUpdatePhase, step: string, cancellable: boolean): void {
@@ -264,30 +258,17 @@ export class EngineUpdater {
   }
 
   /** Follows a hostd job until it ends; its log becomes part of ours. */
-  async #follow(job: EngineUpdateJob, started: EngineJob, host: EngineHost, timeoutMs: number): Promise<EngineJob> {
-    this.#hostJob = started;
-    const until = this.#now() + timeoutMs;
-    let unreachable = false;
-    while (this.#now() < until) {
-      await delay(this.#pollMs);
-      // The AI server may be busy restarting; keep trying until the time limit.
-      const status = await host.status().catch((error: unknown) => {
-        if (!unreachable) this.#note(job, `portal-hostd did not answer (${errorMessage(error)}); still trying.`);
-        return null;
-      });
-      if (job.finishedAt !== null) throw new Cancelled();
-      unreachable = status === null;
-      const current = status?.job;
-      if (!current || current.id !== started.id) continue;
-      this.#hostJob = current;
-      if (current.step) job.step = current.step;
-      if (current.phase !== "running") {
-        job.log.push(...current.log);
-        this.#hostJob = null;
-        return current;
-      }
-    }
-    throw new Error(`portal-hostd's ${started.kind} did not finish within ${Math.round(timeoutMs / 60_000)} minutes.`);
+  #follow(job: EngineUpdateJob, started: EngineJob, host: EngineHost, timeoutMs: number): Promise<EngineJob> {
+    return followHostJob({
+      job,
+      started,
+      current: async () => (await host.status()).job,
+      now: this.#now,
+      pollMs: this.#pollMs,
+      timeoutMs,
+      live: (current) => (this.#hostJob = current),
+      note: (line) => this.#note(job, line),
+    });
   }
 
   #note(job: EngineUpdateJob, line: string): void {
@@ -304,4 +285,3 @@ export class EngineUpdater {
   }
 }
 
-class Cancelled extends Error {}

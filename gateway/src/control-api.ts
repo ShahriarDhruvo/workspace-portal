@@ -11,6 +11,7 @@ import { driverFor, modelCatalog } from "@portal/harnesses";
 import type { Config } from "./config.ts";
 import { SESSION_DISCONNECTED, type ConnectionRegistry } from "./proxy/connections.ts";
 import { invalidVersion, type EngineUpdater } from "./updates/engine-updater.ts";
+import type { AppUpdater } from "./updates/app-updater.ts";
 import { readHostStats } from "./monitor/host-stats.ts";
 import { HttpError, readJsonBody, sendError, sendJson, splitTarget } from "./lib/http-util.ts";
 import type { LiveHub } from "./monitor/live.ts";
@@ -29,6 +30,7 @@ interface ControlDeps {
   versions: AgentVersions;
   updater: AgentUpdater;
   engine: EngineUpdater;
+  apps: AppUpdater;
   llm: LlmQueue;
   requests: LlmRequests;
   live: LiveHub;
@@ -82,7 +84,8 @@ const ROUTES: Route[] = [
     handler: (deps) => {
       const agent = deps.updater.job()?.finishedAt === null;
       const engine = deps.engine.running;
-      return { running: agent || engine, agent, engine };
+      const apps = deps.apps.running;
+      return { running: agent || engine || apps, agent, engine, apps };
     },
   },
   { method: "GET", pattern: /^\/control\/agents\/versions$/, handler: (deps, req) => deps.updater.overview({ refresh: query(req).get("refresh") === "1" }) },
@@ -123,6 +126,28 @@ const ROUTES: Route[] = [
     pattern: /^\/control\/engine\/images\/([^/]+)$/,
     handler: async (deps, _req, [digest]) => {
       await deps.engine.removeImage(decodeParam(digest));
+      return { ok: true };
+    },
+  },
+  { method: "GET", pattern: /^\/control\/apps$/, handler: (deps, req) => deps.apps.overview({ refresh: query(req).get("refresh") === "1" }) },
+  { method: "POST", pattern: /^\/control\/apps\/cancel$/, handler: async (deps) => ({ cancelled: await deps.apps.cancel() }) },
+  { method: "POST", pattern: /^\/control\/apps\/restart-now$/, handler: (deps) => ({ ok: deps.apps.restartNow() }) },
+  {
+    method: "POST",
+    pattern: /^\/control\/apps\/([^/]+)\/update$/,
+    handler: async (deps, req, [app]) => {
+      const { version, actorUserId } = await jsonBody(req);
+      if (typeof version !== "string" || version.length > 64) throw new HttpError(400, "invalid_version", "version is required.");
+      const actor = actorParam(actorUserId);
+      if (actor !== null) requireUser(deps.db, actor, "actorUserId");
+      return deps.apps.startUpdate({ app: decodeParam(app), version, actorUserId: actor });
+    },
+  },
+  {
+    method: "DELETE",
+    pattern: /^\/control\/apps\/([^/]+)\/versions\/([^/]+)$/,
+    handler: async (deps, _req, [app, version]) => {
+      await deps.apps.removeVersion(decodeParam(app), decodeParam(version));
       return { ok: true };
     },
   },

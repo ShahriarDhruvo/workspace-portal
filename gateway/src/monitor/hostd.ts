@@ -6,6 +6,11 @@ import { field, parseJson, readBounded, type HostInfo, type HostSample } from "@
 import type { HostdConfig } from "../config.ts";
 
 const REQUEST_TIMEOUT_MS = 5_000;
+/**
+ * A removal answers once it is done: `podman rmi` of an image (hostd allows it 300 s), or the deletion of an installed
+ * version's directory, whose Python environment holds tens of thousands of files.
+ */
+export const REMOVE_TIMEOUT_MS = 120_000;
 /** No event for this long means the stream is dead (hostd sends a sample every 0.25-5 s). */
 const STREAM_IDLE_MS = 15_000;
 /** A larger event is refused (a sample is about 2 KB). */
@@ -60,8 +65,8 @@ export class HostdClient {
     return this.#request<T>("POST", path, body);
   }
 
-  delete<T>(path: string): Promise<T> {
-    return this.#request<T>("DELETE", path);
+  delete<T>(path: string, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
+    return this.#request<T>("DELETE", path, undefined, timeoutMs);
   }
 
   /** Follows GET /v1/stream until `signal` aborts (it resolves then); rejects with a HostdError when it can't be opened, breaks or ends. */
@@ -121,13 +126,13 @@ export class HostdClient {
     return new URL(this.url.replace(/\/+$/, "") + path);
   }
 
-  #request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  #request<T>(method: string, path: string, body?: unknown, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
     return new Promise((resolve, reject) => {
       const url = this.#url(path);
       const payload = body === undefined ? undefined : JSON.stringify(body);
       const headers = this.#headers(payload === undefined ? {} : { "content-type": "application/json", "content-length": String(Buffer.byteLength(payload)) });
-      const req = transport(url).request(url, { method, headers, agent: false, timeout: REQUEST_TIMEOUT_MS });
-      req.on("timeout", () => req.destroy(new Error(`no answer within ${REQUEST_TIMEOUT_MS / 1000} s`)));
+      const req = transport(url).request(url, { method, headers, agent: false, timeout: timeoutMs });
+      req.on("timeout", () => req.destroy(new Error(`no answer within ${timeoutMs / 1000} s`)));
       req.on("error", (error) => reject(new HostdError(null, "unreachable", `${this.url}: ${error.message}`)));
       req.on("response", (res) => {
         if (res.statusCode === undefined || res.statusCode >= 300) {

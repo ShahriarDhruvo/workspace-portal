@@ -1,7 +1,8 @@
 // Concurrency limiter for LLM requests: at most `maxConcurrency` in flight overall and
 // `maxPerUser` per user. Waiters are served first come, first served; a waiter whose user is at
 // their own limit does not hold up other users queued behind it. While paused (an engine update
-// restarts the AI server), nothing new is granted: requests wait here instead of failing.
+// restarts the AI server) or held (a video job runs on the AI server), nothing new is granted:
+// requests wait here instead of failing, or stopping the job.
 
 /** Gives the slot back. Safe to call more than once. */
 export type ReleaseSlot = () => void;
@@ -17,6 +18,7 @@ export class LlmQueue {
   readonly maxPerUser: number;
   #inFlight = 0;
   #paused = false;
+  #holds = 0;
   readonly #inFlightByUser = new Map<number, number>();
   readonly #waiting: Waiter[] = [];
 
@@ -46,6 +48,26 @@ export class LlmQueue {
     if (!this.#paused) return;
     this.#paused = false;
     this.#dispatch();
+  }
+
+  /** At least one hold() is in place. */
+  get held(): boolean {
+    return this.#holds > 0;
+  }
+
+  /**
+   * Grants nothing new until the returned function is called, like pause() but one per holder, so an engine update's
+   * resume() does not end it. Requests in flight carry on.
+   */
+  hold(): ReleaseSlot {
+    this.#holds++;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.#holds--;
+      this.#dispatch();
+    };
   }
 
   /** Who waits, and since when (epoch ms), in queue order. */
@@ -88,7 +110,7 @@ export class LlmQueue {
   }
 
   #dispatch(): void {
-    if (this.#paused) return;
+    if (this.#paused || this.#holds > 0) return;
     for (let i = 0; i < this.#waiting.length && this.#inFlight < this.maxConcurrency; ) {
       const waiter = this.#waiting[i]!;
       if (this.inFlightFor(waiter.userId) >= this.maxPerUser) {

@@ -127,7 +127,8 @@ build_workspace_image() { # agent version [docker build options...]
   check_workspace_image "$agent" "$version"
 }
 
-# Dies while Admin > Updates runs an agent or engine update, which a rebuild or a gateway restart would break.
+# Dies while Admin > Updates runs an update (an agent, Gufo or the AI server's other software), which a rebuild or
+# a gateway restart would break.
 # (A gateway that doesn't answer runs none. The secret goes to curl on stdin, not on its command line.)
 no_console_update() { # [what to do afterwards]
   local answer

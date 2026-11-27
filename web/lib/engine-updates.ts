@@ -94,18 +94,23 @@ export function engineStatusBadge(overview: EngineOverview | null, unreachable: 
 }
 
 const JOB_RUNNING = "An engine update is running. Wait for it to finish, or cancel it.";
+const APP_JOB_RUNNING = "An update of the AI server's software is running. Wait for it to finish, or cancel it.";
 
-/** Why no update can start right now, or null when one can. */
-export function engineUpdateBlocker(overview: EngineOverview | null, unreachable: boolean): string | null {
+/**
+ * Why no update can start right now, or null when one can. One job at a time runs on the AI server: `appJob` is the
+ * other software's.
+ */
+export function engineUpdateBlocker(overview: EngineOverview | null, unreachable: boolean, appJob: { finishedAt: number | null } | null = null): string | null {
   if (unreachable || !overview) return OFFLINE;
   if (overview.state !== "ok") return "The AI server's portal-hostd isn't available.";
   if (isJobActive(overview.job)) return JOB_RUNNING;
+  if (isJobActive(appJob)) return APP_JOB_RUNNING;
   return null;
 }
 
 /** Why this image can't be removed right now, or null when it can. portal-hostd enforces the same. */
-export function engineRemoveBlocker(overview: EngineOverview | null, unreachable: boolean, image: EngineImage): string | null {
-  const blocked = engineUpdateBlocker(overview, unreachable);
+export function engineRemoveBlocker(overview: EngineOverview | null, unreachable: boolean, image: EngineImage, appJob: { finishedAt: number | null } | null = null): string | null {
+  const blocked = engineUpdateBlocker(overview, unreachable, appJob);
   if (blocked) return blocked;
   if (image.current) return "The engine runs this image. Use another version first.";
   if (!image.digest) return "This image has no digest, so it can't be removed from here.";
@@ -172,6 +177,8 @@ export function engineActionError(action: EngineAction, error: ApiError): string
   switch (error.error) {
     case "engine_job_running":
       return JOB_RUNNING;
+    case "app_job_running":
+      return APP_JOB_RUNNING;
     case "image_current":
       return "The engine runs this image. Use another version first.";
     case "not_found":

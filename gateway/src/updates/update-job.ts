@@ -1,4 +1,4 @@
-// What the two updaters (agent-updater.ts, engine-updater.ts) do alike to their job record, an UpdateJob of
+// What the updaters (agent-updater.ts, engine-updater.ts, app-updater.ts) do alike to their job record, an UpdateJob of
 // @portal/core: add to its log, and end it with an audit entry. Each keeps its own phases, its own order through them
 // and its own way to cancel. A job runs while its `finishedAt` is null.
 import { writeAudit, type AuditAction, type PortalDb, type UpdateJob } from "@portal/core";
@@ -14,12 +14,12 @@ export function appendLog(job: UpdateJob<string>, lines: readonly string[], cap:
 /**
  * Ends a job at `at` (`error` null: it succeeded) and records the end with `details`: in the audit log for the admin
  * who asked, as `agent_updated` or `agent_update_failed`, and in the gateway's log, as "agent updated", "agent update
- * failed" or "agent update cancelled" (the engine's alike).
+ * failed" or "agent update cancelled" (the engine's and the other software's alike).
  */
 export function finishJob<Phase extends string>(
   db: PortalDb,
   log: Logger,
-  subject: "agent" | "engine",
+  subject: "agent" | "engine" | "app",
   job: UpdateJob<Phase>,
   at: number,
   end: { phase: Phase; error: string | null; step: string | null },

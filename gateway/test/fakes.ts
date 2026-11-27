@@ -7,7 +7,19 @@ import http, { type IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { WebSocketServer } from "ws";
-import { isVersion, openDatabase, WORKSPACE_REFS, type AgentKind, type EngineJob, type EngineStatus, type PortalDb, type WorkspaceKind, type WorkspaceRef } from "@portal/core";
+import {
+  isVersion,
+  openDatabase,
+  WORKSPACE_REFS,
+  type AgentKind,
+  type AppHostJob,
+  type AppStatus,
+  type EngineJob,
+  type EngineStatus,
+  type PortalDb,
+  type WorkspaceKind,
+  type WorkspaceRef,
+} from "@portal/core";
 import { containerName } from "@portal/container";
 import { driverFor, type SettingsObject } from "@portal/harnesses";
 import { closeServer, listenLocal } from "@portal/harnesses/testing";
@@ -25,6 +37,7 @@ import {
 import type { RegistryClient } from "../src/updates/engine-releases.ts";
 import type { GitHubRelease, GitHubReleases } from "../src/updates/github-releases.ts";
 import type { EngineHost } from "../src/updates/engine-updater.ts";
+import type { AppHost } from "../src/updates/app-updater.ts";
 import { HostdError, type MeterReading } from "../src/monitor/hostd.ts";
 import { parseWorkspaceImage, STAGING_REPOSITORY, workspaceImage } from "../src/docker/image-names.ts";
 import { registryError, type NpmPackage, type NpmRegistry } from "../src/updates/npm-registry.ts";
@@ -1216,5 +1229,166 @@ export class FakeNotes implements GitHubReleases {
       { tag: "v0.34.0", prerelease: false, notes: { title: "v0.34.0", url: "https://github.com/gufo-org/gufo/releases/tag/v0.34.0", publishedAt: 0, body: "### ⚠ BREAKING CHANGES\n\n* audio", breaking: true } },
       { tag: "v0.33.0", prerelease: false, notes: { title: "v0.33.0", url: "https://github.com/gufo-org/gufo/releases/tag/v0.33.0", publishedAt: 0, body: "### Features", breaking: false } },
     ];
+  }
+}
+
+export const VLLM_REPOSITORY = "docker.io/kyuz0/vllm-therock-gfx1151";
+
+/** An image app's tag of `version`, as the registry and FakeAppRegistry name it. */
+export const vllmTag = (version: string): string => `rocm10.0.0-torch2.11.0-vllm${version}`;
+
+interface FakeApp {
+  id: string;
+  name: string;
+  kind: "dir" | "image";
+  model: string | null;
+  version: string;
+  previous: string | null;
+  installed: Set<string>;
+}
+
+/**
+ * portal-hostd's /v1/apps with two apps: llama-swap (a dir app on release 276) and vLLM (an image app on 0.32.0).
+ * Each job ends after `jobPolls` status reads, failing with failInstall / failApply when set.
+ */
+export class FakeAppHost implements AppHost {
+  readonly apps = new Map<string, FakeApp>([
+    ["llama-swap", { id: "llama-swap", name: "llama-swap", kind: "dir", model: null, version: "276", previous: null, installed: new Set(["276"]) }],
+    ["vllm", { id: "vllm", name: "vLLM", kind: "image", model: "sov-transcribe-1", version: "0.32.0", previous: null, installed: new Set(["0.32.0"]) }],
+  ]);
+  jobPolls = 1;
+  failInstall: string | null = null;
+  failApply: string | null = null;
+  offline = false;
+  noApps = false;
+  readonly calls: string[] = [];
+  #job: AppHostJob | null = null;
+  #pollsLeft = 0;
+  #finishJob: (() => void) | null = null;
+  #nextId = 1;
+
+  async status(): Promise<{ apps: AppStatus[]; job: AppHostJob | null }> {
+    if (this.offline) throw new HostdError(null, "unreachable", "http://llm:9180: connect ECONNREFUSED");
+    if (this.noApps) throw new HostdError(404, "no_apps", "this host updates no other software (APPS_FILE)");
+    if (this.#job?.phase === "running" && --this.#pollsLeft <= 0) this.#finishJob?.();
+    const apps = [...this.apps.values()].map((app): AppStatus => ({
+      id: app.id,
+      name: app.name,
+      kind: app.kind,
+      unit: app.kind === "dir" ? `${app.id}.service` : "vllm-sov.service",
+      model: app.model,
+      releases: app.kind === "dir" ? { github: "mostlygeek/llama-swap", tag: "^v([0-9]+)$" } : { github: "vllm-project/vllm", tag: "^rocm[0-9.]+-torch[0-9.]+-vllm([0-9]+\\.[0-9]+\\.[0-9]+)$" },
+      version: app.version,
+      previous: app.previous,
+      state: "active",
+      subState: "running",
+      error: null,
+      versions: [...app.installed].map((version) => ({
+        version,
+        image: app.kind === "image" ? `${VLLM_REPOSITORY}@${engineDigest(version)}` : null,
+        createdAt: 0,
+        sizeBytes: app.kind === "image" ? 12e9 : null,
+        current: version === app.version,
+        previous: version === app.previous,
+      })),
+      ...(app.kind === "image" ? { repository: VLLM_REPOSITORY } : {}),
+    }));
+    return { apps, job: this.#job && { ...this.#job, log: [...this.#job.log] } };
+  }
+
+  async install(id: string, request: { version: string; image?: string; tag?: string }): Promise<AppHostJob> {
+    this.calls.push(`install ${id} ${request.version}${request.image ? ` ${request.image} ${request.tag}` : ""}`);
+    const app = this.#app(id);
+    if (app.installed.has(request.version)) throw new HostdError(409, "installed", `${request.version} is installed already`);
+    return this.#start("install", id, request.image ?? null, request.version, () => {
+      if (this.failInstall !== null) return this.failInstall;
+      app.installed.add(request.version);
+      return null;
+    });
+  }
+
+  async apply(id: string, version: string): Promise<AppHostJob> {
+    this.calls.push(`apply ${id} ${version}`);
+    const app = this.#app(id);
+    if (!app.installed.has(version)) throw new HostdError(409, "not_installed", `install ${version} first`);
+    return this.#start("apply", id, null, version, () => {
+      if (this.failApply !== null) {
+        const error = this.failApply;
+        this.failApply = null;
+        this.#job!.rolledBack = true;
+        return error;
+      }
+      app.previous = app.version;
+      app.version = version;
+      return null;
+    });
+  }
+
+  async cancel(): Promise<boolean> {
+    this.calls.push("cancel");
+    if (this.#job?.phase !== "running" || this.#job.kind !== "install") return false;
+    this.#job.phase = "cancelled";
+    this.#job.finishedAt = Date.now();
+    return true;
+  }
+
+  async remove(id: string, version: string): Promise<void> {
+    this.calls.push(`remove ${id} ${version}`);
+    const app = this.#app(id);
+    if (!app.installed.has(version)) throw new HostdError(404, "not_found", `${version} is not installed`);
+    if (version === app.version) throw new HostdError(409, "version_current", `${version} runs now`);
+    app.installed.delete(version);
+  }
+
+  #app(id: string): FakeApp {
+    const app = this.apps.get(id);
+    if (!app) throw new HostdError(404, "no_app", `no app '${id}' on this host`);
+    return app;
+  }
+
+  #start(kind: AppHostJob["kind"], app: string, image: string | null, version: string, finish: () => string | null): AppHostJob {
+    if (this.#job?.phase === "running") throw new HostdError(409, "job_running", "another update is running");
+    const job: AppHostJob = { id: String(this.#nextId++), kind, app, image, version, phase: "running", step: `${kind}ing`, log: [`${kind} started`], startedAt: Date.now(), finishedAt: null, error: null, rolledBack: false };
+    this.#job = job;
+    this.#pollsLeft = this.jobPolls;
+    this.#finishJob = () => {
+      const error = finish();
+      job.phase = error === null ? "succeeded" : "failed";
+      job.error = error;
+      job.log.push(error === null ? `${kind} done` : `${kind} failed: ${error}`);
+      job.finishedAt = Date.now();
+    };
+    return { ...job, log: [...job.log] };
+  }
+}
+
+/** Docker Hub's tags of the vLLM image: two builds of 0.33.0, dated tags, and a dev tag. */
+export class FakeAppRegistry implements RegistryClient {
+  versions = ["0.31.0", "0.32.0", "0.33.0"];
+  calls = 0;
+
+  async tags(): Promise<string[]> {
+    this.calls++;
+    return [...this.versions.map(vllmTag), "rocm7.9.0-torch2.10.0-vllm0.33.0", "20261102-152517", "latest", "dev"];
+  }
+
+  async digest(_repository: string, tag: string): Promise<string | null> {
+    const version = this.versions.find((candidate) => vllmTag(candidate) === tag);
+    return version === undefined ? null : engineDigest(version);
+  }
+}
+
+/** GitHub's releases of llama-swap and vLLM. */
+export class FakeAppNotes implements GitHubReleases {
+  readonly calls: string[] = [];
+  async list(repo: string): Promise<GitHubRelease[]> {
+    this.calls.push(repo);
+    const release = (tag: string, prerelease = false): GitHubRelease => ({
+      tag,
+      prerelease,
+      notes: { title: tag, url: `https://github.com/${repo}/releases/tag/${tag}`, publishedAt: 0, body: "", breaking: false },
+    });
+    if (repo === "mostlygeek/llama-swap") return ["v278-rc1", "v277", "v276", "v275", "v99", "nightly"].map((tag) => release(tag, tag.includes("rc")));
+    return [release("v0.33.0"), release("v0.32.0")];
   }
 }

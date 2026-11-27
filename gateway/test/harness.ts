@@ -38,6 +38,7 @@ import type { SearchBackend, SearchQuery } from "../src/service/search-mcp.ts";
 import type { FetchText } from "../src/monitor/energy-prices.ts";
 import {
   closeServer,
+  FakeAppHost,
   FakeEngineHost,
   FakeEngineRegistry,
   FakeImageBuilder,
@@ -171,6 +172,8 @@ export interface GatewayOptions {
   search?: SearchBackend;
   /** The AI server's portal-hostd; null = not set up. By default a fake engine at 0.31.0 that ends each job at the next status call. */
   engineHost?: FakeEngineHost | null;
+  /** The same portal-hostd's other software; null = none. By default llama-swap at 276 and vLLM at 0.32.0. */
+  appHost?: FakeAppHost | null;
   /** What the electricity price sources answer (by URL); by default every download fails ("offline"). */
   priceSource?: FetchText;
 }
@@ -194,6 +197,8 @@ export interface Gateway {
   sessionLog: Parts["sessionLog"];
   engineHost: FakeEngineHost | null;
   engine: Parts["engine"];
+  appHost: FakeAppHost | null;
+  apps: Parts["apps"];
   live: Parts["live"];
   connections: Parts["connections"];
   sessionCache: Parts["sessions"];
@@ -330,6 +335,7 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
   };
   const engineHost = options.engineHost === undefined ? new FakeEngineHost() : options.engineHost;
   const engineRegistry = new FakeEngineRegistry();
+  const appHost = options.appHost === undefined ? new FakeAppHost() : options.appHost;
   const seams: Seams = {
     now: () => clock.now,
     fence: fence.check,
@@ -339,6 +345,7 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
     engineRegistry,
     engineNotes: new FakeNotes(),
     enginePollMs: 5,
+    appHost,
     search,
     reader: options.reader,
     // The tests that need prices give `priceSource` (offline otherwise).
@@ -349,7 +356,7 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
   /** Starts a gateway as main.ts does, minus what it runs in the background; returns what a restart replaces in `Gateway`. */
   const boot = async (config: Config) => {
     const versions = AgentVersions.fromConfig(config, log);
-    const { llm: llmQueue, requests: llmRequests, sessions: sessionCache, manager, sessionLog, updater, engine, live, connections, createAgentServer, ...parts } = compose(
+    const { llm: llmQueue, requests: llmRequests, sessions: sessionCache, manager, sessionLog, updater, engine, apps, live, connections, createAgentServer, ...parts } = compose(
       { config, db, runtime, versions, log },
       seams,
     );
@@ -360,7 +367,7 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
     const [control, service, privateService, onlineService] = await Promise.all([parts.control, ...services].map((server) => listenLocal(server)));
     servers = [parts.control, ...services, ...(await listenAgentPorts(config, createAgentServer, parts.createPreviewServer))];
     const ports = { control: control!, service: service!, services: { private: privateService!, online: onlineService! } };
-    return { config, versions, updater, llmQueue, llmRequests, sessionLog, engine, live, connections, sessionCache, manager, ports, createAgentServer, createServiceServer: parts.createServiceServer };
+    return { config, versions, updater, llmQueue, llmRequests, sessionLog, engine, apps, live, connections, sessionCache, manager, ports, createAgentServer, createServiceServer: parts.createServiceServer };
   };
   const started = await boot(config);
   // deploy/install.sh built the current version of each agent.
@@ -390,6 +397,7 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
     registry,
     finishedRequests,
     engineHost,
+    appHost,
     fence,
     clock,
     caller,

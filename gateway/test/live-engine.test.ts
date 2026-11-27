@@ -1,5 +1,6 @@
-// The admin's live view (GET /control/live) and Gufo updates (/control/engine...) through the
-// control API, with the in-process gateway of integration.test.ts and a fake portal-hostd engine.
+// The admin's live view (GET /control/live), Gufo updates (/control/engine...) and the other software's updates
+// (/control/apps...) through the control API, with the in-process gateway of integration.test.ts and a fake
+// portal-hostd.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
@@ -85,11 +86,11 @@ test("engine overview, updates (a download, or the image already there) and imag
 
     const started = json<{ reuse: boolean; toVersion: string; image: string }>(await g.control("POST", "/control/engine/update", { version: "0.34.0", actorUserId: admin }));
     assert.deepEqual([started.reuse, started.toVersion, started.image], [false, "0.34.0", `${ENGINE_REPOSITORY}@${engineDigest("0.34.0")}`]);
-    const running = async () => json<{ running: boolean; agent: boolean; engine: boolean }>(await g.control("GET", "/control/updates/running"));
+    const running = async () => json<{ running: boolean; agent: boolean; engine: boolean; apps: boolean }>(await g.control("GET", "/control/updates/running"));
     const during = await running();
     assert.equal(during.engine, g.engine.snapshot()?.finishedAt === null, "the deploy scripts' check follows the job");
     await waitFor(() => g.engine.snapshot()?.phase === "succeeded", "the update");
-    assert.deepEqual(await running(), { running: false, agent: false, engine: false });
+    assert.deepEqual(await running(), { running: false, agent: false, engine: false, apps: false });
     assert.equal(g.engineHost!.version, "0.34.0");
     assert.equal(json<{ engine: { version: string } }>(await g.control("GET", "/control/engine")).engine.version, "0.34.0");
     assert.equal(json<{ ok: boolean }>(await g.control("POST", "/control/engine/restart-now")).ok, false, "no drain to end");
@@ -121,4 +122,53 @@ test("engine routes without a portal-hostd for the AI server", () =>
     const reply = await g.control("POST", "/control/engine/update", { version: "0.34.0" });
     assert.equal(reply.status, 503);
     assert.equal(json<{ error: string }>(reply).error, "engine_unavailable");
+  }));
+
+test("the other software's overview, updates and version removal through the control API", () =>
+  withGateway({}, async (g) => {
+    const { admin } = g.ids;
+    const overview = json<{ state: string; apps: Array<{ status: { id: string; version: string } }>; job: null; drainMinutes: number }>(await g.control("GET", "/control/apps"));
+    assert.equal(overview.state, "ok");
+    assert.deepEqual(overview.apps.map((app) => [app.status.id, app.status.version]), [["llama-swap", "276"], ["vllm", "0.32.0"]]);
+    assert.equal(overview.job, null);
+
+    const refused = async (method: string, path: string, body: unknown, status: number, error: string): Promise<void> => {
+      const reply = await g.control(method, path, body);
+      assert.equal(reply.status, status, `${method} ${path} ${JSON.stringify(body)}: ${reply.body}`);
+      assert.equal(json<{ error: string }>(reply).error, error);
+    };
+    await refused("POST", "/control/apps/llama-swap/update", { version: 277 }, 400, "invalid_version");
+    await refused("POST", "/control/apps/llama-swap/update", { version: "../277" }, 400, "invalid_version");
+    await refused("POST", "/control/apps/llama-swap/update", { version: "276" }, 409, "already_current");
+    await refused("POST", "/control/apps/ollama/update", { version: "1" }, 404, "no_app");
+    await refused("POST", "/control/apps/llama-swap/update", { version: "275", actorUserId: 999 }, 400, "invalid_actor");
+
+    // A version installed beside the running one switches without an install.
+    g.appHost!.apps.get("llama-swap")!.installed.add("275");
+    const started = json<{ reuse: boolean; app: string; toVersion: string }>(await g.control("POST", "/control/apps/llama-swap/update", { version: "275", actorUserId: admin }));
+    assert.deepEqual([started.reuse, started.app, started.toVersion], [true, "llama-swap", "275"]);
+    await refused("POST", "/control/engine/update", { version: "0.34.0" }, 409, "app_job_running");
+    await waitFor(() => g.apps.snapshot()?.phase === "succeeded", "the switch");
+    assert.equal(g.appHost!.apps.get("llama-swap")!.version, "275");
+    assert.deepEqual(json(await g.control("GET", "/control/updates/running")), { running: false, agent: false, engine: false, apps: false });
+    assert.equal(json<{ ok: boolean }>(await g.control("POST", "/control/apps/restart-now")).ok, false, "no drain to end");
+    assert.equal(json<{ cancelled: boolean }>(await g.control("POST", "/control/apps/cancel")).cancelled, false);
+
+    await refused("DELETE", "/control/apps/llama-swap/versions/275", undefined, 409, "version_current");
+    assert.deepEqual(json(await g.control("DELETE", "/control/apps/llama-swap/versions/276")), { ok: true });
+    await refused("DELETE", "/control/apps/llama-swap/versions/276", undefined, 404, "not_found");
+    const audits = g.db.select().from(auditLog).all().filter((row) => row.action.startsWith("app_"));
+    assert.deepEqual(
+      audits.map((row) => [row.action, row.actorUserId, JSON.parse(row.details ?? "null").app]),
+      [["app_updated", admin, "llama-swap"]],
+      "version removal is the web app's to audit",
+    );
+  }));
+
+test("app routes without a portal-hostd for the AI server", () =>
+  withGateway({ appHost: null }, async (g) => {
+    assert.equal(json<{ state: string }>(await g.control("GET", "/control/apps")).state, "off");
+    const reply = await g.control("POST", "/control/apps/llama-swap/update", { version: "277" });
+    assert.equal(reply.status, 503);
+    assert.equal(json<{ error: string }>(reply).error, "apps_unavailable");
   }));

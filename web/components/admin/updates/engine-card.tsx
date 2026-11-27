@@ -2,8 +2,8 @@
 
 import { useRef } from "react";
 import { removeEngineImage, restartEngineNow, updateEngine } from "@/lib/actions/updates";
-import type { EngineImage, EngineOverview } from "@portal/core/wire";
-import { isJobActive, type Loaded } from "@/lib/update-jobs";
+import type { AppUpdateJob, EngineImage, EngineOverview, UpdateDrain } from "@portal/core/wire";
+import { cutOffText, isJobActive, type Loaded } from "@/lib/update-jobs";
 import {
   enginePackageRows,
   engineRemoveBlocker,
@@ -20,7 +20,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { WarningIcon } from "@/components/ui/icons";
-import { EngineJob } from "./engine-job";
+import { EngineJob } from "./host-job";
 import { PackageImages, type PackageImageRow } from "./package-images";
 import { useDialog } from "./use-dialog";
 import { useShownJob } from "./use-shown-job";
@@ -31,16 +31,18 @@ const SETUP_COMMAND = "sudo bash ~/workspace-portal/hostd/install.sh llm --porta
 /** install: the card's "Update to X.Y.Z…" (`update`), or a Package images row's Use… or Download…. */
 type EngineDialog =
   | { kind: "install"; row: EnginePackageRow; update: boolean }
-  | { kind: "restart"; inFlight: number }
+  | { kind: "restart"; drain: UpdateDrain | null }
   | { kind: "remove"; image: EngineImage };
 
 interface EngineCardProps {
   data: Loaded<EngineOverview>;
+  /** The other software's job: it holds the AI server's one job slot too. */
+  appJob: AppUpdateJob | null;
   onChanged: () => void;
 }
 
 /** Gufo on the Updates page. Without portal-hostd on the AI server it says how to set it up. */
-export function EngineCard({ data, onChanged }: EngineCardProps) {
+export function EngineCard({ data, appJob, onChanged }: EngineCardProps) {
   const overview = data.data;
   const unreachable = data.error !== null;
   const status = engineStatusBadge(overview, unreachable && !overview);
@@ -82,7 +84,7 @@ export function EngineCard({ data, onChanged }: EngineCardProps) {
 
   const engine = overview.engine;
   const job = overview.job;
-  const blocked = engineUpdateBlocker(overview, unreachable);
+  const blocked = engineUpdateBlocker(overview, unreachable, appJob);
   const target = engineUpdateTarget(overview);
   const packages = enginePackageRows(overview.releases?.releases ?? [], engine);
   const targetRow = packages.find((row) => row.version === target) ?? null;
@@ -102,7 +104,7 @@ export function EngineCard({ data, onChanged }: EngineCardProps) {
         image && !image.current
           ? {
               label: "Remove…",
-              blockedReason: engineRemoveBlocker(overview, unreachable, image),
+              blockedReason: engineRemoveBlocker(overview, unreachable, image, appJob),
               onClick: (from) => show({ kind: "remove", image }, from),
             }
           : null,
@@ -158,7 +160,7 @@ export function EngineCard({ data, onChanged }: EngineCardProps) {
           key={shownJob.id}
           job={shownJob}
           onChanged={onChanged}
-          onRestartNow={(from) => show({ kind: "restart", inFlight: shownJob.drain?.inFlight ?? 0 }, from)}
+          onRestartNow={(from) => show({ kind: "restart", drain: shownJob.drain }, from)}
           onDismiss={() => dismissJob(shownJob.id)}
         />
       ) : null}
@@ -231,11 +233,7 @@ function EngineDialogs({ dialog, overview, open, onOpenChange, onDone, opener }:
           destructive
           onConfirm={restartEngineNow}
         >
-          <p>
-            {dialog.inFlight > 0
-              ? `${dialog.inFlight} running ${dialog.inFlight === 1 ? "request is" : "requests are"} cut off: their agents get an error and may retry.`
-              : "Requests still running are cut off: their agents get an error and may retry."}
-          </p>
+          <p>{cutOffText(dialog.drain)}</p>
           <p>Requests waiting in the queue go to the engine once it answers again.</p>
         </ConfirmDialog>
       );
@@ -251,7 +249,7 @@ function EngineDialogs({ dialog, overview, open, onOpenChange, onDone, opener }:
           onConfirm={() => removeEngineImage(image.digest ?? "", image.version)}
         >
           <p>
-            Remove the {em(image.version ?? "unknown")} image{image.sizeBytes ? ` (${formatBytes(image.sizeBytes)})` : ""} from the LLM
+            Remove the {em(image.version ?? "unknown")} image{image.sizeBytes ? ` (${formatBytes(image.sizeBytes)})` : ""} from the AI
             server? Using that version later downloads it again.
           </p>
         </ConfirmDialog>

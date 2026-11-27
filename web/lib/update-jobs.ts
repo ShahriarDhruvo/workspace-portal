@@ -1,5 +1,5 @@
 // What the agents' and Gufo's update jobs share on the Updates page.
-import type { ApiError, UpdateJob } from "@portal/core/wire";
+import type { ApiError, UpdateDrain, UpdateJob } from "@portal/core/wire";
 
 /** What a JSON route of the gateway's data answers; `data` is null when the gateway could not provide it. */
 export interface Loaded<T> {
@@ -24,6 +24,20 @@ export function isJobActive(job: Job | null): boolean {
 
 export function pollDelay(job: Job | null): number {
   return isJobActive(job) ? ACTIVE_POLL_MS : IDLE_POLL_MS;
+}
+
+/** What a drain still waits for, as the Updates page says it: "2 requests and a video job". */
+export function drainRunning({ inFlight, video }: Pick<UpdateDrain, "inFlight" | "video">): string {
+  const requests = `${inFlight} ${inFlight === 1 ? "request" : "requests"}`;
+  return video ? (inFlight === 0 ? "A video job" : `${requests} and a video job`) : requests;
+}
+
+/** The "Restart now" dialog's warning. */
+export function cutOffText(drain: Pick<UpdateDrain, "inFlight" | "video"> | null): string {
+  if (drain === null || (drain.inFlight === 0 && !drain.video)) return "Requests still running are cut off: their agents get an error and may retry.";
+  const video = drain.video ? " The video being made is lost." : "";
+  const requests = drain.inFlight === 0 ? "" : `${drain.inFlight} running ${drain.inFlight === 1 ? "request is" : "requests are"} cut off: their agents get an error and may retry.`;
+  return `${requests}${video}`.trim();
 }
 
 export const OFFLINE = "The workspace service is unavailable right now.";

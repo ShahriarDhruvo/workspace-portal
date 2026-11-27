@@ -66,7 +66,7 @@ async function main(log: Logger): Promise<void> {
     }
   }
 
-  const { manager, sessionLog, updater, hosts, energy, prices, live, engine, llmEnergy, connections, control, createAgentServer, createPreviewServer, createServiceServer } =
+  const { manager, sessionLog, updater, hosts, energy, prices, live, engine, apps, llmEnergy, connections, control, createAgentServer, createPreviewServer, createServiceServer } =
     compose({ config, db, runtime, versions, log });
   await manager.init();
   sessionLog.reconcile(manager.list());
@@ -149,6 +149,7 @@ async function main(log: Logger): Promise<void> {
     // Records a running update as failed now (audited before the database closes below).
     updater.shutdown();
     engine.shutdown();
+    apps.shutdown();
     setTimeout(() => {
       db.$client.close();
       process.exit(0);
