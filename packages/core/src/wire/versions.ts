@@ -16,7 +16,7 @@ export function isVersion(value: unknown): value is string {
   return typeof value === "string" && value.length <= MAX_VERSION_LENGTH && VERSION_PATTERN.test(value);
 }
 
-/** A release, X.Y.Z: no prerelease, no build suffix, no leading v (the LLM engine's image tags; an agent's stable releases). */
+/** A release, X.Y.Z: no prerelease, no build suffix, no leading v (Gufo's image tags; an agent's stable releases). */
 export function isStableVersion(value: string): boolean {
   return /^\d+\.\d+\.\d+$/.test(value);
 }

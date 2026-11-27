@@ -1,5 +1,5 @@
 // End-to-end tests of the gateway without Docker: a fake ContainerRuntime launches in-process fake
-// `qwen serve` servers, and a fake LLM server and a stub search backend stand in for the host
+// `qwen serve` servers, and a fake AI server and a stub search backend stand in for the host
 // services. The first part walks one gateway through a user's day; the lifecycle tests at the end
 // each get a gateway of their own and drive time with the manager's injectable clock.
 import { after, before, test } from "node:test";
@@ -884,19 +884,19 @@ test("a workspace that hangs up frees its LLM slot and the upstream request", as
   assert.equal(g.info(alice).busy, false);
   assert.deepEqual(g.llmRequests.active(), []);
   assert.equal(g.finishedRequests.length, finishedBefore + 1, "a request that never left the gateway is not one");
-  assert.equal(g.finishedRequests[0]!.ok, true, "hanging up is not the LLM server failing");
+  assert.equal(g.finishedRequests[0]!.ok, true, "hanging up is not the AI server failing");
 });
 
-test("a workspace that hangs up before the LLM server answers is not that server failing", async () => {
+test("a workspace that hangs up before the AI server answers is not that server failing", async () => {
   const abandonedBefore = g.llm.abandoned;
   const req = http.request({ host: "127.0.0.1", port: g.ports.service, method: "POST", path: "/llm/v1/chat/completions", agent: false });
   req.on("error", () => undefined);
   req.end(JSON.stringify({ hold: true }));
-  await waitFor(() => g.llmQueue.inFlight === 1, "the request to reach the LLM server");
+  await waitFor(() => g.llmQueue.inFlight === 1, "the request to reach the AI server");
   req.destroy();
   await waitFor(() => g.llm.abandoned === abandonedBefore + 1, "the upstream request to be aborted");
   await waitFor(() => g.llmQueue.inFlight === 0, "the slot to be released");
-  assert.equal(logged(g, "LLM server did not answer"), false);
+  assert.equal(logged(g, "AI server did not answer"), false);
   assert.equal(g.finishedRequests[0]!.ok, true);
 
   const refused = await request(g.ports.service, { method: "POST", path: "/llm/v1/chat/completions", body: JSON.stringify({ fail: true }) });
@@ -950,7 +950,7 @@ test("the LLM proxy only offers generation, images, embeddings and the model lis
     assert.equal(reply.headers.allow, allow);
     assert.deepEqual(json(reply), { error: { message: `Use ${allow} for ${path}.`, type: "method_not_allowed" } });
   }
-  assert.equal(g.llm.requests.length, forwarded, "none of them reached the LLM server");
+  assert.equal(g.llm.requests.length, forwarded, "none of them reached the AI server");
 
   const offered = [
     ["GET", "/llm/v1/models/qwen3.8-flash-next"],

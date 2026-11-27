@@ -99,7 +99,7 @@ test("the image build checks OpenCode against settings as the gateway renders th
   assert.equal(checked, rendered);
 });
 
-test("opencodeConfig: the LLM server's image models are the provider's, for generate_image, the first its default", () => {
+test("opencodeConfig: the AI server's image models are the provider's, for generate_image, the first its default", () => {
   const config = opencodeConfig({ catalog: CATALOG, imageModels: ["Image-Turbo", "Image"], serviceBaseUrl: SERVICE, browser: false, kind: "private" }) as Record<string, any>;
   const { models } = config.providers.portal;
   assert.deepEqual(Object.keys(models), ["small", "big", "org/free-choice", "Image-Turbo", "Image"]);

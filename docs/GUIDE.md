@@ -21,7 +21,7 @@ search, so nothing competes with the model for memory.
 |---|---|---|
 | **A browser, or your own software** | | on your LAN, or on your tailnet over HTTPS |
 | **Portal server** | Workspace Portal: sandboxed Qwen Code, DeepSeek Harness and OpenCode workspaces for each person, a Private and an Online one per agent, with SearXNG search and a page reader, plus the model's API behind each person's own keys | from the browser, on port 3000 or 443 |
-| **LLM server** | The Strix Halo machine: Gufo serving Qwen3.8-Flash-Next with vision | from the portal server only, on port 8080 |
+| **AI server** | The Strix Halo machine: Gufo serving Qwen3.8-Flash-Next with vision | from the portal server only, on port 8080 |
 
 <details>
 <summary>No second machine?</summary>
@@ -35,7 +35,7 @@ then talks to `http://127.0.0.1:8080/v1`.
 ssh -N -T -o ExitOnForwardFailure=yes -L 127.0.0.1:8080:127.0.0.1:8080 YOUR_LOGIN@LLM_IP
 ```
 
-**Agents on the LLM server itself** are not set up in this guide. Use the 3 × 256K layout from [step 8](#layouts);
+**Agents on the AI server itself** are not set up in this guide. Use the 3 × 256K layout from [step 8](#layouts);
 it was not tried with busy sandboxes next to the model. Free memory in each layout:
 [MEASUREMENTS.md](MEASUREMENTS.md#memory).
 
@@ -43,18 +43,18 @@ it was not tried with busy sandboxes next to the model. Free memory in each layo
 
 ## Before you start
 
-- **The LLM server:** a Strix Halo machine (Ryzen AI Max+ 395) with 128 GB. [Step 7](#7-fans-power-and-watchdog),
+- **The AI server:** a Strix Halo machine (Ryzen AI Max+ 395) with 128 GB. [Step 7](#7-fans-power-and-watchdog),
   fans, power and watchdog, runs on the tested board and BIOS only.
 - **A second PC** for part 3: any x86-64 machine with 8 GB of RAM.
 - **A USB stick** with [Fedora Server](https://fedoraproject.org/server/download/) for both machines, and your own
-  PC with SSH. The LLM server was measured on [Fedora
+  PC with SSH. The AI server was measured on [Fedora
   44](https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Server/x86_64/iso/); the portal server runs 45.
 - **Time:** about an hour of typing, plus a 141 GB download (62 minutes at 38 MB/s).
 
 The commands use three placeholders. Put your own values in their place: `LLM_IP` and `PORTAL_IP`, the addresses of
 the two servers, and `YOUR_LOGIN`, your login on both.
 
-The line above each command block says where to run it: **Both servers**, **LLM server**, **Portal server** or
+The line above each command block says where to run it: **Both servers**, **AI server**, **Portal server** or
 **Your PC**.
 
 ## Part 1: Both servers
@@ -65,7 +65,7 @@ A fresh Fedora Server on each machine. Steps 1 to 3.
 
 *At each machine · about 30 min each*
 
-1. **BIOS, LLM server only.** Tap <kbd>Del</kbd> at power-on. Set **Security > Secure Boot** to Disabled, because
+1. **BIOS, AI server only.** Tap <kbd>Del</kbd> at power-on. Set **Security > Secure Boot** to Disabled, because
    the self-built fan driver of step 7 does not load with it on, and **Advanced > Auto Power On** to Power On, so
    the machine comes back after a power cut. Save with <kbd>F4</kbd>. Other vendors name these menus differently.
 2. **Install.** Boot the Fedora Server stick with Ethernet plugged in. Set your time zone, create an administrator
@@ -95,10 +95,10 @@ df -h /
 lsblk -o NAME,SIZE,FSTYPE,MOUNTPOINTS
 ```
 
-**LLM server:** grow the root to 200 GB and put the rest of the disk into `/models`, where the 141 GB of model
+**AI server:** grow the root to 200 GB and put the rest of the disk into `/models`, where the 141 GB of model
 files go:
 
-**LLM server**, only for a small LVM root:
+**AI server**, only for a small LVM root:
 
 ```sh
 ROOT_LV=$(findmnt -no SOURCE /)
@@ -255,14 +255,14 @@ sudo bash -c 'smartctl --scan | cut -d" " -f1 | xargs -n1 smartctl -H | grep res
 ```
 
 **Good:** no failed service, room left on the disk, no hardware errors from the kernel, and `PASSED` for every
-disk. Four kernel lines on the LLM server are not hardware errors: `virt/tdx: TDX not supported by the host
+disk. Four kernel lines on the AI server are not hardware errors: `virt/tdx: TDX not supported by the host
 platform`, and three from `amdxdna`, the driver of the NPU, which is not used here and cannot start once step 5 has
 turned the IOMMU off (`Running without IOMMU not supported`, `Hardware init failed, ret -22`, `probe ... failed
 with error -22`). The portal test machine, an old PC without a TPM, prints the TDX line too, and `DMAR: [Firmware
 Bug]`, `SGX disabled or unsupported by BIOS` and `ima: Error Communicating to TPM chip`: features it lacks, not
 faults.
 
-The LLM server has its own checks [after a reboot](#day-to-day) and [after a kernel update](#engine-update). The
+The AI server has its own checks [after a reboot](#day-to-day) and [after a kernel update](#engine-update). The
 portal comes back by itself and is updated [separately](#update-the-portal).
 
 <details>
@@ -274,24 +274,24 @@ machines, because an update can restart Docker, which stops every workspace.
 
 A new Fedora release comes out every six months and gets updates for about thirteen. The upgrade is a download and
 one long reboot, described in Fedora's [upgrade
-guide](https://docs.fedoraproject.org/en-US/quick-docs/upgrading-fedora-offline/). On the LLM server, run the speed
+guide](https://docs.fedoraproject.org/en-US/quick-docs/upgrading-fedora-offline/). On the AI server, run the speed
 check from [step 9](#9-test-it) again afterwards.
 
 </details>
 
-## Part 2: LLM server
+## Part 2: AI server
 
 The Strix Halo machine. Steps 4 to 9.
 
 ### 4. Tools and CPU profile
 
-*LLM server*
+*AI server*
 
 Installs Podman and the monitoring tools, lets containers use the GPU under SELinux, sets the CPU governor to
 performance, lets your services start at boot without a login, creates `/models`, and fetches the
 [repository](https://github.com/ShahriarDhruvo/workspace-portal) whose `llm-server` folder the next steps run.
 
-**LLM server**:
+**AI server**:
 
 ```sh
 sudo dnf install -y podman grubby tuned nvtop jq tmux btop
@@ -319,7 +319,7 @@ AXB35-02
 If a test fails at stock settings the unit is faulty. Return it; tuning would only hide the fault. Run these in
 `tmux`, before the model is loaded.
 
-**LLM server**:
+**AI server**:
 
 ```sh
 sudo dnf install -y stress-ng stressapptest
@@ -340,12 +340,12 @@ slows itself down, and at about 95 °C in the RAM test.
 
 ### 5. Unlock the memory
 
-*LLM server · 1 reboot*
+*AI server · 1 reboot*
 
 **UMA.** The test machine ships with 64 GB fixed to the GPU, so Linux sees only about 62 GB. This shrinks the fixed
 part to its 512 MB minimum. The GPU borrows what it needs instead.
 
-**LLM server**:
+**AI server**:
 
 ```sh
 cat /sys/class/drm/card*/device/uma/carveout_options
@@ -357,14 +357,14 @@ echo 0 | sudo tee /sys/class/drm/card*/device/uma/carveout
 
 **GTT limit and IOMMU.** Lets the GPU borrow up to 124 GiB of RAM and turns the IOMMU off. Then reboot.
 
-**LLM server**:
+**AI server**:
 
 ```sh
 sudo grubby --update-kernel=ALL --args="amd_iommu=off ttm.pages_limit=32505856"
 sudo reboot
 ```
 
-**LLM server**, after the reboot:
+**AI server**, after the reboot:
 
 ```sh
 cat /proc/cmdline
@@ -394,7 +394,7 @@ The small VRAM number is normal: the GPU works out of shared RAM.
 
 To get the IOMMU back:
 
-**LLM server**:
+**AI server**:
 
 ```sh
 sudo grubby --update-kernel=ALL --remove-args=amd_iommu=off
@@ -405,11 +405,11 @@ sudo reboot
 
 ### 6. Download the model
 
-*LLM server · about 65 minutes, unattended*
+*AI server · about 65 minutes, unattended*
 
 Opens a terminal session that keeps running if your connection drops.
 
-**LLM server**:
+**AI server**:
 
 ```sh
 tmux new-session -A -s setup
@@ -418,7 +418,7 @@ tmux new-session -A -s setup
 Installs the [Hugging Face CLI](https://huggingface.co/docs/huggingface_hub/guides/cli) into its own Python
 environment in your home folder.
 
-**LLM server**, inside tmux:
+**AI server**, inside tmux:
 
 ```sh
 python3 -m venv ~/.hf-cli && ~/.hf-cli/bin/pip install --quiet huggingface_hub
@@ -428,7 +428,7 @@ Fetches Qwen3.8-Flash-Next (Q4) with its n-gram table at 8.5 bits a value, its M
 one fixed revision of Unsloth's repository: seven files, 141 GB. The last line checks each file against the SHA256
 the Hub lists for it.
 
-**LLM server**, inside tmux:
+**AI server**, inside tmux:
 
 ```sh
 REV=f5d175de2cf7f720d45d6064019a81fcf056e986
@@ -458,7 +458,7 @@ The warning only means that the repository holds more than these seven files, su
 Puts the n-gram table where the engine looks for the model's fourth file. Unsloth's script first marks it as file 4
 of 4.
 
-**LLM server**, once the check has passed:
+**AI server**, once the check has passed:
 
 ```sh
 cd /models/qwen3.8-flash-next
@@ -480,14 +480,14 @@ fourth file as not matching: the Hub lists Unsloth's own under that name.
 
 ### 7. Fans, power and watchdog
 
-*LLM server · tested board only*
+*AI server · tested board only*
 
 Builds the driver for the board's controller chip with DKMS and starts one service. It holds a fan curve that
 follows the hotter of CPU and GPU, both main fans at their top speed from 70 °C, and selects the firmware's
 Performance profile (120 W sustained, 160 W peak) whenever it starts. The installer refuses any board or BIOS but the tested one, and a machine with Secure
 Boot on; the firmware then keeps the fans.
 
-**LLM server**:
+**AI server**:
 
 ```sh
 sudo bash ~/workspace-portal/llm-server/fans/install.sh
@@ -499,7 +499,7 @@ sudo bash ~/workspace-portal/llm-server/fans/install.sh
 install.sh: module m5-2, profile performance, fan curve running
 ```
 
-**LLM server**, check:
+**AI server**, check:
 
 ```sh
 systemctl is-active m5-fans.service
@@ -531,7 +531,7 @@ as the GPU does that work. -50, the deepest that does anything, gives 8% but fro
 the unit. The watchdog resets the machine once the kernel has hung for 30 seconds, so a hang ends in a reboot, and
 the next boot says so.
 
-**LLM server**:
+**AI server**:
 
 ```sh
 sudo dnf copr enable -y shdwchn10/ryzenadj
@@ -543,7 +543,7 @@ sudo systemctl enable --now apu-tuning.service
 sudo systemctl daemon-reexec
 ```
 
-**LLM server**, check:
+**AI server**, check:
 
 ```sh
 sudo ryzenadj --info | grep -E 'STAPM LIMIT|PPT LIMIT (FAST|SLOW)|THM LIMIT'
@@ -569,7 +569,7 @@ cat /sys/class/watchdog/watchdog0/state
 
 Switch live, until the next boot:
 
-**LLM server**:
+**AI server**:
 
 ```sh
 echo balanced | sudo tee /sys/class/ec_su_axb35/apu/power_mode
@@ -584,7 +584,7 @@ start apu-tuning.service` raises them again.
 Undo: removes the driver, the fan curve and its service, and the firmware has the fans again. The power profile
 stays as it is, so switch it with the line above first if you want another.
 
-**LLM server**:
+**AI server**:
 
 ```sh
 sudo bash ~/workspace-portal/llm-server/fans/install.sh uninstall
@@ -596,7 +596,7 @@ sudo bash ~/workspace-portal/llm-server/fans/install.sh uninstall
 
 ### 8. Start the models
 
-*LLM server*
+*AI server*
 
 Installs [llama-swap](https://github.com/mostlygeek/llama-swap) and Gufo 0.37.0 with three models: the LLM with four
 256K sessions, MTP and vision, and two image models, Qwen-Image-2.1 and its eight-step Turbo. They don't fit in
@@ -605,7 +605,7 @@ from boot on, an image model when an image is asked for, the LLM again with the 
 running model first, once its requests have finished. The LLM keeps conversations on disk as well as in RAM, so
 after a swap or a restart an agent's next turn resumes instead of reading its whole conversation again.
 
-**LLM server**:
+**AI server**:
 
 ```sh
 mkdir /models/gufo-cache /models/gufo-models
@@ -621,7 +621,7 @@ podman run --rm --user 0 -e GUFO_MODELS_DIR=/models -v /models/gufo-models:/mode
 **You should see** both downloads end without an error. Together they are 65.6 GB; the test machine took 27
 minutes.
 
-**LLM server**:
+**AI server**:
 
 ```sh
 curl -fLo /tmp/llama-swap.tar.gz \
@@ -641,7 +641,7 @@ systemctl --user enable --now llama-swap.service
 Neither Gufo nor llama-swap has a login. The models listen on this machine only (ports 18080 to 18082); this lets
 the portal server, and nobody else, reach llama-swap on port 8080.
 
-**LLM server**:
+**AI server**:
 
 ```sh
 sudo firewall-cmd --permanent --zone=FedoraServer \
@@ -649,7 +649,7 @@ sudo firewall-cmd --permanent --zone=FedoraServer \
 sudo firewall-cmd --reload
 ```
 
-**LLM server**, check:
+**AI server**, check:
 
 ```sh
 until curl -s http://127.0.0.1:8080/running | grep -q '"state":"ready"'; do sleep 2; done
@@ -749,11 +749,11 @@ of this size were run with four sessions only.
 
 ### 9. Test it
 
-*LLM server*
+*AI server*
 
 **Tool call.** Agents depend on these: the model must answer with a call, not with prose.
 
-**LLM server**:
+**AI server**:
 
 ```sh
 curl -sS http://127.0.0.1:8080/v1/chat/completions -H 'Content-Type: application/json' -d '{
@@ -772,7 +772,7 @@ curl -sS http://127.0.0.1:8080/v1/chat/completions -H 'Content-Type: application
 
 **Speed.** One streamed answer, with the server's own timing.
 
-**LLM server**:
+**AI server**:
 
 ```sh
 curl -sSN http://127.0.0.1:8080/v1/chat/completions -H 'Content-Type: application/json' -d '{
@@ -795,7 +795,7 @@ keys in it and pass them to a tool, and watches memory while it runs. The run ta
 the whole server, so do it before anyone depends on it. It talks to Gufo directly, on port 18080, so the LLM must be
 the model llama-swap runs: after the tool call above it is.
 
-**LLM server**:
+**AI server**:
 
 ```sh
 python3 ~/workspace-portal/llm-server/acceptance.py
@@ -867,7 +867,7 @@ sudo bash deploy/install.sh
     Models:       /srv/workspace-portal/config/models (deploy/models.sh; used by every agent)
     Instructions: /srv/workspace-portal/config/instructions.md (every agent is told them)
     Web:        web_search through the built-in SearXNG (http://127.0.0.1:8888); page reader on (read_page)
-    Monitoring: this server: portal-hostd on http://127.0.0.1:9180; LLM server: not set up (hostd/README.md)
+    Monitoring: this server: portal-hostd on http://127.0.0.1:9180; AI server: not set up (hostd/README.md)
 
   Check the workspace isolation at any time:  sudo bash deploy/verify-isolation.sh
 ```
@@ -1010,9 +1010,9 @@ The page counts for each key and day the requests, the tokens in and out and the
 
 Gives **Admin > Usage** the live readings of both servers, **Admin > Energy** their energy per day and each user's
 share of it, and lets **Admin > Updates** [update Gufo](#engine-update). The portal server's half came with the
-installer above; this adds the LLM server's.
+installer above; this adds the AI server's.
 
-**LLM server**:
+**AI server**:
 
 ```sh
 sudo bash ~/workspace-portal/hostd/install.sh llm --portal PORTAL_IP --engine-url http://127.0.0.1:18080 \
@@ -1056,7 +1056,7 @@ a second.
   portal downloads both every day, no account needed. The kWh come from the chips' own sensors, so a wall meter
   reads more. Every agent is told this place too, as the place of the portal's server.
 - **Access:** `portal-hostd`, the daemon that takes the readings, listens on 127.0.0.1 only on the portal server.
-  On the LLM server it listens on port 9180, and its installer adds one firewall rule that lets only the portal
+  On the AI server it listens on port 9180, and its installer adds one firewall rule that lets only the portal
   server in. Every request except the health check needs the token; workspaces cannot reach either server. What it
   costs to run: [MEASUREMENTS.md](MEASUREMENTS.md#portal-hostd).
 - **Removal:** `sudo bash ~/workspace-portal/hostd/install.sh uninstall` on a server removes the daemon and its
@@ -1192,14 +1192,14 @@ tailnet.
 > deploy/tailscale-https.sh off` brings it back. Run it with `off` before you change one of the portal's ports or
 > uninstall the portal, and again after a port change. Every device of the tailnet also reaches this machine's SSH,
 > which takes keys only. The machine's name becomes public, because every certificate is listed in the public
-> certificate logs. The LLM server needs no remote access of its own: keep it on the LAN.
+> certificate logs. The AI server needs no remote access of its own: keep it on the LAN.
 
 ## Day to day
 
 Both servers start everything by themselves at boot. **Admin > Usage** in the portal shows both servers and the LLM
 sessions live, and **Admin > Users** the running workspaces; these are the commands for everything else.
 
-| LLM server | What it does |
+| AI server | What it does |
 |---|---|
 | `curl -s http://127.0.0.1:8080/running \| jq -c '[.running[] \| {model, state}]'` | Which models run: the LLM, or one or both image models. |
 | `systemctl --user status llama-swap.service --no-pager` | State and uptime of llama-swap, which starts and stops the models. |
@@ -1223,9 +1223,9 @@ sessions live, and **Admin > Users** the running workspaces; these are the comma
 | `sudo bash deploy/uninstall.sh` | Removes the portal: its containers, images, firewall and portal-hostd. Keeps `.env` and `/srv/workspace-portal`; with `--purge-data` it deletes that folder too. |
 
 <details>
-<summary>After a reboot of the LLM server</summary>
+<summary>After a reboot of the AI server</summary>
 
-**LLM server**:
+**AI server**:
 
 ```sh
 systemctl --failed --no-legend; systemctl --user --failed --no-legend
@@ -1246,13 +1246,13 @@ sudo firewall-cmd --zone=FedoraServer --list-rich-rules
 <a id="engine-update"></a>
 
 <details>
-<summary>Updating the LLM server</summary>
+<summary>Updating the AI server</summary>
 
 **After a kernel update**, `dkms status` must list `ec_su_axb35/m5-2` as installed for the new kernel, and the
 speed check from [step 9](#9-test-it) should still show the same numbers. If the new kernel misbehaves, boot the
 previous one:
 
-**LLM server**:
+**AI server**:
 
 ```sh
 sudo grubby --info=ALL | grep -E '^(index|title)'
@@ -1260,7 +1260,7 @@ sudo grubby --set-default-index=1        # the index of the kernel that worked
 sudo reboot
 ```
 
-**A new Gufo release** is installed under **Admin > Updates > LLM engine** in the portal, which lists the releases
+**A new Gufo release** is installed under **Admin > Updates > Gufo** in the portal, which lists the releases
 with their notes and marks breaking changes. The new image downloads, running requests finish while new ones wait
 in the portal (up to 15 minutes, or **Restart now**), then Gufo restarts and must report the new version. If it
 does not come up, the previous version is put back by itself, and the failed update ends with Gufo's own last log
@@ -1278,7 +1278,7 @@ The model can be downloaded again. What cannot, on the portal server: `~/workspa
 `/srv/workspace-portal`, where `db/` holds the accounts, the API keys, the audit log, usage and energy, `users/`
 every person's files and chat history, and `config/` the model settings and the agent versions. Copy it with
 numeric owners and modes, because each workspace's files belong to a user ID of their own, and stop the portal
-while `db/` is copied: `sudo docker compose down`, afterwards `sudo docker compose up -d`. On the LLM server only
+while `db/` is copied: `sudo docker compose down`, afterwards `sudo docker compose up -d`. On the AI server only
 `~/.config/containers/systemd/gufo*.container` and `~/.config/llama-swap/config.yaml`.
 
 </details>
@@ -1380,7 +1380,7 @@ sudo bash deploy/verify-isolation.sh
 - **A new agent** (OpenCode, for an install from before it) stays off, because the installer keeps
   `WORKSPACE_AGENTS` in your `.env`: add `opencode` to it, as in `WORKSPACE_AGENTS=qwen,dsh,opencode`, and run the
   installer again. It builds the agent's image: 4.2 to 4.9 GB, of which the agents' images share 3.7 GB.
-- **portal-hostd on the LLM server** updates separately: `cd ~/workspace-portal && git pull --ff-only && sudo bash
+- **portal-hostd on the AI server** updates separately: `cd ~/workspace-portal && git pull --ff-only && sudo bash
   hostd/install.sh llm --portal PORTAL_IP` there. It keeps its token and restarts only if something changed.
 - **Chromium and the other system packages** inside the workspace images: `sudo bash deploy/update-image.sh
   --refresh` rebuilds the images with today's packages.
@@ -1401,8 +1401,8 @@ sudo bash deploy/verify-isolation.sh
 | Gufo is stopped while loading | Loading took over 10 minutes, usually a slow disk. Raise `TimeoutStartSec` in `gufo.container` and `healthCheckTimeout` in `~/.config/llama-swap/config.yaml`. |
 | An image takes minutes before it starts | llama-swap stops the LLM only once every running LLM request has ended, and agents' requests can run for minutes. `curl -s http://127.0.0.1:8080/running` shows what runs. |
 | A unit fails with `wait-gpu-memory: ... GiB needed` | The model before it still held the memory after 60 seconds. `journalctl --user -u gufo -u gufo-image-turbo -u gufo-image` says why; the next request of that model tries again. |
-| The LLM server switched itself off or froze | On the next boot, `sudo journalctl -k -b \| grep 'reset reason'`. `hardware watchdog timer expired`: the kernel hung and the watchdog of [step 7](#7-fans-power-and-watchdog) rebooted it. `ACPI power state transition occurred`: the power went off without Linux, or someone switched it off. `software wrote 0x6`: an ordinary reboot. `sudo journalctl -b -1 -n 50` shows what it was doing, less its last seconds, which a hang loses. A CPU offset of -50 froze the test machine five times; step 7 sets -25. Delete `--set-coall=1048551` from `/etc/systemd/system/apu-tuning.service` and reboot to rule it out. [MEASUREMENTS.md](MEASUREMENTS.md#freezes) has what is known. |
-| The model disappears under load | Read `journalctl --user -u gufo.service` and `sudo journalctl -k -b`. Exit status 75 is the stall timeout: nothing progressed for 10 minutes. An out-of-memory kill means something else is running on the LLM server, or the layout is too big. |
+| The AI server switched itself off or froze | On the next boot, `sudo journalctl -k -b \| grep 'reset reason'`. `hardware watchdog timer expired`: the kernel hung and the watchdog of [step 7](#7-fans-power-and-watchdog) rebooted it. `ACPI power state transition occurred`: the power went off without Linux, or someone switched it off. `software wrote 0x6`: an ordinary reboot. `sudo journalctl -b -1 -n 50` shows what it was doing, less its last seconds, which a hang loses. A CPU offset of -50 froze the test machine five times; step 7 sets -25. Delete `--set-coall=1048551` from `/etc/systemd/system/apu-tuning.service` and reboot to rule it out. [MEASUREMENTS.md](MEASUREMENTS.md#freezes) has what is known. |
+| The model disappears under load | Read `journalctl --user -u gufo.service` and `sudo journalctl -k -b`. Exit status 75 is the stall timeout: nothing progressed for 10 minutes. An out-of-memory kill means something else is running on the AI server, or the layout is too big. |
 | HTTP 429 from the model | More than 32 requests are waiting. Let the queue drain. |
 | An agent thinks for minutes and stops without an answer | The reply ran out during the thinking. `gufo.container` must have its `--reasoning-budget` ([step 8](#8-start-the-models)), and `sudo bash deploy/models.sh show` must list an `autoCompactThreshold` and no `max_tokens`. |
 | An agent never gets an answer | All four sessions are busy with long prompts, and a long prompt slows everyone who arrives after it. Look at `/slots` (see [Day to day](#day-to-day)). |
@@ -1446,13 +1446,13 @@ fan service is running and that the vents have space on all sides. How each was 
 | Raw photo, whole answer | 147 s (12 MP), 353 s (16.8 MP) | Idle server, image sent to the API at full size. Qwen Code shrinks images to 1,568 pixels on the long edge first, which is quick |
 | Chip power | 121-128 W under load, about 7 W idle | The chip's own sensor, not a wall meter |
 | Chip temperature under load | 97-98 °C average | The full-load test with the limits and fans of step 7: at the chip's 98 °C limit for 95% of it. Before them, with the Performance profile's limits and fans at 80-95%, 83-89 °C; 86-94 °C on firmware fans |
-| Free memory, LLM server | 9.6 GiB after load, 6.5 GiB with four full prompts at once | 4.7 GiB while four raw 12 MP photos were read. The full-load run moved 1 page to swap, the other tests none |
+| Free memory, AI server | 9.6 GiB after load, 6.5 GiB with four full prompts at once | 4.7 GiB while four raw 12 MP photos were read. The full-load run moved 1 page to swap, the other tests none |
 | Cancelling a reply | session free 0.5 s later | Three clients dropped mid-reply. With three sessions busy, a fourth request waited 5 s for its first word |
 
 ## Not tested
 
 - A fresh install from USB and the BIOS screens. Both test machines kept their installed Fedora, so [step
-  1](#1-install-fedora-server) was not run on them: its LVM commands for the LLM server ran on a test disk image,
+  1](#1-install-fedora-server) was not run on them: its LVM commands for the AI server ran on a test disk image,
   the portal server's line not at all.
 - [Step 6](#6-download-the-model) from an empty folder. Its blocks ran as written in a scratch folder that already
   held the three model files, the MTP helper and the vision file, so the download fetched the n-gram table and the
@@ -1462,7 +1462,7 @@ fan service is running and that the vents have space on all sides. How each was 
   within 2% of it ([measurements](MEASUREMENTS.md#n-gram-table)).
 - The older numbers on the current kernel. The reading speeds on the fan curve, the image timings and the
   full-machine run date from kernel 7.2.15 and were not repeated with 7.3.4.
-- Fedora 45 on the LLM server, and a Fedora release upgrade on either server.
+- Fedora 45 on the AI server, and a Fedora release upgrade on either server.
 - Coming back after a real power cut.
 - A Gufo update that fails to start, and **Restart now**, in the last test. An earlier forced bad update put the
   previous version back by itself.
@@ -1500,14 +1500,14 @@ fan service is running and that the vents have space on all sides. How each was 
   timestamp, the case of header names and a WebSocket request, which is closed.
 - Installing the portal as an app on a real phone, and a screen reader. Chrome's own install check passed with an
   emulated Pixel 7; no iPhone was at hand.
-- A kernel update on the LLM server with this fan driver. DKMS has built it for the running kernel only.
+- A kernel update on the AI server with this fan driver. DKMS has built it for the running kernel only.
 - Fan noise and power at the wall. No meters were at hand.
 
 ## Versions and sources
 
 | Part | Version on the test machines |
 |---|---|
-| LLM server | Ryzen AI Max+ 395, 128 GB, board AXB35-02, BIOS 3.11 (May 8, 2026); Fedora 44 Server, kernel 7.3.4-200.fc44, Mesa 26.2.6, Podman 5.8.9, crun 1.30 |
+| AI server | Ryzen AI Max+ 395, 128 GB, board AXB35-02, BIOS 3.11 (May 8, 2026); Fedora 44 Server, kernel 7.3.4-200.fc44, Mesa 26.2.6, Podman 5.8.9, crun 1.30 |
 | Engine | [Gufo 0.37.0](https://github.com/gufo-org/gufo/releases/tag/v0.37.0) (build 684b716), image digest `sha256:9548e994...5bb1d4dc` |
 | Model router | [llama-swap v276](https://github.com/mostlygeek/llama-swap/releases/tag/v276) (57b2c19) |
 | Model | [Qwen3.8-Flash-Next](https://huggingface.co/Qwen/Qwen3.8-Flash-Next), [UD-Q4_K_XL from Unsloth](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/tree/f5d175de2cf7f720d45d6064019a81fcf056e986) with the Q8_0 n-gram table, shared Q8 MTP, BF16 vision projector; downloaded with huggingface_hub 2.4.0 and hf-xet 1.8.0 |

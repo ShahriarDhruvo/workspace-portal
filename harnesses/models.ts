@@ -124,7 +124,7 @@ export const DEFAULT_CONTEXT_WINDOW = 131_072;
 export const DEFAULT_MAX_TOKENS = 64_000;
 
 export interface PortalModel {
-  /** What the LLM server serves (the request's `model`). */
+  /** What the AI server serves (the request's `model`). */
   id: string;
   name: string;
   contextWindow: number;

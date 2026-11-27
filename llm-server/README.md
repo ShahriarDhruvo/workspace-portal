@@ -1,6 +1,6 @@
-# LLM server
+# AI server
 
-What the reference LLM server runs besides portal-hostd ([hostd/README.md](../hostd/README.md)). The portal needs
+What the reference AI server runs besides portal-hostd ([hostd/README.md](../hostd/README.md)). The portal needs
 none of it: any OpenAI-compatible model server will do. [docs/GUIDE.md](../docs/GUIDE.md) installs it step by
 step; the measurements behind these choices are in [docs/MEASUREMENTS.md](../docs/MEASUREMENTS.md).
 

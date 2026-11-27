@@ -16,7 +16,7 @@ export const KIND_LABEL = "workspace-portal.kind";
 
 /** Swap allowed on top of the memory limit, so short spikes slow down instead of OOM-killing the agent. */
 const SWAP_HEADROOM_BYTES = 512 * 1024 * 1024;
-/** Makes workspaces the OOM killer's first choice, so the LLM server survives a memory shortage. */
+/** Makes workspaces the OOM killer's first choice, so the AI server survives a memory shortage. */
 const OOM_SCORE_ADJ = 500;
 
 export function containerName(userId: number, ref: WorkspaceRef): string {

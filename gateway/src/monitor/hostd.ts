@@ -1,5 +1,5 @@
 // Client for portal-hostd (hostd/), the small service on each server that reports live hardware readings and, on the
-// LLM server, updates the LLM engine. Its API and payloads are described in hostd/README.md.
+// AI server, updates Gufo. Its API and payloads are described in hostd/README.md.
 import http from "node:http";
 import https from "node:https";
 import { field, parseJson, readBounded, type HostInfo, type HostSample } from "@portal/core";

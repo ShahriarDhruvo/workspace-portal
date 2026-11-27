@@ -28,7 +28,7 @@ import { Progress } from "@/components/ui/progress";
 import { LiveChart } from "./live-chart";
 import { DETAIL_GRID, METRIC_GRID, ServerBodySkeleton } from "./usage-skeleton";
 
-const TITLES = { llm: "LLM server", portal: "Portal server" } as const;
+const TITLES = { llm: "AI server", portal: "Portal server" } as const;
 
 const STATES: Record<HostLive["state"], ReactNode> = {
   online: <Badge variant="success">Online</Badge>,
@@ -310,7 +310,7 @@ function NoReadings({ host }: { host: HostLive }) {
                 </>
               ) : (
                 <>
-                  On the LLM server run{" "}
+                  On the AI server run{" "}
                   <code className="font-mono text-12 wrap-anywhere">sudo bash ~/workspace-portal/hostd/install.sh llm --portal PORTAL_IP</code>,
                   put the two lines it prints into the portal&apos;s <code className="font-mono text-12">.env</code>, then run{" "}
                   <code className="font-mono text-12">sudo docker compose up -d</code>.

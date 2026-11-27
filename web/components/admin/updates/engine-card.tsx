@@ -39,7 +39,7 @@ interface EngineCardProps {
   onChanged: () => void;
 }
 
-/** The LLM engine on the Updates page. Without portal-hostd on the LLM server it says how to set it up. */
+/** Gufo on the Updates page. Without portal-hostd on the AI server it says how to set it up. */
 export function EngineCard({ data, onChanged }: EngineCardProps) {
   const overview = data.data;
   const unreachable = data.error !== null;
@@ -49,7 +49,7 @@ export function EngineCard({ data, onChanged }: EngineCardProps) {
   /** Takes the focus once a removed image's row, and its Remove button, is gone. */
   const imagesTrigger = useRef<HTMLButtonElement>(null);
 
-  const title = "LLM engine";
+  const title = "Gufo";
   const card = (children: React.ReactNode) => <VersionCard title={title} status={status}>{children}</VersionCard>;
   if (!overview) {
     return card(
@@ -61,7 +61,7 @@ export function EngineCard({ data, onChanged }: EngineCardProps) {
   if (overview.state === "off") return card(<Setup />);
   if (overview.state === "offline") {
     return card(
-      <UnreachableAlert title="portal-hostd on the LLM server can't be reached" message={overview.error} onRetry={onChanged}>
+      <UnreachableAlert title="portal-hostd on the AI server can't be reached" message={overview.error} onRetry={onChanged}>
         Engine updates are unavailable until it answers. The engine itself may still be serving.
       </UnreachableAlert>,
     );
@@ -73,7 +73,7 @@ export function EngineCard({ data, onChanged }: EngineCardProps) {
           <EmptyTitle>No engine to update</EmptyTitle>
           <EmptyDescription>
             {overview.error ??
-              "portal-hostd on the LLM server doesn't control an engine. Install it there with the engine's systemd unit and quadlet."}
+              "portal-hostd on the AI server doesn't control an engine. Install it there with the engine's systemd unit and quadlet."}
           </EmptyDescription>
         </EmptyHeader>
       </Empty>,
@@ -114,7 +114,7 @@ export function EngineCard({ data, onChanged }: EngineCardProps) {
       title={title}
       subtitle={engine.repository}
       status={status}
-      version={{ label: "Running on the LLM server", value: engine.version ?? "unknown" }}
+      version={{ label: "Running on the AI server", value: engine.version ?? "unknown" }}
       actions={
         targetRow && !(job && isJobActive(job)) ? (
           <GuardedButton blockedReason={blocked} onClick={(event) => show({ kind: "install", row: targetRow, update: true }, event.currentTarget)}>
@@ -124,11 +124,11 @@ export function EngineCard({ data, onChanged }: EngineCardProps) {
       }
       sections={
         <PackageImages
-          name="LLM engine"
+          name="Gufo"
           rows={rows}
           currentLabel="Running"
           missingLabel="Download first"
-          where="the LLM server"
+          where="the AI server"
           empty="Unknown until the image registry answers."
           triggerRef={imagesTrigger}
         />
@@ -202,7 +202,7 @@ function EngineDialogs({ dialog, overview, open, onOpenChange, onDone, opener }:
       return (
         <ConfirmDialog
           {...common}
-          title={dialog.update ? `Update the LLM engine to ${row.version}?` : `${verb} LLM engine ${row.version}?`}
+          title={dialog.update ? `Update Gufo to ${row.version}?` : `${verb} Gufo ${row.version}?`}
           confirm={dialog.update ? `Update to ${row.version}` : `${verb} ${row.version}`}
           pending="Starting…"
           onConfirm={() => updateEngine(row.version)}
@@ -214,10 +214,10 @@ function EngineDialogs({ dialog, overview, open, onOpenChange, onDone, opener }:
             </span>
           ) : null}
           <p>
-            {row.image ? "Its image is on the LLM server already. " : "Its image downloads first, while the engine keeps serving. "}
+            {row.image ? "Its image is on the AI server already. " : "Its image downloads first, while the engine keeps serving. "}
             {drain} with {em(row.version)}.
           </p>
-          <p>If it doesn&apos;t start properly, the LLM server puts {em(current)} back by itself.</p>
+          <p>If it doesn&apos;t start properly, the AI server puts {em(current)} back by itself.</p>
         </ConfirmDialog>
       );
     }
@@ -266,7 +266,7 @@ function Setup() {
       <EmptyHeader className="max-w-lg">
         <EmptyTitle>Engine updates aren&apos;t set up</EmptyTitle>
         <EmptyDescription>
-          The portal updates the LLM engine through portal-hostd on the LLM server. Run this there, put the HOSTD_LLM_URL and
+          The portal updates Gufo through portal-hostd on the AI server. Run this there, put the HOSTD_LLM_URL and
           HOSTD_LLM_TOKEN lines it prints in the portal&apos;s .env, and run{" "}
           <code className="font-mono text-12">sudo docker compose up -d</code>.
         </EmptyDescription>

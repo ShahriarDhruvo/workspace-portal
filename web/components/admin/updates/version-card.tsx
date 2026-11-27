@@ -17,7 +17,7 @@ import { Progress } from "@/components/ui/progress";
 import { Spinner } from "@/components/ui/spinner";
 import { BuildLog } from "./build-log";
 
-// The one layout of the Updates page's cards (the LLM engine and each agent), so each reads the same way.
+// The one layout of the Updates page's cards (Gufo and each agent), so each reads the same way.
 
 interface VersionCardProps {
   title: string;

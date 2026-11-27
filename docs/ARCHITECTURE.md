@@ -23,7 +23,7 @@ browser --(cookie portal_session)--> web app   WEB_BIND:WEB_PORT  <--(API key)--
 | The gateway also calls | At | With |
 |---|---|---|
 | Docker | `/var/run/docker.sock` | root in its container, with `CHOWN`, `DAC_OVERRIDE`, `FOWNER` only |
-| the LLM server | `LLM_UPSTREAM_URL` | `LLM_API_KEY` |
+| the AI server | `LLM_UPSTREAM_URL` | `LLM_API_KEY` |
 | SearXNG, the page reader | `SEARXNG_URL`, `READER_URL` (loopback by default) | nothing, or `SEARXNG_AUTHORIZATION` |
 | Exa, when `EXA_SEARCH` is on | `https://mcp.exa.ai/mcp` | nothing: no account, no key |
 | portal-hostd on both servers | `HOSTD_PORTAL_URL`, `HOSTD_LLM_URL` | `HOSTD_PORTAL_TOKEN`, `HOSTD_LLM_TOKEN` |
@@ -64,7 +64,7 @@ browser --(cookie portal_session)--> web app   WEB_BIND:WEB_PORT  <--(API key)--
 | `container/security/` | `@portal/container`: the one security profile (`spec.ts`), the networks, the fence probe, the firewall (`firewall.sh`) |
 | `reader/`, `searxng/` | the page reader (Python, Defuddle in Node); SearXNG with its `settings.yml` built in |
 | `hostd/`, `models/` | portal-hostd; the model settings a fresh install starts with |
-| `llm-server/` | the reference LLM server: engine service file, model download, load test, fan control for one board |
+| `llm-server/` | the reference AI server: engine service file, model download, load test, fan control for one board |
 | `deploy/` | installer, isolation check, image update, model settings, HTTPS, uninstall; `lib.sh` is shared |
 
 An agent and a harness are the same thing, the program a workspace runs: the settings and the code say agent,
@@ -352,7 +352,7 @@ account, the same user's included. State is per listener: nothing carries betwee
 
 ## LLM API
 
-`/llm/api/<path>` is the LLM server's `<path>` for software outside the portal (an editor, a script), opened by
+`/llm/api/<path>` is the AI server's `<path>` for software outside the portal (an editor, a script), opened by
 a key its user made on the API page. `https://<portal>/llm/api/v1` is an OpenAI base URL.
 
 ```
@@ -375,7 +375,7 @@ client --(key)--> web app  app/llm/api/[[...path]]/route.ts
   `x-api-key` (Anthropic's clients). It holds while it is not revoked and its user is active without a temporary
   password; anything else gets 401 `invalid_api_key` in OpenAI's error shape. `OPTIONS` passes without a key,
   because a browser's preflight carries none.
-- **Every path is passed on**, where a workspace gets seven: the API stands in for the LLM server's own, and its
+- **Every path is passed on**, where a workspace gets seven: the API stands in for the AI server's own, and its
   caller is a user, not an agent that a web page can talk into things. With a hosted provider behind
   `LLM_UPSTREAM_URL`, a key so opens all of that provider's API on the portal's account. WebSocket upgrades
   are not passed, nor llama-swap's own routes (`ADMIN_ROUTES`: `/api`, `/ui`, `/logs`, `/upstream`, `/unload`,
@@ -590,9 +590,9 @@ A gateway that stops mid-job records it as failed; at its next start `sweep` rem
 containers before the control API listens. `deploy/update-image.sh` does the same build from the shell, writes
 the same file, and refuses while `/control/updates/running` reports a job.
 
-## LLM engine updates
+## Gufo updates
 
-`gateway/src/updates/engine-updater.ts` drives portal-hostd on the LLM server, which owns the engine's
+`gateway/src/updates/engine-updater.ts` drives portal-hostd on the AI server, which owns the engine's
 container; the steps hostd runs are in [hostd/README.md](../hostd/README.md). Phases: `pulling`, `draining`,
 `restarting`, then `succeeded`, `failed` or `cancelled`.
 
@@ -608,7 +608,7 @@ container; the steps hostd runs are in [hostd/README.md](../hostd/README.md). Ph
 ## Live view
 
 `GET /control/live` (`monitor/live.ts`) is a server-sent event stream for Admin > Usage: `init` once, then a
-`frame` every 500 ms with both servers' readings, the LLM sessions and the queue. At most 8 viewers; a slow
+`frame` every 500 ms with both servers' readings, the sessions and the queue. At most 8 viewers; a slow
 one skips frames. What feeds it (hostd's streams, the engine's `/slots`) runs only while someone watches.
 `LLM_SLOTS_PATH` says where `/slots` is: behind llama-swap `/upstream/<model>/slots`, which answers 409 instead of
 starting the LLM while it is stopped for the image models or starting again; the engine's state is then
@@ -618,7 +618,7 @@ These parts of `gateway/src/monitor/` run all the time:
 - **Energy meter**: every 30 s it reads each hostd's running totals and books the increase to the local day in
   `host_daily`. `host_meter` keeps the last reading, so a gateway restart counts only what came after it. A
   day is the server's local day (`TZ`), the same in the web app and the gateway (`usage-day.ts`).
-- **LLM energy**: while requests run, the LLM server's meter is read every 2 s and each stretch is shared
+- **LLM energy**: while requests run, the AI server's meter is read every 2 s and each stretch is shared
   among the running requests by time, into the `workspace_sessions` row of a workspace's request and the
   `api_key_usage` row of an API key's. Idle draw belongs to no one. Admin > Energy adds both up per user and
   day, a session on the day it started.
@@ -692,7 +692,7 @@ ports and UIDs (`numberingProblems`: ranges that do not fit, that hold `WEB_PORT
 
 `gateway/test/harness.ts` builds the gateway with the production `compose()` over a real SQLite file and puts
 fakes where the outside world is, most of them through `Seams`: a Docker runtime whose containers are
-in-process agent servers, an image builder, the registries, an engine host, an LLM server, a search backend
+in-process agent servers, an image builder, the registries, an engine host, an AI server, a search backend
 and a clock. So a test runs production's wiring, and a dependency on the outside world is a seam in
 `compose.ts`.
 

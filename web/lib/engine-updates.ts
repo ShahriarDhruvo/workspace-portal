@@ -1,4 +1,4 @@
-// What the Updates page decides about the LLM engine (docs/ARCHITECTURE.md, "LLM engine updates").
+// What the Updates page decides about Gufo (docs/ARCHITECTURE.md, "Gufo updates").
 import { z } from "zod";
 import { compareVersions, isStableVersion } from "@portal/core/wire";
 import type { ApiError, EngineImage, EngineOverview, EngineRelease, EngineStatus, EngineUpdateJob, ReleaseNotes } from "@portal/core/wire";
@@ -10,7 +10,7 @@ export const engineVersionSchema = z
   .trim()
   .regex(/^\d{1,6}\.\d{1,6}\.\d{1,6}$/, "Choose a release version, like 0.34.0.");
 
-/** An engine image on the LLM server, by digest; its version is only for the audit entry. */
+/** An engine image on the AI server, by digest; its version is only for the audit entry. */
 export const engineImageSchema = z.object({
   digest: z.string().regex(/^sha256:[0-9a-f]{64}$/, "Unknown image."),
   version: z.string().trim().max(64).nullable(),
@@ -45,13 +45,13 @@ export interface EnginePackageRow {
   notes: ReleaseNotes | null;
   /** The engine runs it. */
   running: boolean;
-  /** Its image on the LLM server; null: it downloads first. */
+  /** Its image on the AI server; null: it downloads first. */
   image: EngineImage | null;
 }
 
 /**
- * The gateway's releases (newest first: the newest ones, what runs, the images on the LLM server) as rows, each with
- * its image on the LLM server: the one labelled with that version, else the one with its digest. The gateway uses an
+ * The gateway's releases (newest first: the newest ones, what runs, the images on the AI server) as rows, each with
+ * its image on the AI server: the one labelled with that version, else the one with its digest. The gateway uses an
  * image of that version as it is (engine-updater.ts), so a row with one switches without a download.
  */
 export function enginePackageRows(releases: readonly EngineRelease[], engine: Pick<EngineStatus, "version" | "images">): EnginePackageRow[] {
@@ -98,7 +98,7 @@ const JOB_RUNNING = "An engine update is running. Wait for it to finish, or canc
 /** Why no update can start right now, or null when one can. */
 export function engineUpdateBlocker(overview: EngineOverview | null, unreachable: boolean): string | null {
   if (unreachable || !overview) return OFFLINE;
-  if (overview.state !== "ok") return "The LLM server's portal-hostd isn't available.";
+  if (overview.state !== "ok") return "The AI server's portal-hostd isn't available.";
   if (isJobActive(overview.job)) return JOB_RUNNING;
   return null;
 }
@@ -112,14 +112,14 @@ export function engineRemoveBlocker(overview: EngineOverview | null, unreachable
   return null;
 }
 
-/** What a running job is doing; once a restart failed (`rolledBack`), the LLM server is putting the previous version back. */
+/** What a running job is doing; once a restart failed (`rolledBack`), the AI server is putting the previous version back. */
 export function enginePhaseLabel(job: Pick<EngineUpdateJob, "phase" | "rolledBack" | "fromVersion">): string {
   if (job.phase === "pulling") return "Downloading the image";
   if (job.phase === "draining") return "Waiting for running requests";
   return job.rolledBack ? `Putting ${version(job.fromVersion)} back` : "Restarting the engine";
 }
 
-/** It downloads, drains and restarts; with the image on the LLM server already, only the last two. */
+/** It downloads, drains and restarts; with the image on the AI server already, only the last two. */
 export function engineJobStep(job: Pick<EngineUpdateJob, "reuse" | "phase" | "finishedAt">): JobStep {
   return jobStep(job.reuse ? ["draining", "restarting"] : ["pulling", "draining", "restarting"], job);
 }
@@ -129,8 +129,8 @@ type JobWords = Pick<EngineUpdateJob, "phase" | "fromVersion" | "toVersion">;
 const version = (value: string | null) => value ?? "an unknown version";
 
 /**
- * The job in a few words, an update to a newer version or a switch to an older one: "Updating the LLM engine 0.31.0
- * → 0.34.0", "LLM engine switched to 0.30.0", "Update of the LLM engine to 0.34.0 failed"…
+ * The job in a few words, an update to a newer version or a switch to an older one: "Updating Gufo 0.31.0
+ * → 0.34.0", "Gufo switched to 0.30.0", "Update of Gufo to 0.34.0 failed"…
  */
 export function engineJobTitle(job: JobWords): string {
   const older = job.fromVersion !== null && compareEngineVersions(job.toVersion, job.fromVersion) < 0;
@@ -139,13 +139,13 @@ export function engineJobTitle(job: JobWords): string {
     case "pulling":
     case "draining":
     case "restarting":
-      return `${verb} the LLM engine ${version(job.fromVersion)} → ${job.toVersion}`;
+      return `${verb} Gufo ${version(job.fromVersion)} → ${job.toVersion}`;
     case "succeeded":
-      return `LLM engine ${done} to ${job.toVersion}`;
+      return `Gufo ${done} to ${job.toVersion}`;
     case "failed":
-      return `${noun} of the LLM engine to ${job.toVersion} failed`;
+      return `${noun} of Gufo to ${job.toVersion} failed`;
     case "cancelled":
-      return `${noun} of the LLM engine to ${job.toVersion} cancelled`;
+      return `${noun} of Gufo to ${job.toVersion} cancelled`;
   }
 }
 
@@ -159,7 +159,7 @@ export function engineJobOutcome(job: JobWords & Pick<EngineUpdateJob, "rolledBa
     case "failed":
       return job.rolledBack
         ? `${job.toVersion} didn't start properly, so ${version(job.fromVersion)} runs again.`
-        : "Check the engine on the LLM server: the status above shows what runs now.";
+        : "Check the engine on the AI server: the status above shows what runs now.";
     default:
       return "";
   }
@@ -175,7 +175,7 @@ export function engineActionError(action: EngineAction, error: ApiError): string
     case "image_current":
       return "The engine runs this image. Use another version first.";
     case "not_found":
-      return action === "remove" ? "This image is no longer on the LLM server." : error.message;
+      return action === "remove" ? "This image is no longer on the AI server." : error.message;
     case "timeout":
       return action === "update"
         ? "The workspace service did not answer in time. The job may have started anyway: this page shows it if so."

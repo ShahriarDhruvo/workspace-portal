@@ -13,7 +13,7 @@ Every agent has a Private and an Online workspace of its own for each user, and 
 files (`/home/user`, `/workspace`) and chats: nothing is shared between them, and one of a user's workspaces
 runs at a time. A web server started in a workspace opens from the Preview button in the portal's bar, in a tab
 of its own. With a key from the API page, a user's other software (an editor, a script) uses the same model
-through the portal. The admin manages users, watches usage and energy, updates the agents and the LLM engine,
+through the portal. The admin manages users, watches usage and energy, updates the agents and Gufo,
 and reads the audit log.
 
 ## In a workspace
@@ -36,7 +36,7 @@ lists them and what was left out.
 | | one container per running workspace | a Docker network per kind |
 | | SearXNG and the page reader | `127.0.0.1:8888`, `127.0.0.1:4003` |
 | | portal-hostd: hardware readings | `127.0.0.1:9180` |
-| LLM server (can be the same machine) | an OpenAI-compatible API | `LLM_UPSTREAM_URL` |
+| AI server (can be the same machine) | an OpenAI-compatible API | `LLM_UPSTREAM_URL` |
 | | portal-hostd: readings and engine updates (optional) | `:9180`, open to the portal server only |
 
 ## Requirements
@@ -199,13 +199,13 @@ workspaces afterwards.
 [docs/GUIDE.md](docs/GUIDE.md#update-the-portal) has these steps as commands, and how to move a person's old
 files into one of the new workspaces.
 
-## LLM server: readings and engine updates
+## AI server: readings and engine updates
 
-`sudo bash hostd/install.sh llm --portal <portal IPv4>` on the LLM server installs portal-hostd and prints
+`sudo bash hostd/install.sh llm --portal <portal IPv4>` on the AI server installs portal-hostd and prints
 `HOSTD_LLM_URL` and `HOSTD_LLM_TOKEN` for the portal's `.env`. With them Admin > Usage and Energy show that
 server too, and Admin > Updates updates its engine: see [hostd/README.md](hostd/README.md).
 
-[`llm-server/`](llm-server) holds what the reference LLM server runs: the engine's service file, a full-load
+[`llm-server/`](llm-server) holds what the reference AI server runs: the engine's service file, a full-load
 test, and fan control for the one board it was tested on. [docs/GUIDE.md](docs/GUIDE.md) sets up both servers
 step by step from a fresh Fedora, the model download included.
 

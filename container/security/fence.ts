@@ -1,6 +1,6 @@
 // Whether the host firewall that fences the Online workspaces in (firewall.sh, nftables table
 // inet workspace_portal) is loaded. Without it an Online container is on a Docker NAT bridge with nothing
-// between it and the LAN, the LLM server or the host, so the gateway starts no Online workspace, and stops
+// between it and the LAN, the AI server or the host, so the gateway starts no Online workspace, and stops
 // the running ones, unless this says "loaded" (WorkspaceManager). Private workspaces don't depend on it:
 // their network is a Docker internal one.
 //

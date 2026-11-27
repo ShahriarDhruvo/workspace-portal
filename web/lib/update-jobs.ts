@@ -1,4 +1,4 @@
-// What the agents' and the LLM engine's update jobs share on the Updates page.
+// What the agents' and Gufo's update jobs share on the Updates page.
 import type { ApiError, UpdateJob } from "@portal/core/wire";
 
 /** What a JSON route of the gateway's data answers; `data` is null when the gateway could not provide it. */

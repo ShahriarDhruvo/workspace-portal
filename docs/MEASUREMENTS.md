@@ -3,7 +3,7 @@
 What was measured on the test machines, and what was tried and left out. The engine and fan settings these
 numbers led to are in [`llm-server/`](../llm-server).
 
-- **LLM server:** Bosgame M5, Ryzen AI Max+ 395, 128 GB, board AXB35-02, BIOS 3.11, Fedora 44.
+- **AI server:** Bosgame M5, Ryzen AI Max+ 395, 128 GB, board AXB35-02, BIOS 3.11, Fedora 44.
 - **Portal server:** Pentium G4400T (2 cores), 8 GB, Fedora 45.
 - One unit of each, at room temperature. Power and temperature are the chip's own sensors, not a wall meter.
 - tok/s is tokens per second. Reading is prompt processing, writing is the answer.
@@ -111,7 +111,7 @@ offsets from -50, from 70 °C for the others:
 
 ## Freezes
 
-The LLM server stopped under LLM load on November 19, 2026 at 06:43 UTC and November 26 at 19:10 UTC. On
+The AI server stopped under LLM load on November 19, 2026 at 06:43 UTC and November 26 at 19:10 UTC. On
 November 26 it froze and was switched off by hand; November 19 looks the same in the log. A third boot, at 19:16
 UTC, ended 13 seconds in, while the LLM loaded. Each following boot logged `x86/amd: Previous system reset
 reason [0x00200800]: ACPI power state transition occurred`, which is what holding the power button leaves. The 22
@@ -203,7 +203,7 @@ The full-load test (`llm-server/acceptance.py`), four 256K prompts at once and a
 
 ## Memory
 
-The LLM server's 128 GiB with the model loaded and four 256K sessions, idle after the tests under [Load](#load)
+The AI server's 128 GiB with the model loaded and four 256K sessions, idle after the tests under [Load](#load)
 (`/proc/meminfo` and the GPU's `mem_info_gtt_used`):
 
 | Use | GiB | Share |
@@ -224,7 +224,7 @@ same way (0.12 page records, 0.11 firmware with 32 MiB for graphics, 0.14 kernel
 | 7 × 128K | 11.7 GiB after load, about 6 GiB while in use. Lowest: 5.7 GiB with seven full prompts at once on Gufo 0.34.0 (8.8 GiB on 0.35.0, right after a restart), 4.0 GiB while a raw 12 MP photo was read | See [Load](#load) |
 | 3 × 256K | About 12 GiB under full load, with an idle workspace stack next to the model | Three 259,000-token prompts at once: first words after 8 minutes, follow-up turns after 0.7 seconds |
 
-Agents on the LLM server itself, four sandboxes of 3 GB each next to the model. The 3 × 256K layout was not
+Agents on the AI server itself, four sandboxes of 3 GB each next to the model. The 3 × 256K layout was not
 tried with busy sandboxes.
 
 | Layout | Lowest free memory |
@@ -625,7 +625,7 @@ Three workspaces at once:
 - One agent had a subagent review its code in the background and looked at its own page with the browser
   tools; the review came back two turns later.
 - A workspace used 0.03 to 0.10 of a core on average: most of a turn is the model's time.
-- The LLM server did not restart and no session waited for memory (`gufo_shared_state_waits_total` stayed 0).
+- The AI server did not restart and no session waited for memory (`gufo_shared_state_waits_total` stayed 0).
 
 A reply cut off at its limit. Asked for 30,000 lines of numbers, the model declined and gave a command
 instead, so the cut-off was forced: one workspace got a reply limit of 1,500 tokens.

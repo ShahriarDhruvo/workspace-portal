@@ -5,7 +5,7 @@ import { createGitHubReleases, GitHubError, hasBreakingChanges, tagVersion } fro
 
 test("hasBreakingChanges: a breaking-changes section with something in it, a BREAKING CHANGE line, a type!: entry", () => {
   const breaking = [
-    // release-please (the LLM engine)
+    // release-please (Gufo)
     "## [0.34.0](https://x)\n\n### ⚠ BREAKING CHANGES\n\n* **audio:** decode in Rust\n\n### Features\n\n* x",
     // Qwen Code 0.27.2
     "## Highlights\n\n- x\n\n## Breaking Changes\n\n- fix(deps)!: upgrade dependencies ([#16452](https://x))\n\n## Complete Change List",

@@ -1,4 +1,4 @@
-// What a registry and GitHub last said about releases (the agents' npm packages, the LLM engine's image), so the admin
+// What a registry and GitHub last said about releases (the agents' npm packages, Gufo's image), so the admin
 // console, which polls, does not ask on every page load. Fresh for 10 minutes; `refresh` asks again at once. A failed
 // check keeps the last good answers, reports the error, and is retried after a minute instead of on every poll (each
 // attempt can take the client's full timeout). Release notes are asked for again only when the registry's answer

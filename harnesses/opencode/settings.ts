@@ -33,7 +33,7 @@ const ONLINE_MCP = { context7: "https://mcp.context7.com/mcp", grep: "https://mc
 
 interface OpencodeConfigOptions {
   catalog: ModelCatalog;
-  /** The LLM server's image models, the default first (IMAGE_MODELS); OpenCode's generate_image tool uses them. */
+  /** The AI server's image models, the default first (IMAGE_MODELS); OpenCode's generate_image tool uses them. */
   imageModels: readonly string[];
   /** http://<gateway bridge IP>:<service port>, the only address a Private workspace can reach. */
   serviceBaseUrl: string;

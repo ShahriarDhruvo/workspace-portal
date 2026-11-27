@@ -30,12 +30,12 @@ test("only a working key of an account that may use the portal opens the API", a
       assert.equal(json<{ error: { code: string } }>(reply).error.code, "invalid_api_key");
       assert.equal(reply.headers["www-authenticate"], "Bearer");
       assert.equal(reply.headers["access-control-allow-origin"], "*", "a page of another site can read why");
-      assert.equal(g.llm.requests.length, sent, "nothing reached the LLM server");
+      assert.equal(g.llm.requests.length, sent, "nothing reached the AI server");
     };
     await refused("no key", { key: null });
     await refused("a key nobody has", { key: "sk-none" });
     await refused("the control secret", { key: CONTROL_SECRET });
-    await refused("the LLM server's own key", { key: "test-llm-key" });
+    await refused("the AI server's own key", { key: "test-llm-key" });
 
     const account = (values: Partial<typeof users.$inferInsert>) => g.db.update(users).set(values).where(eq(users.id, alice)).run();
     account({ active: false });
@@ -50,7 +50,7 @@ test("only a working key of an account that may use the portal opens the API", a
   });
 });
 
-test("every path, method, header and body reaches the LLM server as it was sent, but for the key", async () => {
+test("every path, method, header and body reaches the AI server as it was sent, but for the key", async () => {
   await withGateway({}, async (g) => {
     addKey(g, g.ids.alice);
     const body = JSON.stringify({ model: "m", messages: [{ role: "user", content: "hello" }] });
@@ -89,7 +89,7 @@ test("every path, method, header and body reaches the LLM server as it was sent,
   });
 });
 
-test("llama-swap's routes that run the LLM server are left out", async () => {
+test("llama-swap's routes that run the AI server are left out", async () => {
   await withGateway({}, async (g) => {
     addKey(g, g.ids.alice);
     const sent = g.llm.requests.length;
@@ -105,9 +105,9 @@ test("llama-swap's routes that run the LLM server are left out", async () => {
     ] as const) {
       const reply = await api(g, path, { method });
       assert.equal(reply.status, 404, `${method} ${path}`);
-      assert.match(json<{ error: { message: string } }>(reply).error.message, /runs the LLM server/);
+      assert.match(json<{ error: { message: string } }>(reply).error.message, /runs the AI server/);
     }
-    assert.equal(g.llm.requests.length, sent, "none reached the LLM server");
+    assert.equal(g.llm.requests.length, sent, "none reached the AI server");
     for (const path of ["/v1/images/generations", "/apis", "/v1/metrics"]) {
       assert.equal((await api(g, path, { method: "POST", body: "{}" })).status, 200, path);
     }
@@ -133,7 +133,7 @@ test("a key's generations are counted for the key and its user, wait their turn,
     assert.deepEqual({ ...usage[0], day: "" }, { keyId, day: "", requests: 3, failed: 1, promptTokens: 11 + 12, outputTokens: 22 + 34, energyJ: 0 });
     assert.deepEqual(g.finishedRequests.map((finished) => finished.keyId), [keyId, keyId, keyId]);
     const day = g.db.select().from(llmUsage).where(eq(llmUsage.userId, alice)).get()!;
-    assert.deepEqual([day.requests, day.promptTokens, day.completionTokens], [2, 23, 56], "the user's day counts what the LLM server answered");
+    assert.deepEqual([day.requests, day.promptTokens, day.completionTokens], [2, 23, 56], "the user's day counts what the AI server answered");
     assert.equal(g.db.select().from(workspaceSessions).where(eq(workspaceSessions.userId, alice)).get()!.requests, 0);
     assert.equal(g.info(alice).llmInFlight, 0);
 
@@ -141,7 +141,7 @@ test("a key's generations are counted for the key and its user, wait their turn,
     const held = http.request({ host: "127.0.0.1", port: g.ports.control, method: "POST", path: "/llm/api/v1/chat/completions", headers: { authorization: `Bearer ${KEY}` }, agent: false });
     held.on("error", () => undefined);
     held.end(JSON.stringify({ hold: true }));
-    await waitFor(() => g.llmQueue.inFlight === 1, "the key's request to reach the LLM server");
+    await waitFor(() => g.llmQueue.inFlight === 1, "the key's request to reach the AI server");
     g.caller.userId = alice;
     const queued = http.request({ host: "127.0.0.1", port: g.ports.service, method: "POST", path: "/llm/v1/chat/completions", agent: false });
     queued.on("error", () => undefined);

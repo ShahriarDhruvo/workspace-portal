@@ -1,4 +1,4 @@
-// Switches the LLM engine to another release through the LLM server's portal-hostd, which owns the engine's Podman
+// Switches Gufo to another release through the AI server's portal-hostd, which owns the engine's Podman
 // quadlet (hostd/README.md). The engine serves during the download; during the drain and the restart new LLM requests
 // wait in the gateway's queue. hostd puts the old image back when the new one does not serve.
 import crypto from "node:crypto";
@@ -36,7 +36,7 @@ export const invalidVersion = (): HttpError => new HttpError(400, "invalid_versi
 const unavailable = (message: string): HttpError => new HttpError(503, "engine_unavailable", message);
 const jobRunning = (): HttpError => new HttpError(409, "engine_job_running", "An engine update is running. Wait for it to finish, or cancel it.");
 
-/** What the updater needs from the LLM server's portal-hostd. */
+/** What the updater needs from the AI server's portal-hostd. */
 export interface EngineHost {
   status(): Promise<EngineStatus>;
   pull(image: string): Promise<EngineJob>;
@@ -59,7 +59,7 @@ export function createEngineHost(client: HostdClient): EngineHost {
 
 export interface EngineUpdaterOptions {
   config: Config;
-  /** null when the LLM server has no portal-hostd set up. */
+  /** null when the AI server has no portal-hostd set up. */
   host: EngineHost | null;
   releases: EngineReleases;
   queue: LlmQueue;
@@ -101,7 +101,7 @@ export class EngineUpdater {
       if (error instanceof HostdError && error.code === "no_engine") return { ...base, state: "no_engine", error: error.message };
       return { ...base, state: "offline", error: errorMessage(error) };
     }
-    // What runs and the images on the LLM server are listed too, whether or not they are among the newest releases.
+    // What runs and the images on the AI server are listed too, whether or not they are among the newest releases.
     const local = [{ version: engine.version, digest: engine.digest }, ...engine.images];
     return { ...base, state: "ok", error: null, engine, releases: await releases.list(engine.repository, options, local) };
   }
@@ -115,16 +115,16 @@ export class EngineUpdater {
 
   /**
    * Starts switching the engine to `version` (X.Y.Z, newer or older); resolves once it has started. An image of that
-   * version on the LLM server is used as it is; any other is resolved to its digest in the registry and downloaded.
+   * version on the AI server is used as it is; any other is resolved to its digest in the registry and downloaded.
    */
   async startUpdate(request: { version: string; actorUserId: number | null }): Promise<EngineUpdateJob> {
     const { version, actorUserId } = request;
     const { host, releases, log } = this.#options;
     if (!isStableVersion(version)) throw invalidVersion();
-    if (host === null) throw unavailable("The LLM server's portal-hostd is not set up (HOSTD_LLM_URL, HOSTD_LLM_TOKEN).");
+    if (host === null) throw unavailable("The AI server's portal-hostd is not set up (HOSTD_LLM_URL, HOSTD_LLM_TOKEN).");
     if (this.running) throw jobRunning();
     const engine = await host.status().catch((error: unknown) => {
-      throw unavailable(error instanceof HostdError && error.code === "no_engine" ? error.message : `The LLM server's portal-hostd can't be reached: ${errorMessage(error)}`);
+      throw unavailable(error instanceof HostdError && error.code === "no_engine" ? error.message : `The AI server's portal-hostd can't be reached: ${errorMessage(error)}`);
     });
     if (engine.version === version) throw new HttpError(409, "already_current", `The engine already runs ${version}.`);
     const local = engine.images.find((image) => image.version === version && image.digest !== null)?.digest;
@@ -181,12 +181,12 @@ export class EngineUpdater {
     if (!/^sha256:[0-9a-f]{64}$/.test(digest)) throw new HttpError(400, "invalid_digest", "digest must be sha256:<64 hex digits>.");
     if (this.running) throw jobRunning();
     const host = this.#options.host;
-    if (host === null) throw unavailable("The LLM server's portal-hostd is not set up.");
+    if (host === null) throw unavailable("The AI server's portal-hostd is not set up.");
     await host.removeImage(digest).catch((error: unknown) => {
       if (!(error instanceof HostdError)) throw error;
       // hostd's own refusals (the running image, a job it runs) are the admin's to see; the rest is a fault.
       if (error.status === 409 || error.status === 404) throw new HttpError(error.status, error.code, error.message);
-      throw new HttpError(502, "hostd_failed", `portal-hostd on the LLM server: ${error.message}`);
+      throw new HttpError(502, "hostd_failed", `portal-hostd on the AI server: ${error.message}`);
     });
   }
 
@@ -221,9 +221,9 @@ export class EngineUpdater {
     }
   }
 
-  /** hostd downloads the image, unless the LLM server has it. */
+  /** hostd downloads the image, unless the AI server has it. */
   async #download(job: EngineUpdateJob, host: EngineHost, image: string): Promise<void> {
-    if (job.reuse) return this.#note(job, `Using the image already on the LLM server (${image}).`);
+    if (job.reuse) return this.#note(job, `Using the image already on the AI server (${image}).`);
     this.#phase(job, "pulling", `Downloading ${job.toVersion}`, true);
     const pulled = await this.#follow(job, await host.pull(image), host, PULL_TIMEOUT_MS);
     if (pulled.phase === "cancelled" || this.#cancelRequested) throw new Cancelled();
@@ -270,7 +270,7 @@ export class EngineUpdater {
     let unreachable = false;
     while (this.#now() < until) {
       await delay(this.#pollMs);
-      // The LLM server may be busy restarting; keep trying until the time limit.
+      // The AI server may be busy restarting; keep trying until the time limit.
       const status = await host.status().catch((error: unknown) => {
         if (!unreachable) this.#note(job, `portal-hostd did not answer (${errorMessage(error)}); still trying.`);
         return null;

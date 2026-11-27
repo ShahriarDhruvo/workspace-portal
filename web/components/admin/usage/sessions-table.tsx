@@ -30,7 +30,7 @@ interface SessionsTableProps {
 }
 
 /**
- * The LLM sessions card's table: each run of a user's workspace and what its LLM requests added up to, the running
+ * The Sessions card's table: each run of a user's workspace and what its LLM requests added up to, the running
  * ones first. The page is read again whenever the live frame says the sessions changed (a quarter second's wait
  * folds a burst into one read) and on paging.
  */
@@ -97,10 +97,10 @@ export function SessionsTable({ initial, version, llm, now }: SessionsTableProps
             <DataTableHead align="right" title="Tokens out: answers">
               Out
             </DataTableHead>
-            <DataTableHead align="right" title="Time its requests took on the LLM server">
+            <DataTableHead align="right" title="Time its requests took on the AI server">
               LLM time
             </DataTableHead>
-            <DataTableHead align="right" title="Its share of the LLM server's measured energy while its requests ran">
+            <DataTableHead align="right" title="Its share of the AI server's measured energy while its requests ran">
               Energy
             </DataTableHead>
             <DataTableHead align="right">Cost</DataTableHead>
@@ -170,11 +170,11 @@ const STATUS_NAMES = { writing: "Writing", reading: "Reading", preparing: "Prepa
 const WAITING_TITLES = {
   portal: "In the portal's queue: all sessions are busy",
   engine: "Sent to the engine, not started yet",
-  swap: "Sent to the LLM server: llama-swap starts the model it needs once the other model's requests are done",
+  swap: "Sent to the AI server: llama-swap starts the model it needs once the other model's requests are done",
 } as const;
 type LiveState = keyof typeof STATUS_DOTS;
 
-/** What the LLM server is doing for a running session now: its furthest request's phase, waiting, or nothing. */
+/** What the AI server is doing for a running session now: its furthest request's phase, waiting, or nothing. */
 function liveState(userId: number, llm: LlmLive): { state: LiveState; title?: string } {
   const own = llm.sessions.filter((session) => session.userId === userId);
   for (const phase of ["writing", "reading", "preparing"] as const) if (own.some((session) => session.phase === phase)) return { state: phase };

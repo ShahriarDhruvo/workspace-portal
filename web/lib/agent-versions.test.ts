@@ -107,7 +107,7 @@ test("Package images: every release the gateway lists, with its image and what i
   const missing = agentPackageRows({ ...qwen, installed: qwen.installed.slice(1) });
   assert.equal(missing.find((row) => row.current)?.action, "build", "the current version without its image: built again");
   assert.equal(packageSummary(rows, "this server"), "4 versions · 2 on this server");
-  assert.equal(packageSummary(rows.slice(0, 1), "the LLM server"), "1 version · 0 on the LLM server");
+  assert.equal(packageSummary(rows.slice(0, 1), "the AI server"), "1 version · 0 on the AI server");
 });
 
 test("one job at a time blocks every update; an offline gateway blocks everything", () => {

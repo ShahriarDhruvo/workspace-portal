@@ -1,8 +1,8 @@
 // What the gateway can tell about the image models' requests (IMAGE_MODELS), whose server reports no progress of its
-// own: the model and the number of images a request asks for, read from its body as it streams to the LLM server, and
+// own: the model and the number of images a request asks for, read from its body as it streams to the AI server, and
 // from the requests' times how long an image takes (LlmImages.pace).
 
-/** The routes that make images, on the LLM server. */
+/** The routes that make images, on the AI server. */
 export const IMAGE_PATH = /\/images\/(?:generations|edits)$/;
 
 /** The fields are looked for in this much of a body: one after a large inline image is not found. */

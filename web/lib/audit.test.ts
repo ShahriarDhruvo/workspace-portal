@@ -58,13 +58,13 @@ test("a harness change names the agents; a first choice comes from nothing", () 
   assert.equal(formatAuditDetails(JSON.stringify({ from: null, to: "qwen" })), "From: — · To: Qwen Code");
 });
 
-test("LLM engine updates, failures and image removals", () => {
-  assert.equal(auditActionLabel("engine_updated", true), "LLM engine updated");
-  assert.equal(auditActionLabel("engine_update_failed", false), "LLM engine update failed");
-  assert.equal(auditActionLabel("engine_update_failed", true, '{"from":"0.31.0","to":"0.34.0","error":"Cancelled.","rolledBack":false}'), "LLM engine update cancelled");
+test("Gufo updates, failures and image removals", () => {
+  assert.equal(auditActionLabel("engine_updated", true), "Gufo updated");
+  assert.equal(auditActionLabel("engine_update_failed", false), "Gufo update failed");
+  assert.equal(auditActionLabel("engine_update_failed", true, '{"from":"0.31.0","to":"0.34.0","error":"Cancelled.","rolledBack":false}'), "Gufo update cancelled");
   assert.equal(auditActionLabel("agent_update_failed", true, '{"agent":"qwen","error":"Cancelled"}'), "Agent update cancelled");
   assert.equal(auditActionLabel("agent_update_failed", true, '{"agent":"qwen","error":"Cancelled by a restart"}'), "Agent update failed");
-  assert.equal(auditActionLabel("engine_image_removed", true), "LLM engine image removed");
+  assert.equal(auditActionLabel("engine_image_removed", true), "Gufo image removed");
   assert.equal(
     formatAuditDetails(JSON.stringify({ from: "0.34.0", to: "0.31.0" })),
     "From: 0.34.0 · To: 0.31.0",

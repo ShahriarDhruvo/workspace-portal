@@ -1,6 +1,6 @@
 // A whole gateway in one process for the integration tests: main.ts's own parts (compose.ts) over a real
 // database, with a FakeRuntime whose "containers" are fake agent servers (`qwen serve`, `dsh web`), a fake
-// image builder, npm registry, engine host and LLM server, a stub search backend and an injectable clock.
+// image builder, npm registry, engine host and AI server, a stub search backend and an injectable clock.
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -169,7 +169,7 @@ export interface GatewayOptions {
   reader?: ReaderBackend;
   /** The search backend; by default a stub that answers "results for <query>". */
   search?: SearchBackend;
-  /** The LLM server's portal-hostd; null = not set up. By default a fake engine at 0.31.0 that ends each job at the next status call. */
+  /** The AI server's portal-hostd; null = not set up. By default a fake engine at 0.31.0 that ends each job at the next status call. */
   engineHost?: FakeEngineHost | null;
   /** What the electricity price sources answer (by URL); by default every download fails ("offline"). */
   priceSource?: FetchText;
@@ -189,7 +189,7 @@ export interface Gateway {
   updater: Parts["updater"];
   llmQueue: Parts["llm"];
   llmRequests: Parts["requests"];
-  /** The requests that reached the LLM server and ended, newest first. */
+  /** The requests that reached the AI server and ended, newest first. */
   finishedRequests: FinishedLlmRequest[];
   sessionLog: Parts["sessionLog"];
   engineHost: FakeEngineHost | null;

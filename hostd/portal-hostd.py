@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """portal-hostd: this host's live hardware readings for the workspace portal's gateway and, in the llm role,
-updates of the LLM engine (a rootless Podman quadlet) through the engine user's systemd manager.
+updates of Gufo (a rootless Podman quadlet) through the engine user's systemd manager.
 Standard library only. README.md has the configuration, the API and the data sources."""
 
 import glob

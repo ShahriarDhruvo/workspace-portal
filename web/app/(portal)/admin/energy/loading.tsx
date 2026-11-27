@@ -3,7 +3,7 @@ import { HeadingSkeleton, TableSkeleton } from "@/components/layout/skeletons";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 
-const COLUMNS = ["Day", "LLM server (kWh)", "Portal server (kWh)", "Total (kWh)", "Price", "Cost"];
+const COLUMNS = ["Day", "AI server (kWh)", "Portal server (kWh)", "Total (kWh)", "Price", "Cost"];
 
 export default function EnergyLoading() {
   return (

@@ -31,7 +31,7 @@ export function UsageSkeleton() {
 }
 
 /**
- * The LLM sessions and both servers. `rows`: the sessions table's rows on its first page, when known (UsageLive
+ * The Sessions card and both servers. `rows`: the sessions table's rows on its first page, when known (UsageLive
  * knows, the page's loading.tsx doesn't and guesses a full page).
  */
 export function LiveSkeleton({ rows = SESSION_PAGE_SIZE }: { rows?: number }) {

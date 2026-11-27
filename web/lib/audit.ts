@@ -21,9 +21,9 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   agent_update_failed: "Agent update failed",
   agent_image_removed: "Agent image removed",
   agent_preference_changed: "Changed harness",
-  engine_updated: "LLM engine updated",
-  engine_update_failed: "LLM engine update failed",
-  engine_image_removed: "LLM engine image removed",
+  engine_updated: "Gufo updated",
+  engine_update_failed: "Gufo update failed",
+  engine_image_removed: "Gufo image removed",
   energy_price_location_set: "Changed electricity price location",
   workspace_files_erased: "Erased workspace files",
   user_online_access_changed: "Changed Online access",
@@ -52,7 +52,7 @@ const DETAIL_LABELS: Record<string, string> = {
   to: "To",
   version: "Version",
   rebuild: "From scratch",
-  // LLM engine updates (written by the gateway) and image removals: from/to or version, rolledBack, digest. A kind
+  // Gufo updates (written by the gateway) and image removals: from/to or version, rolledBack, digest. A kind
   // (Private or Online) without an agent beside it; with one, the two name a workspace (workspaceIn).
   kind: "Type",
   rolledBack: "Rolled back",
@@ -77,7 +77,7 @@ function humanize(key: string): string {
 export function auditActionLabel(action: string, hasActor: boolean, details: string | null = null): string {
   if (action === "workspace_stopped" && hasActor) return "Stopped workspace";
   if ((action === "agent_update_failed" || action === "engine_update_failed") && wasCancelled(details)) {
-    return action === "agent_update_failed" ? "Agent update cancelled" : "LLM engine update cancelled";
+    return action === "agent_update_failed" ? "Agent update cancelled" : "Gufo update cancelled";
   }
   return isKnownAction(action) ? ACTION_LABELS[action] : humanize(action);
 }

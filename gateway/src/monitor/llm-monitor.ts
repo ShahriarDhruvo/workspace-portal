@@ -1,4 +1,4 @@
-// The live view of the LLM server for Admin > Usage: for each request it is working on, how fast it reads the prompt
+// The live view of the AI server for Admin > Usage: for each request it is working on, how fast it reads the prompt
 // ("Read": prompt tokens processed per second) and writes the answer ("Write": generated tokens per second), the
 // totals, and who is waiting. Two sources, joined:
 // - The engine's own sessions, from `GET /slots` (llama.cpp's server and engines derived from it, such as gufo): live
@@ -188,7 +188,7 @@ export interface LlmMonitorOptions {
   requests: LlmRequests;
   /** Display names for user ids (unknown ids are left out). */
   names: (userIds: readonly number[]) => Map<number, string>;
-  /** The LLM server has image models (IMAGE_MODELS). */
+  /** The AI server has image models (IMAGE_MODELS). */
   images?: boolean;
   log: Logger;
   now?: () => number;
@@ -387,8 +387,8 @@ export class LlmMonitor {
 
   #setEngine(state: EngineState, reported: boolean, sessions: number | null, error: string): void {
     if (state !== this.#engine && (state === "offline" || this.#engine === "offline")) {
-      if (state === "offline") this.#options.log.warn("LLM live view: the LLM server is not reachable", { error });
-      else this.#options.log.info("LLM live view: the LLM server answers again", { state });
+      if (state === "offline") this.#options.log.warn("LLM live view: the AI server is not reachable", { error });
+      else this.#options.log.info("LLM live view: the AI server answers again", { state });
     }
     this.#engine = state;
     this.#sessionsReported = reported;

@@ -131,7 +131,7 @@ export function EnergyView({ initial }: { initial: EnergyMonth }) {
             <TableHeader>
               <TableRow>
                 <DataTableHead>Day</DataTableHead>
-                <DataTableHead align="right">LLM server (kWh)</DataTableHead>
+                <DataTableHead align="right">AI server (kWh)</DataTableHead>
                 <DataTableHead align="right">Portal server (kWh)</DataTableHead>
                 <DataTableHead align="right">Total (kWh)</DataTableHead>
                 <DataTableHead align="right">{currency ? `Price (${priceUnit(currency)})` : "Price"}</DataTableHead>
@@ -181,7 +181,7 @@ function UserEnergy({ data, currency }: { data: EnergyMonth; currency: EnergyCur
   const used = { wh: users.reduce((sum, [, user]) => sum + user.wh, 0), cost: sumKnown(users.map(([, user]) => user.cost)) ?? 0 };
   const heads = (
     <>
-      <DataTableHead align="right" title="Their share of the LLM server's measured energy while their requests ran">
+      <DataTableHead align="right" title="Their share of the AI server's measured energy while their requests ran">
         Energy
       </DataTableHead>
       <DataTableHead align="right">Cost</DataTableHead>

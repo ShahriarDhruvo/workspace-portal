@@ -15,7 +15,7 @@ Run from a checkout of this repo. To update, run the same command again from the
 # portal server: listens on 127.0.0.1
 sudo bash hostd/install.sh portal --token-stdin --port 9180 <<<"$token"
 
-# LLM server: listens on 0.0.0.0, firewalld lets only the portal server in
+# AI server: listens on 0.0.0.0, firewalld lets only the portal server in
 sudo bash hostd/install.sh llm --portal <portal IPv4>
 sudo bash hostd/install.sh llm --portal <portal IPv4> --engine-unit none    # readings only
 

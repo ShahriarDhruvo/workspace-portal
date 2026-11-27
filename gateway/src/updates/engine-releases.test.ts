@@ -80,7 +80,7 @@ test("release notes: stable releases only, by version, breaking changes flagged"
   assert.equal(calls[0]!.auth, null, "anonymous");
 });
 
-test("offered: the 5 newest releases up to the one latest points at, plus what runs and the images on the LLM server", async () => {
+test("offered: the 5 newest releases up to the one latest points at, plus what runs and the images on the AI server", async () => {
   const registry = new FakeEngineRegistry();
   registry.versions = ["0.28.0", "0.29.0", "0.30.0", "0.31.0", "0.32.0", "0.33.0", "0.34.0", "0.35.0"];
   const latestIs = "0.34.0";

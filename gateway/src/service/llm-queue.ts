@@ -1,7 +1,7 @@
 // Concurrency limiter for LLM requests: at most `maxConcurrency` in flight overall and
 // `maxPerUser` per user. Waiters are served first come, first served; a waiter whose user is at
 // their own limit does not hold up other users queued behind it. While paused (an engine update
-// restarts the LLM server), nothing new is granted: requests wait here instead of failing.
+// restarts the AI server), nothing new is granted: requests wait here instead of failing.
 
 /** Gives the slot back. Safe to call more than once. */
 export type ReleaseSlot = () => void;

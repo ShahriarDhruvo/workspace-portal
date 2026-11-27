@@ -188,7 +188,7 @@ export const workspaceSessions = sqliteTable(
     startedAt: integer("started_at").notNull(),
     /** When it stopped; null while it runs. */
     endedAt: integer("ended_at"),
-    /** Requests that reached the LLM server, and those of them it failed (not those the workspace hung up on). */
+    /** Requests that reached the AI server, and those of them it failed (not those the workspace hung up on). */
     requests: integer("requests").notNull().default(0),
     failed: integer("failed").notNull().default(0),
     /** As the answers' `usage` counts them, like llm_usage: tokens in (cached ones included) and out. */
@@ -200,10 +200,10 @@ export const workspaceSessions = sqliteTable(
     readMs: real("read_ms").notNull().default(0),
     writeTokens: integer("write_tokens").notNull().default(0),
     writeMs: real("write_ms").notNull().default(0),
-    /** The requests' time from reaching the LLM server to their last byte, added up. */
+    /** The requests' time from reaching the AI server to their last byte, added up. */
     llmMs: integer("llm_ms").notNull().default(0),
     /**
-     * Its share of the LLM server's measured energy while its requests ran (shared with the requests running at the
+     * Its share of the AI server's measured energy while its requests ran (shared with the requests running at the
      * same time), and the time that share covers; null while none was measured.
      */
     energyJ: real("energy_j"),
@@ -240,12 +240,12 @@ export const apiKeyUsage = sqliteTable(
       .notNull()
       .references(() => apiKeys.id, { onDelete: "cascade" }),
     day: text("day").notNull(),
-    /** Requests that reached the LLM server, and those of them it failed. */
+    /** Requests that reached the AI server, and those of them it failed. */
     requests: integer("requests").notNull().default(0),
     failed: integer("failed").notNull().default(0),
     promptTokens: integer("prompt_tokens").notNull().default(0),
     outputTokens: integer("output_tokens").notNull().default(0),
-    /** Its share of the LLM server's measured energy while its requests ran; 0 while none was measured. */
+    /** Its share of the AI server's measured energy while its requests ran; 0 while none was measured. */
     energyJ: real("energy_j").notNull().default(0),
   },
   (t) => [primaryKey({ columns: [t.keyId, t.day] })],

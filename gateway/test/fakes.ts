@@ -1,5 +1,5 @@
 // In-process stand-ins for Docker (containers and images), the agents' web servers (Qwen Code's
-// `qwen serve`, DeepSeek Harness's `dsh web`, OpenCode's `opencode serve`), the LLM server and the npm registry.
+// `qwen serve`, DeepSeek Harness's `dsh web`, OpenCode's `opencode serve`), the AI server and the npm registry.
 import assert from "node:assert/strict";
 import { createHash, createHmac } from "node:crypto";
 import fs from "node:fs";
@@ -1070,7 +1070,7 @@ export function engineDigest(version: string): string {
 }
 
 /**
- * The LLM server's portal-hostd as the engine updater sees it: a quadlet image, local images, and one
+ * The AI server's portal-hostd as the engine updater sees it: a quadlet image, local images, and one
  * job at a time that ends after `jobPolls` status calls. `failApply` makes the next apply fail (and
  * roll back, like hostd).
  */

@@ -3,12 +3,12 @@
 import { sumKnown } from "./live-format.ts";
 
 export interface KeyUse {
-  /** Requests that reached the LLM server, and those of them it failed. */
+  /** Requests that reached the AI server, and those of them it failed. */
   requests: number;
   failed: number;
   tokensIn: number;
   tokensOut: number;
-  /** Its share of the LLM server's measured energy; null when none was measured. */
+  /** Its share of the AI server's measured energy; null when none was measured. */
   energyWh: number | null;
   /** That energy at each day's price; null without energy, a place or a price. */
   cost: number | null;

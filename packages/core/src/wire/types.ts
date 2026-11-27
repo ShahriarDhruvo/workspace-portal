@@ -88,7 +88,7 @@ export interface AgentInfo {
   version: string;
 }
 
-/** A release's notes on GitHub (the agents' and the LLM engine's). */
+/** A release's notes on GitHub (the agents' and Gufo's). */
 export interface ReleaseNotes {
   title: string;
   /** The release's page on github.com. */
@@ -148,7 +148,7 @@ export interface AgentVersionInfo {
 }
 
 /**
- * An update job, an agent's or the LLM engine's. Each of the two updaters runs one at a time, and its last job stays
+ * An update job, an agent's or Gufo's. Each of the two updaters runs one at a time, and its last job stays
  * visible until the next starts or the gateway restarts. A job runs while `finishedAt` is null.
  */
 export interface UpdateJob<Phase extends string> {
@@ -211,7 +211,7 @@ export interface AgentUpdateRequest {
   actorUserId?: number;
 }
 
-/** An engine image on the LLM server, as portal-hostd lists it. */
+/** An engine image on the AI server, as portal-hostd lists it. */
 export interface EngineImage {
   id: string;
   digest: string | null;
@@ -271,7 +271,7 @@ export interface EngineRelease {
 
 export interface EngineReleaseList {
   repository: string;
-  /** The newest releases, and the versions the LLM server runs or has an image of, newest first. */
+  /** The newest releases, and the versions the AI server runs or has an image of, newest first. */
   releases: EngineRelease[];
   checkedAt: number | null;
   error: string | null;
@@ -300,7 +300,7 @@ export interface EngineUpdateJob extends UpdateJob<EngineUpdatePhase> {
 
 /** GET /control/engine[?refresh=1]. */
 export interface EngineOverview {
-  /** off: no portal-hostd for the LLM server; offline: it can't be reached; no_engine: it controls no engine. */
+  /** off: no portal-hostd for the AI server; offline: it can't be reached; no_engine: it controls no engine. */
   state: "off" | "offline" | "no_engine" | "ok";
   error: string | null;
   engine: EngineStatus | null;
@@ -419,7 +419,7 @@ export interface LlmWaiting {
   stage: "portal" | "engine" | "swap";
 }
 
-/** The image models' work, when the LLM server has any (IMAGE_MODELS). */
+/** The image models' work, when the AI server has any (IMAGE_MODELS). */
 export interface LlmImages {
   /** Image requests an image model is making now. */
   making: number;
@@ -440,7 +440,7 @@ export interface LlmLive {
   maxConcurrency: number;
   inFlight: number;
   queued: number;
-  /** The gateway holds new requests (an engine update is restarting the LLM server). */
+  /** The gateway holds new requests (an engine update is restarting the AI server). */
   paused: boolean;
   sessions: LlmSession[];
   waiting: LlmWaiting[];

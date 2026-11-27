@@ -3,7 +3,7 @@ import { ButtonSkeleton, HeadingSkeleton } from "@/components/layout/skeletons";
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 
-/** The two cards every install has (the LLM engine and a harness): the widths of their titles and sources. */
+/** The two cards every install has (Gufo and a harness): the widths of their titles and sources. */
 const CARDS = [
   { title: "max-w-24", source: "max-w-72" },
   { title: "max-w-24", source: "max-w-36" },

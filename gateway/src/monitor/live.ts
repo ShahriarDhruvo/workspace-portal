@@ -1,6 +1,6 @@
 // The admin's live view (GET /control/live, server-sent events, for Admin > Usage): `init` once (the frames' interval
 // and the last minute of history for the charts), then a `frame` every FRAME_MS with both servers' hardware readings
-// and today's energy and traffic, and the LLM server's sessions with their Read and Write speeds. The workspace
+// and today's energy and traffic, and the AI server's sessions with their Read and Write speeds. The workspace
 // sessions (session-log.ts) are not in it: the page reads them from the database when the frame's `sessionsVersion`
 // changes. Everything behind it (hostd streams, /slots polling) runs only while someone watches; today's totals come
 // from the energy meter's memory, which runs all the time.

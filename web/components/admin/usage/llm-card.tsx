@@ -73,7 +73,7 @@ const ENGINE_BADGES: Record<LlmLive["engine"], ReactNode> = {
 };
 
 /**
- * Usage's focal card: the LLM server's Read and Write rates over the last minute, each on its own scale (reading
+ * Usage's focal card: the AI server's Read and Write rates over the last minute, each on its own scale (reading
  * runs about ten times faster than writing).
  */
 export function LlmCard({ llm, tokens, now, sessions, sessionsVersion }: LlmCardProps) {
@@ -84,7 +84,7 @@ export function LlmCard({ llm, tokens, now, sessions, sessionsVersion }: LlmCard
       <CardHeader className={HEADER_ROW}>
         <div className="flex flex-1 flex-col justify-center gap-1 px-4 py-3">
           <CardTitle className="flex items-center gap-2">
-            <h2 className="text-16">LLM sessions</h2>
+            <h2 className="text-16">Sessions</h2>
             <EngineBadge llm={llm} />
           </CardTitle>
           <CardDescription className="tabular-nums">

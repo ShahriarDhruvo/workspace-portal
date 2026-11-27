@@ -1,4 +1,4 @@
-# llama-swap on the LLM server: one address (port 8080) for the LLM and the two image models, which do not fit in
+# llama-swap on the AI server: one address (port 8080) for the LLM and the two image models, which do not fit in
 # memory together. A request names its model; llama-swap starts that model's Gufo unit and, when the model belongs
 # to the other group, first stops the running one. It waits for requests in flight to finish before it stops a
 # model, and holds new requests while it swaps. Goes to ~/.config/llama-swap/config.yaml (docs/GUIDE.md).

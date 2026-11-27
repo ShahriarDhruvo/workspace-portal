@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Full-load test of the LLM server: every session gets a prompt that fills it, at the same moment.
+"""Full-load test of the AI server: every session gets a prompt that fills it, at the same moment.
 
 Each prompt hides three keys in filler text. The model must pass them to a tool and repeat the tool's receipt.
 FUNCTIONAL: every session did. CAPACITY: also all sessions ran at once, nothing was killed for memory and
-nothing swapped for long. Run it on the LLM server; it occupies the whole server for about eleven minutes.
+nothing swapped for long. Run it on the AI server; it occupies the whole server for about eleven minutes.
 """
 import argparse
 import concurrent.futures

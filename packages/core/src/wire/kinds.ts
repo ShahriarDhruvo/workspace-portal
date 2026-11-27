@@ -92,7 +92,7 @@ export function workspaceName(ref: WorkspaceRef): string {
 export const STOP_REASONS = ["admin", "user", "deactivated", "deleted"] as const;
 export type StopReason = (typeof STOP_REASONS)[number];
 
-/** The two servers portal-hostd reports on: the portal's own and the LLM server. */
+/** The two servers portal-hostd reports on: the portal's own and the AI server. */
 export const HOST_ROLES = ["portal", "llm"] as const;
 export type HostRole = (typeof HOST_ROLES)[number];
 

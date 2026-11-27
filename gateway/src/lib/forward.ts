@@ -26,7 +26,7 @@ export interface ForwardResult {
   status: number | null;
 }
 
-/** Resolves once the exchange is over. A client that goes away aborts the upstream request too, which frees its LLM server slot. */
+/** Resolves once the exchange is over. A client that goes away aborts the upstream request too, which frees its AI server slot. */
 export function forward(req: IncomingMessage, res: ServerResponse, options: ForwardOptions): Promise<ForwardResult> {
   return new Promise((resolve) => {
     let status: number | null = null;

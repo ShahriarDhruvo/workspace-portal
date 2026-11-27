@@ -73,7 +73,7 @@ test("overview: not set up, unreachable, or no engine", async () => {
   assert.match(overview.error!, /ECONNREFUSED/);
   await assert.rejects(down.updater.startUpdate({ version: "0.34.0", actorUserId: null }), {
     code: "engine_unavailable",
-    message: "The LLM server's portal-hostd can't be reached: http://llm:9180: connect ECONNREFUSED",
+    message: "The AI server's portal-hostd can't be reached: http://llm:9180: connect ECONNREFUSED",
   });
   down.cleanup();
 });
@@ -112,7 +112,7 @@ test("an update downloads, drains the queue, restarts, then opens the queue agai
   cleanup();
 });
 
-test("a failed restart reports hostd's rollback; an image on the LLM server is used without download or registry; refusals", async () => {
+test("a failed restart reports hostd's rollback; an image on the AI server is used without download or registry; refusals", async () => {
   const { updater, host, registry, queue, audits, done, cleanup } = setup();
   await assert.rejects(updater.startUpdate({ version: "0.31.0", actorUserId: null }), { status: 409, code: "already_current" });
   await assert.rejects(updater.startUpdate({ version: "latest", actorUserId: null }), { status: 400, code: "invalid_version" });
@@ -135,7 +135,7 @@ test("a failed restart reports hostd's rollback; an image on the LLM server is u
   const back = await updater.startUpdate({ version: "0.31.0", actorUserId: null });
   const switched = await done();
   assert.deepEqual([back.reuse, switched!.phase, switched!.fromVersion, switched!.toVersion], [true, "succeeded", "0.33.0", "0.31.0"]);
-  assert.ok(switched!.log.includes(`Using the image already on the LLM server (${ENGINE_REPOSITORY}@${engineDigest("0.31.0")}).`));
+  assert.ok(switched!.log.includes(`Using the image already on the AI server (${ENGINE_REPOSITORY}@${engineDigest("0.31.0")}).`));
   assert.equal(host.version, "0.31.0");
   assert.deepEqual(host.calls, [`apply ${ENGINE_REPOSITORY}@${engineDigest("0.33.0")} 0.33.0`, `apply ${ENGINE_REPOSITORY}@${engineDigest("0.31.0")} 0.31.0`], "no pull");
   assert.deepEqual(
@@ -231,6 +231,6 @@ test("removing an engine image: not while a job runs, not the running one", asyn
   await assert.rejects(updater.removeImage("0.30.0"), { status: 400, code: "invalid_digest" });
   await assert.rejects(updater.removeImage(engineDigest("0.31.0")), { status: 409, code: "image_current", message: "The engine runs this image." });
   host.removeImage = () => Promise.reject(new HostdError(null, "unreachable", "http://llm:9180: connect ECONNREFUSED"));
-  await assert.rejects(updater.removeImage(engineDigest("0.31.0")), { status: 502, code: "hostd_failed", message: "portal-hostd on the LLM server: http://llm:9180: connect ECONNREFUSED" });
+  await assert.rejects(updater.removeImage(engineDigest("0.31.0")), { status: 502, code: "hostd_failed", message: "portal-hostd on the AI server: http://llm:9180: connect ECONNREFUSED" });
   cleanup();
 });

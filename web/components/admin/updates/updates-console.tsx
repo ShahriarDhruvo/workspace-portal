@@ -20,7 +20,7 @@ interface UpdatesConsoleProps {
 }
 
 /**
- * The Updates page: one card each for the LLM engine and the enabled agents. Each part polls its own route; "Check
+ * The Updates page: one card each for Gufo and the enabled agents. Each part polls its own route; "Check
  * for updates" asks the registries again for both.
  */
 export function UpdatesConsole({ initialAgents, initialEngine }: UpdatesConsoleProps) {

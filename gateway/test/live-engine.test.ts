@@ -1,4 +1,4 @@
-// The admin's live view (GET /control/live) and LLM engine updates (/control/engine...) through the
+// The admin's live view (GET /control/live) and Gufo updates (/control/engine...) through the
 // control API, with the in-process gateway of integration.test.ts and a fake portal-hostd engine.
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -47,7 +47,7 @@ test("GET /control/live streams an init event, then frames with the servers and 
     );
     assert.equal("workspaces" in frame, false, "the running workspaces are on Admin > Users, not in the live frames");
     assert.deepEqual([frame.llm.maxConcurrency, frame.llm.inFlight, frame.llm.queued, frame.llm.paused], [g.config.llm.maxConcurrency, 0, 0, false]);
-    // The fake LLM server has no /slots: the rows come from the gateway's own count.
+    // The fake AI server has no /slots: the rows come from the gateway's own count.
     const lastFrame = (): LiveFrame => live.events.filter((e) => e.event === "frame").at(-1)!.data as LiveFrame;
     await waitFor(() => lastFrame().llm.engine === "ready", "the engine check");
     assert.equal(lastFrame().llm.sessionsReported, false);
@@ -95,7 +95,7 @@ test("engine overview, updates (a download, or the image already there) and imag
     assert.equal(json<{ ok: boolean }>(await g.control("POST", "/control/engine/restart-now")).ok, false, "no drain to end");
     assert.equal(json<{ cancelled: boolean }>(await g.control("POST", "/control/engine/cancel")).cancelled, false);
 
-    // Back to the version before: its image is on the LLM server, so nothing is downloaded.
+    // Back to the version before: its image is on the AI server, so nothing is downloaded.
     const back = json<{ reuse: boolean }>(await g.control("POST", "/control/engine/update", { version: "0.31.0", actorUserId: admin }));
     assert.equal(back.reuse, true);
     await waitFor(() => g.engine.snapshot()?.toVersion === "0.31.0" && g.engine.snapshot()?.phase === "succeeded", "the switch back");
@@ -115,7 +115,7 @@ test("engine overview, updates (a download, or the image already there) and imag
     );
   }));
 
-test("engine routes without a portal-hostd for the LLM server", () =>
+test("engine routes without a portal-hostd for the AI server", () =>
   withGateway({ engineHost: null }, async (g) => {
     assert.equal(json<{ state: string }>(await g.control("GET", "/control/engine")).state, "off");
     const reply = await g.control("POST", "/control/engine/update", { version: "0.34.0" });

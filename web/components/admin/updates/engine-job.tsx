@@ -57,13 +57,13 @@ export function EngineJob({ job, onChanged, onRestartNow, onDismiss }: EngineJob
         </p>
       ) : job.phase === "restarting" && job.rolledBack ? (
         <p className="text-13 text-muted-foreground">
-          {job.toVersion} didn&apos;t start properly, so the LLM server is putting{" "}
+          {job.toVersion} didn&apos;t start properly, so the AI server is putting{" "}
           {job.fromVersion ?? "the previous version"} back. New requests keep waiting in the portal&apos;s queue.
         </p>
       ) : job.phase === "restarting" ? (
         <p className="text-13 text-muted-foreground">
           New requests wait in the portal&apos;s queue until the engine answers again. If the new version doesn&apos;t start properly, the
-          LLM server puts the previous one back by itself.
+          AI server puts the previous one back by itself.
         </p>
       ) : null}
     </JobPanel>

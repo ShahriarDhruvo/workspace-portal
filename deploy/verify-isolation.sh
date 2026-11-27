@@ -221,7 +221,7 @@ upstream() { # url label
     *) for address in $(url_ipv4s "$1"); do closed+=("$address $port $2 directly"); done ;;
   esac
 }
-upstream "$(env_get LLM_UPSTREAM_URL)" "the LLM server"
+upstream "$(env_get LLM_UPSTREAM_URL)" "the AI server"
 upstream "$(searxng_url)" SearXNG
 for hostd in PORTAL LLM; do
   url=$(env_get "HOSTD_${hostd}_URL")

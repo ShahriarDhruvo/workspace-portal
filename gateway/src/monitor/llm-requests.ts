@@ -1,7 +1,7 @@
 // The LLM generation requests passing through the gateway: whose request it is, when it was queued and forwarded,
 // when its first token came back, how many tokens have streamed so far, and once it ends the engine's own timings
 // and the answer's usage. The proxy (service-api.ts) reports into it; llm-monitor.ts reads the requests in flight
-// for the admin's live view, and a listener hears each one reach the LLM server and end (main.ts: the workspace
+// for the admin's live view, and a listener hears each one reach the AI server and end (main.ts: the workspace
 // sessions and their energy). Cheap enough to run always: the response stream is read for usage anyway
 // (usage.ts), and this adds a counter per event.
 import { imagePace, type ImageAsk } from "./image-requests.ts";
@@ -11,7 +11,7 @@ export interface ActiveLlmRequest {
   readonly id: number;
   readonly userId: number;
   readonly queuedAt: number;
-  /** When the gateway sent it to the LLM server; null while it waits for a slot in the gateway. */
+  /** When the gateway sent it to the AI server; null while it waits for a slot in the gateway. */
   forwardedAt: number | null;
   /** When the first generated token arrived; null while the engine is still reading the prompt. */
   firstTokenAt: number | null;
@@ -21,7 +21,7 @@ export interface ActiveLlmRequest {
   image: ImageAsk | null;
 }
 
-/** A request that reached the LLM server, once it has ended. */
+/** A request that reached the AI server, once it has ended. */
 export interface FinishedLlmRequest {
   id: number;
   userId: number;
@@ -39,11 +39,11 @@ export interface FinishedLlmRequest {
   timings: EngineTimings | null;
   /** The answer's `usage`, or of a stream without one what the engine's timings count; null without either. */
   usage: TokenUsage | null;
-  /** False when the LLM server failed it: an answer that is not 2xx, or none, or a stream that broke. */
+  /** False when the AI server failed it: an answer that is not 2xx, or none, or a stream that broke. */
   ok: boolean;
 }
 
-/** Hears the requests that reach the LLM server. Its methods must not throw. */
+/** Hears the requests that reach the AI server. Its methods must not throw. */
 export interface LlmRequestListener {
   forwarded(request: { id: number; userId: number; keyId: number | null; forwardedAt: number }): void;
   finished(request: FinishedLlmRequest): void;
@@ -111,7 +111,7 @@ export class LlmRequests {
         if (done) return;
         done = true;
         this.#active.delete(entry.id);
-        // A request that never reached the LLM server (the workspace hung up while queued) is no request.
+        // A request that never reached the AI server (the workspace hung up while queued) is no request.
         if (entry.forwardedAt === null) return;
         const finishedAt = this.#now();
         this.#timeImage(entry, finishedAt, ok);

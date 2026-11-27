@@ -94,7 +94,7 @@ test("versions compare numerically; the update target is latest when it is newer
   assert.equal(engineUpdateTarget(overview({ releases: unflagged })), "0.34.0", "no latest flag: the first X.Y.Z release");
 });
 
-test("Package images: each release with its image on the LLM server, by version, else by digest", () => {
+test("Package images: each release with its image on the AI server, by version, else by digest", () => {
   const releases = [{ ...release("0.34.0", true), digest: "sha256:34" }, { ...release("0.31.0"), digest: "sha256:31" }, { ...release("0.30.0"), digest: "sha256:30" }];
   const images = [image({ version: "0.31.0", digest: "sha256:other", current: true }), image({ version: null, digest: "sha256:30" })];
   const rows = enginePackageRows(releases, { version: "0.31.0", images });
@@ -140,10 +140,10 @@ test("job steps, titles and outcomes", () => {
   assert.equal(enginePhaseLabel(job({ phase: "restarting", rolledBack: true })), "Putting 0.31.0 back");
   assert.deepEqual(engineJobStep(job({ reuse: true, phase: "restarting" })), { index: 2, count: 2, progress: 75 }, "no download");
   assert.equal(engineJobStep(job({ phase: "succeeded" })).progress, 100);
-  assert.equal(engineJobTitle(job({ phase: "draining" })), "Updating the LLM engine 0.31.0 → 0.34.0");
-  assert.equal(engineJobTitle(job({ phase: "succeeded" })), "LLM engine updated to 0.34.0");
-  assert.equal(engineJobTitle(job({ fromVersion: "0.34.0", toVersion: "0.31.0", phase: "draining" })), "Switching the LLM engine 0.34.0 → 0.31.0");
-  assert.equal(engineJobTitle(job({ fromVersion: "0.34.0", toVersion: "0.31.0", phase: "failed" })), "Switch of the LLM engine to 0.31.0 failed");
+  assert.equal(engineJobTitle(job({ phase: "draining" })), "Updating Gufo 0.31.0 → 0.34.0");
+  assert.equal(engineJobTitle(job({ phase: "succeeded" })), "Gufo updated to 0.34.0");
+  assert.equal(engineJobTitle(job({ fromVersion: "0.34.0", toVersion: "0.31.0", phase: "draining" })), "Switching Gufo 0.34.0 → 0.31.0");
+  assert.equal(engineJobTitle(job({ fromVersion: "0.34.0", toVersion: "0.31.0", phase: "failed" })), "Switch of Gufo to 0.31.0 failed");
   assert.match(engineJobOutcome(job({ phase: "failed", rolledBack: true })), /0.34.0 didn't start properly, so 0.31.0 runs again/);
   assert.match(engineJobOutcome(job({ phase: "cancelled" })), /still runs 0.31.0/);
 });
@@ -162,7 +162,7 @@ test("polling, merging and input", () => {
 });
 
 test("errors in plain words", () => {
-  assert.match(engineActionError("remove", { error: "not_found", message: "x" }), /no longer on the LLM server/);
+  assert.match(engineActionError("remove", { error: "not_found", message: "x" }), /no longer on the AI server/);
   assert.match(engineActionError("update", { error: "timeout", message: "x" }), /may have started anyway/);
   assert.equal(engineActionError("update", { error: "version_not_found", message: "no digest" }), "no digest");
 });

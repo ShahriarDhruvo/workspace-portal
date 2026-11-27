@@ -80,7 +80,7 @@ test("a start that fails before it runs leaves no session; a run that fails late
   assert.deepEqual(rows().map((row) => [row.requests, row.endedAt]), [[1, 9_000], [0, 12_000]], "it ran, without a request");
 });
 
-test("a request counts in the session open when it reached the LLM server, even if that has closed since", () => {
+test("a request counts in the session open when it reached the AI server, even if that has closed since", () => {
   const { log, state, rows, userId } = setup();
   assert.equal(log.forwarded(1, userId), null, "no session: not counted");
   log.finished(finished(1, userId));

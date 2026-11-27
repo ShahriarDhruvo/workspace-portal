@@ -74,7 +74,7 @@ test("a restarted hostd, an unmeasurable server or a clock far off share nothing
   await energy.read();
   assert.equal(Math.round(total(7)), 100);
 
-  // The LLM server's clock is an hour off: the stretch is bounded by the gateway's own clock instead.
+  // The AI server's clock is an hour off: the stretch is bounded by the gateway's own clock instead.
   meter.reading = { ...meter.reading, t: 3_600_000 + 6_000, energyJ: meter.reading.energyJ! + 100 };
   clock.now = 6_000;
   await energy.read();

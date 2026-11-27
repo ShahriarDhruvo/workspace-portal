@@ -58,7 +58,7 @@ export interface EnergyTotal {
 }
 
 /**
- * A user's share of the LLM server's measured energy on one day: what their requests used, from their workspace
+ * A user's share of the AI server's measured energy on one day: what their requests used, from their workspace
  * sessions (each on the day it started, as Admin > Usage prices it) and their API keys.
  */
 export interface UserEnergyDay {

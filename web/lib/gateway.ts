@@ -165,8 +165,8 @@ export const gateway = {
       timeoutMs: IMAGE_REMOVE_TIMEOUT_MS,
     }),
   /**
-   * The LLM engine: what runs, its releases and their notes, and the running or last update job
-   * (docs/ARCHITECTURE.md, "LLM engine updates"). `refresh` asks the registry and GitHub again.
+   * Gufo: what runs, its releases and their notes, and the running or last update job
+   * (docs/ARCHITECTURE.md, "Gufo updates"). `refresh` asks the registry and GitHub again.
    */
   engine: ({ refresh = false }: { refresh?: boolean } = {}) =>
     call<EngineOverview>("GET", `/control/engine${refresh ? "?refresh=1" : ""}`, { timeoutMs: REGISTRY_TIMEOUT_MS }),

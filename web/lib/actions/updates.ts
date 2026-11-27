@@ -8,7 +8,7 @@ import { attempt, gateway } from "../gateway";
 import { requireAdmin } from "../session";
 import { agentImageSchema, agentUpdateSchema, fieldErrors, type ActionResult } from "../validation";
 
-// The Updates page's actions, for the agents and the LLM engine. Each re-checks the admin role and validates its
+// The Updates page's actions, for the agents and Gufo. Each re-checks the admin role and validates its
 // input; the gateway refuses what it can't do (one job at a time, an image in use) and audits updates itself,
 // attributed to actorUserId. Image removals are audited here. The page polls for a job's progress.
 
@@ -83,7 +83,7 @@ export async function restartEngineNow(): Promise<ActionResult> {
   );
 }
 
-/** Removes an engine image from the LLM server (not the one that runs). */
+/** Removes an engine image from the AI server (not the one that runs). */
 export async function removeEngineImage(digest: string, version: string | null): Promise<ActionResult> {
   const session = await requireAdmin();
   const parsed = engineImageSchema.safeParse({ digest, version });

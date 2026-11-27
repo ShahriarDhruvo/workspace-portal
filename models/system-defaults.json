@@ -3,7 +3,7 @@
 // Install your own:  sudo bash deploy/models.sh install system-defaults.json
 // In every entry of modelProviders.openai the portal sets "baseUrl" to its gateway and "envKey" to a placeholder
 // (LLM_API_KEY never enters a workspace) and removes "apiKey". "id" must be a model that LLM_UPSTREAM_URL serves.
-// contextWindowSize is one session of the LLM server. Without samplingParams.max_tokens Qwen Code asks for replies of
+// contextWindowSize is one session of the AI server. Without samplingParams.max_tokens Qwen Code asks for replies of
 // 64,000 tokens (thinking included) and continues one that was cut off; with it, a cut-off reply ends the turn.
 // autoCompactThreshold keeps that reply and Qwen Code's margin (5% of the context) free behind the conversation:
 // contextWindowSize × (1 − autoCompactThreshold) ≥ 64,000 + 5%.

@@ -42,7 +42,7 @@ export interface Seams {
   fence?: () => Promise<FenceState>;
   builder?: ImageBuilder;
   registry?: NpmRegistry;
-  /** null: the LLM server has no portal-hostd. */
+  /** null: the AI server has no portal-hostd. */
   engineHost?: EngineHost | null;
   engineRegistry?: RegistryClient;
   engineNotes?: GitHubReleases;
@@ -51,7 +51,7 @@ export interface Seams {
   reader?: ReaderBackend | null;
   /** Downloads the electricity prices. */
   fetchText?: FetchText;
-  /** Told each request that reached the LLM server, once it has ended. */
+  /** Told each request that reached the AI server, once it has ended. */
   onLlmFinished?: (request: FinishedLlmRequest) => void;
 }
 

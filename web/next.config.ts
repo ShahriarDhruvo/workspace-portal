@@ -17,7 +17,7 @@ const nextConfig: NextConfig = {
   outputFileTracingRoot: repoRoot,
   transpilePackages: ["@portal/core"],
   poweredByHeader: false,
-  // Next.js cuts a request body off at 10 MB; the LLM API (app/llm/api) passes on what the LLM server takes.
+  // Next.js cuts a request body off at 10 MB; the LLM API (app/llm/api) passes on what the AI server takes.
   experimental: { proxyClientMaxBodySize: LLM_API_BODY_BYTES },
   reactStrictMode: true,
   async headers() {

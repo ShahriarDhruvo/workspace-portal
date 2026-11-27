@@ -258,7 +258,7 @@ export function previewResponseHeaders(
 }
 
 /**
- * Headers for a request to the LLM server: the workspace's placeholder key is replaced by the real one (or dropped),
+ * Headers for a request to the AI server: the workspace's placeholder key is replaced by the real one (or dropped),
  * and responses are requested uncompressed so usage can be read from them.
  */
 export function llmRequestHeaders(incoming: IncomingHttpHeaders, apiKey: string): HeaderMap {

@@ -49,7 +49,7 @@ interface PackageImagesProps {
   currentLabel: string;
   /** A row without an image: "Build first" or "Download first". */
   missingLabel: string;
-  /** Where the images are, in the folded summary: "this server", "the LLM server". */
+  /** Where the images are, in the folded summary: "this server", "the AI server". */
   where: string;
   /** With the Workspaces column (the agents). */
   workspaces?: boolean;

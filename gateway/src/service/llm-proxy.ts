@@ -1,4 +1,4 @@
-// One request to the LLM server and its answer back, for the workspaces (service-api.ts) and for API keys
+// One request to the AI server and its answer back, for the workspaces (service-api.ts) and for API keys
 // (llm-api.ts). A generation waits for its turn (llm-queue.ts), is followed while it runs (llm-requests.ts) and is
 // counted for its user (llm_usage); any other request is passed straight on.
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -24,7 +24,7 @@ export interface LlmProxyDeps {
 interface LlmCall {
   /** Whose request it is, and the API key it came with (null from a workspace). null: no one's, a browser's preflight. */
   caller: { userId: number; keyId: number | null } | null;
-  /** On the LLM server: "/v1/chat/completions". */
+  /** On the AI server: "/v1/chat/completions". */
   pathname: string;
   /** "?…", or "". */
   search: string;
@@ -35,12 +35,12 @@ interface LlmCall {
 /** POST routes that count or format a prompt: they take none of the engine's sessions, so they are no generations. */
 const NOT_A_GENERATION = /\/(?:input_tokens|count_tokens|tokenize|apply-template)$/;
 
-/** The error shape OpenAI clients understand (the LLM server's own errors pass through as they are). */
+/** The error shape OpenAI clients understand (the AI server's own errors pass through as they are). */
 export function sendLlmError(res: ServerResponse, status: number, type: string, message: string, headers?: Record<string, string>): void {
   sendJson(res, status, { error: { message, type } }, headers);
 }
 
-/** No dot segments or encoded separators, so the LLM server only ever sees the path that was checked. */
+/** No dot segments or encoded separators, so the AI server only ever sees the path that was checked. */
 export function isPlainPath(pathname: string): boolean {
   return !/%2e|%2f|%5c|\\/i.test(pathname) && new URL(pathname, "http://localhost").pathname === pathname;
 }
@@ -94,13 +94,13 @@ export async function proxyLlm(deps: LlmProxyDeps, req: IncomingMessage, res: Se
         return tapped.parser ? usageTap(tapped.parser) : null;
       },
       onError: (error, response) => {
-        deps.log.warn("LLM server did not answer", { ...caller, error });
-        sendLlmError(response, 502, "llm_unreachable", "The LLM server is not reachable.");
+        deps.log.warn("AI server did not answer", { ...caller, error });
+        sendLlmError(response, 502, "llm_unreachable", "The AI server is not reachable.");
       },
     });
   } finally {
     release();
-    // A client that hangs up (a cancelled turn, a helper request it dropped, a workspace's stop) is not the LLM server failing.
+    // A client that hangs up (a cancelled turn, a helper request it dropped, a workspace's stop) is not the AI server failing.
     const ok = result !== null && result.outcome !== "failed" && (result.status === null || (result.status >= 200 && result.status < 300));
     progress?.finish(ok, tapped.parser?.usage ?? null);
   }

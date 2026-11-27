@@ -130,9 +130,9 @@ export interface Config {
     apiKey: string;
     maxConcurrency: number;
     maxConcurrencyPerUser: number;
-    /** Image models the LLM server serves on /v1/images/*, the default first (IMAGE_MODELS); empty: none. */
+    /** Image models the AI server serves on /v1/images/*, the default first (IMAGE_MODELS); empty: none. */
     imageModels: string[];
-    /** Where the LLM server reports its sessions, llama.cpp style (LLM_SLOTS_PATH). */
+    /** Where the AI server reports its sessions, llama.cpp style (LLM_SLOTS_PATH). */
     slotsPath: string;
   };
   search: SearchConfig;

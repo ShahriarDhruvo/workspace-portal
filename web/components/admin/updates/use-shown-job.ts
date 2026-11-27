@@ -4,7 +4,7 @@ import { useCallback, useSyncExternalStore } from "react";
 import type { UpdateJob } from "@portal/core/wire";
 import { isJobActive } from "@/lib/update-jobs";
 
-// The gateway shows its last finished job (of the agents, and of the LLM engine) until it restarts; once the admin
+// The gateway shows its last finished job (of the agents, and of Gufo) until it restarts; once the admin
 // has read the outcome, this browser stops showing it. Only the latest dismissal of each kind is kept: a newer job
 // has another id and shows again.
 

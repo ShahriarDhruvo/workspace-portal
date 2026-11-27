@@ -340,7 +340,7 @@ test("ONLINE_WORKSPACES switches Online workspaces off for the whole portal; its
   assert.deepEqual(problems({ ...secrets, ONLINE_WORKSPACES: "off", ONLINE_NETWORK: "workspace-portal-ws" }).length, 1, "so turning it on later can't break isolation");
 });
 
-test("portal-hostd: a token sets a host up; the portal's address defaults to this machine, the LLM server's is required", () => {
+test("portal-hostd: a token sets a host up; the portal's address defaults to this machine, the AI server's is required", () => {
   const token = "t".repeat(64);
   assert.deepEqual(loadConfig({ ...secrets, HOSTD_PORTAL_TOKEN: token }).hostd.portal, { url: "http://127.0.0.1:9180", token });
   assert.deepEqual(loadConfig({ ...secrets, HOSTD_LLM_URL: "http://192.168.10.14:9180/", HOSTD_LLM_TOKEN: token }).hostd.llm, {

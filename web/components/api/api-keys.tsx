@@ -272,7 +272,7 @@ function Usage({ days, currency, today }: ApiKeysView) {
           <TableRow>
             <DataTableHead>Day</DataTableHead>
             <DataTableHead>Key</DataTableHead>
-            <DataTableHead align="right" title="Requests that reached the LLM server">
+            <DataTableHead align="right" title="Requests that reached the AI server">
               Requests
             </DataTableHead>
             <UseHeads />
@@ -329,7 +329,7 @@ function UseHeads() {
       <DataTableHead align="right" title="Tokens out: answers">
         Out
       </DataTableHead>
-      <DataTableHead align="right" title="Its share of the LLM server's measured energy while its requests ran">
+      <DataTableHead align="right" title="Its share of the AI server's measured energy while its requests ran">
         Energy
       </DataTableHead>
       <DataTableHead align="right" title="That energy at each day's electricity price">

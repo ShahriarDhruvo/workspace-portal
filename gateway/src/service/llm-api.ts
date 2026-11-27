@@ -1,4 +1,4 @@
-// The LLM server's own HTTP API for a user's software (an editor, a script), opened by the user's API keys (the web
+// The AI server's own HTTP API for a user's software (an editor, a script), opened by the user's API keys (the web
 // app's API page). The web app passes /llm/api/* on as it comes (web/app/llm/api), so this answers on the control
 // API's port. Any path and method goes there as it is, but for the key, and a generation waits its turn and is
 // counted like a workspace's (llm-proxy.ts), for its key as well (key-usage.ts). Only the routes that run the server
@@ -12,8 +12,8 @@ import { isPlainPath, proxyLlm, sendLlmError, type LlmProxyDeps } from "./llm-pr
 const PREFIX = "/llm/api";
 
 /**
- * llama-swap's own routes, in front of the engines on the reference LLM server: they stop and start every model,
- * cancel others' requests and show everyone's traffic, so they are the admin's, on the LLM server itself.
+ * llama-swap's own routes, in front of the engines on the reference AI server: they stop and start every model,
+ * cancel others' requests and show everyone's traffic, so they are the admin's, on the AI server itself.
  */
 const ADMIN_ROUTES = /^\/(?:api|ui|logs|upstream|comfyui|audiocpp)(?:\/|$)|^\/(?:unload|running|metrics)$/;
 
@@ -22,7 +22,7 @@ export function isLlmApi(pathname: string): boolean {
 }
 
 export async function serveLlmApi(deps: LlmProxyDeps, req: IncomingMessage, res: ServerResponse): Promise<void> {
-  // As on the LLM server itself, a page of any site may call: the key opens the API, never the portal's cookie.
+  // As on the AI server itself, a page of any site may call: the key opens the API, never the portal's cookie.
   res.setHeader("access-control-allow-origin", "*");
   const { pathname, search } = splitTarget(req.url ?? "");
   if (!isPlainPath(pathname)) return sendLlmError(res, 400, "invalid_request_error", "Invalid path.");
@@ -34,7 +34,7 @@ export async function serveLlmApi(deps: LlmProxyDeps, req: IncomingMessage, res:
   }
   delete req.headers["x-api-key"];
   const path = pathname.slice(PREFIX.length) || "/";
-  if (ADMIN_ROUTES.test(path)) return sendLlmError(res, 404, "not_found", `${pathname} runs the LLM server and is not available through the portal.`);
+  if (ADMIN_ROUTES.test(path)) return sendLlmError(res, 404, "not_found", `${pathname} runs the AI server and is not available through the portal.`);
   return proxyLlm(deps, req, res, { caller, pathname: path, search });
 }
 

@@ -1,8 +1,8 @@
 // Each run of a user's workspace, from Start to its stop (workspace_sessions), and what its LLM requests added up to,
 // for Admin > Usage's sessions table. The workspace manager reports every state it saves (sync): a session opens when
 // the workspace starts and closes once it has stopped; a start that fails before the workspace ran leaves none. A
-// request that reaches the LLM server belongs to its user's session open at that moment, which counts its tokens and
-// the engine's timings when it ends; llm-energy.ts adds each request's share of the LLM server's energy as it is
+// request that reaches the AI server belongs to its user's session open at that moment, which counts its tokens and
+// the engine's timings when it ends; llm-energy.ts adds each request's share of the AI server's energy as it is
 // measured. `version` changes with every write, so the live view tells the page to read the table again.
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { workspaceSessions, type AgentKind, type PortalDb, type WorkspaceKind, type WorkspaceStatus } from "@portal/core";
@@ -29,7 +29,7 @@ export class SessionLog {
    * workspace got to running (one open before the gateway started did).
    */
   readonly #open = new Map<number, { id: number; startedAt: number; ran: boolean }>();
-  /** The session of each request between reaching the LLM server and ending, by request id. */
+  /** The session of each request between reaching the AI server and ending, by request id. */
   readonly #requests = new Map<number, number>();
   #version = 0;
 
@@ -104,7 +104,7 @@ export class SessionLog {
     return true;
   }
 
-  /** A request reached the LLM server: the session it belongs to, null when its user has none open. */
+  /** A request reached the AI server: the session it belongs to, null when its user has none open. */
   forwarded(requestId: number, userId: number): number | null {
     const open = this.#open.get(userId);
     if (!open) return null;
@@ -112,7 +112,7 @@ export class SessionLog {
     return open.id;
   }
 
-  /** A request that reached the LLM server ended: its session counts it, even if it has closed meanwhile. */
+  /** A request that reached the AI server ended: its session counts it, even if it has closed meanwhile. */
   finished(request: FinishedLlmRequest): void {
     const sessionId = this.#requests.get(request.id);
     if (sessionId === undefined) return;
@@ -142,7 +142,7 @@ export class SessionLog {
     }
   }
 
-  /** The sessions' shares of the LLM server's measured energy (llm-energy.ts). */
+  /** The sessions' shares of the AI server's measured energy (llm-energy.ts). */
   addEnergy(shares: ReadonlyArray<{ sessionId: number; joules: number; ms: number }>): void {
     if (shares.length === 0) return;
     const s = workspaceSessions;

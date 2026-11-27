@@ -24,9 +24,9 @@ export interface SessionRow {
   /** Prompt tokens read and answer tokens written per second of the engine's own time; null without any. */
   readTps: number | null;
   writeTps: number | null;
-  /** Its requests' time on the LLM server, added up. */
+  /** Its requests' time on the AI server, added up. */
   llmMs: number;
-  /** Its share of the LLM server's measured energy; null while none was measured. */
+  /** Its share of the AI server's measured energy; null while none was measured. */
   energyWh: number | null;
   /** That share's average draw while its requests ran. */
   watts: number | null;

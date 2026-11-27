@@ -1,5 +1,5 @@
 // What each API key's requests added up to on each local day (api_key_usage), for the web app's API page. A request
-// that reached the LLM server is counted when it ends; its share of the LLM server's measured energy is added as it
+// that reached the AI server is counted when it ends; its share of the AI server's measured energy is added as it
 // is measured (llm-energy.ts).
 import { sql } from "drizzle-orm";
 import { apiKeyUsage, usageDay, type PortalDb } from "@portal/core";
@@ -17,12 +17,12 @@ export class KeyUsage {
     this.#now = options.now ?? Date.now;
   }
 
-  /** A request that came with `keyId` and reached the LLM server ended. */
+  /** A request that came with `keyId` and reached the AI server ended. */
   finished(keyId: number, { ok, usage }: FinishedLlmRequest): void {
     this.#add(keyId, { requests: 1, failed: ok ? 0 : 1, promptTokens: usage?.promptTokens ?? 0, outputTokens: usage?.completionTokens ?? 0, energyJ: 0 });
   }
 
-  /** The keys' shares of the LLM server's measured energy. */
+  /** The keys' shares of the AI server's measured energy. */
   addEnergy(shares: ReadonlyArray<{ keyId: number; joules: number }>): void {
     for (const share of shares) this.#add(share.keyId, { requests: 0, failed: 0, promptTokens: 0, outputTokens: 0, energyJ: share.joules });
   }

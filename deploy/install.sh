@@ -175,9 +175,9 @@ else
   MONITORING="this server: $HOSTD_PORTAL_URL (not installed by this script)"
 fi
 if [[ -n $(env_get HOSTD_LLM_TOKEN) ]]; then
-  MONITORING+="; LLM server: $(env_get HOSTD_LLM_URL)"
+  MONITORING+="; AI server: $(env_get HOSTD_LLM_URL)"
 else
-  MONITORING+="; LLM server: not set up (hostd/README.md)"
+  MONITORING+="; AI server: not set up (hostd/README.md)"
 fi
 
 # Only now, behind the firewall: without a key of its own SearXNG gets its example key and refuses to start.
