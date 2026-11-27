@@ -1,6 +1,7 @@
 // The gateway's parts and what each is given: built here once, for main.ts and for the integration tests
 // (test/harness.ts). Nothing here starts, listens or asks Docker anything; main.ts does that, in its order.
-import { loadSessionContext, type PortalDb } from "@portal/core";
+import { loadSessionContext, type PortalDb, type VideoHold } from "@portal/core";
+import { besideLlmIds } from "@portal/harnesses";
 import { createAgentServerFactory } from "./proxy/agent-proxy.ts";
 import { createPreviewServerFactory } from "./proxy/preview-proxy.ts";
 import { AgentUpdater } from "./updates/agent-updater.ts";
@@ -24,6 +25,8 @@ import { hostdClient } from "./monitor/hostd.ts";
 import { LiveHub, userNames } from "./monitor/live.ts";
 import { LlmMonitor } from "./monitor/llm-monitor.ts";
 import { LlmQueue } from "./service/llm-queue.ts";
+import { modelPrefix } from "./service/media-routes.ts";
+import { fetchVideoStatus, videoHold as videoHoldOf, VideoJobs } from "./service/video-jobs.ts";
 import { KeyUsage } from "./monitor/key-usage.ts";
 import { LlmEnergy } from "./monitor/llm-energy.ts";
 import { LlmRequests, type FinishedLlmRequest } from "./monitor/llm-requests.ts";
@@ -52,6 +55,8 @@ export interface Seams {
   enginePollMs?: number;
   /** null: the AI server has no portal-hostd. */
   appHost?: AppHost | null;
+  /** How often the gateway asks about a running video job. */
+  videoPollMs?: number;
   search?: SearchBackend;
   reader?: ReaderBackend | null;
   /** Downloads the electricity prices. */
@@ -66,6 +71,13 @@ export function compose(
 ) {
   const { now } = seams;
   const llm = new LlmQueue(config.llm.maxConcurrency, config.llm.maxConcurrencyPerUser);
+  const { media, mediaModelPath, upstreamUrl, apiKey } = config.llm;
+  const videoJobs = new VideoJobs({
+    status: fetchVideoStatus((id, model) => `${upstreamUrl}${modelPrefix(mediaModelPath, model)}/v1/videos/${encodeURIComponent(id)}`, apiKey),
+    log,
+    now,
+    pollMs: seams.videoPollMs,
+  });
   // Each run of a workspace and what its LLM requests added up to, energy included (Admin > Usage).
   const sessionLog = new SessionLog({ db, log, now });
   // The same for each API key (the API page).
@@ -79,7 +91,10 @@ export function compose(
     },
     log,
   });
+  // The image and media models that run beside the LLM: their requests wait for no swap (media.json's besideLlm).
+  const besideLlm = besideLlmIds(media);
   const requests = new LlmRequests({
+    besideLlm,
     now,
     listener: {
       forwarded: ({ id, userId, keyId, forwardedAt }) => {
@@ -99,7 +114,9 @@ export function compose(
   const sessions = new SessionCache((tokenHash) => loadSessionContext(db, tokenHash));
   // Online workspaces run only while the host firewall that fences them in answers (firewall.sh and fence.ts in container/security).
   const fence = seams.fence ?? fenceCheck(config.servicePort);
-  const manager = new WorkspaceManager({ config, db, runtime, versions, llm, connections, log, fence, sessions: sessionLog, now });
+  // The oldest running video job, as each person's workspace page shows it (WorkspaceInfo.videoHold).
+  const videoHold = (userId: number): VideoHold | null => videoHoldOf(videoJobs, llm, userId, (now ?? Date.now)());
+  const manager = new WorkspaceManager({ config, db, runtime, versions, llm, videoHold, connections, log, fence, sessions: sessionLog, now });
   const registry = seams.registry ?? createNpmRegistry();
   const updater = new AgentUpdater({
     config,
@@ -125,7 +142,9 @@ export function compose(
     queue: llm,
     requests,
     names: (ids) => userNames(db, ids),
-    images: config.llm.imageModels.length > 0,
+    generation: Object.keys(media).length > 0,
+    besideLlm,
+    ...(media.video === undefined ? {} : { video: { jobs: videoJobs } }),
     log,
     now,
   });
@@ -186,11 +205,12 @@ export function compose(
     live,
     engine,
     apps,
-    control: createControlServer({ config, db, manager, versions, updater, engine, apps, llm, requests, live, prices, sessions, connections, log }),
+    videoJobs,
+    control: createControlServer({ config, db, manager, versions, updater, engine, apps, llm, requests, videoJobs, live, prices, sessions, connections, log }),
     createAgentServer: createAgentServerFactory({ config, manager, sessions, connections, log }),
     createPreviewServer: createPreviewServerFactory({ config, manager, sessions, connections, log }),
     /** A service listener for one kind's network. */
-    createServiceServer: (own: Pick<ServiceDeps, "kind" | "resolveCaller">) => createServiceServer({ ...own, config, db, manager, llm, requests, log, search, reader }),
+    createServiceServer: (own: Pick<ServiceDeps, "kind" | "resolveCaller">) => createServiceServer({ ...own, config, db, manager, llm, requests, videoJobs, log, search, reader }),
   };
 }
 

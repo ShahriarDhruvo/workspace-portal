@@ -3,19 +3,21 @@
 // file names wins over a person's own settings (~/.config/opencode) and over any project's opencode.json; everything
 // it leaves out stays theirs (agents, commands, their own MCP servers, plugins and skills, permissions for other
 // tools). It holds what the portal depends on: the portal's models (../models.ts) through the gateway and no other
-// provider, its image models (IMAGE_MODELS) for OpenCode's generate_image tool, the gateway's search in place of
-// OpenCode's own web tools, and no update or session sharing, which a
-// workspace could not reach or must not use. And what a workspace starts with: the plugins and skills of the image
-// (image/install.sh), formatting after edits, and for an Online workspace two public MCP servers. The keys are
-// OpenCode 2's (`providers`, `policies`, `permissions`, `mcp.servers`, `plugins`, `skills`).
+// provider, its image models (media.json) for OpenCode's generate_image tool, its media models (media.json, by kind
+// and tier) for the portal's own media tools (image/media-tools), the gateway's search in place of OpenCode's own web
+// tools, and no update or session sharing, which a workspace could not reach or must not use. And what a workspace
+// starts with: the plugins and skills of the image (image/install.sh), formatting after edits, and for an Online
+// workspace two public MCP servers. The keys are OpenCode 2's (`providers`, `policies`, `permissions`, `mcp.servers`,
+// `plugins`, `skills`).
 //
 // OpenCode replaces `{env:NAME}` and `{file:path}` in the file's text before it parses it. Nothing here uses them; a
 // model name or id of the admin's that held such a marker would be replaced, so a start with one is refused. So is
 // one with a model id that has a `#`, where OpenCode's name for a model ("<provider>/<id>#<variant>") ends the id.
 import type { WorkspaceKind } from "@portal/core";
 import { INSTRUCTIONS_FILE } from "../instructions.ts";
+import { MEDIA_KINDS, MEDIA_TIERS, besideLlmIds, imageModels as imageModelIds, mediaModel, type MediaKind, type MediaRegistry } from "../media.ts";
 import type { ModelCatalog, PortalModel } from "../models.ts";
-import { AgentConfigError, BROWSER_MCP, BROWSER_TIMEOUT_MS, LLM_KEY_ENV, LLM_TIMEOUT_MS, SEARCH_TIMEOUT_MS } from "../shared.ts";
+import { AgentConfigError, BROWSER_MCP, BROWSER_TIMEOUT_MS, LLM_KEY_ENV, LLM_TIMEOUT_MS, LLM_WAIT_MS, SEARCH_TIMEOUT_MS } from "../shared.ts";
 
 export const OPENCODE_SETTINGS_DIR = "/etc/opencode";
 export const OPENCODE_CONFIG_FILE = "opencode.json";
@@ -33,8 +35,8 @@ const ONLINE_MCP = { context7: "https://mcp.context7.com/mcp", grep: "https://mc
 
 interface OpencodeConfigOptions {
   catalog: ModelCatalog;
-  /** The AI server's image models, the default first (IMAGE_MODELS); OpenCode's generate_image tool uses them. */
-  imageModels: readonly string[];
+  /** The AI server's image and media models (media.json): generate_image and the portal's media tools use them. */
+  media: MediaRegistry;
   /** http://<gateway bridge IP>:<service port>, the only address a Private workspace can reach. */
   serviceBaseUrl: string;
   /** Offer the Playwright MCP browser. */
@@ -42,20 +44,34 @@ interface OpencodeConfigOptions {
   kind: WorkspaceKind;
 }
 
+/** Every string in `value`, keys included. */
+function textsOf(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap(textsOf);
+  if (value !== null && typeof value === "object") return Object.entries(value).flatMap(([key, item]) => [key, ...textsOf(item)]);
+  return [];
+}
+
 /** The managed opencode.json of a workspace, as an object. Throws AgentConfigError for a model OpenCode would misread. */
 export function opencodeConfig(options: OpencodeConfigOptions): Record<string, unknown> {
-  const { catalog, imageModels, serviceBaseUrl, browser, kind } = options;
-  for (const model of [...catalog.models, ...imageModels.map((id) => ({ id, name: id }))]) {
-    const marker = [model.id, model.name].find((text) => /\{(?:env|file):/.test(text));
-    if (marker !== undefined) {
-      throw new AgentConfigError(`OpenCode would replace "${marker}" in its settings: a model's id and name must not contain {env: or {file:.`);
-    }
-    if (model.id.includes("#")) {
-      throw new AgentConfigError(`OpenCode reads the "#" in "${model.id}" as the start of a variant's name: a model's id must not contain one.`);
-    }
+  const { catalog, media, serviceBaseUrl, browser, kind } = options;
+  const imageModels = imageModelIds(media);
+  const mediaKinds = MEDIA_KINDS.filter((kind) => kind !== "image" && media[kind] !== undefined);
+  const mediaIds = MEDIA_KINDS.flatMap((kind) => MEDIA_TIERS.flatMap((tier) => {
+    const entry = media[kind]?.[tier];
+    return entry ? [entry.model, entry.clone ?? "", entry.design ?? ""].filter(Boolean) : [];
+  }));
+  // The whole registry goes into the settings (the media plugin's options), its every text with it.
+  const marker = [...catalog.models.flatMap((model) => [model.id, model.name]), ...textsOf(media)].find((text) => /\{(?:env|file):/.test(text));
+  if (marker !== undefined) {
+    throw new AgentConfigError(`OpenCode would replace "${marker}" in its settings: a model's id and name, and media.json's text, must not contain {env: or {file:.`);
+  }
+  const variant = [...catalog.models.map((model) => model.id), ...mediaIds].find((id) => id.includes("#"));
+  if (variant !== undefined) {
+    throw new AgentConfigError(`OpenCode reads the "#" in "${variant}" as the start of a variant's name: a model's id must not contain one.`);
   }
   const both = imageModels.find((id) => catalog.models.some((model) => model.id === id));
-  if (both !== undefined) throw new AgentConfigError(`"${both}" is both a chat model and an image model (IMAGE_MODELS): OpenCode takes a model as one or the other.`);
+  if (both !== undefined) throw new AgentConfigError(`"${both}" is both a chat model and an image model (media.json): OpenCode takes a model as one or the other.`);
   // codemode false: the model calls these tools itself (search_web_search, search_read_page), as with the other
   // agents, not through a script it would have to write for OpenCode's `execute` tool.
   const servers: Record<string, unknown> = {
@@ -74,7 +90,13 @@ export function opencodeConfig(options: OpencodeConfigOptions): Record<string, u
     model: `${PROVIDER}/${catalog.defaultModel}`,
     // Added to every session's prompt, after the AGENTS.md files of the person and the project.
     instructions: [`${OPENCODE_SETTINGS_DIR}/${INSTRUCTIONS_FILE}`],
-    plugins: [`${SHARE}/plugins/superpowers`, `${SHARE}/plugins/safety-net`],
+    plugins: [
+      `${SHARE}/plugins/superpowers`,
+      `${SHARE}/plugins/safety-net`,
+      // generate_video, generate_music, synthesize_speech and transcribe_audio, for the kinds there are models of,
+      // and list_media_models.
+      ...(mediaKinds.length === 0 ? [] : [{ package: `${SHARE}/plugins/media`, options: { baseURL: `${serviceBaseUrl}/llm/v1`, media } }]),
+    ],
     skills: [`${SHARE}/skills`],
     // Files are formatted after an edit, by the formatters OpenCode knows and the image has (gofmt, rustfmt, ruff,
     // shfmt) or the project installed (prettier, biome). {} keeps a person's own formatters; `true` would drop them.
@@ -89,9 +111,10 @@ export function opencodeConfig(options: OpencodeConfigOptions): Record<string, u
         compatibility: { maxTokensField: "max_tokens" },
         settings: {
           baseURL: `${serviceBaseUrl}/llm/v1`,
-          // A request may wait in the gateway's queue for longer than OpenCode's own limits (LLM_TIMEOUT_MS).
+          // A request may wait in the gateway's queue for hours before its headers come (LLM_WAIT_MS); once the
+          // answer streams, an hour without a chunk ends it.
           timeout: false,
-          headerTimeout: LLM_TIMEOUT_MS,
+          headerTimeout: LLM_WAIT_MS,
           chunkTimeout: LLM_TIMEOUT_MS,
         },
         models: Object.fromEntries([
@@ -100,7 +123,7 @@ export function opencodeConfig(options: OpencodeConfigOptions): Record<string, u
         ]),
       },
     },
-    // The image model generate_image uses unless the person asks for another.
+    // The image model generate_image uses unless the agent names another: the fast tier's.
     ...(imageModels.length === 0 ? {} : { experimental: { image_generate: { model: `${PROVIDER}/${imageModels[0]}` } } }),
     // No provider but this one, whatever a person or a project configures or signs in to: OpenCode would otherwise
     // offer its own hosted models (it lists them even without a route to them). The later rule wins.
@@ -118,17 +141,63 @@ export function opencodeConfig(options: OpencodeConfigOptions): Record<string, u
   };
 }
 
+/** Each kind's tool, and what it is for, as the agent is told; the skill (image/media-skill) says how to make a piece. */
+const MEDIA_TOOLS: Record<MediaKind, { tool: string; does: string }> = {
+  image: { tool: "generate_image", does: "makes and edits images" },
+  video: { tool: "generate_video", does: "makes a short clip with its own sound" },
+  music: { tool: "generate_music", does: "makes music, instrumental or sung" },
+  speech: { tool: "synthesize_speech", does: "reads text aloud in a built-in, described or cloned voice" },
+  transcription: { tool: "transcribe_audio", does: "writes down what an audio or video file says" },
+};
+
 /**
- * What the agent is told about the image tool, with the workspace's other facts (../instructions.ts): without a path
- * OpenCode saves an image in its temp folder, which the person does not see and a restart empties.
+ * What the agent is told about the image and media tools, with the workspace's other facts (../instructions.ts): each
+ * kind's fast and quality model and what each is for, and when to go ahead and when to propose a plan first. Without
+ * a path OpenCode saves an image in its temp folder, which the person does not see and a restart empties.
  */
-export function opencodeFacts(imageModels: readonly string[]): string[] {
-  const [first, ...others] = imageModels;
-  if (first === undefined) return [];
-  const choice = others.length === 0 ? "" : ` unless the person asks for another: ${others.map((id) => `${PROVIDER}/${id}`).join(", ")}`;
-  return [
-    `- Images: generate_image makes and edits images. Give it a \`path\` in the project, such as images/<short-name>.png, so the person finds the file there, and once the image is saved show it in your reply as ![<what it shows>](images/<short-name>.png). Leave \`model\` out (the default is ${PROVIDER}/${first})${choice}.`,
-  ];
+export function opencodeFacts(media: MediaRegistry): string[] {
+  const kinds = MEDIA_KINDS.filter((kind) => media[kind] !== undefined);
+  if (kinds.length === 0) return [];
+  const facts: string[] = [];
+  const beside = besideLlmIds(media);
+  const image = media.image;
+  if (image) {
+    const fast = mediaModel(media, "image", "fast")!;
+    facts.push(
+      `- Images: generate_image makes and edits images. Give it a \`path\` in the project, such as images/<short-name>.png, so the person finds the file there, and once the image is saved show it in your reply as ![<what it shows>](images/<short-name>.png). Its \`model\` is the tier: leave it out for the fast one (${PROVIDER}/${fast.model})${image.quality && image.quality.model !== fast.model ? `, or give ${PROVIDER}/${image.quality.model} for the quality one` : ""}.`,
+    );
+  }
+  const tools = kinds.filter((kind) => kind !== "image");
+  const lines = kinds.map((kind) => {
+    const { tool } = MEDIA_TOOLS[kind];
+    const tiers = MEDIA_TIERS.flatMap((tier) => {
+      const entry = media[kind]?.[tier];
+      if (!entry) return [];
+      const about = [entry.bestFor && `for ${entry.bestFor}`, entry.time].filter(Boolean).join("; ");
+      const model = kind === "image" ? `${PROVIDER}/${entry.model}` : entry.model;
+      return [`${tier}: ${entry.name} (${model})${about ? `, ${about}` : ""}${beside.has(entry.model) ? ", runs beside you" : ""}`];
+    });
+    return `  - ${tool} ${MEDIA_TOOLS[kind].does}. ${tiers.join(". ")}.${tiers.length === 1 ? " Both tiers use it." : ""}`;
+  });
+  facts.push(
+    [
+      `- Media models, by tier: \`fast\` for drafts, tries and everyday work, \`quality\` for the final version or when the person asks for the best.${tools.length > 0 ? " The media tools take the tier as `tier`, save the file at the `path` in the project you give them, and answer with JSON facts about it (file_path, tier, model_used, elapsed_sec), never the file." : ""}`,
+      ...lines,
+      `  Every model not marked as running beside you shares the GPU with you, one at a time: while it works no LLM request is answered, anyone's or yours, and a video holds the server for minutes. list_media_models says which are loaded now and whether a video holds the server.`,
+    ].join("\n"),
+  );
+  if (tools.length > 0) {
+    facts.push(
+      [
+        "- Media requests:",
+        "  - Go ahead when it is one simple asset the person described clearly (an image, a line spoken, a transcript, a short track): pick the tier yourself, fast unless they ask for the final or the best, and say which you used.",
+        "  - Otherwise propose first: a piece with several assets, any video, anything that takes more than a few minutes, or when the tier is not clear. Call list_media_models, then show the plan as a table with the columns Step, Asset, Tier & model, Why, Est. time (from the times above, a model swap included), and end with: Reply **go** to start, or tell me what to change. Make nothing until they answer.",
+        "  - For a piece that matters, make it twice: drafts with fast, shown to the person, then the final with quality once they approve.",
+        "  - Load the media-production skill before making a video, a song or a narrated piece, and follow it: plan, batch by model, check every part.",
+      ].join("\n"),
+    );
+  }
+  return facts;
 }
 
 export function renderOpencodeConfig(options: OpencodeConfigOptions): string {

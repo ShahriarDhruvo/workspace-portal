@@ -1,0 +1,62 @@
+[Unit]
+Description=SOV-Transcribe-1, speech to text with its DFlash draft (vLLM 0.32.0); started and stopped by llama-swap
+Documentation=https://huggingface.co/salesforce-sovereign-intelligence/SOV-Transcribe-1
+BindsTo=llama-swap.service
+After=llama-swap.service
+
+[Container]
+ContainerName=vllm-sov
+# kyuz0's vLLM for gfx1151, tag rocm10.0.0-torch2.11.0-vllm0.32.0 (https://github.com/kyuz0/amd-strix-halo-vllm-toolboxes).
+Image=docker.io/kyuz0/vllm-therock-gfx1151@sha256:6aa3f7a806c8c1b4af6854815b729b3ef36112b5bfdc20c265f95e374357748c
+Pull=never
+AddDevice=/dev/kfd
+AddDevice=/dev/dri
+PublishPort=127.0.0.1:18085:8000
+Volume=/models/SOV-Transcribe-1:/models/SOV-Transcribe-1:ro,z
+Volume=/models/SOV-Transcribe-1-DFlash:/models/SOV-Transcribe-1-DFlash:ro,z
+# The model's vLLM plugin and the audio decoders the image lacks, all pure Python or abi3 (any CPython >= 3.12):
+#   cp -r /models/SOV-Transcribe-1/vllm_plugin /tmp/sov-plugin && uv pip install --no-deps --python-version 3.12 \
+#     --python-platform x86_64-manylinux_2_28 --target /opt/ai-studio/vllm-sov/site-packages /tmp/sov-plugin \
+#     soundfile==0.14.0 av==19.0.2 soxr==1.1.0
+Volume=/opt/ai-studio/vllm-sov/site-packages:/opt/sov-site:ro,z
+Environment=PYTHONPATH=/opt/sov-site
+# Compiled kernels persist across starts.
+EnvironmentFile=/etc/ai-studio/cache.env
+Volume=/var/cache/ai-studio/hf:/var/cache/ai-studio/hf:z
+Volume=/var/cache/ai-studio/torch:/var/cache/ai-studio/torch:z
+Volume=/var/cache/ai-studio/triton:/var/cache/ai-studio/triton:z
+Volume=/var/cache/ai-studio/miopen:/var/cache/ai-studio/miopen:z
+Volume=/var/cache/ai-studio/vllm:/var/cache/ai-studio/vllm:z
+Volume=/var/cache/ai-studio/comgr:/var/cache/ai-studio/comgr:z
+# TunableOp off: it tunes every new GEMM shape, that is every new prompt length. Measured: engine start-up 1,120 s instead
+# of 17 s, a first 12.5 s clip 60.8 s instead of 2.6 s, for about 2% faster transcription once tuned.
+Environment=PYTORCH_TUNABLEOP_ENABLED=0
+# Set in the image's login profile, which podman does not read.
+Environment=TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1
+# The model card's 30-minute limit (default 600 s), in uploads up to llama-swap's 64 MB body limit (default 25 MB);
+# 1 GiB of decoded PCM holds 30 minutes of 48 kHz stereo (default 256 MiB).
+Environment=VLLM_MAX_AUDIO_DECODE_DURATION_S=1800
+Environment=VLLM_MAX_AUDIO_CLIP_FILESIZE_MB=64
+Environment=VLLM_MAX_AUDIO_DECODE_BYTES=1073741824
+HealthCmd=curl -fsS -o /dev/null http://127.0.0.1:8000/health
+HealthInterval=30s
+HealthTimeout=10s
+HealthRetries=3
+HealthStartupCmd=curl -fsS -o /dev/null http://127.0.0.1:8000/health
+HealthStartupInterval=2s
+HealthOnFailure=kill
+Notify=healthy
+# A 36 GiB KV cache holds 270,865 tokens, 8.27 requests of 32K (its log): all eight sequences fit. Without the cap
+# vLLM filled 0.85 of the GPU (105.8 GiB in use) and left a speech model no room beside it; with it SOV peaks at
+# 89.4 GiB. --gpu-memory-utilization then only sets the free memory vLLM checks for at start.
+Exec=vllm serve /models/SOV-Transcribe-1 --host 0.0.0.0 --port 8000 --served-model-name sov-transcribe-1 \
+      --max-model-len 32768 --max-num-seqs 8 --gpu-memory-utilization 0.70 --kv-cache-memory-bytes 38654705664 \
+      --speculative-config '{"method":"dflash","model":"/models/SOV-Transcribe-1-DFlash","num_speculative_tokens":15}'
+
+[Service]
+# Starts only once the model llama-swap stopped has let go of its GPU memory: SOV's peak, eight 5-minute recordings at
+# once (89.4 GiB). vLLM sees about 2.6 GiB less free than amdgpu's GTT counter, so it checks for 0.70 of the 124 GiB.
+ExecStartPre=%h/.local/bin/wait-gpu-memory 90
+Restart=no
+TimeoutStartSec=600
+TimeoutStopSec=60

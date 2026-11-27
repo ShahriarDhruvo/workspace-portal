@@ -43,14 +43,14 @@ test("every harness's settings hold the agent's instructions, and each harness i
     idleTimeoutMs: 1_800_000,
     uploadLimitBytes: 1024,
     reader: { url: "" },
-    llm: { imageModels: ["Image-Turbo", "Image"] },
+    llm: { media: { image: { fast: { model: "Image-Turbo", name: "Image-Turbo", time: "", bestFor: "", besideLlm: false, request: {} } } } },
     workspace: { kinds: { private: { gatewayIp: "172.29.0.1" }, online: { gatewayIp: "172.30.0.1" } }, browser: true, defaultEffort: null },
   };
   const online = { kind: "online", person: "Ana Lima", place: "Florida, US" } as const;
   const files = (kind: (typeof AGENT_KINDS)[number]) => driverFor(kind).renderSettings(config, online);
   for (const kind of AGENT_KINDS.filter((kind) => kind !== "opencode")) assert.equal(files(kind)[INSTRUCTIONS_FILE], agentInstructions(config, online), kind);
-  // OpenCode's instructions add its image tool's fact; the other harnesses have no image tool.
-  assert.equal(files("opencode")[INSTRUCTIONS_FILE], agentInstructions(config, online, opencodeFacts(config.llm.imageModels)));
+  // OpenCode's instructions add its image and media tools' facts; the other harnesses have no such tools.
+  assert.equal(files("opencode")[INSTRUCTIONS_FILE], agentInstructions(config, online, opencodeFacts(config.llm.media)));
   assert.match(files("opencode")[INSTRUCTIONS_FILE]!, /\n- Images: generate_image /);
   const file = (kind: (typeof AGENT_KINDS)[number]): string => `${driverFor(kind).settingsMount}/${INSTRUCTIONS_FILE}`;
 

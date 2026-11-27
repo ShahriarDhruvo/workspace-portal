@@ -2,7 +2,9 @@
 // `maxPerUser` per user. Waiters are served first come, first served; a waiter whose user is at
 // their own limit does not hold up other users queued behind it. While paused (an engine update
 // restarts the AI server) or held (a video job runs on the AI server), nothing new is granted:
-// requests wait here instead of failing, or stopping the job.
+// requests wait here instead of failing, or stopping the job. A request that needs the AI server to
+// itself (acquireAlone: a video job's create) waits at its place until nothing is in flight; nothing
+// behind it goes first, and the queue is held from the moment it is granted.
 
 /** Gives the slot back. Safe to call more than once. */
 export type ReleaseSlot = () => void;
@@ -10,7 +12,9 @@ export type ReleaseSlot = () => void;
 interface Waiter {
   userId: number;
   since: number;
-  grant: (release: ReleaseSlot) => void;
+  /** acquireAlone's: granted only with nothing in flight, and with a hold. */
+  alone: boolean;
+  grant: (release: ReleaseSlot, unhold: ReleaseSlot | null) => void;
 }
 
 export class LlmQueue {
@@ -87,20 +91,36 @@ export class LlmQueue {
   }
 
   /** Resolves with a release function once a slot is free; rejects if `signal` aborts first. */
-  acquire(userId: number, signal?: AbortSignal): Promise<ReleaseSlot> {
+  async acquire(userId: number, signal?: AbortSignal): Promise<ReleaseSlot> {
+    return (await this.#enqueue(userId, false, signal)).release;
+  }
+
+  /**
+   * Like acquire, for a request that must have the AI server to itself: it is granted once nothing is in flight,
+   * nothing queued behind it is granted before it, and from its grant the queue is held as by hold() until `unhold`.
+   */
+  async acquireAlone(userId: number, signal?: AbortSignal): Promise<{ release: ReleaseSlot; unhold: ReleaseSlot }> {
+    const { release, unhold } = await this.#enqueue(userId, true, signal);
+    return { release, unhold: unhold! };
+  }
+
+  #enqueue(userId: number, alone: boolean, signal?: AbortSignal): Promise<{ release: ReleaseSlot; unhold: ReleaseSlot | null }> {
     if (signal?.aborted) return Promise.reject(signal.reason);
     return new Promise((resolve, reject) => {
       const onAbort = (): void => {
         const index = this.#waiting.indexOf(waiter);
         if (index !== -1) this.#waiting.splice(index, 1);
         reject(signal?.reason);
+        // What waited behind it may go now.
+        this.#dispatch();
       };
       const waiter: Waiter = {
         userId,
         since: Date.now(),
-        grant: (release) => {
+        alone,
+        grant: (release, unhold) => {
           signal?.removeEventListener("abort", onAbort);
-          resolve(release);
+          resolve({ release, unhold });
         },
       };
       signal?.addEventListener("abort", onAbort, { once: true });
@@ -113,12 +133,20 @@ export class LlmQueue {
     if (this.#paused || this.#holds > 0) return;
     for (let i = 0; i < this.#waiting.length && this.#inFlight < this.maxConcurrency; ) {
       const waiter = this.#waiting[i]!;
+      if (waiter.alone) {
+        // Nothing behind it goes first; it goes once what is in flight has ended.
+        if (this.#inFlight > 0) return;
+        this.#waiting.splice(i, 1);
+        const unhold = this.hold();
+        waiter.grant(this.#take(waiter.userId), unhold);
+        return;
+      }
       if (this.inFlightFor(waiter.userId) >= this.maxPerUser) {
         i++;
         continue;
       }
       this.#waiting.splice(i, 1);
-      waiter.grant(this.#take(waiter.userId));
+      waiter.grant(this.#take(waiter.userId), null);
     }
   }
 

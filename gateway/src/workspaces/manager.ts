@@ -23,6 +23,7 @@ import {
   type BusyReason,
   type OnlineAccess,
   type PortalDb,
+  type VideoHold,
   type WorkspaceInfo,
   type WorkspaceKind,
   type WorkspaceRef,
@@ -90,6 +91,8 @@ interface WorkspaceManagerOptions {
   /** Which version (and image) of an agent a start uses. */
   versions: Pick<AgentVersions, "selection">;
   llm: LlmQueue;
+  /** The video being made on the AI server as this user sees it (compose.ts), for WorkspaceInfo.videoHold. */
+  videoHold?: (userId: number) => VideoHold | null;
   connections: ConnectionRegistry;
   log: Logger;
   /** Whether the host firewall's fence is loaded (fence.ts: fenceCheck). Online workspaces run only while it says "loaded". */
@@ -228,6 +231,7 @@ export class WorkspaceManager {
   readonly #runtime: ContainerRuntime;
   readonly #versions: Pick<AgentVersions, "selection">;
   readonly #llm: LlmQueue;
+  readonly #videoHold: (userId: number) => VideoHold | null;
   readonly #connections: ConnectionRegistry;
   readonly #log: Logger;
   readonly #now: () => number;
@@ -250,6 +254,7 @@ export class WorkspaceManager {
     this.#runtime = options.runtime;
     this.#versions = options.versions;
     this.#llm = options.llm;
+    this.#videoHold = options.videoHold ?? (() => null);
     this.#connections = options.connections;
     this.#log = options.log;
     this.#fenceCheck = options.fence;
@@ -376,6 +381,7 @@ export class WorkspaceManager {
       memoryBytes: active ? entry.memoryBytes : null,
       connections: this.#connections.count(userId),
       llmInFlight: this.#llm.inFlightFor(userId),
+      videoHold: this.#videoHold(userId),
       busy: activity?.busy ?? false,
       busyReason: activity?.busyReason ?? null,
       stopPending: active && entry.stopPending,

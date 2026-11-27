@@ -49,8 +49,8 @@ test("the dsh patch: every model through the gateway, the default model, search 
             baseURL: `${SERVICE}/llm/v1`,
             apiKeyEnv: "PORTAL_LLM_KEY",
             cacheRetention: "none",
-            timeoutMs: 3_600_000,
-            streamIdleTimeoutMs: 3_600_000,
+            timeoutMs: 86_400_000,
+            streamIdleTimeoutMs: 86_400_000,
             compat: {
               supportsStore: false,
               supportsDeveloperRole: false,

@@ -23,6 +23,21 @@ export interface UpdateDrain {
   video: boolean;
 }
 
+/**
+ * A video job holding the AI server (media.json's video): the gateway's queue grants no LLM request until its video
+ * is downloaded, so the workspace page tells the person why their prompt waits.
+ */
+export interface VideoHold {
+  /** How long the job has run, in seconds. */
+  elapsedSeconds: number;
+  /** Percent done, as the video server reports it; null before it has said. */
+  progress: number | null;
+  /** The video is this person's own. */
+  own: boolean;
+  /** This person's requests waiting behind it. */
+  waiting: number;
+}
+
 /** GET /control/workspaces → workspaces[], GET /control/workspaces/:id, and the answers of start, stop, attach, release. */
 export interface WorkspaceInfo {
   userId: number;
@@ -52,6 +67,8 @@ export interface WorkspaceInfo {
    */
   connections: { owner: number; admin: number };
   llmInFlight: number;
+  /** A video being made on the AI server, which answers nothing else until it is done; null when there is none. */
+  videoHold: VideoHold | null;
   /** The agent is working: it is never stopped for inactivity while this is true. */
   busy: boolean;
   busyReason: BusyReason;
@@ -491,8 +508,10 @@ export interface HostLive {
 
 /** unloaded: behind llama-swap, the LLM is stopped while the image models run, or is starting again. */
 export type EngineState = "ready" | "loading" | "unloaded" | "offline" | "unknown";
-/** image: an image model is making an image for the request (behind llama-swap, while the LLM is stopped). */
-export type SessionPhase = "preparing" | "reading" | "writing" | "image";
+/** What the image and media models make (media.json's kinds). */
+export type GenerationKind = "image" | "video" | "music" | "speech" | "transcription";
+/** An LLM request's phase, or the kind of model making something else: an image, or one of the media models'. */
+export type SessionPhase = "preparing" | "reading" | "writing" | GenerationKind;
 
 /** One engine session working on a request. Token counts and rates are null where unknown. */
 export interface LlmSession {
@@ -502,8 +521,10 @@ export interface LlmSession {
   userName: string | null;
   /** preparing: admitted, nothing processed yet (prompt cache, images); reading: the prompt; writing: the answer. */
   phase: SessionPhase;
-  /** The image model an image request names (one of IMAGE_MODELS); null for the LLM, or when it is not known. */
-  imageModel: string | null;
+  /**
+   * The image or media model the request names (one of media.json's); null for the LLM, or when it is not known. A running video job is a session too, though no request of it is in flight.
+   */
+  model: string | null;
   promptTokens: number | null;
   /** Prompt tokens reused from the engine's prompt cache (not read again). */
   cachedTokens: number | null;
@@ -523,21 +544,32 @@ export interface LlmWaiting {
   /**
    * portal: in the gateway's queue (limits, or a paused queue); engine: forwarded, the engine has no free session;
    * swap: forwarded, behind llama-swap the model it needs starts once the other model's requests are done (an image
-   * request while the LLM has requests, an LLM request while images are made).
+   * request while the LLM has requests, an LLM request while images are made); video: in the gateway's queue, which
+   * grants nothing until the video being made is downloaded.
    */
-  stage: "portal" | "engine" | "swap";
+  stage: "portal" | "engine" | "swap" | "video";
 }
 
-/** The image models' work, when the AI server has any (IMAGE_MODELS). */
-export interface LlmImages {
-  /** Image requests an image model is making now. */
+/**
+ * The image and media models' work, when the AI server has any (media.json): of one kind, the one being made now (a
+ * video before the others), else the one made last.
+ */
+export interface LlmGeneration {
+  /** null: nothing made since the gateway started, and nothing being made. */
+  kind: GenerationKind | null;
+  /** Requests of that kind being made now, or its video jobs running. */
   making: number;
+  /** The model of the oldest of them; else of the last one finished; null when unknown. */
+  model: string | null;
+  /** The oldest running video job's: percent done (null until its server says) and how long it has run. */
+  video: { progress: number | null; elapsedSeconds: number } | null;
   /**
-   * Seconds per image: the median of the last five finished on the image model that finished one last, each timed
-   * from when the server could start on it (not the wait behind other requests) to its answer, divided by the images
-   * it asked for. One that had to wait for its model to start counts that start too. null until one has finished.
+   * The median time of the last five finished of that kind on the model that finished one last: per image, per
+   * video (from its create to its completion), per request for music, speech and transcription. Each is timed from
+   * when the server could start on it (not the wait behind other requests) to its answer, a model start included
+   * when one was needed. null until one has finished.
    */
-  pace: { model: string | null; secondsPerImage: number } | null;
+  pace: { model: string | null; seconds: number } | null;
 }
 
 export interface LlmLive {
@@ -555,8 +587,10 @@ export interface LlmLive {
   waiting: LlmWaiting[];
   /** null while the LLM is not loaded: it reads and writes nothing then, but that is no rate of 0. */
   totals: { readTps: number | null; writeTps: number | null };
-  /** null without image models. */
-  images: LlmImages | null;
+  /** null without image and media models. */
+  generation: LlmGeneration | null;
+  /** Video jobs the AI server is making; while there is one, the gateway's queue grants nothing. */
+  videoJobs: number;
 }
 
 export interface LiveFrame {

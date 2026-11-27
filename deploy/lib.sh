@@ -127,14 +127,15 @@ build_workspace_image() { # agent version [docker build options...]
   check_workspace_image "$agent" "$version"
 }
 
-# Dies while Admin > Updates runs an update (an agent, Gufo or the AI server's other software), which a rebuild or
-# a gateway restart would break.
+# Dies while Admin > Updates runs an update (an agent, Gufo or the AI server's other software), or while a video is
+# being made (the gateway holds the AI server for it), which a rebuild or a gateway restart would break.
 # (A gateway that doesn't answer runs none. The secret goes to curl on stdin, not on its command line.)
 no_console_update() { # [what to do afterwards]
   local answer
   answer=$(curl -fsS --max-time 20 -H @- "http://127.0.0.1:$(env_get CONTROL_PORT)/control/updates/running" \
     <<<"Authorization: Bearer $(env_get GATEWAY_CONTROL_SECRET)" 2>/dev/null) || return 0
   [[ ! $answer =~ \"running\":\ *true ]] || die "Admin > Updates is running an update: wait for it or cancel it there${1:+; $1}"
+  [[ ! $answer =~ \"video\":\ *true ]] || die "a video is being made on the AI server (Admin > Usage): wait for it${1:+; $1}"
 }
 
 # Docker before 25.0.5 lets containers on internal networks resolve internet names (CVE-2024-29018).

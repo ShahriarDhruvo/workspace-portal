@@ -1,0 +1,38 @@
+[Unit]
+Description=Qwen3-TTS 1.7B Base, text to speech in a voice cloned from a recording; started and stopped by llama-swap
+Documentation=https://github.com/gufo-org/gufo/blob/v0.37.0/docs/models/qwen3-tts.md
+# Runs beside the LLM; llama-swap starts it on demand and the LLM's group stops it. It stops with llama-swap.
+BindsTo=llama-swap.service
+After=llama-swap.service
+
+[Container]
+ContainerName=gufo-tts-clone
+Image=ghcr.io/gufo-org/toolboxes/gufo-runtime@sha256:9548e9946c18cab9d135dd5dc2fad47e7bae0285d6240c100bb36a855bb1d4dc
+Pull=missing
+AddDevice=/dev/kfd
+AddDevice=/dev/dri
+PublishPort=127.0.0.1:18088:8080
+# The weights `gufo model install qwen3-tts` downloaded (docs/GUIDE.md), named by their model id.
+Volume=/models/gufo-models:/models:ro,z
+Environment=GUFO_MODELS_DIR=/models
+HealthCmd=curl -fsS -o /dev/null http://127.0.0.1:8080/ready
+HealthInterval=30s
+HealthTimeout=10s
+HealthRetries=3
+HealthStartupCmd=curl -fsS -o /dev/null http://127.0.0.1:8080/ready
+HealthStartupInterval=2s
+HealthOnFailure=kill
+Notify=healthy
+# The reference recording, a WAV of up to 30 s, comes base64 in the JSON body. 8,192 tokens hold the longest input
+# Gufo takes (16 KiB of text, about 3,300 tokens) with its default 3,000 frames (240 s) of speech; a request whose
+# prompt plus max_new_tokens does not fit fails with 500. Each 4,096 tokens cost 1.3 GiB.
+Exec=gufo serve --host 0.0.0.0 --port 8080 --max-request-bytes 67108864 tts --model qwen3-tts \
+      --served-model-name qwen3-tts-1.7b-clone --context 8192
+
+[Service]
+# Starts once the GPU memory it needs is free beside the LLM: 7 GiB loaded, about 10 GiB from its first buffered
+# WAV of 24 s or more (streamed PCM adds 0.5 GiB).
+ExecStartPre=%h/.local/bin/wait-gpu-memory 10
+Restart=no
+TimeoutStartSec=120
+TimeoutStopSec=60

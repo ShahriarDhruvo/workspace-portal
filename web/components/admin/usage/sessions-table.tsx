@@ -165,12 +165,35 @@ function KindIcon({ kind }: { kind: SessionRow["kind"] }) {
   );
 }
 
-const STATUS_DOTS = { writing: "bg-success", reading: "bg-info", preparing: "bg-info", image: "bg-info", waiting: "bg-warning", idle: "bg-muted-foreground/50" } as const;
-const STATUS_NAMES = { writing: "Writing", reading: "Reading", preparing: "Preparing", image: "Making an image", waiting: "Waiting", idle: "Running" } as const;
+const STATUS_DOTS = {
+  writing: "bg-success",
+  reading: "bg-info",
+  preparing: "bg-info",
+  image: "bg-info",
+  video: "bg-info",
+  music: "bg-info",
+  speech: "bg-info",
+  transcription: "bg-info",
+  waiting: "bg-warning",
+  idle: "bg-muted-foreground/50",
+} as const;
+const STATUS_NAMES = {
+  writing: "Writing",
+  reading: "Reading",
+  preparing: "Preparing",
+  image: "Making an image",
+  video: "Making a video",
+  music: "Making music",
+  speech: "Making speech",
+  transcription: "Transcribing",
+  waiting: "Waiting",
+  idle: "Running",
+} as const;
 const WAITING_TITLES = {
   portal: "In the portal's queue: all sessions are busy",
   engine: "Sent to the engine, not started yet",
   swap: "Sent to the AI server: llama-swap starts the model it needs once the other model's requests are done",
+  video: "In the portal's queue: a video is being made, and nothing else runs until it is downloaded",
 } as const;
 type LiveState = keyof typeof STATUS_DOTS;
 
@@ -178,8 +201,8 @@ type LiveState = keyof typeof STATUS_DOTS;
 function liveState(userId: number, llm: LlmLive): { state: LiveState; title?: string } {
   const own = llm.sessions.filter((session) => session.userId === userId);
   for (const phase of ["writing", "reading", "preparing"] as const) if (own.some((session) => session.phase === phase)) return { state: phase };
-  const image = own.find((session) => session.phase === "image");
-  if (image) return { state: "image", title: image.imageModel ?? undefined };
+  const other = own.find((session) => session.phase !== "writing" && session.phase !== "reading" && session.phase !== "preparing");
+  if (other) return { state: other.phase, title: other.model ?? undefined };
   const waiting = llm.waiting.find((row) => row.userId === userId);
   if (waiting) return { state: "waiting", title: WAITING_TITLES[waiting.stage] };
   return { state: "idle" };

@@ -124,3 +124,66 @@ test("paused: nothing new is granted until resume, requests in flight carry on, 
   assert.equal(queue.inFlight, 0);
   assert.deepEqual(queue.waiting(), []);
 });
+
+test("held: nothing new is granted until every hold ends, and a resume does not end one", async () => {
+  const queue = new LlmQueue(2, 2);
+  const first = queue.hold();
+  const second = queue.hold();
+  assert.equal(queue.held, true);
+  const order: string[] = [];
+  track(queue, 1, order, "a");
+  await settle();
+  queue.pause();
+  queue.resume();
+  await settle();
+  assert.deepEqual(order, [], "an engine update's resume leaves the holds in place");
+  first();
+  first();
+  await settle();
+  assert.deepEqual(order, [], "releasing one hold twice does not end the other");
+  second();
+  await settle();
+  assert.equal(queue.held, false);
+  assert.deepEqual(order, ["a"]);
+});
+
+test("acquireAlone waits for what is in flight, lets nothing behind it go first, and holds the queue once granted", async () => {
+  const queue = new LlmQueue(4, 4);
+  const order: string[] = [];
+  const first = track(queue, 1, order, "chat-before");
+  await settle();
+  let alone: { release: ReleaseSlot; unhold: ReleaseSlot } | null = null;
+  void queue.acquireAlone(2).then((granted) => {
+    order.push("video");
+    alone = granted;
+  });
+  track(queue, 3, order, "chat-after");
+  await settle();
+  assert.deepEqual(order, ["chat-before"], "the video waits for the chat in flight, and the later chat for the video");
+  first.state.release!();
+  await settle();
+  assert.deepEqual(order, ["chat-before", "video"]);
+  assert.equal(queue.held, true, "held from the grant");
+  alone!.release();
+  await settle();
+  assert.deepEqual(order, ["chat-before", "video"], "the create's answer is in, but the job still holds the queue");
+  alone!.unhold();
+  await settle();
+  assert.deepEqual(order, ["chat-before", "video", "chat-after"]);
+});
+
+test("an aborted acquireAlone lets what waited behind it go", async () => {
+  const queue = new LlmQueue(4, 4);
+  const order: string[] = [];
+  const first = track(queue, 1, order, "a");
+  const abort = new AbortController();
+  const video = queue.acquireAlone(2, abort.signal).catch(() => "aborted");
+  track(queue, 3, order, "b");
+  await settle();
+  assert.deepEqual(order, ["a"]);
+  abort.abort();
+  assert.equal(await video, "aborted");
+  await settle();
+  assert.deepEqual(order, ["a", "b"]);
+  first.state.release!();
+});

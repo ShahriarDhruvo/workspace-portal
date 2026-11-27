@@ -40,3 +40,11 @@ skill anthropics/skills e4bb5d960d87126ff3b3a8af1a104b7db67560ba 287d5d39770a929
 skill vercel-labs/agent-skills 5a37a6329fbad3666c3207392a6a7c0110e92efb 3fa11f3c03f7506ac164a4f9f41c296e1a62ca6fe6c035347861489a8ccf6f5a skills/react-best-practices
 skill shadcn-ui/ui 055aa6b7837b1808456a24beb4c97a677864aa82 3c58f5aee57e9079576eccb1a0b93ec559c458e166bdb250c274b983a4ac9e78 skills/shadcn
 skill mattpocock/skills d65391149dbb5fe76478e76fa8d5122b2aa5a70e 1bd2d67bf2c909de9773606aab6fce367e1813392b3a2fcd286047385b1b76c3 skills/engineering/research
+
+# The portal's own: the media tools (the settings name them only when the AI server has media models) and the skill
+# that says how to make a piece with them.
+here=$(dirname "$0")
+install -D -m 0644 "$here/media-tools/index.js" "$share/plugins/media/index.js"
+install -D -m 0644 "$here/media-tools/lib.js" "$share/plugins/media/lib.js"
+install -D -m 0644 "$here/media-tools/package.json" "$share/plugins/media/package.json"
+install -D -m 0644 "$here/media-skill/SKILL.md" "$share/skills/media-production/SKILL.md"

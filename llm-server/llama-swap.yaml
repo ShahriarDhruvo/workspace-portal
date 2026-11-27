@@ -1,8 +1,12 @@
-# llama-swap on the AI server: one address (port 8080) for the LLM and the two image models, which do not fit in
-# memory together. A request names its model; llama-swap starts that model's Gufo unit and, when the model belongs
-# to the other group, first stops the running one. It waits for requests in flight to finish before it stops a
-# model, and holds new requests while it swaps. Goes to ~/.config/llama-swap/config.yaml (docs/GUIDE.md).
-# Reference: https://github.com/mostlygeek/llama-swap/blob/v276/docs/config.example.yaml
+# llama-swap on the AI server: one address (port 8080) for the LLM, the two image models and the media models,
+# which do not fit in memory together. A request names its model; llama-swap starts that model's unit and, when the
+# model belongs to an exclusive group, first stops the models of the other groups. The everyday speech models are the
+# exception: they start beside whatever runs, the LLM included (group `speech`). It waits for requests in flight to
+# finish before it stops a model, and holds new requests while it swaps. A video job runs after the request that
+# created it has ended, so llama-swap would stop the video model for the next request; the portal's gateway sends
+# none until the job's video is downloaded (gateway/src/service/video-jobs.ts). Goes to
+# ~/.config/llama-swap/config.yaml (docs/GUIDE.md).
+# Reference: https://github.com/mostlygeek/llama-swap/blob/v277/docs/config.example.yaml
 
 # Covers the LLM's longest load stage (the first start after an update hashes 86 GB, about 72 s). llama-swap also
 # gives a model it stops for a swap this long to exit.
@@ -45,6 +49,75 @@ models:
     cmdStop: systemctl --user stop gufo-image.service
     proxy: http://127.0.0.1:18081
     checkEndpoint: /ready
+  # The media models (llm-server/media/ and the gufo-*.container quadlets), as llm-server/media.json names them.
+  # The portal reaches video and music at /upstream/<id>/v1/... (MEDIA_MODEL_PATH): llama-swap routes no /v1/videos, nor
+  # the portal's /v1/audio/music. Speech and transcriptions go to llama-swap's own /v1/audio routes, which pick the
+  # model by the request's `model`.
+  minimax-h3:
+    name: MiniMax H3 (video with sound)
+    cmd: systemctl --user start --wait gufo-video.service
+    cmdStop: systemctl --user stop gufo-video.service
+    proxy: http://127.0.0.1:18083
+    checkEndpoint: /ready
+  fish-s2-pro:
+    name: Fish Audio S2-Pro (speech)
+    cmd: systemctl --user start --wait fish-speech.service
+    cmdStop: systemctl --user stop fish-speech.service
+    proxy: http://127.0.0.1:18084
+    checkEndpoint: /ready
+  sov-transcribe-1:
+    name: SOV-Transcribe-1 (transcription)
+    cmd: systemctl --user start --wait vllm-sov.service
+    cmdStop: systemctl --user stop vllm-sov.service
+    proxy: http://127.0.0.1:18085
+    checkEndpoint: /health
+  # Both XL models in one process: the request's model (base, or the turbo alias) picks one.
+  acestep-1.5-xl-base:
+    name: ACE-Step 1.5 XL (music)
+    aliases: [acestep-1.5-xl-turbo]
+    cmd: systemctl --user start --wait acestep.service
+    cmdStop: systemctl --user stop acestep.service
+    proxy: http://127.0.0.1:18086
+    checkEndpoint: /ready
+  # Everyday speech (Gufo's Qwen3-TTS and Qwen3-ASR), beside the LLM. The portal reaches the WebSockets
+  # (/v1/audio/speech/stream, /v1/realtime) at /upstream/<id>/...: llama-swap routes neither under /v1.
+  qwen3-tts-1.7b:
+    name: Qwen3-TTS 1.7B CustomVoice (speech)
+    cmd: systemctl --user start --wait gufo-tts.service
+    cmdStop: systemctl --user stop gufo-tts.service
+    proxy: http://127.0.0.1:18087
+    checkEndpoint: /ready
+    ttl: 300
+  qwen3-tts-1.7b-clone:
+    name: Qwen3-TTS 1.7B Base (voice cloning)
+    cmd: systemctl --user start --wait gufo-tts-clone.service
+    cmdStop: systemctl --user stop gufo-tts-clone.service
+    proxy: http://127.0.0.1:18088
+    checkEndpoint: /ready
+    ttl: 300
+  qwen3-tts-1.7b-design:
+    name: Qwen3-TTS 1.7B VoiceDesign (designed voices)
+    cmd: systemctl --user start --wait gufo-tts-design.service
+    cmdStop: systemctl --user stop gufo-tts-design.service
+    proxy: http://127.0.0.1:18089
+    checkEndpoint: /ready
+    ttl: 300
+  qwen3-asr-1.7b:
+    name: Qwen3-ASR 1.7B (transcription)
+    cmd: systemctl --user start --wait gufo-asr.service
+    cmdStop: systemctl --user stop gufo-asr.service
+    proxy: http://127.0.0.1:18090
+    checkEndpoint: /ready
+    ttl: 300
+  # LTX-2.5 22B distilled, the fast video model (llm-server/media/ltx.service), once its weights are downloaded
+  # (docs/GUIDE.md): uncomment it, add it to the `media` group and to llm-server/media.json's video.fast, and install
+  # that with deploy/models.sh.
+  # ltx-2.5-distilled:
+  #   name: LTX-2.5 22B distilled (video with sound)
+  #   cmd: systemctl --user start --wait ltx.service
+  #   cmdStop: systemctl --user stop ltx.service
+  #   proxy: http://127.0.0.1:18091
+  #   checkEndpoint: /ready
 
 routing:
   router:
@@ -61,6 +134,22 @@ routing:
           swap: false
           exclusive: true
           members: [Qwen-Image-2.1-Turbo, Qwen-Image-2.1]
+        # One media model at a time, with nothing beside it but an everyday speech model: H3 holds up to 40 GiB while
+        # it denoises, and vLLM takes the cache it is given (vllm-sov.container caps it so one speech model fits).
+        media:
+          swap: true
+          exclusive: true
+          members: [minimax-h3, fish-s2-pro, sov-transcribe-1, acestep-1.5-xl-base]
+        # The everyday speech models, one at a time beside the LLM: it keeps running, and a swap within the group
+        # takes about 2.5 s. Two together leave under 12 GiB free (9.8 GiB measured) and three exceed the GPU's
+        # eight compute queues (about 23 W more at idle). Persistent: without it any request to a model of an
+        # exclusive group, the LLM's included (the portal reads its /slots twice a second), stops the speech model,
+        # and every speech request starts it again. Each stops after five idle minutes instead (ttl).
+        speech:
+          swap: true
+          exclusive: false
+          persistent: true
+          members: [qwen3-tts-1.7b, qwen3-tts-1.7b-clone, qwen3-tts-1.7b-design, qwen3-asr-1.7b]
 
 hooks:
   on_startup:

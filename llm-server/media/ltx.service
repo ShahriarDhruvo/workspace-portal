@@ -1,0 +1,26 @@
+[Unit]
+Description=LTX-2.5 22B distilled, text or keyframes to video with sound, Gufo's video job API on 127.0.0.1:18091; started and stopped by llama-swap
+Documentation=https://github.com/Lightricks/LTX-2/tree/v1.6.3
+BindsTo=llama-swap.service
+After=llama-swap.service
+
+[Service]
+EnvironmentFile=/etc/ai-studio/cache.env
+# TunableOp tunes every new GEMM shape, and each video length and size brings new ones. UnsetEnvironment= is applied
+# last; Environment= could not override the EnvironmentFile.
+UnsetEnvironment=PYTORCH_TUNABLEOP_ENABLED
+# MIOpen's heuristic choice of convolution kernels instead of benchmarking them for every new shape.
+Environment=MIOPEN_FIND_MODE=FAST
+# No progress bars in the journal.
+Environment=TQDM_DISABLE=1
+Environment=PYTHONUNBUFFERED=1
+# current links to the installed version (llm-server/apps/ltx/install.sh), switched by portal-hostd.
+WorkingDirectory=/opt/ai-studio/ltx/current
+# Starts only once the model llama-swap stopped has let go of its GPU memory. The weights it keeps on the GPU are
+# 66.2 GiB (the five files' sizes with the conv VAE); the rest is room to work, estimated, not yet measured.
+ExecStartPre=%h/.local/bin/wait-gpu-memory 85
+ExecStart=/opt/ai-studio/ltx/current/.venv/bin/python /opt/ai-studio/ltx/current/ltx-videos.py --root /var/cache/ai-studio/ltx-videos
+Restart=no
+# Covers wait-gpu-memory's 60 s; llama-swap then polls /ready.
+TimeoutStartSec=90
+TimeoutStopSec=30

@@ -15,7 +15,7 @@ import {
   type AgentKind,
   type WorkspaceKind,
 } from "@portal/core";
-import { driverFor } from "@portal/harnesses";
+import { driverFor, imageModels, loadMediaRegistry, type MediaRegistry } from "@portal/harnesses";
 
 /**
  * What one kind of workspace (Private, Online) has to itself: its network. Every agent's workspace of the kind is on
@@ -130,10 +130,17 @@ export interface Config {
     apiKey: string;
     maxConcurrency: number;
     maxConcurrencyPerUser: number;
-    /** Image models the AI server serves on /v1/images/*, the default first (IMAGE_MODELS); empty: none. */
-    imageModels: string[];
     /** Where the AI server reports its sessions, llama.cpp style (LLM_SLOTS_PATH). */
     slotsPath: string;
+    /** The image and media models, a fast and a quality one of each kind (config/models/media.json), read at start. */
+    media: MediaRegistry;
+    /** The image models the AI server serves on /v1/images/*, fast first: the registry's. */
+    imageModels: string[];
+    /**
+     * Where the AI server serves one model's own routes, with `{model}` for its id (MEDIA_MODEL_PATH): behind
+     * llama-swap /upstream/{model}, which starts that model; "": every model at the server's root.
+     */
+    mediaModelPath: string;
   };
   search: SearchConfig;
   reader: ReaderConfig;
@@ -304,6 +311,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   };
 
   const dataDir = read("PORTAL_DATA_DIR", "/srv/workspace-portal", (value) => (path.isAbsolute(value) ? path.resolve(value) : undefined), "be an absolute path");
+  const media = mediaRegistry(path.join(dataDir, "config", "models", "media.json"), problems);
   const agents: readonly AgentKind[] = read(
     "WORKSPACE_AGENTS",
     "qwen,dsh,opencode",
@@ -335,8 +343,15 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
       apiKey: text("LLM_API_KEY", ""),
       maxConcurrency: int("LLM_MAX_CONCURRENCY", 3, 1),
       maxConcurrencyPerUser: int("LLM_MAX_CONCURRENCY_PER_USER", 2, 1),
-      imageModels: list("IMAGE_MODELS", "none", /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/, "model ids"),
       slotsPath: read("LLM_SLOTS_PATH", "/slots", (value) => (/^\/[^\s?#]*$/.test(value) ? value : undefined), "be a path such as /slots"),
+      media,
+      imageModels: imageModels(media),
+      mediaModelPath: read(
+        "MEDIA_MODEL_PATH",
+        "none",
+        (value) => (value.toLowerCase() === "none" ? "" : /^(?:\/[^\s?#/{}]+)*\/\{model\}(?:\/[^\s?#/{}]+)*$/.test(value) ? value : undefined),
+        "be a path with {model} in it, such as /upstream/{model}, or none",
+      ),
     },
     search: {
       url: url("SEARXNG_URL", "http://127.0.0.1:8888"),
@@ -483,4 +498,17 @@ function networkProblems(config: Config): string[] {
   const [a, b] = [parseCidr(priv.subnet), parseCidr(online.subnet)];
   if (a && b && (a.has(b.address) || b.has(a.address))) problems.push(`WORKSPACE_SUBNET (${priv.subnet}) and ONLINE_SUBNET (${online.subnet}) must not overlap`);
   return problems;
+}
+
+/**
+ * The media registry, or an empty one with the reasons in `problems`. It took the place of IMAGE_MODELS, which
+ * deploy/install.sh moves into it.
+ */
+function mediaRegistry(file: string, problems: string[]): MediaRegistry {
+  try {
+    return loadMediaRegistry(file);
+  } catch (error) {
+    problems.push((error as Error).message);
+    return {};
+  }
 }

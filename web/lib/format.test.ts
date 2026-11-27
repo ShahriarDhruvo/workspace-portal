@@ -72,6 +72,7 @@ const running: WorkspaceInfo = {
   memoryBytes: 412 * 1024 * 1024,
   connections: { owner: 1, admin: 0 },
   llmInFlight: 0,
+  videoHold: null,
   busy: false,
   busyReason: null,
   stopPending: false,

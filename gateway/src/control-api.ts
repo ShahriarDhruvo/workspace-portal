@@ -18,6 +18,7 @@ import type { LiveHub } from "./monitor/live.ts";
 import type { EnergyPrices } from "./monitor/energy-prices.ts";
 import type { LlmRequests } from "./monitor/llm-requests.ts";
 import { isLlmApi, serveLlmApi } from "./service/llm-api.ts";
+import type { VideoJobs } from "./service/video-jobs.ts";
 import type { LlmQueue } from "./service/llm-queue.ts";
 import type { Logger } from "./lib/log.ts";
 import type { SessionCache } from "./proxy/session-cache.ts";
@@ -33,6 +34,7 @@ interface ControlDeps {
   apps: AppUpdater;
   llm: LlmQueue;
   requests: LlmRequests;
+  videoJobs: VideoJobs;
   live: LiveHub;
   prices: EnergyPrices;
   sessions: SessionCache;
@@ -78,14 +80,15 @@ const ROUTES: Route[] = [
   // Answers once both sources are done (one downloaded in the last 10 minutes is not asked again).
   { method: "POST", pattern: /^\/control\/energy-prices\/refresh$/, handler: (deps) => deps.prices.refresh() },
   {
-    // For deploy/install.sh and update-image.sh: answers at once (no registry or hostd call).
+    // For deploy/install.sh, update-image.sh and models.sh: answers at once (no registry or hostd call). A video job
+    // is no update, but a gateway restart loses its hold on the AI server.
     method: "GET",
     pattern: /^\/control\/updates\/running$/,
     handler: (deps) => {
       const agent = deps.updater.job()?.finishedAt === null;
       const engine = deps.engine.running;
       const apps = deps.apps.running;
-      return { running: agent || engine || apps, agent, engine, apps };
+      return { running: agent || engine || apps, agent, engine, apps, video: deps.videoJobs.running > 0 };
     },
   },
   { method: "GET", pattern: /^\/control\/agents\/versions$/, handler: (deps, req) => deps.updater.overview({ refresh: query(req).get("refresh") === "1" }) },

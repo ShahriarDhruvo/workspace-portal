@@ -3,7 +3,8 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { formatNumber } from "@/lib/live-format";
-import type { LlmImages, LlmLive, LlmTotalsPoint } from "@portal/core/wire";
+import type { LlmGeneration, LlmLive, LlmTotalsPoint } from "@portal/core/wire";
+import { generationTileCopy } from "@/lib/generation-tile";
 import type { SessionPage } from "@/lib/workspace-sessions";
 import { cn } from "@/lib/utils";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -30,24 +31,36 @@ const TOTALS: Record<Total, { label: string; hint: string; color: string }> = {
   writeTps: { label: "Write", hint: "Answer tokens per second, all sessions writing. None while the LLM is not loaded", color: "var(--chart-2)" },
 };
 // The header's figures: under the title in a narrow card, beside it in a wide one. Top-aligned, so that labels and
-// figures line up beside the Images tile's extra line.
+// figures line up beside the generation tile's extra line.
 const HEADER_ROW = "flex flex-col items-stretch gap-0 border-b px-0 @3xl/llm:flex-row";
 const HEADER_TILE = "flex flex-1 flex-col gap-1 border-t px-4 py-3 @3xl/llm:min-w-40 @3xl/llm:border-t-0 @3xl/llm:border-l @3xl/llm:px-6";
 const TOTAL_KEYS = Object.keys(TOTALS) as Total[];
 
-/** The engine's state, or "Making images" while it is stopped for image models at work. */
+/** What the models other than the LLM are making, by kind, in the order the badge names them. */
+const WORK_BADGES = {
+  video: { label: "Making a video", wait: "LLM requests wait in the portal's queue until the video is downloaded, then the LLM starts again." },
+  music: { label: "Making music", wait: "LLM requests wait until the track is done, then the LLM starts again." },
+  speech: { label: "Making speech", wait: "LLM requests wait until the speech is done, then the LLM starts again." },
+  transcription: { label: "Transcribing", wait: "LLM requests wait until the transcript is done, then the LLM starts again." },
+  image: { label: "Making images", wait: "LLM requests wait until the images are done, then the LLM starts again." },
+} as const;
+const WORK_KINDS = Object.keys(WORK_BADGES) as (keyof typeof WORK_BADGES)[];
+
+/** The engine's state, or what is being made ("Making images", "Making a video") while the LLM is stopped for it. */
 function EngineBadge({ llm }: { llm: LlmLive }) {
-  const models = [...new Set(llm.sessions.filter((session) => session.phase === "image").map((session) => session.imageModel ?? "an image model"))];
-  if (llm.engine !== "unloaded" || models.length === 0) return ENGINE_BADGES[llm.engine];
+  const kind = WORK_KINDS.find((work) => llm.sessions.some((session) => session.phase === work));
+  // A video job holds the queue from its start, before llama-swap has stopped the LLM.
+  if (kind === undefined || (llm.engine !== "unloaded" && kind !== "video")) return ENGINE_BADGES[llm.engine];
+  const models = [...new Set(llm.sessions.filter((session) => session.phase === kind).map((session) => session.model ?? `the ${kind} model`))];
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <Badge variant="info" tabIndex={0}>
-          Making images
+          {WORK_BADGES[kind].label}
         </Badge>
       </TooltipTrigger>
       <TooltipContent className="max-w-72">
-        llama-swap stopped the LLM for {models.join(" and ")}. LLM requests wait until the images are done, then the LLM starts again.
+        llama-swap stopped the LLM for {models.join(" and ")}. {WORK_BADGES[kind].wait}
       </TooltipContent>
     </Tooltip>
   );
@@ -64,7 +77,7 @@ const ENGINE_BADGES: Record<LlmLive["engine"], ReactNode> = {
         </Badge>
       </TooltipTrigger>
       <TooltipContent className="max-w-72">
-        llama-swap stopped the LLM to make room for an image model, or is starting it again. The next LLM request starts it.
+        llama-swap stopped the LLM to make room for an image or media model, or is starting it again. The next LLM request starts it.
       </TooltipContent>
     </Tooltip>
   ),
@@ -101,7 +114,7 @@ export function LlmCard({ llm, tokens, now, sessions, sessionsVersion }: LlmCard
               </span>
             </div>
           ))}
-          {llm.images ? <ImagesTile images={llm.images} /> : null}
+          {llm.generation ? <GenerationTile generation={llm.generation} /> : null}
         </div>
       </CardHeader>
       <CardContent className="flex flex-1 flex-col gap-4 p-4">
@@ -146,23 +159,20 @@ export function LlmCard({ llm, tokens, now, sessions, sessionsVersion }: LlmCard
 }
 
 /**
- * The image models' work: images being made, and the seconds an image takes. Their server reports no progress, so
- * these come from the portal's own record of the requests.
+ * The image and media models' work, by the kind being made now or else made last: how many are being made (a video's
+ * percent done), and how long one takes (generation-tile.ts).
  */
-function ImagesTile({ images }: { images: LlmImages }) {
-  const { pace } = images;
-  const hint = pace
-    ? `Image requests being made now. ${formatNumber(pace.secondsPerImage)} s per image: the median of the last five on ${pace.model ?? "an image model"}, each from when it could start (not the wait behind other requests) to its answer, a model start included when one was needed`
-    : "Image requests being made now. Seconds per image show once one has finished";
+function GenerationTile({ generation }: { generation: LlmGeneration }) {
+  const copy = generationTileCopy(generation);
   return (
     // A row of its own under Read and Write in a phone's narrow card.
-    <div title={hint} className={cn(HEADER_TILE, "basis-full @md/llm:basis-auto @md/llm:border-l")}>
-      <span className="text-12 text-muted-foreground">Images</span>
+    <div title={copy.hint} className={cn(HEADER_TILE, "basis-full @md/llm:basis-auto @md/llm:border-l")}>
+      <span className="text-12 text-muted-foreground">{copy.label}</span>
       <span className="text-24 leading-none font-semibold whitespace-nowrap tabular-nums">
-        {images.making}
-        <span className="ml-1 text-13 font-normal text-muted-foreground">in progress</span>
+        {copy.figure}
+        <span className="ml-1 text-13 font-normal text-muted-foreground">{copy.suffix}</span>
       </span>
-      <span className="text-12 whitespace-nowrap text-muted-foreground tabular-nums">{pace ? `${formatNumber(pace.secondsPerImage)} s per image` : "no image yet"}</span>
+      <span className="text-12 whitespace-nowrap text-muted-foreground tabular-nums">{copy.detail}</span>
     </div>
   );
 }

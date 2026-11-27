@@ -33,9 +33,15 @@ export const BROWSER_MCP = {
 export const BROWSER_TIMEOUT_MS = 120_000;
 export const SEARCH_TIMEOUT_MS = 60_000;
 /**
- * An agent's own limits on a model request, where its settings take them: as long as Qwen Code's
- * (generationConfig.timeout and streamIdleTimeoutMs in models/system-defaults.json), because a request may wait in
- * the gateway's queue.
+ * How long an agent waits for a model's answer to start, where its settings take it: as long as Qwen Code's
+ * (generationConfig.timeout in models/system-defaults.json). A request waits in the gateway's queue, in the order it
+ * came, for as long as it takes: while a video is made nothing else runs, for up to 12 hours (VideoJobs' maxRunMs),
+ * and other requests or videos may be ahead of it. An agent that gave up would ask again at the back of the queue.
+ */
+export const LLM_WAIT_MS = 86_400_000;
+/**
+ * How long an answer under way may go without a word, where an agent's settings take it apart from the wait: as long
+ * as Qwen Code's (generationConfig.streamIdleTimeoutMs).
  */
 export const LLM_TIMEOUT_MS = 3_600_000;
 

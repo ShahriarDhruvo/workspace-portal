@@ -86,12 +86,12 @@ export const opencodeDriver: AgentDriver = {
     return {
       [OPENCODE_CONFIG_FILE]: renderOpencodeConfig({
         catalog: modelCatalog(config),
-        imageModels: config.llm.imageModels,
+        media: config.llm.media,
         serviceBaseUrl: serviceBaseUrl(config, kind),
         browser: config.workspace.browser,
         kind,
       }),
-      [INSTRUCTIONS_FILE]: agentInstructions(config, workspace, opencodeFacts(config.llm.imageModels)),
+      [INSTRUCTIONS_FILE]: agentInstructions(config, workspace, opencodeFacts(config.llm.media)),
     };
   },
 

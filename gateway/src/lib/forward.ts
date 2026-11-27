@@ -11,6 +11,8 @@ interface ForwardOptions {
   headers: HeaderMap;
   /** More body bytes than this fail the request with an HttpError (413). */
   bodyLimit?: number;
+  /** The body to send, already read from the request (whose own body is then not read again); its length is sent. */
+  body?: Buffer;
   /** Sees every chunk of the request body on its way upstream. It must not throw or keep the chunk from flowing. */
   observeBody?: (chunk: Buffer) => void;
   responseHeaders: (upstream: IncomingMessage) => HeaderMap;
@@ -66,6 +68,10 @@ export function forward(req: IncomingMessage, res: ServerResponse, options: Forw
     upstream.on("error", fail);
 
     req.on("error", fail);
+    if (options.body !== undefined) {
+      upstream.end(options.body);
+      return;
+    }
     const body: Readable = options.bodyLimit === undefined ? req : req.pipe(byteLimit(options.bodyLimit));
     if (body !== req) body.on("error", fail);
     // Attached in the same tick as the pipe, so both see every chunk.

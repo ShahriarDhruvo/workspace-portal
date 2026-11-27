@@ -8,13 +8,15 @@ ARG PLAYWRIGHT_MCP_VERSION=0.0.86
 ARG PNPM_VERSION=12.23.0
 # While building only: npm's cache and logs go to /tmp, a tmpfs in every step that runs npm.
 ARG NPM_CONFIG_CACHE=/tmp/npm
-# build-essential and gdb: C and C++. libicu72: what PowerShell needs of the system.
+# build-essential and gdb: C and C++. libicu72: what PowerShell needs of the system. ffmpeg, sox and imagemagick: for
+# cutting, mixing and checking what the media tools make (harnesses/opencode/image/media-skill).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates curl file git jq less openssh-client procps ripgrep tini unzip xz-utils zip \
       build-essential gdb \
       python3 python3-venv \
       libicu72 \
+      ffmpeg sox imagemagick \
       chromium fonts-liberation fonts-noto-core fonts-noto-color-emoji \
  && rm -rf /var/lib/apt/lists/* \
  && userdel --remove node \

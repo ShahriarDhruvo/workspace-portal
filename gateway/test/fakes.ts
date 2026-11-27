@@ -112,6 +112,8 @@ export interface RecordedRequest {
   method: string;
   url: string;
   headers: http.IncomingHttpHeaders;
+  /** The body as text, where the fake reads it (the AI server's). */
+  body?: string;
 }
 
 /** What `GET /health?deep=1` reports; tests change it to simulate the agent working. */
@@ -1021,16 +1023,23 @@ export interface FakeUpstream {
   requests: RecordedRequest[];
   /** Requests whose client went away before the response finished. */
   abandoned: number;
+  /** What a video job of the video model at /upstream/<model>/v1/videos reports, as Gufo's video server does. */
+  videoStatus: "queued" | "in_progress" | "completed" | "failed";
   close(): Promise<void>;
 }
+
+/** The video job API of a model behind llama-swap's /upstream/<model> (Gufo's `serve video`). */
+const VIDEO_ROUTE = /^\/upstream\/[^/]+\/v1\/videos(?:\/(video_[a-z0-9]{24})(\/content)?)?$/;
 
 export const LLM_KEY = "test-llm-key";
 
 /** OpenAI-compatible server: JSON and SSE chat completions with usage, and a model list. */
 export async function startFakeLlm(): Promise<FakeUpstream> {
-  const fake: FakeUpstream = { port: 0, requests: [], abandoned: 0, close: () => closeServer(server) };
+  const fake: FakeUpstream = { port: 0, requests: [], abandoned: 0, videoStatus: "queued", close: () => closeServer(server) };
+  let jobs = 0;
   const server = http.createServer(async (req, res) => {
-    fake.requests.push({ method: req.method ?? "", url: req.url ?? "", headers: req.headers });
+    const record: RecordedRequest = { method: req.method ?? "", url: req.url ?? "", headers: req.headers };
+    fake.requests.push(record);
     if (req.headers.authorization !== `Bearer ${LLM_KEY}`) {
       res.writeHead(401, { "content-type": "application/json" }).end('{"error":{"message":"bad key"}}');
       return;
@@ -1041,6 +1050,16 @@ export async function startFakeLlm(): Promise<FakeUpstream> {
     }
     const chunks: Buffer[] = [];
     for await (const chunk of req) chunks.push(chunk as Buffer);
+    record.body = Buffer.concat(chunks).toString("utf8");
+    const video = VIDEO_ROUTE.exec(req.url ?? "");
+    if (video !== null) {
+      const [, id, content] = video;
+      const answer = (value: unknown) => void res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(value));
+      if (req.method === "POST" && id === undefined) return answer({ id: `video_${String(++jobs).padStart(24, "0")}`, object: "video", status: "queued", progress: 0 });
+      if (req.method === "GET" && content !== undefined) return void res.writeHead(200, { "content-type": "video/mp4" }).end("mp4");
+      if (req.method === "GET") return answer({ id, object: "video", status: fake.videoStatus, progress: fake.videoStatus === "completed" ? 100 : 40 });
+      if (req.method === "DELETE") return answer({ id, object: "video.deleted", deleted: true });
+    }
     const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}") as { stream?: boolean; hold?: boolean; fail?: boolean };
     if (body.fail) return void res.writeHead(500, { "content-type": "application/json" }).end('{"error":{"message":"out of memory"}}');
     res.on("close", () => {

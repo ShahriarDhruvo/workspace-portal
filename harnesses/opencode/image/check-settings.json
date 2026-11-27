@@ -8,7 +8,77 @@
   ],
   "plugins": [
     "/usr/local/share/workspace-portal/opencode/plugins/superpowers",
-    "/usr/local/share/workspace-portal/opencode/plugins/safety-net"
+    "/usr/local/share/workspace-portal/opencode/plugins/safety-net",
+    {
+      "package": "/usr/local/share/workspace-portal/opencode/plugins/media",
+      "options": {
+        "baseURL": "http://service.invalid:4001/llm/v1",
+        "media": {
+          "image": {
+            "fast": {
+              "model": "Check-Image",
+              "name": "Check-Image",
+              "time": "",
+              "bestFor": "",
+              "besideLlm": false,
+              "request": {}
+            }
+          },
+          "video": {
+            "fast": {
+              "model": "Check-Video",
+              "name": "Check-Video",
+              "time": "",
+              "bestFor": "",
+              "besideLlm": false,
+              "request": {},
+              "seconds": {
+                "min": 1,
+                "max": 5
+              },
+              "sizes": [
+                "512x512"
+              ]
+            }
+          },
+          "music": {
+            "fast": {
+              "model": "Check-Music",
+              "name": "Check-Music",
+              "time": "",
+              "bestFor": "",
+              "besideLlm": false,
+              "request": {}
+            }
+          },
+          "speech": {
+            "fast": {
+              "model": "Check-Speech",
+              "name": "Check-Speech",
+              "time": "",
+              "bestFor": "",
+              "besideLlm": false,
+              "request": {},
+              "api": "qwen3-tts",
+              "voices": {
+                "check": "a test voice"
+              }
+            }
+          },
+          "transcription": {
+            "fast": {
+              "model": "Check-Transcription",
+              "name": "Check-Transcription",
+              "time": "",
+              "bestFor": "",
+              "besideLlm": false,
+              "request": {},
+              "subtitles": true
+            }
+          }
+        }
+      }
+    }
   ],
   "skills": [
     "/usr/local/share/workspace-portal/opencode/skills"
@@ -27,7 +97,7 @@
       "settings": {
         "baseURL": "http://service.invalid:4001/llm/v1",
         "timeout": false,
-        "headerTimeout": 3600000,
+        "headerTimeout": 86400000,
         "chunkTimeout": 3600000
       },
       "models": {

@@ -2,6 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AGENT_KINDS, agentPortFor, agentPortRange, PREVIEW_PORT_OFFSET, WORKSPACE_BLOCK, WORKSPACE_KINDS, WORKSPACE_REFS, workspaceNumber } from "@portal/core";
 import { driverFor } from "@portal/harnesses";
@@ -73,8 +75,8 @@ test("values are parsed and normalised", () => {
     AGENT_PORT_BASE: "7000",
     AGENT_PORT_COUNT: "10",
     LLM_UPSTREAM_URL: "http://llm.internal:8000/",
-    IMAGE_MODELS: " Qwen-Image-2.1-Turbo, Qwen-Image-2.1,Qwen-Image-2.1",
     LLM_SLOTS_PATH: "/upstream/qwen3.8-flash-next/slots",
+    MEDIA_MODEL_PATH: "/upstream/{model}",
     SEARXNG_URL: "https://search.internal/searx/",
     SEARXNG_AUTHORIZATION: " Basic dXNlcjpwYXNz ",
     SEARXNG_TIMEOUT_SECONDS: "5",
@@ -100,8 +102,10 @@ test("values are parsed and normalised", () => {
   assert.equal(config.modelsDir, "/data/portal/config/models");
   assert.deepEqual([config.agentPortBase, config.agentPortCount], [7000, 10]);
   assert.equal(config.llm.upstreamUrl, "http://llm.internal:8000");
-  assert.deepEqual(config.llm.imageModels, ["Qwen-Image-2.1-Turbo", "Qwen-Image-2.1"]);
+  assert.deepEqual(config.llm.imageModels, [], "no media.json: no image models");
+  assert.deepEqual(config.llm.media, {});
   assert.equal(config.llm.slotsPath, "/upstream/qwen3.8-flash-next/slots");
+  assert.equal(config.llm.mediaModelPath, "/upstream/{model}");
   assert.deepEqual(config.search, {
     url: "https://search.internal/searx",
     authorization: "Basic dXNlcjpwYXNz",
@@ -135,6 +139,30 @@ test("values are parsed and normalised", () => {
   assert.equal(config.maxBusyMs, 0, "0 turns the limit off");
 });
 
+test("the image and media models come from config/models/media.json", () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "portal-config-"));
+  try {
+    fs.mkdirSync(path.join(dataDir, "config", "models"), { recursive: true });
+    const file = path.join(dataDir, "config", "models", "media.json");
+    fs.writeFileSync(
+      file,
+      `// The reference server's, cut short.
+      { "image": { "fast": { "model": "Qwen-Image-2.1-Turbo" }, "quality": { "model": "Qwen-Image-2.1", "time": "about 95 s" } },
+        "transcription": { "fast": { "model": "qwen3-asr-1.7b", "besideLlm": true } } }`,
+    );
+    const config = loadConfig({ ...secrets, PORTAL_DATA_DIR: dataDir });
+    assert.deepEqual(config.llm.imageModels, ["Qwen-Image-2.1-Turbo", "Qwen-Image-2.1"]);
+    assert.equal(config.llm.media.image?.quality?.time, "about 95 s");
+    assert.equal(config.llm.media.transcription?.fast?.besideLlm, true);
+    fs.writeFileSync(file, `{ "video": { "fast": { "model": "minimax-h3" } } }`);
+    assert.deepEqual(problems({ ...secrets, PORTAL_DATA_DIR: dataDir }), [
+      `the media registry ${file} is not valid:\n  - video.fast.sizes is required: the sizes it makes, such as ["512x512", "1344x768"]\n  - video.fast.seconds is required: { "min": 5, "max": 14 }, the clip lengths it makes`,
+    ]);
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
 test("every problem is reported at once", () => {
   assert.deepEqual(
     problems({
@@ -142,7 +170,7 @@ test("every problem is reported at once", () => {
       AGENT_PORT_BASE: "70000",
       AGENT_PORT_COUNT: "1",
       LLM_MAX_CONCURRENCY: "0",
-      IMAGE_MODELS: "Qwen-Image-2.1, bad model",
+      MEDIA_MODEL_PATH: "/upstream",
       LLM_SLOTS_PATH: "slots",
       PORTAL_DATA_DIR: "data",
       SEARXNG_URL: "ftp://search",
@@ -159,8 +187,8 @@ test("every problem is reported at once", () => {
       'AGENT_PORT_COUNT must be an integer >= 2 (got "1")',
       "GATEWAY_CONTROL_SECRET must be at least 16 characters",
       'LLM_MAX_CONCURRENCY must be an integer >= 1 (got "0")',
-      'IMAGE_MODELS must be a comma-separated list of model ids (got "bad model")',
       'LLM_SLOTS_PATH must be a path such as /slots (got "slots")',
+      'MEDIA_MODEL_PATH must be a path with {model} in it, such as /upstream/{model}, or none (got "/upstream")',
       'SEARXNG_URL must be an http(s) URL (got "ftp://search")',
       'SEARCH_FALLBACK_ENGINES must be a comma-separated list of SearXNG engine names (got "bad&engine")',
       'READER_URL must be an http(s) URL (got "reader:4003")',

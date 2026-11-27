@@ -597,7 +597,9 @@ test("control API: health, stats, workspaces, errors", async () => {
     "stopPending",
     "stopReason",
     "userId",
+    "videoHold",
   ]);
+  assert.equal(info.videoHold, null, "no video is being made");
 
   const list = json<{ workspaces: WorkspaceInfo[] }>(await g.control("GET", "/control/workspaces"));
   assert.deepEqual(list.workspaces.map((w) => w.userId), [alice], "only users with a row");
@@ -968,6 +970,96 @@ test("the LLM proxy only offers generation, images, embeddings and the model lis
   }
   g.caller.userId = null;
 });
+
+const MEDIA = {
+  video: {
+    fast: { model: "ltx-2.5-distilled", sizes: ["512x512"], seconds: { min: 1, max: 20 } },
+    quality: { model: "minimax-h3", sizes: ["512x512", "1344x768"], seconds: { min: 5, max: 14.375 } },
+  },
+  speech: { fast: { model: "qwen3-tts-1.7b", besideLlm: true, api: "qwen3-tts", voices: { ryan: "male, English" } }, quality: { model: "fish-s2-pro", api: "fish-speech" } },
+};
+
+test("media models: speech goes to the server's own route; video to its model's, read from the body; a video job holds the queue until its video is downloaded", () =>
+  withGateway({ media: MEDIA, env: { MEDIA_MODEL_PATH: "/upstream/{model}" } }, async (m) => {
+    const { alice, bob } = m.ids;
+    m.caller.userId = alice;
+    const post = (path: string, body: unknown = {}) => request(m.ports.service, { method: "POST", path, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+    // llama-swap picks the speech model by the request's own.
+    assert.equal((await post("/llm/v1/audio/speech", { model: "fish-s2-pro", input: "hi" })).status, 200);
+    assert.equal(m.llm.requests.at(-1)!.url, "/v1/audio/speech");
+    assert.equal((await post("/llm/v1/audio/music")).status, 404, "no music models: no route");
+
+    // What the media tools are told: the registry, what is loaded, the video hold.
+    const catalog = json<{ kinds: typeof MEDIA; loaded: unknown; videoHold: unknown }>(await request(m.ports.service, { path: "/llm/v1/media" }));
+    assert.equal(catalog.kinds.video.quality.model, "minimax-h3");
+    assert.equal(catalog.videoHold, null);
+
+    const unknown = await post("/llm/v1/videos", { model: "sora-2", prompt: "a fox" });
+    assert.equal(unknown.status, 400);
+    assert.match(json<{ error: { message: string } }>(unknown).error.message, /^The video models are ltx-2\.5-distilled and minimax-h3/);
+    // No model: the fast one, written into the body.
+    const before = m.llm.requests.length;
+    const fast = json<{ id: string }>(await post("/llm/v1/videos", { prompt: "a fox" })).id;
+    assert.equal(m.llm.requests.at(-1)!.url, "/upstream/ltx-2.5-distilled/v1/videos");
+    assert.equal(JSON.parse(m.llm.requests.at(-1)!.body!).model, "ltx-2.5-distilled");
+    assert.equal(m.llm.requests.length, before + 1);
+    assert.equal((await request(m.ports.service, { method: "DELETE", path: `/llm/v1/videos/${fast}` })).status, 200);
+    assert.equal(m.llm.requests.at(-1)!.url, `/upstream/ltx-2.5-distilled/v1/videos/${fast}`, "a job's requests go to the model that made it");
+
+    const created = await post("/llm/v1/videos", { model: "minimax-h3", prompt: "a fox", seconds: 5 });
+    assert.equal(created.status, 200);
+    const { id } = json<{ id: string }>(created);
+    assert.equal(m.llm.requests.at(-1)!.url, "/upstream/minimax-h3/v1/videos");
+    assert.equal(m.llmQueue.held, true, "the job holds the queue");
+
+    // Another generation waits in the gateway while the job runs; asking about the job does not.
+    const forwarded = m.llm.requests.length;
+    const chat = post("/llm/v1/chat/completions", { messages: [] });
+    await waitFor(() => m.llmQueue.queued === 1, "the chat request to wait in the queue");
+    const status = await request(m.ports.service, { path: `/llm/v1/videos/${id}` });
+    assert.equal(json<{ status: string }>(status).status, "queued");
+    assert.equal(m.llm.requests.filter((entry) => entry.url.includes("/chat/")).length, 0, "the chat request did not reach the AI server");
+    // Each person's workspace page says why: whose video it is, how far along, and their own requests behind it.
+    await waitFor(() => m.info(alice).videoHold?.progress === 40, "the job's progress");
+    assert.deepEqual({ ...m.info(alice).videoHold, elapsedSeconds: 0 }, { elapsedSeconds: 0, progress: 40, own: true, waiting: 1 });
+    assert.deepEqual(pick(m.info(bob).videoHold!, ["own", "waiting"]), { own: false, waiting: 0 });
+
+    m.caller.userId = bob;
+    for (const [method, path] of [["GET", `/llm/v1/videos/${id}`], ["GET", `/llm/v1/videos/${id}/content`], ["DELETE", `/llm/v1/videos/${id}`]] as const) {
+      const reply = await request(m.ports.service, { method, path });
+      assert.equal(reply.status, 404, `another user's ${method} ${path}`);
+      assert.deepEqual(json(reply), { error: { message: "No such video job.", type: "not_found" } });
+    }
+    m.caller.userId = alice;
+
+    m.llm.videoStatus = "completed";
+    await waitFor(() => m.llm.requests.filter((entry) => entry.url === `/upstream/minimax-h3/v1/videos/${id}`).length >= 3, "the gateway to ask about the job");
+    assert.equal(m.llmQueue.held, true, "completed, but its video is not downloaded yet");
+    const video = await request(m.ports.service, { path: `/llm/v1/videos/${id}/content` });
+    assert.equal(video.status, 200);
+    assert.equal(video.body, "mp4");
+    await waitFor(() => !m.llmQueue.held, "the download to end the hold");
+    assert.equal(m.info(bob).videoHold, null);
+    assert.equal((await chat).status, 200, "the waiting request goes on");
+    assert.ok(m.llm.requests.length > forwarded);
+    // Its video again, after the job ended: that loads the video model again, so it waits its turn and has the AI
+    // server to itself.
+    const running = await m.llmQueue.acquire(bob);
+    const late = request(m.ports.service, { path: `/llm/v1/videos/${id}/content` });
+    await waitFor(() => m.llmQueue.queued === 1, "the late download to wait for the running request");
+    running();
+    assert.equal((await late).status, 200);
+    assert.equal(m.llmQueue.held, false, "and holds nothing once sent");
+
+    // A cancelled job ends its hold too.
+    m.llm.videoStatus = "in_progress";
+    const second = json<{ id: string }>(await post("/llm/v1/videos", { model: "minimax-h3", prompt: "a hare", seconds: 5 })).id;
+    assert.equal(m.llmQueue.held, true);
+    assert.equal((await request(m.ports.service, { method: "DELETE", path: `/llm/v1/videos/${second}` })).status, 200);
+    assert.equal(m.llmQueue.held, false);
+    m.caller.userId = null;
+  }));
 
 test("agent and service servers wait at most a minute for request headers, and never time out a request", () => {
   for (const server of [g.createAgentServer(), g.createServiceServer({ kind: "private" })]) {

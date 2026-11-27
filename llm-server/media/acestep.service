@@ -1,0 +1,26 @@
+[Unit]
+Description=ACE-Step 1.5 XL, text and lyrics to music (XL base for tracks, XL turbo for drafts) on 127.0.0.1:18086; started and stopped by llama-swap
+Documentation=https://github.com/ace-step/ACE-Step-1.5
+BindsTo=llama-swap.service
+After=llama-swap.service
+
+[Service]
+EnvironmentFile=/etc/ai-studio/cache.env
+# No GEMM tuning: it tunes again for every new track length (a 30 s draft took 73 s instead of 3.1 s), to gain 16%.
+# UnsetEnvironment= is applied last; Environment= could not override the EnvironmentFile.
+UnsetEnvironment=PYTORCH_TUNABLEOP_ENABLED
+# The weights (acestep-download's layout), where ACE-Step looks instead of <checkout>/checkpoints.
+Environment=ACESTEP_CHECKPOINTS_DIR=/models/ACE-Step-1.5
+# ACE-Step's ROCm default is float32; bfloat16 renders the same track (waveform r=0.94) 6 to 8 times faster here.
+Environment=ACESTEP_ROCM_DTYPE=bfloat16
+Environment=MIOPEN_FIND_MODE=FAST
+Environment=PYTHONUNBUFFERED=1
+# current links to the installed version (llm-server/apps/acestep/install.sh), switched by portal-hostd.
+WorkingDirectory=/opt/ai-studio/acestep/current
+# Starts only once the model llama-swap stopped has let go of its GPU memory (measured peak 24.9 GiB).
+ExecStartPre=%h/.local/bin/wait-gpu-memory 26
+ExecStart=/opt/ai-studio/acestep/current/.venv/bin/python /opt/ai-studio/acestep/current/acestep-sync.py
+Restart=no
+# Covers ExecStartPre only: the unit counts as started once Python runs, and llama-swap then polls /ready (8 to 21 s).
+TimeoutStartSec=90
+TimeoutStopSec=30

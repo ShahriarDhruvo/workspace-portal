@@ -5,6 +5,7 @@
 // harness is up and whether it is working, and where its releases come from. A harness's folder holds all of it: the
 // driver, its settings renderer, its image files and what the shell scripts read (harness.env).
 import type { AgentKind, WorkspaceKind } from "@portal/core";
+import type { MediaRegistry } from "./media.ts";
 
 export type HeaderMap = Record<string, string | string[]>;
 
@@ -19,7 +20,10 @@ export interface HarnessConfig {
   /** The largest request body into a workspace, and the Web Shell's largest upload. */
   uploadLimitBytes: number;
   reader: { /** "": no read_page tool. */ url: string };
-  llm: { /** Image models the AI server serves, the default first (IMAGE_MODELS); empty: none. */ imageModels: readonly string[] };
+  llm: {
+    /** The image and media models, a fast and a quality one of each kind (config/models/media.json; media.ts). */
+    media: MediaRegistry;
+  };
   workspace: {
     kinds: Record<WorkspaceKind, { /** The host's address on the kind's network, where the service API listens. */ gatewayIp: string }>;
     browser: boolean;

@@ -161,6 +161,8 @@ export interface FakeFence {
 
 export interface GatewayOptions {
   env?: NodeJS.ProcessEnv;
+  /** Written to PORTAL_DATA_DIR/config/models/media.json before the gateway starts: its image and media models. */
+  media?: Record<string, unknown>;
   /** The fence at gateway start; "loaded" by default. */
   fence?: FenceState;
   readyAfterMs?: number;
@@ -259,6 +261,10 @@ export interface Gateway {
 
 export async function startGateway(options: GatewayOptions = {}): Promise<Gateway> {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "gateway-it-"));
+  if (options.media) {
+    fs.mkdirSync(path.join(dataDir, "config", "models"), { recursive: true });
+    fs.writeFileSync(path.join(dataDir, "config", "models", "media.json"), JSON.stringify(options.media));
+  }
   const llm = await startFakeLlm();
   const config = loadConfig({
     PORTAL_DATA_DIR: dataDir,
@@ -346,6 +352,7 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
     engineNotes: new FakeNotes(),
     enginePollMs: 5,
     appHost,
+    videoPollMs: 10,
     search,
     reader: options.reader,
     // The tests that need prices give `priceSource` (offline otherwise).

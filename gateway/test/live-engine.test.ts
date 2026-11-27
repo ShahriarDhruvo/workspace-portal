@@ -86,11 +86,11 @@ test("engine overview, updates (a download, or the image already there) and imag
 
     const started = json<{ reuse: boolean; toVersion: string; image: string }>(await g.control("POST", "/control/engine/update", { version: "0.34.0", actorUserId: admin }));
     assert.deepEqual([started.reuse, started.toVersion, started.image], [false, "0.34.0", `${ENGINE_REPOSITORY}@${engineDigest("0.34.0")}`]);
-    const running = async () => json<{ running: boolean; agent: boolean; engine: boolean; apps: boolean }>(await g.control("GET", "/control/updates/running"));
+    const running = async () => json<{ running: boolean; agent: boolean; engine: boolean; apps: boolean; video: boolean }>(await g.control("GET", "/control/updates/running"));
     const during = await running();
     assert.equal(during.engine, g.engine.snapshot()?.finishedAt === null, "the deploy scripts' check follows the job");
     await waitFor(() => g.engine.snapshot()?.phase === "succeeded", "the update");
-    assert.deepEqual(await running(), { running: false, agent: false, engine: false, apps: false });
+    assert.deepEqual(await running(), { running: false, agent: false, engine: false, apps: false, video: false });
     assert.equal(g.engineHost!.version, "0.34.0");
     assert.equal(json<{ engine: { version: string } }>(await g.control("GET", "/control/engine")).engine.version, "0.34.0");
     assert.equal(json<{ ok: boolean }>(await g.control("POST", "/control/engine/restart-now")).ok, false, "no drain to end");
@@ -150,7 +150,7 @@ test("the other software's overview, updates and version removal through the con
     await refused("POST", "/control/engine/update", { version: "0.34.0" }, 409, "app_job_running");
     await waitFor(() => g.apps.snapshot()?.phase === "succeeded", "the switch");
     assert.equal(g.appHost!.apps.get("llama-swap")!.version, "275");
-    assert.deepEqual(json(await g.control("GET", "/control/updates/running")), { running: false, agent: false, engine: false, apps: false });
+    assert.deepEqual(json(await g.control("GET", "/control/updates/running")), { running: false, agent: false, engine: false, apps: false, video: false });
     assert.equal(json<{ ok: boolean }>(await g.control("POST", "/control/apps/restart-now")).ok, false, "no drain to end");
     assert.equal(json<{ cancelled: boolean }>(await g.control("POST", "/control/apps/cancel")).cancelled, false);
 

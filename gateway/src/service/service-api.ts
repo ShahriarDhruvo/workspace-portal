@@ -11,9 +11,13 @@ import type http from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { workspaceNumber, type PortalDb, type WorkspaceKind, type WorkspaceRef } from "@portal/core";
 import type { Config } from "../config.ts";
-import { createStreamingServer, remoteAddress, sendError, splitTarget } from "../lib/http-util.ts";
+import { createStreamingServer, remoteAddress, sendError, sendJson, splitTarget } from "../lib/http-util.ts";
 import { isPlainPath, proxyLlm, sendLlmError } from "./llm-proxy.ts";
 import type { LlmQueue } from "./llm-queue.ts";
+import { fetchLoadedModels, type MediaCatalog } from "./media-catalog.ts";
+import { MEDIA_ROUTES } from "./media-routes.ts";
+import { videoHold } from "./video-jobs.ts";
+import type { VideoJobs } from "./video-jobs.ts";
 import type { LlmRequests } from "../monitor/llm-requests.ts";
 import type { Logger } from "../lib/log.ts";
 import type { ReaderBackend } from "./reader.ts";
@@ -30,6 +34,7 @@ export interface ServiceDeps {
   llm: LlmQueue;
   /** Where each generation request reports its progress, for the admin's live view. */
   requests: LlmRequests;
+  videoJobs: VideoJobs;
   log: Logger;
   /** Web search for the MCP tool (in production SearXNG, behind Exa when that is on). */
   search: SearchBackend;
@@ -37,6 +42,8 @@ export interface ServiceDeps {
   reader?: ReaderBackend | null;
   /** The workspace calling from a source address. Defaults to the running workspace containers of `kind`. */
   resolveCaller?: CallerResolver;
+  /** The models the AI server has loaded now (media-catalog.ts), for GET /llm/v1/media. */
+  loadedModels?: () => Promise<string[] | null>;
 }
 
 type CallerResolver = (address: string) => { userId: number; ref: WorkspaceRef } | null;
@@ -44,8 +51,11 @@ type CallerResolver = (address: string) => { userId: number; ref: WorkspaceRef }
 const LLM_PREFIX = "/llm/v1/";
 const MCP_PATH = "/mcp/search";
 
+/** The image and media models, for the portal's media tools (media-catalog.ts). */
+const MEDIA_CATALOG_PATH = "media";
+
 /**
- * The image models' routes (IMAGE_MODELS), under the same queue as the LLM. Their prompt is the model's own writing,
+ * The image models' routes (media.json's image), under the same queue as the LLM. Their prompt is the model's own writing,
  * not something it was shown, so its URLs are not added to what read_page may open.
  */
 const IMAGE_ROUTE = /^images\/(?:generations|edits)$/;
@@ -63,6 +73,14 @@ const LLM_ROUTES: ReadonlyArray<{ path: RegExp; method: "GET" | "POST" }> = [
   { path: /^models$/, method: "GET" },
   { path: /^models\/[^/]+(?:\/[^/]+)*$/, method: "GET" },
 ];
+
+/**
+ * The routes of the media models the AI server has (media.json). Like an image prompt, what a media request carries
+ * is the model's own writing or a file of the project, not something it was shown.
+ */
+function mediaRoutes(config: Config): ReadonlyArray<{ path: RegExp; method: "GET" | "POST" | "DELETE" }> {
+  return MEDIA_ROUTES.filter((route) => config.llm.media[route.kind] !== undefined);
+}
 
 /** LLM request bodies larger than this are not searched for URLs (a conversation full of images). */
 const URL_SCAN_LIMIT_BYTES = 8 * 1024 * 1024;
@@ -139,7 +157,9 @@ function createWebTools(deps: ServiceDeps): WebTools {
 export function createServiceServer(deps: ServiceDeps): http.Server {
   const resolveCaller = deps.resolveCaller ?? ((address: string) => deps.manager.workspaceForIp(deps.kind, address));
   const web = createWebTools(deps);
-  const server = createStreamingServer(deps.log, "service", (req, res) => handle(deps, resolveCaller, web, req, res));
+  const media = mediaRoutes(deps.config);
+  const routes = [...LLM_ROUTES, ...media];
+  const server = createStreamingServer(deps.log, "service", (req, res) => handle(deps, resolveCaller, web, { routes, media }, req, res));
   const open = new Map<string, number>();
   server.on("connection", (socket) => {
     const address = socket.remoteAddress ?? "";
@@ -159,6 +179,7 @@ async function handle(
   deps: ServiceDeps,
   resolveCaller: CallerResolver,
   web: WebTools,
+  { routes, media }: { routes: ReadonlyArray<{ path: RegExp; method: string }>; media: ReadonlyArray<{ path: RegExp }> },
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
@@ -184,7 +205,14 @@ async function handle(
   if (pathname.startsWith(LLM_PREFIX)) {
     if (!isPlainPath(pathname)) return sendError(res, 400, "bad_request", "Invalid path.");
     const method = req.method ?? "GET";
-    const allowed = LLM_ROUTES.filter((route) => route.path.test(pathname.slice(LLM_PREFIX.length)));
+    const llmPath = pathname.slice(LLM_PREFIX.length);
+    if (llmPath === MEDIA_CATALOG_PATH) {
+      if (method !== "GET") return sendLlmError(res, 405, "method_not_allowed", `Use GET for ${pathname}.`, { allow: "GET" });
+      const loaded = deps.loadedModels ?? (() => fetchLoadedModels(deps.config.llm.upstreamUrl, deps.config.llm.apiKey));
+      const catalog: MediaCatalog = { kinds: deps.config.llm.media, loaded: await loaded(), videoHold: videoHold(deps.videoJobs, deps.llm, userId, Date.now()) };
+      return sendJson(res, 200, catalog);
+    }
+    const allowed = routes.filter((entry) => entry.path.test(llmPath));
     if (allowed.length === 0) return sendLlmError(res, 404, "not_found", `${pathname} is not available to workspaces.`);
     if (!allowed.some((route) => route.method === method)) {
       const allow = allowed.map((route) => route.method).join(", ");
@@ -193,7 +221,7 @@ async function handle(
     deps.manager.noteAgentActivity(userId);
     // What the model is shown in a request (the user's messages, tool output) it may then open with read_page. The
     // body has arrived in full before the model can answer, let alone call a tool.
-    const shows = method === "POST" && web.tracksShown && !IMAGE_ROUTE.test(pathname.slice(LLM_PREFIX.length));
+    const shows = method === "POST" && web.tracksShown && !IMAGE_ROUTE.test(llmPath) && !media.some((entry) => entry.path.test(llmPath));
     const collector = shows ? shownUrlCollector((urls) => web.shown.add(workspace, urls)) : null;
     if (collector) {
       req.once("end", () => {

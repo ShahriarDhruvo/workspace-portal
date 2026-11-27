@@ -34,7 +34,7 @@ export function agentInstructions(config: HarnessConfig, { kind, person, place }
     "- Files: projects belong in /workspace, and /home/user is the home folder. Both are kept. Everything else is read-only, and /tmp is emptied at every start.",
     "- Nothing in /tmp can be run (it is mounted noexec): build and run programs in /workspace or the home folder.",
     `- ${NETWORK[kind]}`,
-    "- Installed: Node.js with npm and pnpm, Python 3 with uv and ruff, Go, Rust with cargo, rustfmt and clippy, GCC and G++ with make and gdb, Bash with shellcheck and shfmt, PowerShell (pwsh), git, ripgrep, jq and curl. There is no root, no apt and no Docker.",
+    "- Installed: Node.js with npm and pnpm, Python 3 with uv and ruff, Go, Rust with cargo, rustfmt and clippy, GCC and G++ with make and gdb, Bash with shellcheck and shfmt, PowerShell (pwsh), git, ripgrep, jq and curl, and for media ffmpeg with ffprobe, SoX and ImageMagick. There is no root, no apt and no Docker.",
     "- Web servers: make a server listen on 0.0.0.0, not on localhost only (`next dev -H 0.0.0.0`, `vite --host 0.0.0.0`). The person opens it with the Preview button in the portal's bar, which appears while a server runs. Tell them its port. Never give them a localhost link: in their browser, localhost is their own computer.",
     ...(config.workspace.browser
       ? ["- The browser tools run a headless Chromium inside this workspace, where http://localhost:<port> is this workspace: use them to look at what you built."]

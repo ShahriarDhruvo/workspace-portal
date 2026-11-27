@@ -1,0 +1,112 @@
+// The reference AI server's image and media models (llama-swap.yaml), for the portal:
+//   sudo bash deploy/models.sh install llm-server/media.json
+// It becomes PORTAL_DATA_DIR/config/models/media.json; the gateway reads it when it starts (models.sh restarts it).
+//
+// Each kind has a "fast" model, for drafts and everyday work, and a "quality" one, for final work; the agent picks
+// the tier of each call (opencode/image/media-tools). A model's fields:
+//   model      the id llama-swap serves it under                      name     its name for people
+//   time       how long it takes, in words, measured (docs/MEASUREMENTS.md)
+//   bestFor    what it is the better choice for                       besideLlm  it runs beside the LLM: no swap
+//   request    fields every request to it carries (a preset)
+// and by kind: video sizes and seconds; speech api ("qwen3-tts" or "fish-speech"), and for qwen3-tts its built-in
+// voices, languages and its clone and design models; transcription subtitles (it writes times: srt, vtt and
+// verbose_json segments; SOV under vLLM 0.32.0 answers 400 to all three, so no model here has it).
+//
+// LTX-2.5 distilled becomes the fast video model once its weights are in (docs/GUIDE.md, "LTX-2.5"):
+//   "fast": { "model": "ltx-2.5-distilled", "name": "LTX-2.5 22B distilled", "bestFor": "...",
+//             "sizes": ["512x512", "1344x768", "768x1344"], "seconds": { "min": 1, "max": 20 } }
+{
+  "image": {
+    "fast": {
+      "model": "Qwen-Image-2.1-Turbo",
+      "name": "Qwen-Image 2.1 Turbo",
+      "time": "about 25 s an image at 1024x1024",
+      "bestFor": "drafts, storyboards, keyframes to try, everyday pictures"
+    },
+    "quality": {
+      "model": "Qwen-Image-2.1",
+      "name": "Qwen-Image 2.1",
+      "time": "about 95 s an image at 1024x1024",
+      "bestFor": "final images and keyframes, text in a picture, fine detail"
+    }
+  },
+  "video": {
+    "fast": {
+      "model": "minimax-h3",
+      "name": "MiniMax H3, fast preset",
+      "time": "about 3.5 min for 5 s at 512x512, the model swap included",
+      "bestFor": "trying a shot's prompt, motion and keyframes",
+      "request": { "gufo": { "preset": "fast" } },
+      "sizes": ["512x512"],
+      "seconds": { "min": 5, "max": 14.375 }
+    },
+    "quality": {
+      "model": "minimax-h3",
+      "name": "MiniMax H3",
+      "time": "about 18 min for 5 s at 512x512; at 1344x768 about 95 min (estimated)",
+      "bestFor": "final clips at 512x512; 1344x768 only when the person accepts the server busy for over an hour a clip",
+      "sizes": ["512x512", "1344x768"],
+      "seconds": { "min": 5, "max": 14.375 }
+    }
+  },
+  "music": {
+    "fast": {
+      "model": "acestep-1.5-xl-turbo",
+      "name": "ACE-Step 1.5 XL turbo",
+      "time": "about 3 s for 30 s of music once loaded, 30 s with the model swap",
+      "bestFor": "trying a style, drafts, background loops"
+    },
+    "quality": {
+      "model": "acestep-1.5-xl-base",
+      "name": "ACE-Step 1.5 XL",
+      "time": "about 15 s for 30 s of music once loaded, 40 s with the model swap",
+      "bestFor": "final tracks, songs with lyrics"
+    }
+  },
+  "speech": {
+    "fast": {
+      "model": "qwen3-tts-1.7b",
+      "name": "Qwen3-TTS 1.7B",
+      "time": "about 0.4 s per second of speech, 3 s more for the first request in five minutes, and no model swap",
+      "bestFor": "narration, dialogue and voice-overs, drafts; built-in, described or cloned voices",
+      "besideLlm": true,
+      "api": "qwen3-tts",
+      "voices": {
+        "ryan": "male, English",
+        "aiden": "male, English",
+        "vivian": "female, native Chinese",
+        "serena": "female, native Chinese",
+        "ono_anna": "female, native Japanese",
+        "sohee": "female, native Korean",
+        "uncle_fu": "older male, native Chinese",
+        "dylan": "male, Beijing dialect",
+        "eric": "male, Sichuan dialect"
+      },
+      "languages": ["english", "chinese", "german", "italian", "portuguese", "spanish", "japanese", "korean", "french", "russian"],
+      "clone": "qwen3-tts-1.7b-clone",
+      "design": "qwen3-tts-1.7b-design"
+    },
+    "quality": {
+      "model": "fish-s2-pro",
+      "name": "Fish Audio S2-Pro",
+      "time": "about 2 s per second of speech, plus about 40 s for the model swap",
+      "bestFor": "the most natural delivery of a final narration; a close clone of a recorded voice",
+      "api": "fish-speech"
+    }
+  },
+  "transcription": {
+    "fast": {
+      "model": "qwen3-asr-1.7b",
+      "name": "Qwen3-ASR 1.7B",
+      "time": "about 25 s for 5 minutes of audio, and no model swap",
+      "bestFor": "checking generated speech, notes, everyday transcripts",
+      "besideLlm": true
+    },
+    "quality": {
+      "model": "sov-transcribe-1",
+      "name": "SOV-Transcribe-1",
+      "time": "about 45 s for 5 minutes of audio, plus about 90 s for the model swap",
+      "bestFor": "a second pass on a recording the fast model got words wrong in"
+    }
+  }
+}

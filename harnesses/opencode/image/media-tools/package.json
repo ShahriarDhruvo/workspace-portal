@@ -1,0 +1,8 @@
+{
+  "name": "portal-media-tools",
+  "version": "1.0.0",
+  "description": "The portal's media tools for OpenCode 2: video, music, speech and transcription through the gateway",
+  "type": "module",
+  "main": "index.js",
+  "license": "GPL-2.0-or-later"
+}

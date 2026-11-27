@@ -103,7 +103,19 @@ EOF
 prints powershell pwsh -NoLogo -NoProfile -File hello.ps1
 
 prints node node -e 'console.log("node")'
-for tool in make gdb pnpm git rg jq curl ssh zip xz file; do
+
+# The media tools: a second of tone and colour, encoded as the media skill's assembly does, then measured.
+ffmpeg -v error -f lavfi -i testsrc=size=64x64:rate=24:duration=1 -f lavfi -i sine=frequency=440:duration=1 \
+  -filter_complex "[1:a]asplit=2[a][k];[a][k]sidechaincompress,loudnorm=I=-14:TP=-1.5:LRA=11[m]" \
+  -map 0:v -map "[m]" -c:v libx264 -pix_fmt yuv420p -c:a aac -ar 48000 -movflags +faststart media.mp4
+[ "$(ffprobe -v error -show_entries stream=codec_name -of csv=p=0 media.mp4 | sort | tr '\n' ' ')" = "aac h264 " ] \
+  || { echo "check-toolchains: ffmpeg did not make an H.264 and AAC file" >&2; exit 1; }
+sox -n -r 16000 tone.wav synth 0.5 sine 440 && [ "$(soxi -D tone.wav)" = "0.500000" ] \
+  || { echo "check-toolchains: sox did not make half a second of tone" >&2; exit 1; }
+convert -size 8x8 xc:red red.png && [ "$(identify -format %wx%h red.png)" = "8x8" ] \
+  || { echo "check-toolchains: ImageMagick did not make an image" >&2; exit 1; }
+
+for tool in make gdb pnpm git rg jq curl ssh zip xz file ffmpeg ffprobe sox convert identify; do
   command -v "$tool" > /dev/null || { echo "check-toolchains: $tool is missing" >&2; exit 1; }
 done
-echo "check-toolchains: C, C++, Go, Rust, Python, Bash, PowerShell and Node build and run"
+echo "check-toolchains: C, C++, Go, Rust, Python, Bash, PowerShell and Node build and run; ffmpeg, SoX and ImageMagick work"

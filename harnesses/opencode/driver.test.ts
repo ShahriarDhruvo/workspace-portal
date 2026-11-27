@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";
 import type { HeaderMap } from "../harness.ts";
+import { parseMediaRegistry, type MediaRegistry } from "../media.ts";
 import type { ModelCatalog } from "../models.ts";
 import { AgentConfigError } from "../shared.ts";
 import { closeServer, listenLocal } from "../testing.ts";
@@ -10,6 +11,19 @@ import { opencodeAuthorization, opencodeDriver, parsePendingCount, parseRunningJ
 import { opencodeConfig, opencodeFacts, renderOpencodeConfig } from "./settings.ts";
 
 const SERVICE = "http://172.29.0.1:4001";
+const NO_MEDIA: MediaRegistry = {};
+const registry = (value: unknown): MediaRegistry => parseMediaRegistry(JSON.stringify(value), "test");
+const images = (fast: string, quality?: string): MediaRegistry => registry({ image: { fast: { model: fast }, ...(quality ? { quality: { model: quality } } : {}) } });
+/** The reference AI server's, shortened. */
+const STUDIO = registry({
+  image: { fast: { model: "Image-Turbo", name: "Image Turbo", time: "about 25 s an image", bestFor: "drafts" }, quality: { model: "Image", name: "Image", time: "about 95 s an image", bestFor: "final images" } },
+  video: { fast: { model: "minimax-h3", name: "H3 fast", request: { gufo: { preset: "fast" } }, sizes: ["512x512"], seconds: { min: 5, max: 14.375 } }, quality: { model: "minimax-h3", name: "H3", sizes: ["512x512", "1344x768"], seconds: { min: 5, max: 14.375 } } },
+  speech: {
+    fast: { model: "qwen3-tts-1.7b", name: "Qwen3-TTS", besideLlm: true, api: "qwen3-tts", voices: { ryan: "male, English" }, clone: "qwen3-tts-1.7b-clone", design: "qwen3-tts-1.7b-design" },
+    quality: { model: "fish-s2-pro", name: "Fish", api: "fish-speech" },
+  },
+  transcription: { quality: { model: "sov-transcribe-1", name: "SOV", subtitles: true } },
+});
 const PASSWORD = "container-password";
 
 const CATALOG: ModelCatalog = {
@@ -22,7 +36,7 @@ const CATALOG: ModelCatalog = {
 };
 
 test("opencodeConfig: one provider through the gateway, the portal's models and default, search in place of OpenCode's web tools", () => {
-  const config = opencodeConfig({ catalog: CATALOG, imageModels: [], serviceBaseUrl: SERVICE, browser: true, kind: "private" }) as Record<string, any>;
+  const config = opencodeConfig({ catalog: CATALOG, media: NO_MEDIA, serviceBaseUrl: SERVICE, browser: true, kind: "private" }) as Record<string, any>;
   assert.equal(config.update, "disable");
   assert.equal(config.share, "disabled");
   assert.equal(config.model, "portal/big");
@@ -43,7 +57,7 @@ test("opencodeConfig: one provider through the gateway, the portal's models and 
   assert.equal(portal.package, "@opencode/ai/providers/openai-compatible", "part of OpenCode: nothing to download");
   assert.deepEqual(portal.env, ["PORTAL_LLM_KEY"]);
   assert.deepEqual(portal.compatibility, { maxTokensField: "max_tokens" });
-  assert.deepEqual(portal.settings, { baseURL: `${SERVICE}/llm/v1`, timeout: false, headerTimeout: 3_600_000, chunkTimeout: 3_600_000 });
+  assert.deepEqual(portal.settings, { baseURL: `${SERVICE}/llm/v1`, timeout: false, headerTimeout: 86_400_000, chunkTimeout: 3_600_000 });
   assert.deepEqual(Object.keys(portal.models), ["small", "big", "org/free-choice"]);
   assert.deepEqual(portal.models.small, {
     name: "Small",
@@ -65,18 +79,18 @@ test("opencodeConfig: one provider through the gateway, the portal's models and 
   assert.equal(servers.browser.command[0], "/usr/local/bin/playwright-mcp");
   assert.equal(servers.browser.codemode, false, "the model calls the browser's tools itself");
   assert.deepEqual(servers.browser.timeout, { execution: 120_000 });
-  assert.deepEqual(Object.keys((opencodeConfig({ catalog: CATALOG, imageModels: [], serviceBaseUrl: SERVICE, browser: false, kind: "private" }) as Record<string, any>).mcp.servers), ["search"]);
+  assert.deepEqual(Object.keys((opencodeConfig({ catalog: CATALOG, media: NO_MEDIA, serviceBaseUrl: SERVICE, browser: false, kind: "private" }) as Record<string, any>).mcp.servers), ["search"]);
 });
 
 test("opencodeConfig: a workspace starts with the image's plugins and skills and with formatting; an Online one with the public MCP servers too", () => {
-  const config = opencodeConfig({ catalog: CATALOG, imageModels: [], serviceBaseUrl: SERVICE, browser: true, kind: "private" }) as Record<string, any>;
+  const config = opencodeConfig({ catalog: CATALOG, media: NO_MEDIA, serviceBaseUrl: SERVICE, browser: true, kind: "private" }) as Record<string, any>;
   const share = "/usr/local/share/workspace-portal/opencode";
   assert.deepEqual(config.plugins, [`${share}/plugins/superpowers`, `${share}/plugins/safety-net`], "folders of the image: nothing to download");
   assert.deepEqual(config.skills, [`${share}/skills`]);
   assert.deepEqual(config.formatter, {}, "on, and a person's own formatters stay");
   assert.deepEqual(Object.keys(config.mcp.servers), ["search", "browser"], "a Private workspace reaches no public server");
 
-  const online = opencodeConfig({ catalog: CATALOG, imageModels: [], serviceBaseUrl: SERVICE, browser: true, kind: "online" }) as Record<string, any>;
+  const online = opencodeConfig({ catalog: CATALOG, media: NO_MEDIA, serviceBaseUrl: SERVICE, browser: true, kind: "online" }) as Record<string, any>;
   assert.deepEqual(Object.keys(online.mcp.servers), ["search", "browser", "context7", "grep"]);
   assert.deepEqual(online.mcp.servers.context7, { type: "remote", url: "https://mcp.context7.com/mcp", oauth: false, codemode: false });
   assert.deepEqual(online.mcp.servers.grep, { type: "remote", url: "https://mcp.grep.app", oauth: false, codemode: false });
@@ -93,14 +107,21 @@ test("the image build checks OpenCode against settings as the gateway renders th
       { id: "plain-model", name: "Plain model", contextWindow: 65_536, maxTokens: 8192, image: false, efforts: [], defaultEffort: null },
     ],
   };
-  const rendered = renderOpencodeConfig({ catalog, imageModels: ["Check-Image"], serviceBaseUrl: "http://service.invalid:4001", browser: true, kind: "private" });
+  const media = registry({
+    image: { fast: { model: "Check-Image" } },
+    video: { fast: { model: "Check-Video", sizes: ["512x512"], seconds: { min: 1, max: 5 } } },
+    music: { fast: { model: "Check-Music" } },
+    speech: { fast: { model: "Check-Speech", api: "qwen3-tts", voices: { check: "a test voice" } } },
+    transcription: { fast: { model: "Check-Transcription", subtitles: true } },
+  });
+  const rendered = renderOpencodeConfig({ catalog, media, serviceBaseUrl: "http://service.invalid:4001", browser: true, kind: "private" });
   const checked = fs.readFileSync(new URL("image/check-settings.json", import.meta.url), "utf8");
   // When the renderer changes, the file changes with it (to `rendered`), so that the build checks what workspaces get.
   assert.equal(checked, rendered);
 });
 
-test("opencodeConfig: the AI server's image models are the provider's, for generate_image, the first its default", () => {
-  const config = opencodeConfig({ catalog: CATALOG, imageModels: ["Image-Turbo", "Image"], serviceBaseUrl: SERVICE, browser: false, kind: "private" }) as Record<string, any>;
+test("opencodeConfig: the AI server's image models are the provider's, for generate_image, the fast one its default", () => {
+  const config = opencodeConfig({ catalog: CATALOG, media: images("Image-Turbo", "Image"), serviceBaseUrl: SERVICE, browser: false, kind: "private" }) as Record<string, any>;
   const { models } = config.providers.portal;
   assert.deepEqual(Object.keys(models), ["small", "big", "org/free-choice", "Image-Turbo", "Image"]);
   assert.deepEqual(models.Image, {
@@ -111,15 +132,12 @@ test("opencodeConfig: the AI server's image models are the provider's, for gener
   });
   assert.deepEqual(config.experimental, { image_generate: { model: "portal/Image-Turbo" } });
   assert.equal(config.model, "portal/big", "the chat model stays the default");
-  const without = opencodeConfig({ catalog: CATALOG, imageModels: [], serviceBaseUrl: SERVICE, browser: false, kind: "private" }) as Record<string, any>;
+  const without = opencodeConfig({ catalog: CATALOG, media: NO_MEDIA, serviceBaseUrl: SERVICE, browser: false, kind: "private" }) as Record<string, any>;
   assert.equal("experimental" in without, false, "no image models: OpenCode offers no generate_image");
 
-  for (const [imageModels, message] of [
-    [["big"], /"big" is both a chat model and an image model/],
-    [["Image#hd"], /must not contain one/],
-    [["{env:HOME}"], /must not contain \{env: or \{file:/],
-  ] as const) {
-    assert.throws(() => renderOpencodeConfig({ catalog: CATALOG, imageModels, serviceBaseUrl: SERVICE, browser: false, kind: "private" }), (error: unknown) => {
+  // A "#" in a model id the registry refuses already (media.test.ts).
+  for (const [model, message] of [["big", /"big" is both a chat model and an image model/]] as const) {
+    assert.throws(() => renderOpencodeConfig({ catalog: CATALOG, media: images(model), serviceBaseUrl: SERVICE, browser: false, kind: "private" }), (error: unknown) => {
       assert.ok(error instanceof AgentConfigError);
       assert.match(error.message, message);
       return true;
@@ -127,25 +145,67 @@ test("opencodeConfig: the AI server's image models are the provider's, for gener
   }
 });
 
-test("opencodeFacts: where to save an image and how to show it, which image models there are; nothing without one", () => {
-  assert.deepEqual(opencodeFacts([]), []);
-  const [fact] = opencodeFacts(["Image-Turbo", "Image"]);
+test("opencodeFacts: where to save an image and how to show it, and its model by tier; nothing without image or media models", () => {
+  assert.deepEqual(opencodeFacts(NO_MEDIA), []);
+  const [fact, tiers, protocol] = opencodeFacts(images("Image-Turbo", "Image"));
   assert.match(fact!, /^- Images: generate_image makes and edits images\./);
   assert.match(fact!, /`path` in the project, such as images\/<short-name>\.png/);
   assert.match(fact!, /!\[<what it shows>\]\(images\/<short-name>\.png\)/);
-  assert.match(fact!, /\(the default is portal\/Image-Turbo\) unless the person asks for another: portal\/Image\.$/);
-  assert.match(opencodeFacts(["Image"])[0]!, /\(the default is portal\/Image\)\.$/);
+  assert.match(fact!, /leave it out for the fast one \(portal\/Image-Turbo\), or give portal\/Image for the quality one\.$/);
+  assert.match(opencodeFacts(images("Image"))[0]!, /leave it out for the fast one \(portal\/Image\)\.$/);
+  assert.match(tiers!, /^- Media models, by tier: `fast` for drafts/);
+  assert.doesNotMatch(tiers!, /The media tools take the tier/, "images alone: no media tools");
+  assert.equal(protocol, undefined, "no media tools: nothing about plans");
+});
+
+test("opencodeFacts: each kind's fast and quality model, which run beside the LLM, and when to propose a plan", () => {
+  const [, tiers, protocol, ...rest] = opencodeFacts(STUDIO);
+  assert.equal(rest.length, 0);
+  const lines = tiers!.split("\n");
+  assert.match(lines[0]!, /The media tools take the tier as `tier`, save the file at the `path`.*\(file_path, tier, model_used, elapsed_sec\), never the file\.$/);
+  assert.equal(lines[1], "  - generate_image makes and edits images. fast: Image Turbo (portal/Image-Turbo), for drafts; about 25 s an image. quality: Image (portal/Image), for final images; about 95 s an image.");
+  assert.equal(lines[2], "  - generate_video makes a short clip with its own sound. fast: H3 fast (minimax-h3). quality: H3 (minimax-h3).");
+  assert.equal(lines[3], "  - synthesize_speech reads text aloud in a built-in, described or cloned voice. fast: Qwen3-TTS (qwen3-tts-1.7b), runs beside you. quality: Fish (fish-s2-pro).");
+  assert.equal(lines[4], "  - transcribe_audio writes down what an audio or video file says. quality: SOV (sov-transcribe-1). Both tiers use it.");
+  assert.match(lines[5]!, /^  Every model not marked as running beside you shares the GPU with you/);
+  assert.match(protocol!, /Go ahead when it is one simple asset/);
+  assert.match(protocol!, /the columns Step, Asset, Tier & model, Why, Est\. time/);
+  assert.match(protocol!, /Reply \*\*go\*\* to start, or tell me what to change\. Make nothing until they answer\./);
+  assert.match(protocol!, /drafts with fast, shown to the person, then the final with quality/);
+  assert.match(protocol!, /Load the media-production skill/);
+});
+
+test("opencodeConfig: the media registry is the media plugin's, with the gateway's address; no plugin without a media model", () => {
+  const config = opencodeConfig({ catalog: CATALOG, media: STUDIO, serviceBaseUrl: SERVICE, browser: false, kind: "private" }) as Record<string, any>;
+  assert.deepEqual(config.plugins.at(-1), {
+    package: "/usr/local/share/workspace-portal/opencode/plugins/media",
+    options: { baseURL: `${SERVICE}/llm/v1`, media: STUDIO },
+  });
+  assert.equal(config.providers.portal.models["minimax-h3"], undefined, "a media model is no model of the provider's");
+  for (const media of [NO_MEDIA, images("Image-Turbo")]) {
+    const without = opencodeConfig({ catalog: CATALOG, media, serviceBaseUrl: SERVICE, browser: false, kind: "private" }) as Record<string, any>;
+    assert.equal(without.plugins.length, 2, "superpowers and safety-net only");
+  }
+  for (const fast of [{ model: "music", name: "{env:HOME}" }, { model: "music", bestFor: "x {file:/etc/opencode/opencode.json}" }, { model: "music", request: { style: "{env:LLM_KEY}" } }]) {
+    assert.throws(
+      () => renderOpencodeConfig({ catalog: CATALOG, media: registry({ music: { fast } }), serviceBaseUrl: SERVICE, browser: false, kind: "private" }),
+      /must not contain \{env: or \{file:/,
+      JSON.stringify(fast),
+    );
+  }
+  const named = opencodeConfig({ catalog: CATALOG, media: registry({ music: { fast: { model: "music", name: "Take #2" } } }), serviceBaseUrl: SERVICE, browser: false, kind: "private" });
+  assert.ok(named, "a name may have a #: only an id is read for a variant");
 });
 
 test("renderOpencodeConfig is JSON; a model OpenCode would rewrite is refused", () => {
-  const text = renderOpencodeConfig({ catalog: CATALOG, imageModels: [], serviceBaseUrl: SERVICE, browser: true, kind: "private" });
-  assert.deepEqual(JSON.parse(text), opencodeConfig({ catalog: CATALOG, imageModels: [], serviceBaseUrl: SERVICE, browser: true, kind: "private" }));
+  const text = renderOpencodeConfig({ catalog: CATALOG, media: NO_MEDIA, serviceBaseUrl: SERVICE, browser: true, kind: "private" });
+  assert.deepEqual(JSON.parse(text), opencodeConfig({ catalog: CATALOG, media: NO_MEDIA, serviceBaseUrl: SERVICE, browser: true, kind: "private" }));
   assert.ok(text.endsWith("}\n"));
   assert.equal(text.match(/\{(env|file):/g), null, "nothing for OpenCode to substitute");
 
   for (const [id, name] of [["m", "Model {env:OPENCODE_PASSWORD}"], ["{file:/etc/passwd}", "M"]] as const) {
     const catalog = { defaultModel: id, models: [{ ...CATALOG.models[0]!, id, name }] };
-    assert.throws(() => renderOpencodeConfig({ catalog, imageModels: [], serviceBaseUrl: SERVICE, browser: false, kind: "private" }), (error: unknown) => {
+    assert.throws(() => renderOpencodeConfig({ catalog, media: NO_MEDIA, serviceBaseUrl: SERVICE, browser: false, kind: "private" }), (error: unknown) => {
       assert.ok(error instanceof AgentConfigError);
       assert.match(error.message, /must not contain \{env: or \{file:/);
       return true;
@@ -153,7 +213,7 @@ test("renderOpencodeConfig is JSON; a model OpenCode would rewrite is refused", 
   }
   // "portal/m#high" is model "m" at its variant "high" to OpenCode.
   const marked = { defaultModel: "small", models: [CATALOG.models[0]!, { ...CATALOG.models[0]!, id: "m#high" }] };
-  assert.throws(() => renderOpencodeConfig({ catalog: marked, imageModels: [], serviceBaseUrl: SERVICE, browser: false, kind: "private" }), (error: unknown) => {
+  assert.throws(() => renderOpencodeConfig({ catalog: marked, media: NO_MEDIA, serviceBaseUrl: SERVICE, browser: false, kind: "private" }), (error: unknown) => {
     assert.ok(error instanceof AgentConfigError);
     assert.equal(error.message, 'OpenCode reads the "#" in "m#high" as the start of a variant\'s name: a model\'s id must not contain one.');
     return true;

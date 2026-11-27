@@ -16,7 +16,7 @@ function config(instructionsFile: string, browser = true): HarnessConfig {
     idleTimeoutMs: 0,
     uploadLimitBytes: 0,
     reader: { url: "" },
-    llm: { imageModels: [] },
+    llm: { media: {} },
     workspace: { kinds: { private: { gatewayIp: "172.29.0.1" }, online: { gatewayIp: "172.30.0.1" } }, browser, defaultEffort: null },
   };
 }

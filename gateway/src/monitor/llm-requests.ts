@@ -4,7 +4,8 @@
 // for the admin's live view, and a listener hears each one reach the AI server and end (main.ts: the workspace
 // sessions and their energy). Cheap enough to run always: the response stream is read for usage anyway
 // (usage.ts), and this adds a counter per event.
-import { imagePace, type ImageAsk } from "./image-requests.ts";
+import type { GenerationKind } from "@portal/core";
+import { generationPace, type GenerationPace, type ImageAsk } from "./image-requests.ts";
 import type { EngineTimings, StreamObserver, TokenUsage } from "./usage.ts";
 
 export interface ActiveLlmRequest {
@@ -19,6 +20,14 @@ export interface ActiveLlmRequest {
   tokens: number;
   /** What an image request asks for (image-requests.ts); null for the LLM. */
   image: ImageAsk | null;
+  /** The media model a media request is for (media-routes.ts); null for the LLM and the image models. */
+  media: MediaWork | null;
+}
+
+export interface MediaWork {
+  kind: Exclude<GenerationKind, "image">;
+  /** The model it names; null until its body has said (speech and transcription go to the server's own routes). */
+  model: string | null;
 }
 
 /** A request that reached the AI server, once it has ended. */
@@ -54,9 +63,17 @@ export interface LlmRequestHandle extends StreamObserver {
   forwarded(): void;
   /** What an image request asks for, as its body is read. */
   imageAsk(ask: ImageAsk): void;
-  /** `usage`: the answer's, when it had one. */
-  finish(ok: boolean, usage?: TokenUsage | null): void;
+  /** The model a media request names, as its body is read. */
+  mediaModel(model: string): void;
+  /** How it ended; `usage`: the answer's, when it had one. */
+  finish(end: RequestEnd, usage?: TokenUsage | null): void;
 }
+
+/**
+ * completed: answered in full with a 2xx; aborted: the client hung up first (a cancelled turn, a workspace's stop),
+ * which is not the AI server failing; failed: any other answer, none, or a stream that broke.
+ */
+export type RequestEnd = "completed" | "aborted" | "failed";
 
 export class LlmRequests {
   readonly #now: () => number;
@@ -64,20 +81,25 @@ export class LlmRequests {
   readonly #active = new Map<number, ActiveLlmRequest>();
   #nextId = 1;
   /**
-   * When the LLM ("") and each image model last finished a request. Behind llama-swap an image model makes one image
-   * at a time, and never while the LLM has requests: so an image request's own time starts when it was forwarded, or
-   * when the request before it on its model or on the LLM finished, whichever is latest.
+   * When the LLM ("") and each image and media model last finished a request. Behind llama-swap a model makes one
+   * thing at a time, and one that swaps with the LLM never starts while the LLM has requests: so a request's own time
+   * starts when it was forwarded, or when the request before it on its model (or on the LLM, for a model that swaps
+   * with it) finished, whichever is latest.
    */
   readonly #lastFinished = new Map<string, number>();
-  readonly #paces: Array<{ model: string | null; secondsPerImage: number }> = [];
+  readonly #paces: GenerationPace[] = [];
+  /** The models that run beside the LLM (media.json's besideLlm): the LLM's requests don't hold them up. */
+  readonly #besideLlm: ReadonlySet<string>;
+  #lastGeneration: { kind: GenerationKind; at: number } | null = null;
 
-  constructor(options: { now?: () => number; listener?: LlmRequestListener } = {}) {
+  constructor(options: { now?: () => number; listener?: LlmRequestListener; besideLlm?: ReadonlySet<string> } = {}) {
     this.#now = options.now ?? Date.now;
     this.#listener = options.listener ?? null;
+    this.#besideLlm = options.besideLlm ?? new Set();
   }
 
   /** A generation request arrived (it may still wait for a slot), from a workspace or with an API key. */
-  begin(userId: number, keyId: number | null = null, image = false): LlmRequestHandle {
+  begin(userId: number, keyId: number | null = null, image = false, media: MediaWork | null = null): LlmRequestHandle {
     const entry: ActiveLlmRequest = {
       id: this.#nextId++,
       userId,
@@ -86,6 +108,7 @@ export class LlmRequests {
       firstTokenAt: null,
       tokens: 0,
       image: image ? { model: null, images: 1 } : null,
+      media,
     };
     this.#active.set(entry.id, entry);
     let timings: EngineTimings | null = null;
@@ -99,6 +122,9 @@ export class LlmRequests {
       imageAsk: (ask) => {
         if (!done && entry.image !== null) entry.image = ask;
       },
+      mediaModel: (model) => {
+        if (!done && entry.media !== null) entry.media = { ...entry.media, model };
+      },
       token: () => {
         if (done) return;
         if (entry.firstTokenAt === null) entry.firstTokenAt = this.#now();
@@ -107,14 +133,14 @@ export class LlmRequests {
       timings: (value) => {
         timings = value;
       },
-      finish: (ok, usage = null) => {
+      finish: (end, usage = null) => {
         if (done) return;
         done = true;
         this.#active.delete(entry.id);
         // A request that never reached the AI server (the workspace hung up while queued) is no request.
         if (entry.forwardedAt === null) return;
         const finishedAt = this.#now();
-        this.#timeImage(entry, finishedAt, ok);
+        this.#time(entry, finishedAt, end);
         this.#listener?.finished({
           id: entry.id,
           userId,
@@ -126,7 +152,7 @@ export class LlmRequests {
           ttftMs: entry.firstTokenAt === null ? null : entry.firstTokenAt - entry.forwardedAt,
           timings,
           usage,
-          ok,
+          ok: end !== "failed",
         });
       },
     };
@@ -137,18 +163,32 @@ export class LlmRequests {
     return [...this.#active.values()];
   }
 
-  /** Seconds per image of the image model that finished one last (LlmImages.pace); null before any. */
-  imagePace(): { model: string | null; secondsPerImage: number } | null {
-    return imagePace(this.#paces);
+  /**
+   * The median time of `kind`'s last five on the model of its kind that finished one last (LlmGeneration.pace): per
+   * image for images, per request for the others; null before any. A video's request only creates its job: its
+   * pace is the job's (VideoJobs.pace).
+   */
+  pace(kind: GenerationKind): { model: string | null; seconds: number } | null {
+    return generationPace(this.#paces, kind);
   }
 
-  #timeImage(entry: ActiveLlmRequest, finishedAt: number, ok: boolean): void {
-    const key = entry.image === null ? "" : `image:${entry.image.model ?? ""}`;
-    if (entry.image !== null && ok) {
-      const start = Math.max(entry.forwardedAt!, this.#lastFinished.get("") ?? 0, this.#lastFinished.get(key) ?? 0);
-      this.#paces.push({ model: entry.image.model, secondsPerImage: (finishedAt - start) / 1000 / entry.image.images });
-      if (this.#paces.length > 20) this.#paces.shift();
+  /** The kind of the generation that finished last, and when; null before any. */
+  lastGeneration(): { kind: GenerationKind; at: number } | null {
+    return this.#lastGeneration;
+  }
+
+  #time(entry: ActiveLlmRequest, finishedAt: number, end: RequestEnd): void {
+    const kind: GenerationKind | null = entry.image !== null ? "image" : (entry.media?.kind ?? null);
+    const model = entry.image?.model ?? entry.media?.model ?? null;
+    const key = kind === null ? "" : `${kind}:${model ?? ""}`;
+    if (kind !== null && kind !== "video" && end === "completed") {
+      const beside = model !== null && this.#besideLlm.has(model);
+      const start = Math.max(entry.forwardedAt!, beside ? 0 : (this.#lastFinished.get("") ?? 0), this.#lastFinished.get(key) ?? 0);
+      this.#paces.push({ kind, model, seconds: (finishedAt - start) / 1000 / (entry.image?.images ?? 1) });
+      if (this.#paces.length > 50) this.#paces.shift();
+      this.#lastGeneration = { kind, at: finishedAt };
     }
-    this.#lastFinished.set(key, finishedAt);
+    // An LLM request that ends before its first token without an answer may have waited out a swap: it held no LLM.
+    if (kind !== null || end === "completed" || entry.firstTokenAt !== null) this.#lastFinished.set(key, finishedAt);
   }
 }

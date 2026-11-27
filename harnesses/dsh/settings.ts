@@ -7,7 +7,7 @@
 // The file is JSON, which YAML 1.2 reads as it is: model names and ids come from the admin's file, and as JSON
 // strings they can never become YAML tags (dsh evaluates `!!js` tags as code).
 import type { ModelCatalog, PortalModel } from "../models.ts";
-import { AgentConfigError, BROWSER_MCP, BROWSER_TIMEOUT_MS, LLM_KEY_ENV, LLM_TIMEOUT_MS, SEARCH_TIMEOUT_MS } from "../shared.ts";
+import { AgentConfigError, BROWSER_MCP, BROWSER_TIMEOUT_MS, LLM_KEY_ENV, LLM_WAIT_MS, SEARCH_TIMEOUT_MS } from "../shared.ts";
 
 export const DSH_PATCH_FILE = "portal.patch.yml";
 
@@ -92,8 +92,10 @@ export function dshPatchRows(options: DshPatchOptions): unknown[] {
             // A placeholder in the container; the gateway's LLM proxy sends the real key upstream.
             apiKeyEnv: LLM_KEY_ENV,
             cacheRetention: "none",
-            timeoutMs: LLM_TIMEOUT_MS,
-            streamIdleTimeoutMs: LLM_TIMEOUT_MS,
+            // A request may wait in the gateway's queue for hours (LLM_WAIT_MS), and dsh's idle watchdog counts that
+            // wait for the first event too.
+            timeoutMs: LLM_WAIT_MS,
+            streamIdleTimeoutMs: LLM_WAIT_MS,
             // An OpenAI-compatible server such as llama.cpp's llama-server.
             compat: {
               supportsStore: false,

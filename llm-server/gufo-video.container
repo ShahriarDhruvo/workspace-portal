@@ -1,0 +1,36 @@
+[Unit]
+Description=MiniMax H3, text or keyframes to video with stereo sound; started and stopped by llama-swap
+Documentation=https://github.com/gufo-org/gufo/blob/v0.37.0/docs/models/minimax-h3.md
+BindsTo=llama-swap.service
+After=llama-swap.service
+
+[Container]
+ContainerName=gufo-video
+Image=ghcr.io/gufo-org/toolboxes/gufo-runtime@sha256:9548e9946c18cab9d135dd5dc2fad47e7bae0285d6240c100bb36a855bb1d4dc
+Pull=missing
+AddDevice=/dev/kfd
+AddDevice=/dev/dri
+PublishPort=127.0.0.1:18083:8080
+# The weights `gufo model install minimax-h3` downloaded (docs/GUIDE.md), named by their model id.
+Volume=/models/gufo-models:/models:ro,z
+Environment=GUFO_MODELS_DIR=/models
+# The jobs and their finished MP4s, kept until --ttl; owned by the container's user (uid 1000).
+Volume=/models/gufo-cache/video-jobs:/jobs:Z
+HealthCmd=curl -fsS -o /dev/null http://127.0.0.1:8080/ready
+HealthInterval=30s
+HealthTimeout=10s
+HealthRetries=3
+HealthStartupCmd=curl -fsS -o /dev/null http://127.0.0.1:8080/ready
+HealthStartupInterval=2s
+HealthOnFailure=kill
+Notify=healthy
+# Keyframes come as base64 data URLs of up to 20 MiB each.
+Exec=gufo serve --host 0.0.0.0 --port 8080 --max-request-bytes 67108864 video --model minimax-h3 \
+      --served-model-name minimax-h3 --root /jobs --ttl 3600
+
+[Service]
+# Starts only once the model llama-swap stopped has let go of its GPU memory.
+ExecStartPre=%h/.local/bin/wait-gpu-memory 90
+Restart=no
+TimeoutStartSec=300
+TimeoutStopSec=60

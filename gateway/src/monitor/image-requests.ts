@@ -1,6 +1,8 @@
-// What the gateway can tell about the image models' requests (IMAGE_MODELS), whose server reports no progress of its
-// own: the model and the number of images a request asks for, read from its body as it streams to the AI server, and
-// from the requests' times how long an image takes (LlmImages.pace).
+// What the gateway can tell about the image and media models' requests (media.json), whose servers report no
+// progress of their own: the model and the number of images a request asks for, or the media model it names, read
+// from its body as it streams to the AI server, and from the requests' times how long each takes (LlmGeneration.pace).
+import type { GenerationKind } from "@portal/core";
+import { median } from "../lib/stats.ts";
 
 /** The routes that make images, on the AI server. */
 export const IMAGE_PATH = /\/images\/(?:generations|edits)$/;
@@ -11,7 +13,7 @@ const SCAN_BYTES = 64 * 1024;
 const MAX_IMAGES = 10;
 
 export interface ImageAsk {
-  /** One of IMAGE_MODELS; null when the body names none of them where it was read. */
+  /** One of the image models; null when the body names none of them where it was read. */
   model: string | null;
   images: number;
 }
@@ -46,12 +48,35 @@ export function imageAskReader(contentType: string | undefined, models: readonly
   };
 }
 
-/** The median of the last five paces of the model that finished last; null before any. */
-export function imagePace(paces: ReadonlyArray<{ model: string | null; secondsPerImage: number }>): { model: string | null; secondsPerImage: number } | null {
-  const last = paces.at(-1);
+/** One finished generation's time: per image for an image request, per request for a media request. */
+export interface GenerationPace {
+  kind: GenerationKind;
+  model: string | null;
+  seconds: number;
+}
+
+/** The median of the last five paces of `kind` on the model of its kind that finished last; null before any. */
+export function generationPace(paces: readonly GenerationPace[], kind: GenerationKind): { model: string | null; seconds: number } | null {
+  const ofKind = paces.filter((pace) => pace.kind === kind);
+  const last = ofKind.at(-1);
   if (!last) return null;
-  const recent = paces.filter((pace) => pace.model === last.model).slice(-5).map((pace) => pace.secondsPerImage).sort((a, b) => a - b);
-  const middle = Math.floor(recent.length / 2);
-  const secondsPerImage = recent.length % 2 === 1 ? recent[middle]! : (recent[middle - 1]! + recent[middle]!) / 2;
-  return { model: last.model, secondsPerImage };
+  return { model: last.model, seconds: median(ofKind.filter((pace) => pace.model === last.model).slice(-5).map((pace) => pace.seconds)) };
+}
+
+/**
+ * Reads `model` from the start of a media request's body, JSON or multipart (a transcription's upload), as it streams
+ * by; `onModel` hears it once, when it is one of `models`.
+ */
+export function bodyModelReader(contentType: string | undefined, models: readonly string[], onModel: (model: string) => void): (chunk: Buffer) => void {
+  const field = /^multipart\/form-data/i.test(contentType ?? "") ? formField("model", "[^\\r\\n]{1,200}") : /"model"\s*:\s*"([^"\\]{1,200})"/;
+  let text = "";
+  let found = false;
+  return (chunk) => {
+    if (found || text.length >= SCAN_BYTES) return;
+    text += chunk.subarray(0, SCAN_BYTES - text.length).toString("latin1");
+    const model = field.exec(text)?.[1];
+    if (model === undefined || !models.includes(model)) return;
+    found = true;
+    onModel(model);
+  };
 }

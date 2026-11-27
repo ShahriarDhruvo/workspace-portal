@@ -14,6 +14,9 @@
 //   * Safety Net refuses a command that destroys work, and a file the model writes is formatted;
 //   * generate_image asks the stand-in for the settings' default image model and saves the image where the model
 //     says, and the session hears when it is saved;
+//   * the portal's media tools (media-tools) list the settings' media models with what the stand-in says is loaded,
+//     ask it for the model of the tier the call names, follow a video job to its end, save each file where the model
+//     says and tell the model where it is, in JSON;
 //   * the routes of the gateway's status check answer as it reads them: a running turn, one that waits for an
 //     approval, and a command left running in the background;
 //   * a terminal's ticket and socket are given to requests without an Origin, as the gateway sends them;
@@ -79,6 +82,40 @@ const IMAGE_PROMPT = "Draw the check image.";
 const IMAGE_CALL = { prompt: "A red square", path: "images/check.png" };
 const IMAGE_PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
 const imageRequests = [];
+// Asked to (MEDIA_PROMPT), it lists the media models, then calls the media tools in turn: a video from the check
+// image, speech, music, and the transcript of the speech. The stand-in answers each as the AI server's media models do.
+const MEDIA_PROMPT = "Make the check media.";
+const MEDIA_CALLS = [
+  ["list_media_models", {}],
+  ["generate_video", { prompt: "The red square turns", path: "media/check.mp4", tier: "fast", seconds: 5, first_frame: IMAGE_CALL.path }],
+  ["synthesize_speech", { input: "The check passed.", path: "media/check.wav", tier: "fast" }],
+  ["generate_music", { prompt: "calm piano", duration: 10, path: "media/theme.wav", tier: "quality" }],
+  ["transcribe_audio", { file: "media/check.wav", path: "media/check.txt", tier: "fast" }],
+];
+/** A tenth of a second of silence, 16 kHz mono: a real WAV for ffmpeg to read. */
+const WAV = (() => {
+  const data = Buffer.alloc(3200);
+  const header = Buffer.alloc(44);
+  header.write("RIFF", 0);
+  header.writeUInt32LE(36 + data.length, 4);
+  header.write("WAVEfmt ", 8);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(1, 22);
+  header.writeUInt32LE(16000, 24);
+  header.writeUInt32LE(32000, 28);
+  header.writeUInt16LE(2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write("data", 36);
+  header.writeUInt32LE(data.length, 40);
+  return Buffer.concat([header, data]);
+})();
+const VIDEO = Buffer.from("the check video");
+const TRANSCRIPT = "The check passed, as transcribed.";
+const mediaRequests = [];
+let videoPolls = 0;
+/** The settings' media registry (the media plugin's options). */
+const checkMedia = sample.plugins.find((entry) => typeof entry === "object")?.options?.media ?? {};
 const DESTRUCTIVE_COMMAND = "git reset --hard";
 const GO_AS_WRITTEN = 'package main\nfunc main(){println("check")}\n';
 const GO_FORMATTED = 'package main\n\nfunc main() { println("check") }\n';
@@ -110,7 +147,32 @@ const service = http.createServer((req, res) => {
 async function serve(req, res) {
   let body = "";
   for await (const part of req) body += part;
+  if (req.url === "/llm/v1/audio/transcriptions" && req.method === "POST") {
+    // Multipart: the model and format fields, and the file.
+    const field = (name) => new RegExp(`name="${name}"\r\n\r\n([^\r]*)`).exec(body)?.[1] ?? null;
+    mediaRequests.push({ route: "transcriptions", model: field("model"), response_format: field("response_format"), file: /name="file"/.test(body) });
+    return void res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ text: TRANSCRIPT, language: "en" }));
+  }
   const message = body === "" ? null : JSON.parse(body);
+  if (req.url === "/llm/v1/media" && req.method === "GET") {
+    mediaRequests.push({ route: "media", method: "GET" });
+    return void res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ kinds: checkMedia, loaded: [checkMedia.speech.fast.model], videoHold: null }));
+  }
+  const media = /^\/llm\/v1\/(videos(?:\/video_check(?:\/content)?)?|audio\/speech|audio\/music)$/.exec(req.url)?.[1];
+  if (media !== undefined) {
+    mediaRequests.push({ route: media, method: req.method, ...message });
+    if (media === "videos" && req.method === "POST") return void res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ id: "video_check", object: "video", status: "queued", progress: 0 }));
+    if (media === "videos/video_check" && req.method === "GET") {
+      videoPolls++;
+      const status = videoPolls < 2 ? { status: "in_progress", progress: 50 } : { status: "completed", progress: 100 };
+      return void res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ id: "video_check", object: "video", ...status }));
+    }
+    if (media === "videos/video_check/content") return void res.writeHead(200, { "content-type": "video/mp4" }).end(VIDEO);
+    // Qwen3-TTS's raw PCM when asked for it, as the speech tool does.
+    if (media === "audio/speech" && message?.response_format === "pcm") return void res.writeHead(200, { "content-type": "audio/pcm" }).end(WAV.subarray(44));
+    if (media.startsWith("audio/")) return void res.writeHead(200, { "content-type": "audio/wav" }).end(WAV);
+    return void res.writeHead(404).end();
+  }
   if (req.url === "/mcp/search") {
     if (req.method !== "POST") return void res.writeHead(405, { allow: "POST", "content-length": 0 }).end();
     const answers = [message].flat().map(mcpAnswer).filter(Boolean);
@@ -130,12 +192,15 @@ async function serve(req, res) {
   const background = asked(BACKGROUND_PROMPT);
   const toolset = asked(TOOLSET_PROMPT);
   const image = asked(IMAGE_PROMPT);
-  llmRequests.push({ turn, background, toolset, image, step: results.length, authorization: req.headers.authorization, body: message });
+  const mediaTurn = asked(MEDIA_PROMPT);
+  llmRequests.push({ turn, background, toolset, image, media: mediaTurn, step: results.length, authorization: req.headers.authorization, body: message });
   let call = null;
   if (turn && background) {
     if (results.length === 0) call = toolCall("shell", { command: "sleep 300", background: true });
   } else if (turn && image) {
     if (results.length === 0) call = toolCall("generate_image", IMAGE_CALL);
+  } else if (turn && mediaTurn) {
+    if (results.length < MEDIA_CALLS.length) call = toolCall(...MEDIA_CALLS[results.length]);
   } else if (turn && toolset) {
     if (results.length === 0) call = toolCall("shell", { command: DESTRUCTIVE_COMMAND });
     else if (results.length === 1) call = toolCall("write", { path: goFile, content: GO_AS_WRITTEN });
@@ -305,7 +370,9 @@ async function main() {
   // The plugins and skills are the image's (install.sh): there is no network to fetch one from.
   await until("GET /api/plugin to list the settings' `plugins` as active", async () => {
     const listed = (await api("GET", "/api/plugin")).json?.data;
-    return Array.isArray(listed) && sample.plugins.every((folder) => listed.some((plugin) => plugin?.source?.path === folder && plugin.state?.status === "active"));
+    // An entry is a folder, or {package: <folder>, options} for a plugin that takes options (the media tools).
+    const folders = sample.plugins.map((entry) => (typeof entry === "string" ? entry : entry.package));
+    return Array.isArray(listed) && folders.every((folder) => listed.some((plugin) => plugin?.source?.path === folder && plugin.state?.status === "active"));
   });
   const installed = sample.skills.flatMap((folder) => fs.readdirSync(folder));
   expect(installed.length > 0, "the settings' `skills` folders hold skills", sample.skills);
@@ -343,6 +410,8 @@ async function main() {
   expect(tools.some((name) => name.startsWith("browser_")), "the browser MCP server's tools are offered by name (browser_*)", tools);
   expect(tools.includes("execute") && tools.includes("shell"), "OpenCode offers its `execute` and `shell` tools, which the rest of this check uses", tools);
   expect(tools.includes("generate_image"), "OpenCode offers generate_image for the settings' image models (type \"image\")", tools);
+  const mediaTools = MEDIA_CALLS.map(([name]) => name);
+  expect(mediaTools.every((name) => tools.includes(name)), `the media plugin offers ${mediaTools.join(", ")} for the settings' media models`, tools);
   const said = (text) => JSON.stringify(turn.body.messages).split(text).length - 1;
   expect(said(INSTRUCTIONS) === 1, "the request carries the text of the managed `instructions` file, once", said(INSTRUCTIONS));
   expect(said("You have superpowers.") === 1, "the request carries Superpowers' introduction, once", said("You have superpowers."));
@@ -426,6 +495,48 @@ async function main() {
     llmRequests.some((request) => request.image && request.turn && JSON.stringify(request.body.messages).includes(imageFile)),
   );
   passed("generate_image makes an image with the default image model, saves it in the project and wakes the session");
+
+  // A turn that uses each media tool once, the video from the image just saved.
+  const mediaModels = Object.fromEntries(["video", "music", "speech", "transcription"].map((kind) => [kind, checkMedia[kind]?.fast?.model ?? checkMedia[kind]?.quality?.model]));
+  expect(Object.values(mediaModels).every((model) => typeof model === "string"), `${process.argv[2]} gives the media plugin its registry`, sample.plugins);
+  const fifth = (await api("POST", "/api/session", { body: { location: { directory: project } } })).json?.data;
+  expect(typeof fifth?.id === "string", "POST /api/session creates a fifth session", fifth);
+  await api("POST", `/api/session/${fifth.id}/prompt`, { body: { text: MEDIA_PROMPT } });
+  await until("the turn that used each media tool to end", async () => llmRequests.some((request) => request.media && request.step === MEDIA_CALLS.length) && (await ended(fifth.id)()), STEP_TIMEOUT_MS * 2);
+  const mediaAsk = (route, method = "POST") => mediaRequests.find((request) => request.route === route && (request.method ?? "POST") === method);
+  const created = mediaAsk("videos");
+  expect(mediaAsk("media", "GET"), "list_media_models asks <service>/llm/v1/media what is loaded");
+  expect(
+    created?.model === mediaModels.video && created.seconds === 5 && created.size === "512x512" && String(created.first_frame).startsWith("data:image/png;base64,") && Number.isInteger(created.gufo?.seed),
+    `generate_video asks <service>/llm/v1/videos for the fast tier's ${mediaModels.video}, 5 seconds at 512x512, with the keyframe as a data URL and a seed`,
+    { ...created, first_frame: String(created?.first_frame).slice(0, 40) },
+  );
+  expect(videoPolls >= 2 && mediaAsk("videos/video_check/content", "GET"), "generate_video follows its job until it completes, then downloads it", { videoPolls });
+  const saved = (file) => (fs.existsSync(path.join(project, file)) ? fs.readFileSync(path.join(project, file)) : null);
+  expect(saved("media/check.mp4")?.equals(VIDEO), "generate_video saves the video where the model said", saved("media/check.mp4")?.length);
+  const speech = mediaAsk("audio/speech");
+  const voice = Object.keys(checkMedia.speech.fast.voices ?? {})[0];
+  expect(
+    speech?.model === mediaModels.speech && speech.input === "The check passed." && speech.response_format === "pcm" && speech.voice === voice && speech.language === "auto",
+    `synthesize_speech asks <service>/llm/v1/audio/speech for ${mediaModels.speech}'s first voice, as raw PCM`,
+    speech,
+  );
+  const music = mediaAsk("audio/music");
+  expect(music?.model === mediaModels.music && music.duration === 10 && music.lyrics === "[Instrumental]" && music.response_format === "wav", `generate_music asks <service>/llm/v1/audio/music for ${mediaModels.music}, an instrumental, as WAV`, music);
+  const spoken = saved("media/check.wav");
+  expect(
+    spoken?.toString("ascii", 0, 4) === "RIFF" && spoken.readUInt32LE(24) === 24_000 && spoken.subarray(44).equals(WAV.subarray(44)),
+    "synthesize_speech saves the PCM as a 24 kHz WAV where the model said",
+    spoken?.subarray(0, 44).toString("hex"),
+  );
+  expect(saved("media/theme.wav")?.equals(WAV), "generate_music saves its audio where the model said");
+  const transcribed = mediaAsk("transcriptions");
+  expect(transcribed?.model === mediaModels.transcription && transcribed.response_format === "json" && transcribed.file, `transcribe_audio sends the file to <service>/llm/v1/audio/transcriptions for ${mediaModels.transcription}`, transcribed);
+  expect(saved("media/check.txt")?.toString() === `${TRANSCRIPT}\n`, "transcribe_audio saves the transcript where the model said", saved("media/check.txt")?.toString());
+  const told = JSON.stringify(llmRequests.filter((request) => request.media).at(-1)?.body.messages ?? []);
+  const facts = ['\\"file_path\\":\\"media/check.mp4\\"', '\\"file_path\\":\\"media/check.wav\\"', '\\"file_path\\":\\"media/theme.wav\\"', '\\"tier\\":\\"quality\\"', TRANSCRIPT, '\\"loaded\\":true'];
+  expect(facts.every((text) => told.includes(text)), "the model is told in JSON where each file is saved, by which tier, the transcript and what is loaded", told.slice(-900));
+  passed("the media tools make video, speech and music, transcribe, and save each file in the project");
   const settled = await providerIds();
   expect(JSON.stringify(settled) === '["portal"]', "the portal's provider is still the only one after a turn", settled);
 

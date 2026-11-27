@@ -1,0 +1,37 @@
+[Unit]
+Description=Qwen3-ASR 1.7B, speech to text of recordings up to 30 minutes and live audio; started and stopped by llama-swap
+Documentation=https://github.com/gufo-org/gufo/blob/v0.37.0/docs/models/qwen3-asr.md
+# Runs beside the LLM; llama-swap starts it on demand and the LLM's group stops it. It stops with llama-swap.
+BindsTo=llama-swap.service
+After=llama-swap.service
+
+[Container]
+ContainerName=gufo-asr
+Image=ghcr.io/gufo-org/toolboxes/gufo-runtime@sha256:9548e9946c18cab9d135dd5dc2fad47e7bae0285d6240c100bb36a855bb1d4dc
+Pull=missing
+AddDevice=/dev/kfd
+AddDevice=/dev/dri
+PublishPort=127.0.0.1:18090:8080
+# The weights `gufo model install qwen3-asr` downloaded (docs/GUIDE.md), named by their model id.
+Volume=/models/gufo-models:/models:ro,z
+Environment=GUFO_MODELS_DIR=/models
+HealthCmd=curl -fsS -o /dev/null http://127.0.0.1:8080/ready
+HealthInterval=30s
+HealthTimeout=10s
+HealthRetries=3
+HealthStartupCmd=curl -fsS -o /dev/null http://127.0.0.1:8080/ready
+HealthStartupInterval=2s
+HealthOnFailure=kill
+Notify=healthy
+# Uploads up to llama-swap's 64 MB body limit. Long recordings are split at quiet points into pieces of --context
+# tokens (about 50 s at the default 1,024), so the context does not grow with the recording. Longer pieces read
+# worse: 4,096 gave 68% word errors on a 5-minute recording, against 1% at 1,024.
+Exec=gufo serve --host 0.0.0.0 --port 8080 --max-request-bytes 67108864 asr --model qwen3-asr \
+      --served-model-name qwen3-asr-1.7b
+
+[Service]
+# Starts once the GPU memory it needs is free beside the LLM: 5 GiB loaded, 5.4 GiB after long recordings.
+ExecStartPre=%h/.local/bin/wait-gpu-memory 6
+Restart=no
+TimeoutStartSec=120
+TimeoutStopSec=60

@@ -33,6 +33,7 @@ import { KindPicker, StartWorkspaceButton, useKindChoice } from "./start-workspa
 import { StateCard } from "./state-card";
 import { StatusPill } from "./status-pill";
 import { StopDialog } from "./stop-dialog";
+import { VideoHoldBanner } from "./video-hold-banner";
 
 // The /workspace page body: a top bar and the workspace's agent in an iframe, mounted only once the agent is ready.
 // Nothing here starts a workspace by itself, and Stop (own workspace only) always asks first.
@@ -465,6 +466,7 @@ export function WorkspaceShell({ viewer, target, frames, idleTimeoutMinutes, ban
           </BarMenu>
         </div>
       </HeaderBar>
+      {phase.kind === "ready" && info?.videoHold ? <VideoHoldBanner hold={info.videoHold} /> : null}
       <main className="relative min-h-0 flex-1">
         {phase.kind === "ready" ? (
           content

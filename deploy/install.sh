@@ -94,6 +94,35 @@ install -d -m 0700 -o root -g root "$PORTAL_DATA_DIR/config/models"
 for file in settings.json system-defaults.json; do
   [[ -f $PORTAL_DATA_DIR/config/models/$file ]] || install -m 0600 -o root -g root "models/$file" "$PORTAL_DATA_DIR/config/models/$file"
 done
+# media.json took the place of IMAGE_MODELS: an install from before it gets a media.json of the same image models
+# (the first fast, the second quality, any others dropped), and the line leaves .env. llm-server/media.json is the
+# reference AI server's whole file, with the media models.
+MEDIA_JSON=$PORTAL_DATA_DIR/config/models/media.json
+if [[ ! -f $MEDIA_JSON ]]; then
+  if python3 -I - "$MEDIA_JSON" "$(env_value "$ENV_FILE" IMAGE_MODELS || true)" <<'PY'; then
+import json, sys
+target, images = sys.argv[1:]
+ids = [item.strip() for item in images.split(",") if item.strip()] if images.strip().lower() != "none" else []
+if not ids: sys.exit(3)
+if len(ids) > 2:
+    print(f"!! media.json: the image models after the second ({', '.join(ids[2:])}) are dropped: name them in it to keep them", file=sys.stderr)
+media = {"image": {"fast": {"model": ids[0]}, **({"quality": {"model": ids[1]}} if len(ids) > 1 else {})}}
+with open(target, "w", encoding="utf-8") as file:
+    file.write("// Moved from IMAGE_MODELS in .env by deploy/install.sh. llm-server/media.json describes every field; deploy/models.sh installs a new file.\n")
+    json.dump(media, file, indent=2)
+    file.write("\n")
+PY
+    chmod 600 "$MEDIA_JSON"
+    log "moved the image models from .env to $MEDIA_JSON"
+  else
+    [[ $? -eq 3 ]] || die "could not write $MEDIA_JSON"
+    install -m 0600 -o root -g root models/media.json "$MEDIA_JSON"
+  fi
+fi
+if grep -qE "^IMAGE_MODELS=" "$ENV_FILE"; then
+  sed -i "/^IMAGE_MODELS=/d" "$ENV_FILE"
+  log "removed IMAGE_MODELS from .env: media.json names the image models now"
+fi
 INSTRUCTIONS="$PORTAL_DATA_DIR/config/instructions.md"
 [[ -f $INSTRUCTIONS ]] || install -m 0600 -o root -g root harnesses/instructions.md "$INSTRUCTIONS"
 if selinux_on; then
