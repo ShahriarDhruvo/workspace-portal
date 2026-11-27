@@ -19,10 +19,12 @@ and reads the audit log.
 ## In a workspace
 
 Whichever agent runs it, a workspace has the compilers and tools for Node.js, Python, Go, Rust, C and C++, Bash
-and PowerShell: they are in the image, because a Private workspace can download nothing
-([the list](docs/GUIDE.md#10-workspace-portal)). OpenCode also starts with plugins, skills, formatting after edits
-and, in an Online workspace, two public MCP servers: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#opencodes-toolset)
-lists them and what was left out.
+and PowerShell, and ffmpeg, SoX and ImageMagick for media: they are in the image, because a Private workspace can
+download nothing ([the list](docs/GUIDE.md#10-workspace-portal)). OpenCode also starts with plugins, skills,
+formatting after edits and, in an Online workspace, two public MCP servers:
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#opencodes-toolset) lists them and what was left out. With the AI
+server's image and media models, OpenCode makes images, video clips with sound, music and speech, and transcribes
+audio, saving each file in the project ([the media models](docs/GUIDE.md#media-models)).
 
 ## What runs where
 
@@ -88,7 +90,9 @@ The models are not in `.env` but in two files in Qwen Code's settings format, in
 `$PORTAL_DATA_DIR/config/models`: `system-defaults.json` holds the models and the defaults users may change,
 `settings.json` what users cannot override. Every agent takes its models from these files. Every model `id`
 must be one the model server serves. Start from the copies in [`models/`](models); workspaces read the
-installed files at their next start.
+installed files at their next start. The image and media models are in a third file there, `media.json`, by kind
+and tier (a fast and a quality model): [`llm-server/media.json`](llm-server/media.json) is the reference AI server's.
+Installing it restarts the gateway, so `models.sh` refuses while an update or a video runs.
 
 ```sh
 sudo bash deploy/models.sh install models/system-defaults.json models/settings.json
@@ -176,7 +180,8 @@ sudo bash deploy/uninstall.sh --purge-data    # deletes the data directory too
 ```
 
 A re-run of the installer rebuilds the images and restarts what changed. It keeps `.env`, adding the settings
-it lacks, the model settings and all data, and refuses while an update from Admin > Updates is running. An agent
+it lacks, the model settings and all data, and refuses while an update from Admin > Updates is running or a video
+is being made. An agent
 the portal has gained since the install (OpenCode) stays off, because `WORKSPACE_AGENTS` in `.env` is kept: add
 `opencode` to it and run the installer again.
 
@@ -239,7 +244,7 @@ npm ci                # Node.js 24 or newer; npm workspaces: packages/core, harn
 npm test              # all five; the gateway's integration tests need no Docker
 npm run typecheck
 npm run build         # the gateway bundle, then the web app
-python3 -m unittest hostd/test_hostd.py llm-server/fans/test_fans.py
+python3 -m unittest hostd/test_hostd.py llm-server/fans/test_fans.py llm-server/apps/ltx/test_ltx_videos.py
 ```
 
 The page reader's tests run in its image build. `npm run dev -w @portal/gateway` runs the gateway from source

@@ -560,6 +560,169 @@ llama-swap's own part of a swap was under 2 seconds.
 
 Downloading both image models (65.6 GB) with `gufo model install` took 26 minutes 54 seconds, at about 41 MB/s.
 
+## Media models
+
+Measured on November 27, 2026 on kernel 7.3.4 through llama-swap v277, each request shaped as the portal sends
+it: speech and transcriptions to llama-swap's `/v1/audio/speech` and `/v1/audio/transcriptions`, music and video
+to `/upstream/<model>/v1/...`, recordings as 16 kHz mono FLAC. Engines: Gufo 0.37.0 for MiniMax H3, Qwen3-TTS and
+Qwen3-ASR; Fish Speech v3.0.0-beta for S2-Pro; ACE-Step 1.5 v0.1.8 with both XL models in one process; vLLM 0.32.0
+(kyuz0's gfx1151 image) for SOV-Transcribe-1 with its DFlash draft. Times run from sending the request to the whole
+answer, for a video from creating the job to its MP4 downloaded. GPU memory is the GTT counter and free memory is
+MemAvailable, both read every 0.25 s. The model files were in the page cache.
+
+The test recordings are LibriSpeech readings with their reference text: 12.5 s, 34.6 s, and 302.9 s (the first 46
+utterances of test-clean, two speakers). The word error rate (WER) counts words after lowercasing and removing
+punctuation, with "Mr" read as "mister".
+
+### Swap times
+
+One request after another; "again" is the same request at once after it. H3 started with the Turbo image model
+loaded, which it stopped.
+
+| Request | Loaded before | With the swap | Again | GPU memory |
+|---|---|--:|--:|--:|
+| H3 video, 5 s at 512 × 512, `fast` preset | Turbo | 220.9 s | 205.3 s | 34.3 GiB at most |
+| Fish speech, 7.8 s of audio | H3 | 53.5 s | 16.5 s | 19.2 GiB, 20.3 at most |
+| SOV transcription, 34.6 s of audio | Fish | 89.3 s | 1.5 s | 88.8 GiB |
+| ACE turbo, 30 s track | SOV | 29.7 s | 3.0 s | 22.4 GiB, 24.5 at most |
+| ACE base, 30 s track | ACE turbo, the same process | 15.1 s | 15.1 s | 24.4 GiB at most |
+| A chat request | ACE | 19.8 s | 0.19 s | 96.1 GiB |
+
+Other swaps: Fish to ACE base 39.1 s; SOV and Fish back to the LLM 20.4 and 18.6 s.
+
+- H3 starts in 0.2 s and reads its weights during each job, so a first video is only 16 s slower than the next.
+- SOV takes about 85 s to start. Its log shows 20 s for the 49.7 GiB of weights and 19 s to prepare the engine.
+- ACE loads both models in about 24 s. The first turbo track took 5.4 s of generation, the next 2.8 s (its log).
+- The same seed and request gave byte-identical output again from H3, Fish, ACE and qwen3-tts-1.7b.
+
+### Speech models beside other models
+
+The speech models have a group of their own and start beside whatever else runs; one speech model replaces
+another. With `persistent: true` and `ttl: 300`, installed at 15:48, llama-swap keeps a speech model until 300 s
+after its last answer. The qwen3-tts-1.7b models were asked for `pcm` as the portal does, with the 26-word sentence
+also used for Fish. Memory is read while the model answers again.
+
+| Request | Beside | First, the model starts | Again | GPU memory in use | Lowest free memory |
+|---|---|--:|--:|--:|--:|
+| qwen3-tts-1.7b, voice ryan, 7.1 s of speech | the LLM | 5.3 s | 2.8 s, 2.8 s | 103.5 GiB | 18.3 GiB |
+| qwen3-tts-1.7b, voice ryan, 24.6 s of speech | the LLM | 12.2 s | 9.7 s | 105.9 GiB | 15.9 GiB |
+| qwen3-asr-1.7b, 34.6 s recording, WER 1.2% | the LLM | 4.9 s | 2.3 s, 2.3 s | 101.3 GiB | 20.2 GiB |
+| qwen3-tts-1.7b-clone, a 12.5 s reference with its text, 7.4 s of speech | SOV | 6.3 s | 3.1 s | 96.6 GiB | 21.5 GiB |
+| qwen3-tts-1.7b-design, a described voice, 8.2 s of speech | SOV | 5.8 s | 3.3 s | 96.3 GiB | 21.8 GiB |
+| qwen3-asr-1.7b, 34.6 s recording, WER 1.2% | SOV | 4.9 s | 2.3 s | 94.1 GiB | 23.9 GiB |
+| qwen3-asr-1.7b, 302.9 s recording, WER 2.8% | SOV | | 25.0 s | 94.2 GiB | 23.7 GiB |
+
+- The journal shows gufo-tts and gufo-asr each started once for their three requests and stopped only when the
+  other replaced it. The swaps from the LLM to SOV and back left the speech model running. llama-swap unloaded
+  qwen3-tts-1.7b at 15:58:13.6, 300.9 s after its last answer, and logged "TTL of 300s reached".
+- A chat request sent 2 s into the 24.6 s speech answered in 0.09 s. The speech took 9.7 s, as it does alone.
+- SOV started from the LLM in 88.8 s with qwen3-tts-1.7b beside it. The LLM came back from SOV in 19.1 s with
+  qwen3-tts-1.7b still there.
+- Eight 302.9 s recordings on SOV with a 24.6 s qwen3-tts-1.7b request 15 s in: 99.0 GiB in use at most and
+  18.5 GiB free at least. The transcriptions took 105.2-106.7 s each instead of 95.1-97.3 s, and the speech 20.7 s
+  with its model's start instead of 12.2 s. This and the long speech beside the LLM (15.9 GiB free) left the least
+  free memory seen with a speech model.
+- In an earlier run beside the LLM, the first request took 5.6 s for voice vivian with an instruction (8.2 s of
+  speech), 6.0 s for the clone, 5.6 s for the design model and 27.4 s for qwen3-asr-1.7b on the 302.9 s recording
+  (WER 2.8%).
+
+That earlier run, without `persistent`, found llama-swap stopping the speech model 5 ms after every answer beside
+the LLM, so each request started it again. A request to a model of an exclusive group stops the models of the
+other groups, also when that model already runs. The portal's live view asks the LLM for `/slots` every 500 ms
+through llama-swap, about two requests a second here. The next request to Fish, ACE or SOV stopped the speech model
+in the same way. With `persistent`, only the swaps between the LLM and SOV were checked.
+
+| Speech model started beside (earlier run) | Request | Time | GPU memory, all | Lowest free memory |
+|---|---|--:|--:|--:|
+| Fish | qwen3-asr-1.7b on Fish's 7.8 s of speech | 3.0 s, WER 0 | 24.3 GiB | 94.3 GiB |
+| ACE | qwen3-asr-1.7b, 34.6 s recording | 4.7 s, WER 1.2% | 27.6 GiB | 91.2 GiB |
+
+The outputs that were transcribed came back word for word (WER 0): ryan, the clone and the design voice by
+qwen3-asr-1.7b; the 24.6 s ryan speech, Fish's own voice and Fish's clone by SOV. qwen3-asr-1.7b heard the lyrics
+of the ACE base track word for word and got 4 of the turbo track's 30 words wrong ("mondo" for "morning",
+"Focusing" for "Take it easy"). Nobody listened to the tracks, so whether turbo sang those words less clearly is
+not known. Median voice pitch: the reference speaker 127 Hz; Fish's own voice 191 Hz and its clone 128 Hz; ryan
+140 Hz, vivian asked to sound cheerful 270 Hz, the Qwen3-TTS clone 119 Hz, the described "deep, older narrator"
+98 Hz.
+
+### SOV-Transcribe-1 and its cache
+
+vLLM takes all the memory it is allowed for its KV cache. At `--gpu-memory-utilization 0.85` that was 51.9 GiB, room
+for 11.9 requests of 32K tokens, and SOV used 105.8 GiB of the GPU's 124. `llm-server/vllm-sov.container` now caps the
+cache with `--kv-cache-memory-bytes` at 36 GiB, room for 8.27 such requests, a little more than its eight sequences
+need. vLLM's log gives 7,525 tokens a GiB.
+
+| | 0.85 of the GPU | Cache capped at 36 GiB |
+|---|--:|--:|
+| KV cache | 51.9 GiB, 390,757 tokens | 36.0 GiB, 270,865 tokens |
+| GPU memory, loaded | 105.1 GiB | 88.8 GiB |
+| GPU memory at most, eight 302.9 s recordings at once | 105.8 GiB | 89.4 GiB |
+| Lowest free memory, the same | 11.9 GiB | 28.4 GiB |
+| Start, first 12.5 s transcribed | 97.8 s, the LLM stopped first | 86.2 s, nothing loaded |
+| 12.5 s recording | 0.56 s, WER 0 | 0.56 s, WER 0 |
+| 34.6 s recording | 1.51 s, WER 0 | 1.51 s, WER 0 |
+| 302.9 s recording | 44.3 s, WER 2.9% | 44.3 s, WER 2.9% |
+| Eight 34.6 s recordings at once | 3.2 s | 3.0 s |
+| Eight 302.9 s recordings at once | 97.3 s, WER 2.7-2.9% | 97.3 s, WER 2.7-2.9% |
+
+- vLLM sees about 2.6 GiB less free memory than the GTT counter shows (121.5 against 124.0 GiB with nothing loaded,
+  25.4 against 28.1 beside the LLM). The unit waits for 90 GiB of GTT and vLLM checks for 0.70 of the 124 GiB.
+- SOV answers 400 to `response_format` `srt` and `vtt` (vLLM 0.32.0 takes only `text`, `json`, `verbose_json` and
+  `diarized_json`) and to `verbose_json` and `diarized_json` (not supported for this model). `text` answers with
+  JSON, `{"text": ...}`.
+
+### MiniMax H3
+
+Five-second videos of the same prompt, seed 42, as the portal asks for them (`/upstream/minimax-h3/v1/videos`,
+then its status every 5 s and `/content`). Every file is H.264 at 24 frames a second, 124 frames, with stereo AAC
+at 32 kHz, 5.18 s long.
+
+| Video | Steps (Gufo's log) | Create to downloaded | GPU memory at most | File |
+|---|--:|--:|--:|--:|
+| 512 × 512, `fast`, the Turbo image model loaded before | 19 | 220.9 s | 34.3 GiB | 945 KB |
+| The same again | 19 | 205.3 s | 34.3 GiB | 945 KB |
+| 512 × 512, `exact` (the default) | 49 | 1,056 s (17.6 min) | 39.3 GiB | 893 KB |
+| 512 × 512, `exact`, starting on a Turbo image (`first_frame`) | 49 | 1,101 s (18.3 min) | 39.5 GiB | 914 KB |
+| 1344 × 768, `exact` | 25 of 49 | cancelled after 40 min | 41.8 GiB until then | |
+
+- At 1344 × 768 the first step ended 107 s after the job started, then each step took 95.4 s (steps 1 to 25 in
+  Gufo's log), six times a 512 × 512 step (15.9 s). The job was cancelled after 40 minutes at progress 45%. At that
+  rate the steps would end after about 78 minutes; with the decoding scaled up from 512 × 512 by the number of
+  pixels, the video would take about 95 minutes (estimate, not run).
+- Cancelling that job with `DELETE /v1/videos/{id}` answered `deleted` and the job then answered 404, but the job
+  went on: Gufo logged no cancellation and left its folder as `in_progress`. When llama-swap stopped H3 27 s later,
+  the container ignored SIGTERM and podman killed it after 10 s. The folder was deleted by hand, so the job could
+  not start again with H3.
+- H3's `POST /v1/videos` answers 202. When llama-swap stopped H3 at the start of a 5 s job, Gufo cancelled the
+  running job, but a second job queued behind it stayed in the jobs folder as `queued` (Gufo keeps jobs across
+  restarts). It was deleted by hand before H3 started again, so whether it would have run was not seen.
+- `progress` counts the denoising steps up to 80%, then the video decoding up to 89%, then jumps to 100. With
+  `exact`, 10% comes after 5 s, then about 1.5% every 15 s; 80 to 89% takes 4 minutes.
+- Lowest free memory was 82 GiB at 512 × 512 and 73 GiB at 1344 × 768.
+- What the frames show (15 frames, one every 0.42 s, looked at): `fast` and `exact` both show the prompt, a red fox
+  trotting through snow among birches while the camera tracks it from the side. Its body and legs stay whole from
+  frame to frame and the light is the low golden light asked for; the steaming breath does not show. With
+  `first_frame` the video starts on the picture and the fox walks toward the camera until its head fills the frame;
+  two small grey specks appear on the snow for about a second.
+- The sound is quiet: mean level -37 dB (`fast`), -43 dB (`exact`) and -44 dB (`first_frame`). In the spectrograms
+  `fast` shows short transients and tonal bands, `exact` a low rumble and one call with harmonics, `first_frame`
+  regular footstep-like clicks and calls at 0.8 s and 4.5 s. Nobody listened to them.
+
+### Fish S2-Pro and ACE-Step
+
+| Request | Time, loaded | With the swap | Output | GPU memory |
+|---|--:|--:|---|--:|
+| Fish, its own voice, 26 words | 16.5 s | 53.5 s from H3 | 7.8 s, 44.1 kHz mono WAV | 19.2 GiB, 20.3 at most |
+| Fish, a cloned voice: 12.5 s reference with its text | 18.4-19.2 s | | 7.8 s | 21.7 GiB at most |
+| ACE turbo, 8 steps, 30 s with lyrics | 3.0 s | 29.7 s from SOV | 30.0 s, 48 kHz stereo WAV | 22.4 GiB, 24.5 at most |
+| ACE base, 50 steps, the same | 15.1 s | 39.1 s from Fish | 30.0 s, 48 kHz stereo WAV | 24.4 GiB at most |
+
+- Fish takes about 2.1 seconds for each second of speech.
+- The model name picks ACE's model: its log shows the turbo settings for every `acestep-1.5-xl-turbo` request,
+  sent to `/upstream/acestep-1.5-xl-turbo/` (llama-swap's alias), and the base settings for `acestep-1.5-xl-base`.
+- Both tracks are peak-normalized to -1 dB, mean level -16.5 dB (turbo) and -19.6 dB (base). Their spectrograms
+  show notes and a sung voice; the last second of each is near silence.
+
 ## Portal server
 
 ### Workspace memory

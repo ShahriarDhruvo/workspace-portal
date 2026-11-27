@@ -123,7 +123,7 @@ the gateway which origins to name: `https://host` for the portal instead of `htt
 ```
 PORTAL_DATA_DIR/                    root 0755
   db/portal.sqlite                  db/ is 10001's (the web app), 0700
-  config/models/                    root 0700; settings.json, system-defaults.json, 0600
+  config/models/                    root 0700; settings.json, system-defaults.json, media.json, 0600
   config/instructions.md            root 0600; what every agent is told beside its workspace's facts
   config/agent-versions.env         root 0600; the agent versions in use
   users/<id>/                       root 0711, as users/ itself
@@ -318,7 +318,11 @@ account, the same user's included. State is per listener: nothing carries betwee
 | Route | Does |
 |---|---|
 | `POST /llm/v1/chat/completions`, `/completions`, `/embeddings` | forwarded to `LLM_UPSTREAM_URL/v1/...` |
-| `POST /llm/v1/images/generations`, `/llm/v1/images/edits` | the same; OpenCode's `generate_image` uses them (`IMAGE_MODELS`) |
+| `POST /llm/v1/images/generations`, `/llm/v1/images/edits` | the same; OpenCode's `generate_image` uses them with the models of `media.json`'s `image` |
+| `POST /llm/v1/audio/speech`, `/llm/v1/audio/transcriptions` | only when `media.json` has the kind: forwarded to `LLM_UPSTREAM_URL/v1/audio/...`, whose server picks the model by the request's own (llama-swap does); the gateway reads the model only to count the request, from the JSON or from the multipart form, and sends the body as it came |
+| `POST /llm/v1/audio/music`, `POST /llm/v1/videos` | only when `media.json` has the kind: the body is read whole (at most 64 MiB, `MEDIA_BODY_BYTES`; more is 413). Its `model` must be one of the kind's (400 otherwise); without one it goes to the kind's fast model, or its only one, which is written into a JSON body (a multipart one, a video's keyframes as files, is sent as it came). Then forwarded to that model's own routes, `LLM_UPSTREAM_URL` + `MEDIA_MODEL_PATH` with the id + the path (behind llama-swap `/upstream/<id>/v1/...`, as llama-swap routes neither) |
+| `GET /llm/v1/videos/<id>`, `GET /llm/v1/videos/<id>/content`, `DELETE /llm/v1/videos/<id>` | OpenAI's video job API: to the model that made the job; a job is its creator's alone (`video-jobs.ts`) |
+| `GET /llm/v1/media` | the gateway's own answer (`media-catalog.ts`): `{ kinds, loaded, videoHold }`, the kinds and tiers of `media.json`, the models llama-swap has ready (from its `/running`; null when that cannot be read), and the running video job as the caller's workspace page shows it. The media tools' `list_media_models` reads it |
 | `GET /llm/v1/models`, `/llm/v1/models/<id>` | the same |
 | `POST /mcp/search` | MCP over streamable HTTP, stateless: `web_search`, and `read_page` when a reader is set |
 
@@ -327,9 +331,23 @@ account, the same user's included. State is per listener: nothing carries betwee
 - **Queue** (`llm-queue.ts`): generation requests take a slot, at most `LLM_MAX_CONCURRENCY` in all and
   `LLM_MAX_CONCURRENCY_PER_USER` each, first come first served; a user at the limit does not hold up the users
   behind. An engine update pauses the queue, and requests wait instead of failing. An image request is a
-  generation like any other: behind llama-swap it holds its slot while the LLM is swapped out.
-- **Shown URLs**: what a chat request shows the model is noted for `read_page`; an image request's prompt is the
-  model's own writing and is not.
+  generation like any other: behind llama-swap it holds its slot while the LLM is swapped out. So is a media
+  request (`media-routes.ts`); speech, transcription and music answer when they are done.
+- **Video jobs** (`video-jobs.ts`): a video job runs after the request that created it has ended, so behind
+  llama-swap no request is in flight and the next one, for any other model, would stop the video model and the
+  job with it. A create waits until nothing is in flight, and nothing queued behind it goes first
+  (`LlmQueue.acquireAlone`); from its grant until the job ends the queue grants nothing new. Requests wait in
+  the gateway as they do during an engine update, and asking about a job is no generation, so it passes. The job
+  remembers its model: its status, content and cancel go there. The
+  gateway asks the server about each running job every 5 s, with the AI server's key. A job ends when it
+  failed or was cancelled, when the server no longer knows it, after 10 minutes without an answer, or after 12
+  hours. A completed job holds on until its user has downloaded the video, or for 5 minutes: a download after
+  the LLM took the GPU back would load the video model again only to send the file. A job that ended is kept for
+  its user for an hour, so its status still answers. Another user's job id gets
+  404 `No such video job.`, as for an id that never was. The gateway keeps its jobs in memory only: a restart
+  forgets them, and with them the hold.
+- **Shown URLs**: what a chat request shows the model is noted for `read_page`; an image or media request's
+  prompt is the model's own writing, or a file of the project, and is not.
 - **Usage**: token counts are read from a copy of the answer as it streams (`monitor/usage.ts`) into
   `llm_usage` and the workspace's session row: the answer's `usage`, or for a stream that was not asked for
   one what the engine's closing `timings` say. Prompts and answers are not stored.
@@ -375,11 +393,16 @@ client --(key)--> web app  app/llm/api/[[...path]]/route.ts
   `x-api-key` (Anthropic's clients). It holds while it is not revoked and its user is active without a temporary
   password; anything else gets 401 `invalid_api_key` in OpenAI's error shape. `OPTIONS` passes without a key,
   because a browser's preflight carries none.
-- **Every path is passed on**, where a workspace gets seven: the API stands in for the AI server's own, and its
+- **Every path is passed on**, where a workspace gets seven and the media models' routes: the API stands in for
+  the AI server's own, and its
   caller is a user, not an agent that a web page can talk into things. With a hosted provider behind
   `LLM_UPSTREAM_URL`, a key so opens all of that provider's API on the portal's account. WebSocket upgrades
   are not passed, nor llama-swap's own routes (`ADMIN_ROUTES`: `/api`, `/ui`, `/logs`, `/upstream`, `/unload`,
   `/running`, `/metrics`), which stop models, cancel others' requests and show everyone's traffic: 404.
+- **Media routes and video jobs** are the workspaces' too, for the kinds `media.json` has: speech and
+  transcription go to the server's own `/v1/audio/...`, music and a video's create to the model's own routes
+  (`MEDIA_MODEL_PATH`) after the same check of `model`, and a video job holds the queue and is its creator's
+  alone. `GET /llm/v1/media` is a workspace's only: under `/llm/api` the path goes to the AI server like any other.
 - **Queue and counting** are the workspaces' (`service/llm-proxy.ts`). A `POST` is a generation unless its path
   only counts or formats a prompt (`NOT_A_GENERATION`): it waits for a slot within the same limit per user,
   counts in `llm_usage`, and counts per key and day in `api_key_usage` (`monitor/key-usage.ts`) where a
@@ -402,16 +425,21 @@ client --(key)--> web app  app/llm/api/[[...path]]/route.ts
 | GET | `/control/models` | `{ models }`: the ids in the admin's model settings, the default first | |
 | GET | `/control/energy-prices` | `EnergyPriceStatus` | |
 | POST | `/control/energy-prices/refresh` | the same, once both sources are done | |
-| GET | `/control/updates/running` | `{ running, agent, engine }`, for the deploy scripts | |
+| GET | `/control/updates/running` | `{ running, agent, engine, apps, video }`, for the deploy scripts: `video` while a video job runs, which a gateway restart would lose | |
 | GET | `/control/agents/versions[?refresh=1]` | `AgentVersionsOverview` | |
 | POST | `/control/agents/update/cancel` | `{ cancelled }` | |
 | POST | `/control/agents/:agent/update` | `{ version, rebuild?, actorUserId? }`, `AgentUpdateJob` | 400 `unknown_agent`, `invalid_version`, `agent_unavailable`; 404 `version_not_found`; 409 `update_running`; 502 `registry_unreachable` |
 | DELETE | `/control/agents/:agent/images/:version` | `{ ok: true }` | 400 `unknown_agent`, `invalid_version`; 404 `not_found`; 409 `image_current`, `image_in_use`, `update_running` |
 | GET | `/control/engine[?refresh=1]` | `EngineOverview` | |
-| POST | `/control/engine/update` | `{ version, actorUserId? }`, `EngineUpdateJob` | 400 `invalid_version`; 404 `version_not_found`; 409 `already_current`, `engine_job_running`; 503 `engine_unavailable` |
+| POST | `/control/engine/update` | `{ version, actorUserId? }`, `EngineUpdateJob` | 400 `invalid_version`; 404 `version_not_found`; 409 `already_current`, `engine_job_running`, `app_job_running`; 503 `engine_unavailable` |
 | POST | `/control/engine/cancel` | `{ cancelled }`: while pulling or draining | |
 | POST | `/control/engine/restart-now` | `{ ok }`: ends the drain | |
-| DELETE | `/control/engine/images/:digest` | `{ ok: true }` | 400 `invalid_digest`; 409 `engine_job_running`; hostd's own 404 and 409 codes; 502 `hostd_failed`; 503 `engine_unavailable` |
+| DELETE | `/control/engine/images/:digest` | `{ ok: true }` | 400 `invalid_digest`; 409 `engine_job_running`, `app_job_running`; hostd's own 404 and 409 codes; 502 `hostd_failed`; 503 `engine_unavailable` |
+| GET | `/control/apps[?refresh=1]` | `AppsOverview` | |
+| POST | `/control/apps/:id/update` | `{ version, actorUserId? }`, `AppUpdateJob` | 400 `invalid_version`; 404 `no_app`, `version_not_found`; 409 `already_current`, `app_job_running`, `engine_job_running`; 503 `apps_unavailable` |
+| POST | `/control/apps/cancel` | `{ cancelled }`: while installing or draining | |
+| POST | `/control/apps/restart-now` | `{ ok }`: ends the drain | |
+| DELETE | `/control/apps/:id/versions/:version` | `{ ok: true }` | 400 `invalid_version`; 409 `app_job_running`, `engine_job_running`; hostd's own 404 and 409 codes; 502 `hostd_failed`; 503 `apps_unavailable` |
 | GET | `/control/workspaces` | `{ workspaces: WorkspaceInfo[] }` | |
 | GET | `/control/workspaces/:userId` | `WorkspaceInfo`; `stopped` for a user without a row | |
 | GET | `/control/workspaces/:userId/servers` | `WorkspaceServers`: the web servers of the workspace that runs; counts as no activity | |
@@ -487,14 +515,23 @@ The admin writes the models as Qwen Code settings (`config/models/`, JSON with c
   offers hosted models of its own; a session that names one fails), no update and no session sharing, its
   `webfetch` and `websearch` tools off, the `fetch` of its `execute` tool with them, the MCP server `search`
   (plus `browser` with `WORKSPACE_BROWSER`), whose tools the model calls by name, and its
-  [toolset](#opencodes-toolset). With `IMAGE_MODELS` the provider also has those models as `type: "image"`, which
-  OpenCode keeps out of its model picker and gives to its `generate_image` tool, the first as
+  [toolset](#opencodes-toolset). The image and media models come from `media.json` (`harnesses/media.ts`, read by the
+  gateway at its start): each kind (`image`, `video`, `music`, `speech`, `transcription`) has a `fast` and a
+  `quality` model, or one model for both. With `image` the provider also has those models as `type: "image"`,
+  which OpenCode keeps out of its model picker and gives to its `generate_image` tool, the fast one as
   `experimental.image_generate.model`; the instructions then say to save an image under `images/` in the project
-  and show it in the reply (`opencodeFacts`). The image adds
+  and show it in the reply (`opencodeFacts`). With any other kind the settings add the portal's media plugin with
+  the gateway's address and the whole file as its options. The instructions then list each kind's tool and its
+  tiers, with what each model is for, how long it takes and whether it runs beside the agent's LLM; they say to go
+  ahead with one simple asset the person described clearly, and otherwise to call `list_media_models` and propose
+  a plan (a table of step, asset, tier and model, why, estimated time) that starts when the person replies
+  **go**, to make a piece that matters twice (fast drafts, then quality), and to load the `media-production`
+  skill. The workspace image adds
   `OPENCODE_DISABLE_MODELS_FETCH`: its list of the world's models stays the one it ships with. A model's efforts
   are its variants in OpenCode's picker, and its default effort goes with every request for which no variant
   was picked. A start is refused (`AgentConfigError`) when a model's id or name contains `{env:` or `{file:`,
-  which OpenCode would replace, or its id a `#`, which OpenCode reads as the start of a variant's name. No file
+  which OpenCode would replace (so must no text of `media.json`, which goes into the settings whole), or its id
+  a `#`, which OpenCode reads as the start of a variant's name, and when an image model is a chat model too. No file
   of OpenCode is edited in the image; the build only removes the builds this CPU does not run. OpenCode loads
   its native libraries from its temporary folder, and `/tmp` forbids execution, so the start script points
   `BUN_TMPDIR` at a folder in the home; without the libraries OpenCode watches no folder for changes. Sessions
@@ -527,6 +564,8 @@ download. A person adds their own in `~/.config/opencode` or a project's `.openc
 |---|---|---|
 | Plugin | [Superpowers](https://github.com/obra/superpowers) | skills for working in steps (brainstorm, plan, test first, debug by cause, review), and a note in every session that says to use them |
 | Plugin | [Safety Net](https://github.com/kenryu42/claude-code-safety-net) | refuses commands that destroy work (`git reset --hard`, `rm -rf` of a home or repository, an install script piped from the internet) and reads of keys and credentials |
+| Plugin | the portal's media tools (`harnesses/opencode/image/media-tools`), named in the settings only with a media model | `generate_video` (a clip with sound, from a prompt and optional first and last frames; follows the job, cancels it when stopped), `generate_music`, `synthesize_speech` (a built-in voice with instructions, a voice described in words through the design model, or one cloned from a recording through the clone model, made a mono 24 kHz WAV of at most 30 s with ffmpeg; for Qwen3-TTS a long text in pieces of about 1,200 characters, cut at sentence ends and joined with 0.25 s gaps), `transcribe_audio` (text; `.srt` or `.vtt` subtitles and `.json` segments only with a model media.json marks `subtitles`, which the tool then switches to, and the reference AI server has none; it sends 16 kHz mono FLAC made with ffmpeg, and plain text of a long recording in pieces of 25 minutes), and `list_media_models` (the tiers, which models are loaded now, and a running video). Each takes a required `tier`, `fast` or `quality`, and a rarely needed `model_override`; where the server has one model of a kind, both tiers use it and the answer says so in `note`. Each asks the gateway's `/llm/v1`, saves its file inside the project, refuses a path outside it or an existing file without `overwrite`, and answers with compact JSON facts (`status`, `file_path`, `tier`, `model_used`, `elapsed_sec`, what ffprobe says), never the file. OpenCode 2's own `generate_video` works with hosted providers only |
+| Skill | `media-production` (the portal's) | how to make a piece with those tools: plan the shots, make each kind of part together (models swap), check keyframes, speech (by transcript) and clips (by frames), assemble with ffmpeg: speech over the clips, music ducked under it, -14 LUFS |
 | Skill | `frontend-design` ([anthropics/skills](https://github.com/anthropics/skills)) | UI that does not look like a template |
 | Skill | `react-best-practices` ([vercel-labs/agent-skills](https://github.com/vercel-labs/agent-skills)) | React and Next.js performance rules |
 | Skill | `shadcn` ([shadcn-ui/ui](https://github.com/shadcn-ui/ui)) | shadcn/ui components; its CLI needs an Online workspace |
@@ -588,7 +627,8 @@ error is the failed step's last ten output lines, then the engine's message, so 
 
 A gateway that stops mid-job records it as failed; at its next start `sweep` removes staging tags and check
 containers before the control API listens. `deploy/update-image.sh` does the same build from the shell, writes
-the same file, and refuses while `/control/updates/running` reports a job.
+the same file, and refuses while `/control/updates/running` reports a job or a running video; so do `deploy/install.sh`
+and `deploy/models.sh install` with a `media.json`, which restarts the gateway (`no_console_update` in `deploy/lib.sh`).
 
 ## Gufo updates
 
@@ -598,12 +638,34 @@ container; the steps hostd runs are in [hostd/README.md](../hostd/README.md). Ph
 
 - The version is a stable `X.Y.Z` tag of the quadlet's repository; the gateway resolves its digest in the
   registry and hostd pulls by digest while the engine keeps serving. An image already there skips the pull.
-- Draining pauses the LLM queue and waits until no request is in flight, `ENGINE_DRAIN_MINUTES` have passed,
-  or the admin chooses "Restart now". Waiting requests are held, not failed. Until then a cancel works.
+- Draining pauses the LLM queue and waits until no request is in flight and no video job holds the queue,
+  `ENGINE_DRAIN_MINUTES` have passed, or the admin chooses "Restart now". Waiting requests are held, not failed. Until then a cancel works.
 - Restarting is hostd's `apply`. If it fails hostd puts the previous image back and the job ends `failed`,
   its error ending with the engine's own last log lines (an option the new version refuses, say);
   `rolledBack` says whether the previous engine serves again. The queue resumes in every case. A gateway that
   stops mid-job records it as failed, with a note to check the engine's version: hostd carries on.
+
+## Updates of the other software
+
+The AI server's other programs, llama-swap, vLLM and the media programs, are listed in `llm-server/apps.json`, which
+portal-hostd's installer copies beside each program's `install.sh`. hostd's half (how it installs, switches and
+switches back) is in [hostd/README.md](../hostd/README.md#other-software); the gateway's is
+`gateway/src/updates/app-updater.ts`, one job at a time for all programs. Phases: `installing`, `draining`,
+`restarting`, then `succeeded`, `failed` or `cancelled`.
+
+- A program is a `dir` (versions side by side under its root, `current` a symlink to one) or an `image` (a quadlet
+  of its own). Its releases (`app-releases.ts`) are a dir program's GitHub releases, or an image program's registry
+  tags, both read through the program's `releases.tag` pattern, whose first group is the version. Cached and
+  refreshed like Gufo's.
+- Installing runs the program's `install.sh` (a dir program: a download, or a checkout with its Python environment)
+  or pulls the digest the gateway resolved for the tag (an image program), while the old version keeps serving. A
+  version already installed skips it.
+- Draining and its cancel are Gufo's (`host-update.ts` holds both updaters' drain and the following of hostd's job).
+  Restarting is hostd's `apply`: a program with a `model` restarts through llama-swap like the engine, llama-swap
+  itself with `systemctl --user restart` and its `check` URL. A failure switches back, as for Gufo.
+- Gufo's updater and this one refuse to start while the other runs (`engine_job_running`, `app_job_running`), as
+  hostd does: both restart what serves the LLM. The audit actions are `app_updated` and `app_update_failed`, with
+  the program's id, written by the gateway, and `app_version_removed`, written by the web app.
 
 ## Live view
 
@@ -611,8 +673,14 @@ container; the steps hostd runs are in [hostd/README.md](../hostd/README.md). Ph
 `frame` every 500 ms with both servers' readings, the sessions and the queue. At most 8 viewers; a slow
 one skips frames. What feeds it (hostd's streams, the engine's `/slots`) runs only while someone watches.
 `LLM_SLOTS_PATH` says where `/slots` is: behind llama-swap `/upstream/<model>/slots`, which answers 409 instead of
-starting the LLM while it is stopped for the image models or starting again; the engine's state is then
-`unloaded`.
+starting the LLM while it is stopped for the image or media models or starting again; the engine's state is
+then `unloaded`. An image or media request is a session of its kind (`phase`: `image`, `video`, `music`,
+`speech`, `transcription`, with its `model`), and so is a running video job, though no request of it is in
+flight (`videoJobs`); requests held behind a video job wait at stage `video`. `generation` is what the card's
+generation tile shows (`web/lib/generation-tile.ts`): the kind being made, or else made last, how many of it are in
+progress and on which model, the oldest running video's progress and time so far, and `pace`, the median time of
+the last five of that kind on the model that finished one last, each timed from when the server could start on it
+to its answer, a model start included.
 These parts of `gateway/src/monitor/` run all the time:
 
 - **Energy meter**: every 30 s it reads each hostd's running totals and books the increase to the local day in
@@ -688,6 +756,7 @@ ports and UIDs (`numberingProblems`: ranges that do not fit, that hold `WEB_PORT
 | `reader/test_*.py` | address checks, conversion, PDFs; run in the image build, which fails with them |
 | `hostd/test_hostd.py` | portal-hostd against a fake `/proc` and `/sys`: `python3 -m unittest hostd/test_hostd.py` |
 | `llm-server/fans/test_fans.py` | the fan curve and its loop against fake sensors, run the same way |
+| `llm-server/apps/ltx/test_ltx_videos.py` | `ltx-videos.py`'s HTTP side and job handling, with torch and LTX-2 replaced by stand-ins: no GPU, weights or LTX venv, only Pillow and ffmpeg. The stand-in pipeline runs the real progress hook through 8 + 3 fake denoising steps, and its encoder writes ffmpeg's test pattern with a tone, which then goes through the real faststart and stream checks. Run the same way |
 | `deploy/verify-isolation.sh` | the installed system: the only check of real Docker and nftables |
 
 `gateway/test/harness.ts` builds the gateway with the production `compose()` over a real SQLite file and puts
