@@ -28,7 +28,6 @@
 ## Research and reports
 - Research deeply (many sources, cross-checked, parallel subagents if available), report briefly: what to do, why, evidence. Answer exactly what I asked, nothing extra.
 - Put "what to do now" at the top. One consolidated document, no repetition, nothing important missing in a few pages, not dozens of 'not to the point' details.
-- Full reports default to one self-contained HTML file in the current directory (readable, easy-to-copy code blocks, prints cleanly). Markdown for short notes.
 
 ## Code
 - Clean architecture: small modules, one concern each. Functional style where the language allows: pure functions, immutable data, side effects at the edges, composition over class hierarchies.
