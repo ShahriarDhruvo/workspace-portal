@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "description": "HTML to markdown step of the Workspace Portal page reader (see extract.mjs).",
-  "license": "Apache-2.0",
+  "license": "GPL-2.0-or-later",
   "type": "module",
   "engines": {
     "node": ">=22"

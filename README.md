@@ -244,5 +244,6 @@ python3 -m unittest hostd/test_hostd.py llm-server/fans/test_fans.py
 
 The page reader's tests run in its image build. `npm run dev -w @portal/gateway` runs the gateway from source
 with the settings in `.env`; it needs Docker and a data directory it can write. `npm run dev -w @portal/web`
-runs the web app on port 3000 with the settings in its environment. Licensed under [Apache-2.0](LICENSE), except the kernel module in
-`llm-server/fans`, which is [GPL-2.0](llm-server/fans/COPYING).
+runs the web app on port 3000 with the settings in its environment. Licensed under the GNU GPL version 2 or, at your option, any later version
+([GPL-2.0-or-later](LICENSE)), except the kernel module in `llm-server/fans`, which is
+[GPL-2.0-only](llm-server/fans/COPYING).

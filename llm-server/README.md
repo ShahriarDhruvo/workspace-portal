@@ -45,4 +45,4 @@ and keep cycling ([Fans](../docs/MEASUREMENTS.md#fans)). The third fan has no du
 firmware.
 
 The module is reduced from [cmetz/ec-su_axb35-linux](https://github.com/cmetz/ec-su_axb35-linux) and stays under
-that driver's licence, GPL-2.0 (`fans/COPYING`). The rest of this folder is Apache-2.0.
+that driver's licence, GPL-2.0-only (`fans/COPYING`). The rest of this folder is GPL-2.0-or-later.
