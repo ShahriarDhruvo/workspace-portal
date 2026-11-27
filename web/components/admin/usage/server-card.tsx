@@ -12,6 +12,7 @@ import {
   formatRate,
   formatTemp,
   formatWatts,
+  hottestChip,
   memoryFree,
   usedPercent,
 } from "@/lib/live-format";
@@ -46,7 +47,7 @@ export function ServerCard({ host, history, now }: { host: HostLive; history: re
   return (
     <Card className="gap-0 py-0 xl:has-data-[state=open]:row-span-2">
       <CardHeader className="border-b px-4 py-3">
-        <CardTitle className="flex items-center gap-2">
+        <CardTitle className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <h2 className="text-16">{TITLES[host.role]}</h2>
           {STATES[host.state]}
           {sample?.throttling ? <Badge variant="warning">Throttling</Badge> : null}
@@ -54,18 +55,34 @@ export function ServerCard({ host, history, now }: { host: HostLive; history: re
         <CardDescription className="truncate" title={info?.cpu.model}>
           {info?.cpu.model ?? "portal-hostd"}
         </CardDescription>
-        {sample ? (
-          <CardAction className="flex flex-col items-end gap-1">
-            <span className="text-24 leading-none font-semibold tabular-nums">
-              {formatNumber(sample.power.watts)}
-              {sample.power.watts === null ? null : <span className="ml-1 text-13 font-normal text-muted-foreground">W</span>}
-            </span>
-            <span className="text-12 text-muted-foreground">{info?.power ? "Power draw" : "Power: not measurable"}</span>
-          </CardAction>
-        ) : null}
+        {sample ? <HeaderStats sample={sample} powerMeasurable={Boolean(info?.power)} /> : null}
       </CardHeader>
       {sample ? <Readings host={host} sample={sample} history={history} now={now} /> : <NoReadings host={host} />}
     </Card>
+  );
+}
+
+/** The hotter chip's temperature (none without a sensor) and the power draw, each a figure over what it is. */
+function HeaderStats({ sample, powerMeasurable }: { sample: HostSample; powerMeasurable: boolean }) {
+  const hottest = hottestChip(sample);
+  const watts = sample.power.watts;
+  return (
+    <CardAction className="flex items-start gap-4">
+      {hottest ? <HeaderStat value={String(hottest.celsius)} unit="°C" caption={`${hottest.chip} temp`} /> : null}
+      <HeaderStat value={formatNumber(watts)} unit={watts === null ? null : "W"} caption={powerMeasurable ? "Power draw" : "Power: not measurable"} />
+    </CardAction>
+  );
+}
+
+function HeaderStat({ value, unit, caption }: { value: string; unit: string | null; caption: string }) {
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <span className="text-24 leading-none font-semibold whitespace-nowrap tabular-nums">
+        {value}
+        {unit ? <span className="ml-1 text-13 font-normal text-muted-foreground">{unit}</span> : null}
+      </span>
+      <span className="text-12 whitespace-nowrap text-muted-foreground">{caption}</span>
+    </div>
   );
 }
 

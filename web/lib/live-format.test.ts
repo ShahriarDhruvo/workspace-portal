@@ -27,6 +27,7 @@ import {
   formatWatts,
   historyFromInit,
   historyWithFrame,
+  hottestChip,
   memoryFree,
   usedPercent,
 } from "./live-format.ts";
@@ -146,6 +147,19 @@ test("used of total names a shared unit once; idle clocks say so", () => {
 
 test("memory free is MemAvailable, with its share of the total", () => {
   assert.deepEqual(memoryFree(sample(0, 2e9)), { bytes: 2e9, percent: 25 });
+});
+
+test("the hotter chip's temperature, both named when they read the same as shown", () => {
+  const temps = (cpu: number | null, gpu: number | null | undefined): HostSample => {
+    const base = sample(0);
+    return { ...base, cpu: { ...base.cpu, tempC: cpu }, gpu: gpu === undefined ? null : { usage: null, mhz: null, tempC: gpu, powerW: null, memUsedBytes: null, memTotalBytes: null } };
+  };
+  assert.deepEqual(hottestChip(temps(48.25, 61.5)), { celsius: 62, chip: "GPU" });
+  assert.deepEqual(hottestChip(temps(70.6, 61.5)), { celsius: 71, chip: "CPU" });
+  assert.deepEqual(hottestChip(temps(32.2, 31.8)), { celsius: 32, chip: "CPU/GPU" });
+  assert.deepEqual(hottestChip(temps(null, 40)), { celsius: 40, chip: "GPU" });
+  assert.deepEqual(hottestChip(temps(45, undefined)), { celsius: 45, chip: "CPU" });
+  assert.equal(hottestChip(temps(null, null)), null);
 });
 
 test("history keeps the last minute, in time order, without repeats", () => {

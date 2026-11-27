@@ -127,9 +127,13 @@ function ServerSkeleton() {
       <CardHeader className="border-b px-4 py-3">
         <Skeleton className="my-0.5 h-5 w-40" />
         <Skeleton className="my-0.5 h-4 w-56 max-w-full" />
-        <CardAction className="flex flex-col items-end gap-1">
-          <Skeleton className="h-6 w-16" />
-          <Skeleton className="my-0.5 h-3 w-16" />
+        <CardAction className="flex items-start gap-4">
+          {[0, 1].map((key) => (
+            <div key={key} className="flex flex-col items-end gap-1">
+              <Skeleton className="h-6 w-16" />
+              <Skeleton className="my-0.5 h-3 w-16" />
+            </div>
+          ))}
         </CardAction>
       </CardHeader>
       <ServerBodySkeleton />

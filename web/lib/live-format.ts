@@ -86,6 +86,18 @@ export function memoryFree(sample: HostSample): { bytes: number; percent: number
   return { bytes: availableBytes, percent: totalBytes > 0 ? (availableBytes / totalBytes) * 100 : 0 };
 }
 
+/**
+ * The hotter of the CPU and the GPU in whole °C, as shown, and which chip it is: "CPU/GPU" when both read the same
+ * (an Intel iGPU reports the package's sensor, so always). Null when neither has a sensor.
+ */
+export function hottestChip(sample: HostSample): { celsius: number; chip: "CPU" | "GPU" | "CPU/GPU" } | null {
+  const cpu = sample.cpu.tempC === null ? null : Math.round(sample.cpu.tempC);
+  const gpu = sample.gpu?.tempC == null ? null : Math.round(sample.gpu.tempC);
+  if (cpu === null) return gpu === null ? null : { celsius: gpu, chip: "GPU" };
+  if (gpu === null || cpu > gpu) return { celsius: cpu, chip: "CPU" };
+  return { celsius: gpu, chip: gpu > cpu ? "GPU" : "CPU/GPU" };
+}
+
 /** Used share of a whole, in percent; null when the whole is unknown. */
 export function usedPercent(used: number | null, total: number | null | undefined): number | null {
   if (used === null || !total) return null;
