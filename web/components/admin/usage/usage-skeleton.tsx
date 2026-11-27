@@ -37,8 +37,8 @@ export function UsageSkeleton() {
 export function LiveSkeleton({ rows = SESSION_PAGE_SIZE }: { rows?: number }) {
   return (
     <div className={USAGE_GRID} aria-busy="true" aria-label="Loading the live view">
-      <Card className="gap-0 py-0 xl:col-span-2 3xl:col-span-1">
-        <CardHeader className="flex flex-col items-stretch gap-0 border-b px-0 sm:flex-row">
+      <Card className="@container/llm gap-0 py-0 xl:col-span-2 3xl:col-span-1">
+        <CardHeader className="flex flex-col items-stretch gap-0 border-b px-0 @3xl/llm:flex-row">
           <div className="flex flex-1 flex-col justify-center gap-1 px-4 py-3">
             <Skeleton className="my-0.5 h-5 w-40" />
             <Skeleton className="my-0.5 h-4 w-36" />
@@ -47,7 +47,7 @@ export function LiveSkeleton({ rows = SESSION_PAGE_SIZE }: { rows?: number }) {
             {[0, 1].map((key) => (
               <div
                 key={key}
-                className="flex flex-1 flex-col justify-center gap-1 border-t px-4 py-3 even:border-l sm:min-w-40 sm:border-t-0 sm:border-l sm:px-6"
+                className="flex flex-1 flex-col gap-1 border-t px-4 py-3 even:border-l @3xl/llm:min-w-40 @3xl/llm:border-t-0 @3xl/llm:border-l @3xl/llm:px-6"
               >
                 <Skeleton className="my-0.5 h-3 w-12" />
                 <Skeleton className="my-px h-6 w-20" />

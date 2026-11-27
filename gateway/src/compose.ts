@@ -120,6 +120,7 @@ export function compose(
     queue: llm,
     requests,
     names: (ids) => userNames(db, ids),
+    images: config.llm.imageModels.length > 0,
     log,
     now,
   });

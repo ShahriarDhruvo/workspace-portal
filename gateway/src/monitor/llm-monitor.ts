@@ -10,7 +10,10 @@
 // the gateway forwards them in order, so new sessions are paired, in task order, with the oldest unpaired requests
 // that were forwarded before the session was first seen. Without /slots (another kind of server) the rows come from
 // the gateway alone: Write from the streamed tokens, and no Read.
-import type { EngineState, LlmLive, LlmSession, LlmWaiting } from "@portal/core";
+// Image requests (IMAGE_MODELS) take no engine session: behind llama-swap they wait while the LLM is loaded, and are
+// being made while it is stopped (409); their server reports no progress, so a row says only that, and the pace of
+// the finished ones comes from llm-requests.ts.
+import type { EngineState, LlmImages, LlmLive, LlmSession, LlmWaiting } from "@portal/core";
 import type { LlmQueue } from "../service/llm-queue.ts";
 import type { ActiveLlmRequest, LlmRequests } from "./llm-requests.ts";
 import { errorMessage, type Logger } from "../lib/log.ts";
@@ -185,6 +188,8 @@ export interface LlmMonitorOptions {
   requests: LlmRequests;
   /** Display names for user ids (unknown ids are left out). */
   names: (userIds: readonly number[]) => Map<number, string>;
+  /** The LLM server has image models (IMAGE_MODELS). */
+  images?: boolean;
   log: Logger;
   now?: () => number;
   fetch?: typeof fetch;
@@ -232,7 +237,7 @@ export class LlmMonitor {
     if (slots !== null) updateTracks(this.#tracks, slots, now);
     else this.#tracks.clear();
     const active = this.#options.requests.active();
-    pairSessions(this.#tracks.values(), active);
+    pairSessions(this.#tracks.values(), active.filter((request) => request.image === null));
     const live = new Set<number>();
     for (const request of active) {
       if (request.forwardedAt === null) continue;
@@ -250,19 +255,21 @@ export class LlmMonitor {
     const { queue, requests } = this.#options;
     const active = requests.active();
     const byId = new Map(active.map((request) => [request.id, request]));
-    const waitingInQueue = queue.waiting();
     const sessions: LlmSession[] = [];
-    const servedRequests = new Set<number>();
+    const served = new Set<number>();
+    // Behind llama-swap: the LLM is stopped while the image models have its memory, or is starting again.
+    const llmStopped = this.#engine === "unloaded";
 
     if (this.#sessionsReported) {
       for (const track of [...this.#tracks.values()].sort((a, b) => a.slot - b.slot)) {
         const request = track.requestId === null ? undefined : byId.get(track.requestId);
-        if (request) servedRequests.add(request.id);
+        if (request) served.add(request.id);
         sessions.push({
           slot: track.slot + 1,
           userId: request?.userId ?? null,
           userName: null,
           phase: track.generatedTokens > 0 ? "writing" : track.processedTokens > 0 ? "reading" : "preparing",
+          imageModel: null,
           promptTokens: track.promptTokens,
           cachedTokens: track.cachedTokens,
           processedTokens: track.processedTokens,
@@ -274,29 +281,32 @@ export class LlmMonitor {
       }
     } else {
       for (const request of active) {
-        if (request.forwardedAt === null) continue;
-        servedRequests.add(request.id);
+        if (request.forwardedAt === null || (request.image === null && llmStopped)) continue;
+        served.add(request.id);
         sessions.push({
           slot: null,
           userId: request.userId,
           userName: null,
-          phase: request.firstTokenAt === null ? "reading" : "writing",
+          phase: request.image !== null ? "image" : request.firstTokenAt === null ? "reading" : "writing",
+          imageModel: request.image?.model ?? null,
           promptTokens: null,
           cachedTokens: null,
           processedTokens: null,
           generatedTokens: request.tokens,
           readTps: null,
-          writeTps: windowRate(this.#requestSamples.get(request.id) ?? [], now),
+          writeTps: request.image !== null ? null : windowRate(this.#requestSamples.get(request.id) ?? [], now),
           startedAt: request.forwardedAt,
         });
       }
     }
 
-    const waiting: LlmWaiting[] = waitingInQueue.map(({ userId, since }) => ({ userId, userName: null, since, stage: "portal" }));
-    if (this.#sessionsReported) {
+    const waiting: LlmWaiting[] = queue.waiting().map(({ userId, since }) => ({ userId, userName: null, since, stage: "portal" }));
+    if (this.#sessionsReported || llmStopped) {
       for (const request of active) {
-        if (request.forwardedAt === null || servedRequests.has(request.id) || now - request.forwardedAt < ENGINE_WAIT_GRACE_MS) continue;
-        waiting.push({ userId: request.userId, userName: null, since: request.forwardedAt, stage: "engine" });
+        if (request.forwardedAt === null || served.has(request.id) || now - request.forwardedAt < ENGINE_WAIT_GRACE_MS) continue;
+        // An image request beside the loaded LLM, or an LLM request while it is stopped, waits for llama-swap to swap.
+        const stage = request.image !== null || llmStopped ? "swap" : "engine";
+        waiting.push({ userId: request.userId, userName: null, since: request.forwardedAt, stage });
       }
     }
 
@@ -310,6 +320,9 @@ export class LlmMonitor {
       if (session.phase === "reading" && session.readTps !== null) readTps += session.readTps;
       if (session.phase === "writing" && session.writeTps !== null) writeTps += session.writeTps;
     }
+    const images: LlmImages | null = this.#options.images
+      ? { making: sessions.filter((session) => session.phase === "image").length, pace: requests.imagePace() }
+      : null;
     return {
       engine: this.#engine,
       sessionsReported: this.#sessionsReported,
@@ -320,7 +333,8 @@ export class LlmMonitor {
       paused: queue.paused,
       sessions,
       waiting,
-      totals: { readTps, writeTps },
+      totals: llmStopped ? { readTps: null, writeTps: null } : { readTps, writeTps },
+      images,
     };
   }
 

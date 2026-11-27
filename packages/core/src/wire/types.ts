@@ -382,7 +382,8 @@ export interface HostLive {
 
 /** unloaded: behind llama-swap, the LLM is stopped while the image models run, or is starting again. */
 export type EngineState = "ready" | "loading" | "unloaded" | "offline" | "unknown";
-export type SessionPhase = "preparing" | "reading" | "writing";
+/** image: an image model is making an image for the request (behind llama-swap, while the LLM is stopped). */
+export type SessionPhase = "preparing" | "reading" | "writing" | "image";
 
 /** One engine session working on a request. Token counts and rates are null where unknown. */
 export interface LlmSession {
@@ -392,6 +393,8 @@ export interface LlmSession {
   userName: string | null;
   /** preparing: admitted, nothing processed yet (prompt cache, images); reading: the prompt; writing: the answer. */
   phase: SessionPhase;
+  /** The image model an image request names (one of IMAGE_MODELS); null for the LLM, or when it is not known. */
+  imageModel: string | null;
   promptTokens: number | null;
   /** Prompt tokens reused from the engine's prompt cache (not read again). */
   cachedTokens: number | null;
@@ -408,8 +411,24 @@ export interface LlmWaiting {
   userId: number;
   userName: string | null;
   since: number;
-  /** portal: in the gateway's queue (limits, or a paused queue); engine: forwarded, the engine has no free session. */
-  stage: "portal" | "engine";
+  /**
+   * portal: in the gateway's queue (limits, or a paused queue); engine: forwarded, the engine has no free session;
+   * swap: forwarded, behind llama-swap the model it needs starts once the other model's requests are done (an image
+   * request while the LLM has requests, an LLM request while images are made).
+   */
+  stage: "portal" | "engine" | "swap";
+}
+
+/** The image models' work, when the LLM server has any (IMAGE_MODELS). */
+export interface LlmImages {
+  /** Image requests an image model is making now. */
+  making: number;
+  /**
+   * Seconds per image: the median of the last five finished on the image model that finished one last, each timed
+   * from when the server could start on it (not the wait behind other requests) to its answer, divided by the images
+   * it asked for. One that had to wait for its model to start counts that start too. null until one has finished.
+   */
+  pace: { model: string | null; secondsPerImage: number } | null;
 }
 
 export interface LlmLive {
@@ -425,7 +444,10 @@ export interface LlmLive {
   paused: boolean;
   sessions: LlmSession[];
   waiting: LlmWaiting[];
-  totals: { readTps: number; writeTps: number };
+  /** null while the LLM is not loaded: it reads and writes nothing then, but that is no rate of 0. */
+  totals: { readTps: number | null; writeTps: number | null };
+  /** null without image models. */
+  images: LlmImages | null;
 }
 
 export interface LiveFrame {
@@ -440,8 +462,8 @@ export interface LiveFrame {
 /** A frame's LLM totals, kept for the chart. */
 export interface LlmTotalsPoint {
   t: number;
-  readTps: number;
-  writeTps: number;
+  readTps: number | null;
+  writeTps: number | null;
 }
 
 export interface LiveInit {

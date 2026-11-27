@@ -7,6 +7,7 @@ import type { Config } from "../config.ts";
 import { forward, type ForwardResult } from "../lib/forward.ts";
 import { sendJson } from "../lib/http-util.ts";
 import type { Logger } from "../lib/log.ts";
+import { IMAGE_PATH, imageAskReader } from "../monitor/image-requests.ts";
 import type { LlmRequests } from "../monitor/llm-requests.ts";
 import { recordUsage, usageParserFor, usageTap, type UsageParser } from "../monitor/usage.ts";
 import { endToEndHeaders, llmRequestHeaders } from "../proxy/headers.ts";
@@ -48,7 +49,9 @@ export async function proxyLlm(deps: LlmProxyDeps, req: IncomingMessage, res: Se
   const method = req.method ?? "GET";
   // Only a generation waits for a slot: listing the models or counting a prompt's tokens never queues behind one.
   const generating = method === "POST" && !NOT_A_GENERATION.test(pathname) ? caller : null;
-  const progress = generating ? deps.requests.begin(generating.userId, generating.keyId) : null;
+  const image = generating !== null && IMAGE_PATH.test(pathname);
+  const progress = generating ? deps.requests.begin(generating.userId, generating.keyId, image) : null;
+  const readAsk = image && progress ? imageAskReader(req.headers["content-type"], deps.config.llm.imageModels, progress.imageAsk) : null;
 
   let release: ReleaseSlot = () => undefined;
   if (generating) {
@@ -79,7 +82,12 @@ export async function proxyLlm(deps: LlmProxyDeps, req: IncomingMessage, res: Se
       url: new URL(`${deps.config.llm.upstreamUrl}${pathname}${search}`),
       method,
       headers: llmRequestHeaders(req.headers, deps.config.llm.apiKey),
-      observeBody,
+      observeBody: readAsk
+        ? (chunk) => {
+            observeBody?.(chunk);
+            readAsk(chunk);
+          }
+        : observeBody,
       responseHeaders: (incoming) => endToEndHeaders(incoming.headers),
       tap: (incoming) => {
         tapped.parser = generating ? usageParserFor(incoming.headers, progress) : null;

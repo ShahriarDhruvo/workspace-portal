@@ -72,7 +72,7 @@ function track(slotId: number, task: number, firstSeen: number): SessionTrack {
 }
 
 function request(id: number, userId: number, forwardedAt: number | null): ActiveLlmRequest {
-  return { id, userId, queuedAt: 0, forwardedAt, firstTokenAt: null, tokens: 0 };
+  return { id, userId, queuedAt: 0, forwardedAt, firstTokenAt: null, tokens: 0, image: null };
 }
 
 test("pairSessions pairs new sessions in task order with the oldest requests sent before them", () => {
@@ -107,7 +107,7 @@ function fakeEngine(): { fetch: typeof fetch; slots: object[] | null; status: nu
   return engine;
 }
 
-function setup(): { clock: { now: number }; queue: LlmQueue; requests: LlmRequests; engine: ReturnType<typeof fakeEngine>; monitor: LlmMonitor } {
+function setup(images = false): { clock: { now: number }; queue: LlmQueue; requests: LlmRequests; engine: ReturnType<typeof fakeEngine>; monitor: LlmMonitor } {
   const clock = { now: 10_000 };
   const queue = new LlmQueue(7, 2);
   const requests = new LlmRequests({ now: () => clock.now });
@@ -122,6 +122,7 @@ function setup(): { clock: { now: number }; queue: LlmQueue; requests: LlmReques
     queue,
     requests,
     names: (ids) => new Map(ids.filter((id) => names.has(id)).map((id) => [id, names.get(id)!])),
+    images,
     log: quiet,
     now: () => clock.now,
     fetch: engine.fetch,
@@ -235,6 +236,49 @@ test("behind llama-swap the sessions come from LLM_SLOTS_PATH, which never start
   await monitor.poll();
   assert.deepEqual(urls, ["http://llm:8080/upstream/qwen3.8-flash-next/slots"]);
   assert.equal(monitor.snapshot().engine, "unloaded");
+});
+
+test("behind llama-swap an image waits for the LLM's requests, is made while the LLM is stopped, and the LLM's wait then", async () => {
+  const { clock, requests, engine, monitor } = setup(true);
+  const alice = requests.begin(1);
+  alice.forwarded();
+  clock.now += 200;
+  engine.slots = [slot(0, { task: 7, processing: true, prompt: 900, processed: 900, decoded: 4 })];
+  await monitor.poll();
+  const bob = requests.begin(2, null, true);
+  bob.forwarded();
+  bob.imageAsk({ model: "Qwen-Image-2.1-Turbo", images: 1 });
+  clock.now += 1500;
+  await monitor.poll();
+  let live = monitor.snapshot();
+  assert.deepEqual(live.sessions.map((s) => [s.userName, s.phase]), [["Alice", "writing"]], "the image takes none of the LLM's sessions");
+  assert.deepEqual(live.waiting.map((w) => [w.userName, w.stage]), [["Bob", "swap"]]);
+  assert.deepEqual(live.images, { making: 0, pace: null });
+
+  // Alice's answer ends; llama-swap stops the LLM and starts the image model. Alice asks again meanwhile.
+  alice.finish(true);
+  engine.status = 409;
+  const again = requests.begin(1);
+  again.forwarded();
+  clock.now += 1500;
+  await monitor.poll();
+  live = monitor.snapshot();
+  assert.deepEqual(live.sessions.map((s) => [s.userName, s.phase, s.imageModel, s.writeTps]), [["Bob", "image", "Qwen-Image-2.1-Turbo", null]]);
+  assert.deepEqual(live.waiting.map((w) => [w.userName, w.stage]), [["Alice", "swap"]]);
+  assert.deepEqual(live.totals, { readTps: null, writeTps: null }, "no rates while the LLM is stopped");
+  assert.equal(live.images?.making, 1);
+
+  clock.now += 18_000;
+  bob.finish(true);
+  live = monitor.snapshot();
+  assert.deepEqual(live.images, { making: 0, pace: { model: "Qwen-Image-2.1-Turbo", secondsPerImage: 19.5 } }, "timed from Alice's answer, not from being sent");
+  again.finish(true);
+});
+
+test("without image models the live view has no images", async () => {
+  const { monitor } = setup();
+  await monitor.poll();
+  assert.equal(monitor.snapshot().images, null);
 });
 
 test("without /slots (another kind of server) the rows come from the gateway's own count", async () => {

@@ -165,16 +165,23 @@ function KindIcon({ kind }: { kind: SessionRow["kind"] }) {
   );
 }
 
-const STATUS_DOTS = { writing: "bg-success", reading: "bg-info", preparing: "bg-info", waiting: "bg-warning", idle: "bg-muted-foreground/50" } as const;
-const STATUS_NAMES = { writing: "Writing", reading: "Reading", preparing: "Preparing", waiting: "Waiting", idle: "Running" } as const;
+const STATUS_DOTS = { writing: "bg-success", reading: "bg-info", preparing: "bg-info", image: "bg-info", waiting: "bg-warning", idle: "bg-muted-foreground/50" } as const;
+const STATUS_NAMES = { writing: "Writing", reading: "Reading", preparing: "Preparing", image: "Making an image", waiting: "Waiting", idle: "Running" } as const;
+const WAITING_TITLES = {
+  portal: "In the portal's queue: all sessions are busy",
+  engine: "Sent to the engine, not started yet",
+  swap: "Sent to the LLM server: llama-swap starts the model it needs once the other model's requests are done",
+} as const;
 type LiveState = keyof typeof STATUS_DOTS;
 
-/** What the LLM is doing for a running session now: its furthest request's phase, waiting, or nothing. */
+/** What the LLM server is doing for a running session now: its furthest request's phase, waiting, or nothing. */
 function liveState(userId: number, llm: LlmLive): { state: LiveState; title?: string } {
-  const phases = new Set(llm.sessions.filter((session) => session.userId === userId).map((session) => session.phase));
-  for (const phase of ["writing", "reading", "preparing"] as const) if (phases.has(phase)) return { state: phase };
+  const own = llm.sessions.filter((session) => session.userId === userId);
+  for (const phase of ["writing", "reading", "preparing"] as const) if (own.some((session) => session.phase === phase)) return { state: phase };
+  const image = own.find((session) => session.phase === "image");
+  if (image) return { state: "image", title: image.imageModel ?? undefined };
   const waiting = llm.waiting.find((row) => row.userId === userId);
-  if (waiting) return { state: "waiting", title: waiting.stage === "portal" ? "In the portal's queue: all sessions are busy" : "Sent to the engine, not started yet" };
+  if (waiting) return { state: "waiting", title: WAITING_TITLES[waiting.stage] };
   return { state: "idle" };
 }
 
