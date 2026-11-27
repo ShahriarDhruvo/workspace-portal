@@ -237,6 +237,24 @@ step by step from a fresh Fedora, the model download included.
 
 The contracts behind this are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+## Model licences
+
+The portal's licence does not cover the models. Some of the ones the reference AI server runs
+([docs/GUIDE.md](docs/GUIDE.md#media-models)) limit who may use them and how. Read each licence before you download
+a model and before you use what it makes; the guide links each one. As read on November 27, 2026:
+
+| Model | Licence | What it limits |
+|---|---|---|
+| MiniMax H3 (video) | MiniMax H3 Community License Agreement | Grants nothing in the United States, the European Union, the United Kingdom or South Korea: there neither the model nor its videos may be used without a separate licence from MiniMax. Elsewhere: MiniMax's written consent above US$20 million a year in revenue, "MiniMax H3" shown in a commercial product, machine-made content posted in public marked as such |
+| Fish Audio S2-Pro (quality speech) | Fish Audio Research License | Research and non-commercial use only, a business's internal work included; its outputs may not train or improve a foundation model |
+| Qwen3.8-Flash-Next (LLM) | Qwen Community License | Selling it as a paid AI service needs a separate licence |
+| LTX-2.5 (optional fast video, off by default) | LTX-2.x Community License Agreement | A company with US$10 million or more in yearly revenue needs a paid licence for any use that is not non-commercial |
+| Ming-Image-0.2-Design, ACE-Step 1.5 | MIT | |
+| Qwen3-TTS, Qwen3-ASR, SOV-Transcribe-1 | Apache 2.0 | |
+
+To leave a model out, remove its entry from `llm-server/llama-swap.yaml` and its tier from `llm-server/media.json`.
+A kind with one model left uses it for both tiers, and a kind with none has no tool.
+
 ## Development
 
 ```sh
@@ -244,7 +262,8 @@ npm ci                # Node.js 24 or newer; npm workspaces: packages/core, harn
 npm test              # all five; the gateway's integration tests need no Docker
 npm run typecheck
 npm run build         # the gateway bundle, then the web app
-python3 -m unittest hostd/test_hostd.py llm-server/fans/test_fans.py llm-server/apps/ltx/test_ltx_videos.py
+python3 -m unittest hostd/test_hostd.py llm-server/fans/test_fans.py llm-server/apps/ltx/test_ltx_videos.py \
+  llm-server/apps/ming/test_ming_images.py
 ```
 
 The page reader's tests run in its image build. `npm run dev -w @portal/gateway` runs the gateway from source
