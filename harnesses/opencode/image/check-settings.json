@@ -21,7 +21,23 @@
               "time": "",
               "bestFor": "",
               "besideLlm": false,
-              "request": {}
+              "request": {},
+              "sizes": [
+                "1344x768"
+              ]
+            }
+          },
+          "imageEdit": {
+            "fast": {
+              "model": "Check-Image-Edit",
+              "name": "Check-Image-Edit",
+              "time": "",
+              "bestFor": "",
+              "besideLlm": false,
+              "request": {},
+              "sizes": [
+                "768x1344"
+              ]
             }
           },
           "video": {
@@ -154,13 +170,42 @@
           "package": "@opencode/ai/providers/openai-compatible/images",
           "capabilities": {
             "input": [
+              "text"
+            ],
+            "output": [
+              "image"
+            ]
+          },
+          "variants": [
+            {
+              "id": "1344x768",
+              "body": {
+                "size": "1344x768"
+              }
+            }
+          ]
+        },
+        "Check-Image-Edit": {
+          "name": "Check-Image-Edit",
+          "type": "image",
+          "package": "@opencode/ai/providers/openai-compatible/images",
+          "capabilities": {
+            "input": [
               "text",
               "image"
             ],
             "output": [
               "image"
             ]
-          }
+          },
+          "variants": [
+            {
+              "id": "768x1344",
+              "body": {
+                "size": "768x1344"
+              }
+            }
+          ]
         }
       }
     }

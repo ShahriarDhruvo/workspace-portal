@@ -6,7 +6,6 @@ import { loadMediaRegistry } from "../media.ts";
 
 // A variable specifier: TypeScript leaves the JavaScript module untyped.
 const LIB = new URL("./image/media-tools/lib.js", import.meta.url).href;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const lib: any = await import(LIB);
 const reference = loadMediaRegistry(new URL("../../llm-server/media.json", import.meta.url).pathname);
 
@@ -37,7 +36,7 @@ test("a speech request picks Qwen3-TTS's model by how the voice is given, and re
   assert.deepEqual(lib.speechRequest(qwen, { voice_description: "An old sea captain.", instructions: "Slowly." }, null, qwen).request, { model: "qwen3-tts-1.7b-design", instructions: "An old sea captain. Slowly." });
   assert.deepEqual(lib.speechRequest(qwen, { reference_text: "Hello there." }, ref, qwen).request, { model: "qwen3-tts-1.7b-clone", reference_audio: "data:audio/wav;base64,UklGRg==", reference_text: "Hello there." });
   assert.equal(lib.speechRequest(qwen, {}, ref, qwen).request.voice_clone_mode, "speaker_embedding_only", "no transcript of the recording");
-  assert.deepEqual(lib.speechRequest(fish, {}, ref, qwen), { request: { model: "fish-s2-pro", reference_audio: "data:audio/wav;base64,UklGRg==" }, voice: "cloned" });
+  assert.deepEqual(lib.speechRequest(fish, {}, ref, qwen), { request: { model: "fish-drama-3", reference_audio: "data:audio/wav;base64,UklGRg==" }, voice: "cloned" });
   assert.throws(() => lib.speechRequest(fish, { voice: "ryan" }, null, qwen), /`voice` needs the fast tier/);
   assert.throws(() => lib.speechRequest(qwen, { voice: "nobody" }, null, qwen), /voices are ryan, aiden/);
   assert.throws(() => lib.speechRequest(qwen, { instructions: "Loud." }, ref, qwen), /don't apply to a cloned voice/);
@@ -70,7 +69,8 @@ test("Qwen3-TTS's PCM becomes a 24 kHz mono 16-bit WAV", () => {
 
 test("list_media_models shows each tier's model, what it is for, and whether it is loaded", () => {
   const listing = lib.mediaListing(reference, ["qwen3.8-flash-next", "qwen3-tts-1.7b-design"]);
-  assert.deepEqual(listing.models.image.fast, { model: "portal/Ming-Image-0.2-Design", name: "Ming-Image 0.2 Design", best_for: reference.image!.fast!.bestFor, time: reference.image!.fast!.time, beside_llm: false, loaded: false });
+  assert.deepEqual(listing.models.image.quality, { model: "portal/Ming-Image-0.2-Design", name: "Ming-Image 0.2 Design", best_for: reference.image!.quality!.bestFor, time: reference.image!.quality!.time, beside_llm: false, loaded: false, sizes: reference.image!.quality!.sizes });
+  assert.deepEqual([listing.models.imageEdit.tool, listing.models.imageEdit.fast.model], ["generate_image", "portal/Qwen-Image-2.1-Turbo"]);
   assert.equal(listing.models.speech.tool, "synthesize_speech");
   assert.equal(listing.models.speech.fast.loaded, true, "its design model is loaded");
   assert.equal(listing.models.speech.quality.clones_voices, true);

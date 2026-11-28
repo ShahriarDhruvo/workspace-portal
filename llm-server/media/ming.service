@@ -1,5 +1,5 @@
 [Unit]
-Description=Ming-Image-0.2-Design, text to image and image editing on 127.0.0.1:18081; started and stopped by llama-swap
+Description=Ming-Image-0.2-Design, text to image on 127.0.0.1:18081; started and stopped by llama-swap
 Documentation=https://github.com/inclusionAI/Ming-Image
 BindsTo=llama-swap.service
 After=llama-swap.service

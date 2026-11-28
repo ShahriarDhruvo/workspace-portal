@@ -500,10 +500,7 @@ function networkProblems(config: Config): string[] {
   return problems;
 }
 
-/**
- * The media registry, or an empty one with the reasons in `problems`. It took the place of IMAGE_MODELS, which
- * deploy/install.sh moves into it.
- */
+/** The media registry, or an empty one with the reasons in `problems`. */
 function mediaRegistry(file: string, problems: string[]): MediaRegistry {
   try {
     return loadMediaRegistry(file);

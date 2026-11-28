@@ -1,22 +1,22 @@
 [Unit]
-Description=Fish Audio S2-Pro text to speech, OpenAI-style /v1/audio/speech on 127.0.0.1:18084; started and stopped by llama-swap
+Description=Fish Audio Drama 3 text to speech, OpenAI-style /v1/audio/speech on 127.0.0.1:18084; started and stopped by llama-swap
 Documentation=https://github.com/fishaudio/fish-speech/tree/v3.0.0-beta
 BindsTo=llama-swap.service
 After=llama-swap.service
 
 [Service]
 EnvironmentFile=/etc/ai-studio/cache.env
-# TunableOp tunes every new GEMM shape, and S2-Pro's change with each text's length: generating a new 26 s text took
-# 184 s with it, 58 s without. EnvironmentFile= overrides Environment=, so it is unset rather than set to 0.
+# TunableOp tunes every new GEMM shape, and the shapes change with each text's length: a text of 64 words took
+# 164 s with it, 72 s without. EnvironmentFile= overrides Environment=, so it is unset rather than set to 0.
 UnsetEnvironment=PYTORCH_TUNABLEOP_ENABLED
-# MIOpen benchmarks the codec's convolutions for every new audio length (150 s for a 26 s text) unless told to take
-# its heuristic choice: with FAST that text's audio decodes in about a second.
+# MIOpen benchmarks the codec's convolutions for every new audio length unless told to take its heuristic choice.
 Environment=MIOPEN_FIND_MODE=FAST
 # current links to the installed version (llm-server/apps/fish-speech/install.sh), switched by portal-hostd.
 WorkingDirectory=/opt/ai-studio/fish-speech/current
-# Measured peak: 22.5 GiB of GTT.
-ExecStartPre=%h/.local/bin/wait-gpu-memory 24
-ExecStart=/opt/ai-studio/fish-speech/current/.venv/bin/python /opt/ai-studio/fish-speech/current/fish-speech-openai.py --checkpoint /models/fishaudio-s2-pro --listen 127.0.0.1:18084
+# Measured peak: 76.0 GiB of GTT. fish-speech's FP8 kernels are for NVIDIA only, so on this GPU it loads the experts
+# as BF16, which is what takes the memory.
+ExecStartPre=%h/.local/bin/wait-gpu-memory 78
+ExecStart=/opt/ai-studio/fish-speech/current/.venv/bin/python /opt/ai-studio/fish-speech/current/fish-speech-openai.py --checkpoint /models/fishaudio-drama-3 --listen 127.0.0.1:18084
 Restart=no
 # Covers wait-gpu-memory's 60 s; llama-swap waits for /ready, about 33 s after the start.
 TimeoutStartSec=90

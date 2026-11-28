@@ -57,7 +57,7 @@ export const opencodeDriver: AgentDriver = {
   kind: "opencode",
   name: AGENT_NAMES.opencode,
   description: "OpenCode's web UI: chat, projects, files, terminal and a headless browser.",
-  release: { packageName: "@opencode/cli", versionKey: "OPENCODE_VERSION", defaultVersion: "2.4.1", cli: "opencode" },
+  release: { packageName: "@opencode/cli", versionKey: "OPENCODE_VERSION", defaultVersion: "2.4.2", cli: "opencode" },
   port: 4096,
   credentialEnv: "OPENCODE_PASSWORD",
   settingsMount: OPENCODE_SETTINGS_DIR,

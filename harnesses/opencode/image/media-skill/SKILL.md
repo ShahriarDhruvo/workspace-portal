@@ -32,7 +32,7 @@ Then show the person the plan as a table and wait for their answer:
 
 | Step | Asset | Tier & model | Why | Est. time |
 |---|---|---|---|---|
-| 1 | 4 keyframes | Ming-Image 0.2 Design, one model for both tiers | drafts to pick from | about 2.5 min |
+| 1 | 4 keyframes | quality, Ming-Image 0.2 Design | the frames the clips start on | about 2.5 min |
 | 2 | 4 clips, 5 s each | fast, MiniMax H3 fast preset | try the motion | about 15 min, the server busy |
 
 Take the times from your instructions, add a model swap where the model changes, and add up the total. End with:
@@ -42,17 +42,24 @@ passes: every part in the fast tier first, shown to the person, then again in th
 
 ## 2. Make the parts, one model at a time
 
-Do the phases in this order, and finish one before starting the next. Never alternate between tools.
+Do the phases in this order, and finish one before starting the next. Never alternate between tools. Within a phase,
+call the tool for all its parts in one message: the calls run one after another on the model, which is loaded once. A
+call a message loads you again after every part, and then the model again.
 
-1. **Keyframes** (generate_image). One image per shot, at the shot's aspect ratio (1344x768 shots: ask for a wide
-   image such as 1344x768). Draft them with the fast image model. Open every image and check it against its shot:
-   subject, composition, style, that faces and hands are right, that there is no stray text. Make again (another
-   prompt or seed) what does not match. Make the final keyframes with the quality image model; when one model makes
-   every image, the drafts the person approves are the final keyframes.
+1. **Keyframes** (generate_image, from one `execute` script: `await Promise.all(shots.map((shot) =>
+   tools.generate_image({ prompt: shot.prompt, path: shot.path })))`). One image per shot, at the shot's aspect ratio
+   (a new image is 1024x1024 unless `model` names a size: for 1344x768 shots add
+   `model: "<image model>#1344x768"`, with a model your instructions list that size for), all with one image model:
+   the quality model, or the fast one when there are many frames to try. Open every image and check it against its
+   shot: subject, composition, style, that faces and hands are right, that there is no stray text. Make again
+   (another prompt) what does not match. The frames the person approves are the keyframes: the other image model
+   would make another picture, not a better copy. To change part of a frame (a colour, an object, a word), give the
+   frame to generate_image as `images` with what to change; do the changes together, after the new frames, because
+   they may run on another model.
 2. **Speech** (synthesize_speech). One call per line and speaker. Give each speaker one voice for the whole piece: the
    same built-in `voice`, the same `voice_description` and `seed`, or the same `reference_audio`. The fast tier runs
    beside you and stops nothing; use the quality tier for the final narration when the person wants the most natural
-   delivery.
+   delivery, with a tag such as `[whisper]` or `[laughing]` before the words it applies to.
 3. **Check the speech** (transcribe_audio, fast tier). Transcribe every line and compare it with the script; make again
    any line with a missing, added or wrong word. Then measure each file:
    `ffprobe -v error -show_entries format=duration -of csv=p=0 media/<piece>/speech/shot-01.wav`.

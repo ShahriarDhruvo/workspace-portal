@@ -19,7 +19,7 @@
     "kind": "dir",
     "root": "/opt/ai-studio/fish-speech",
     "unit": "fish-speech.service",
-    "model": "fish-s2-pro",
+    "model": "fish-drama-3",
     "releases": { "github": "fishaudio/fish-speech", "tag": "^v(.+)$", "prerelease": true }
   },
   "acestep": {

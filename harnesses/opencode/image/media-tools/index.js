@@ -31,7 +31,7 @@ const REFERENCE_SECONDS = 30;
 /** Longer recordings are transcribed in pieces of this length (Qwen3-ASR takes 30 minutes at most). */
 const TRANSCRIBE_PIECE_SECONDS = 25 * 60;
 
-/** Offered to the model by name, as OpenCode's own generate_image is; without it a tool is only reachable from `execute`. */
+/** Offered to the model by name; without it a tool is only reachable from a script for `execute`, as OpenCode's own generate_image is. */
 const DIRECT = { codemode: false };
 
 export default {
@@ -342,8 +342,9 @@ function speechTool(api, tiers, projectDir) {
   const voices = Object.assign({}, ...all.map((entry) => entry.voices ?? {}));
   const languages = [...new Set(all.flatMap((entry) => entry.languages ?? []))];
   const tiersWith = (has) => [...new Set(all.filter(has).map((entry) => entry.tier))].join(" and ");
+  const tagged = tiersWith((entry) => entry.api === "fish-speech");
   const properties = {
-    input: { type: "string", description: "The words to say." },
+    input: { type: "string", description: `The words to say.${tagged ? ` In the ${tagged} tier a tag in square brackets before a phrase sets its delivery and is not spoken: [whisper], [laughing], [excited], [sad].` : ""}` },
     path: { type: "string", description: "Where in the project to save it, ending in .wav, such as media/<piece>/speech/line-01.wav." },
     tier: tierField(tiers, "speech"),
     model_override: overrideField(tiers),

@@ -69,7 +69,7 @@ export function answer(fields, note) {
 
 // --- list_media_models -------------------------------------------------------------------------------------------
 
-export const TOOL_OF = { image: "generate_image", video: "generate_video", music: "generate_music", speech: "synthesize_speech", transcription: "transcribe_audio" };
+export const TOOL_OF = { image: "generate_image", imageEdit: "generate_image", video: "generate_video", music: "generate_music", speech: "synthesize_speech", transcription: "transcribe_audio" };
 
 /** The registry as list_media_models shows it, with which models are loaded when that is known. */
 export function mediaListing(kinds, loadedIds) {
@@ -80,7 +80,7 @@ export function mediaListing(kinds, loadedIds) {
     models[kind] = { tool: TOOL_OF[kind] };
     for (const entry of entries(tiers)) {
       models[kind][entry.tier] = {
-        model: kind === "image" ? `portal/${entry.model}` : entry.model,
+        model: TOOL_OF[kind] === "generate_image" ? `portal/${entry.model}` : entry.model,
         name: entry.name,
         ...(entry.bestFor ? { best_for: entry.bestFor } : {}),
         ...(entry.time ? { time: entry.time } : {}),

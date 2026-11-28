@@ -3,14 +3,17 @@
 // It becomes PORTAL_DATA_DIR/config/models/media.json; the gateway reads it when it starts (models.sh restarts it).
 //
 // Each kind has a "fast" model, for drafts and everyday work, and a "quality" one, for final work; the agent picks
-// the tier of each call (opencode/image/media-tools). A kind with one model, as image here, names it under one tier,
-// and both tiers use it. A model's fields:
+// the tier of each call (opencode/image/media-tools). A kind with one model, as imageEdit here, names it under one
+// tier, and both tiers use it. Images are two kinds, because OpenCode's generate_image names no tier: "image" makes
+// new ones, the quality model unless the agent names the fast one, and "imageEdit" changes the images a call gives,
+// which OpenCode sends to no other model. A model's fields:
 //   model      the id llama-swap serves it under                      name     its name for people
 //   time       how long it takes, in words, measured (docs/MEASUREMENTS.md)
 //   bestFor    what it is the better choice for                       besideLlm  it runs beside the LLM: no swap
 //   request    fields every request to it carries (a preset)
-// and by kind: video sizes and seconds; speech api ("qwen3-tts" or "fish-speech"), and for qwen3-tts its built-in
-// voices, languages and its clone and design models; transcription subtitles (it writes times: srt, vtt and
+// and by kind: image and imageEdit sizes (what it makes besides the server's default, 1024x1024: the agent asks for
+// one as "<model>#<size>"); video sizes and seconds; speech api ("qwen3-tts" or "fish-speech"), and for qwen3-tts its
+// built-in voices, languages and its clone and design models; transcription subtitles (it writes times: srt, vtt and
 // verbose_json segments; SOV under vLLM 0.32.0 answers 400 to all three, so no model here has it).
 //
 // LTX-2.5 distilled becomes the fast video model once its weights are in (docs/GUIDE.md, "LTX-2.5"):
@@ -19,10 +22,27 @@
 {
   "image": {
     "fast": {
+      "model": "Qwen-Image-2.1-Turbo",
+      "name": "Qwen-Image 2.1 Turbo",
+      "time": "about 19 s an image at any of its sizes; 7 s more for the model swap",
+      "bestFor": "several drafts or storyboard frames at once, and a picture you will change next: the same model edits",
+      "sizes": ["1344x768", "768x1344"]
+    },
+    "quality": {
       "model": "Ming-Image-0.2-Design",
       "name": "Ming-Image 0.2 Design",
-      "time": "about 30 s an image at 1024x1024, about 3 min at 2048x2048, 80 s for an edit; 20 s more for the model swap",
-      "bestFor": "every image, drafts and finals: keyframes, posters, product shots, UI designs, text in a picture"
+      "time": "about 30 s an image, about 3 min at 2048x2048; 20 s more for the model swap",
+      "bestFor": "the picture the person keeps: posters, product shots, UI designs, layouts, text in a picture",
+      "sizes": ["1344x768", "768x1344", "2048x2048"]
+    }
+  },
+  "imageEdit": {
+    "fast": {
+      "model": "Qwen-Image-2.1-Turbo",
+      "name": "Qwen-Image 2.1 Turbo",
+      "time": "about 30 s an edit, 40 s with two pictures; 7 s more for the model swap",
+      "bestFor": "every change to a picture: recolour, add or remove an object, replace text, restyle, put two pictures together; the result keeps the picture's size unless a size is named",
+      "sizes": ["1344x768", "768x1344"]
     }
   },
   "video": {
@@ -82,10 +102,10 @@
       "design": "qwen3-tts-1.7b-design"
     },
     "quality": {
-      "model": "fish-s2-pro",
-      "name": "Fish Audio S2-Pro",
-      "time": "about 2 s per second of speech, plus about 40 s for the model swap",
-      "bestFor": "the most natural delivery of a final narration; a close clone of a recorded voice",
+      "model": "fish-drama-3",
+      "name": "Fish Audio Drama 3",
+      "time": "about 3 s per second of speech; about 35 s more for the model swap",
+      "bestFor": "the final narration or dialogue: delivery set by tags in the text, such as [whisper] or [laughing]; a clone of a recorded voice",
       "api": "fish-speech"
     }
   },
@@ -101,7 +121,7 @@
       "model": "sov-transcribe-1",
       "name": "SOV-Transcribe-1",
       "time": "about 45 s for 5 minutes of audio, plus about 90 s for the model swap",
-      "bestFor": "a second pass on a recording the fast model got words wrong in"
+      "bestFor": "several recordings sent at once, and short clips where every word counts; no more accurate on a long one"
     }
   }
 }

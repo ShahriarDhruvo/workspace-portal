@@ -3,8 +3,8 @@
 // file names wins over a person's own settings (~/.config/opencode) and over any project's opencode.json; everything
 // it leaves out stays theirs (agents, commands, their own MCP servers, plugins and skills, permissions for other
 // tools). It holds what the portal depends on: the portal's models (../models.ts) through the gateway and no other
-// provider, its image models (media.json) for OpenCode's generate_image tool, its media models (media.json, by kind
-// and tier) for the portal's own media tools (image/media-tools), the gateway's search in place of OpenCode's own web
+// provider, its image models (media.json's image and imageEdit) for OpenCode's generate_image tool, its media models
+// (media.json, by kind and tier) for the portal's own media tools (image/media-tools), the gateway's search in place of OpenCode's own web
 // tools, and no update or session sharing, which a workspace could not reach or must not use. And what a workspace
 // starts with: the plugins and skills of the image (image/install.sh), formatting after edits, and for an Online
 // workspace two public MCP servers. The keys are OpenCode 2's (`providers`, `policies`, `permissions`, `mcp.servers`,
@@ -15,7 +15,7 @@
 // one with a model id that has a `#`, where OpenCode's name for a model ("<provider>/<id>#<variant>") ends the id.
 import type { WorkspaceKind } from "@portal/core";
 import { INSTRUCTIONS_FILE } from "../instructions.ts";
-import { MEDIA_KINDS, MEDIA_TIERS, besideLlmIds, imageModels as imageModelIds, mediaModel, type MediaKind, type MediaRegistry } from "../media.ts";
+import { MEDIA_KINDS, MEDIA_TIERS, besideLlmIds, imageModels as imageModelIds, mediaModel, mediaModelIds, type MediaKind, type MediaRegistry, type MediaTier } from "../media.ts";
 import type { ModelCatalog, PortalModel } from "../models.ts";
 import { AgentConfigError, BROWSER_MCP, BROWSER_TIMEOUT_MS, LLM_KEY_ENV, LLM_TIMEOUT_MS, LLM_WAIT_MS, SEARCH_TIMEOUT_MS } from "../shared.ts";
 
@@ -56,7 +56,9 @@ function textsOf(value: unknown): string[] {
 export function opencodeConfig(options: OpencodeConfigOptions): Record<string, unknown> {
   const { catalog, media, serviceBaseUrl, browser, kind } = options;
   const imageModels = imageModelIds(media);
-  const mediaKinds = MEDIA_KINDS.filter((kind) => kind !== "image" && media[kind] !== undefined);
+  const imageDefault = mediaModel(media, "image", "quality") ?? mediaModel(media, "imageEdit", "fast");
+  const editors = new Set(mediaModelIds(media, "imageEdit"));
+  const mediaKinds = MEDIA_KINDS.filter((kind) => !IMAGE_KINDS.includes(kind) && media[kind] !== undefined);
   const mediaIds = MEDIA_KINDS.flatMap((kind) => MEDIA_TIERS.flatMap((tier) => {
     const entry = media[kind]?.[tier];
     return entry ? [entry.model, entry.clone ?? "", entry.design ?? ""].filter(Boolean) : [];
@@ -119,12 +121,14 @@ export function opencodeConfig(options: OpencodeConfigOptions): Record<string, u
         },
         models: Object.fromEntries([
           ...catalog.models.map((model) => [model.id, opencodeModel(model)]),
-          ...imageModels.map((id) => [id, opencodeImageModel(id)]),
+          ...imageModels.map((id) => [id, opencodeImageModel(id, editors.has(id), imageSizes(media, id))]),
         ]),
       },
     },
-    // The image model generate_image uses unless the agent names another: the fast tier's.
-    ...(imageModels.length === 0 ? {} : { experimental: { image_generate: { model: `${PROVIDER}/${imageModels[0]}` } } }),
+    // The model generate_image takes when the agent names none: the quality one, because the tool's own description
+    // tells the agent to name no model unasked, so most images are made this way. With input images OpenCode keeps
+    // it only if it edits, and otherwise takes an image model that does.
+    ...(imageDefault === null ? {} : { experimental: { image_generate: { model: `${PROVIDER}/${imageDefault.model}` } } }),
     // No provider but this one, whatever a person or a project configures or signs in to: OpenCode would otherwise
     // offer its own hosted models (it lists them even without a route to them). The later rule wins.
     policies: [
@@ -141,9 +145,19 @@ export function opencodeConfig(options: OpencodeConfigOptions): Record<string, u
   };
 }
 
+/** The kinds OpenCode's own generate_image serves; the portal's media plugin has a tool for each of the others. */
+const IMAGE_KINDS: readonly MediaKind[] = ["image", "imageEdit"];
+
+/** The sizes an image model makes besides the server's default. A model both kinds name is one model to OpenCode: their sizes together. */
+function imageSizes(media: MediaRegistry, id: string): string[] {
+  const entries = IMAGE_KINDS.flatMap((kind) => MEDIA_TIERS.map((tier) => media[kind]?.[tier]));
+  return [...new Set(entries.flatMap((entry) => (entry?.model === id ? (entry.sizes ?? []) : [])))];
+}
+
 /** Each kind's tool, and what it is for, as the agent is told; the skill (image/media-skill) says how to make a piece. */
 const MEDIA_TOOLS: Record<MediaKind, { tool: string; does: string }> = {
-  image: { tool: "generate_image", does: "makes and edits images" },
+  image: { tool: "generate_image", does: "makes a new image from a prompt" },
+  imageEdit: { tool: "generate_image", does: "changes the images you give it as `images`" },
   video: { tool: "generate_video", does: "makes a short clip with its own sound" },
   music: { tool: "generate_music", does: "makes music, instrumental or sung" },
   speech: { tool: "synthesize_speech", does: "reads text aloud in a built-in, described or cloned voice" },
@@ -160,25 +174,15 @@ export function opencodeFacts(media: MediaRegistry): string[] {
   if (kinds.length === 0) return [];
   const facts: string[] = [];
   const beside = besideLlmIds(media);
-  if (media.image) {
-    const fast = mediaModel(media, "image", "fast")!;
-    const quality = mediaModel(media, "image", "quality")!;
-    const model =
-      quality.model === fast.model
-        ? `Leave its \`model\` out: one model makes every image (${PROVIDER}/${fast.model})`
-        : `Its \`model\` is the tier: leave it out for the fast one (${PROVIDER}/${fast.model}), or give ${PROVIDER}/${quality.model} for the quality one`;
-    facts.push(
-      `- Images: generate_image makes and edits images. Give it a \`path\` in the project, such as images/<short-name>.png, so the person finds the file there, and once the image is saved show it in your reply as ![<what it shows>](images/<short-name>.png). ${model}.`,
-    );
-  }
-  const tools = kinds.filter((kind) => kind !== "image");
+  if (media.image || media.imageEdit) facts.push(imageFact(media));
+  const tools = kinds.filter((kind) => !IMAGE_KINDS.includes(kind));
   const lines = kinds.map((kind) => {
     const { tool } = MEDIA_TOOLS[kind];
     const tiers = MEDIA_TIERS.flatMap((tier) => {
       const entry = media[kind]?.[tier];
       if (!entry) return [];
       const about = [entry.bestFor && `for ${entry.bestFor}`, entry.time].filter(Boolean).join("; ");
-      const model = kind === "image" ? `${PROVIDER}/${entry.model}` : entry.model;
+      const model = IMAGE_KINDS.includes(kind) ? `${PROVIDER}/${entry.model}` : entry.model;
       return [`${tier}: ${entry.name} (${model})${about ? `, ${about}` : ""}${beside.has(entry.model) ? ", runs beside you" : ""}`];
     });
     return `  - ${tool} ${MEDIA_TOOLS[kind].does}. ${tiers.join(". ")}.${tiers.length === 1 ? " Both tiers use it." : ""}`;
@@ -194,14 +198,61 @@ export function opencodeFacts(media: MediaRegistry): string[] {
     facts.push(
       [
         "- Media requests:",
-        "  - Go ahead when it is one simple asset the person described clearly (an image, a line spoken, a transcript, a short track): pick the tier yourself, fast unless they ask for the final or the best, and say which you used.",
+        "  - Go ahead when it is one simple asset the person described clearly (an image, a line spoken, a transcript, a short track): pick the tier yourself and say which you used. A single image is made by its quality model; anything else by the fast one unless they ask for the final or the best.",
         "  - Otherwise propose first: a piece with several assets, any video, anything that takes more than a few minutes, or when the tier is not clear. Call list_media_models, then show the plan as a table with the columns Step, Asset, Tier & model, Why, Est. time (from the times above, a model swap included), and end with: Reply **go** to start, or tell me what to change. Make nothing until they answer.",
         "  - For a piece that matters, make it twice: drafts with fast, shown to the person, then the final with quality once they approve.",
+        "  - Several parts from one model (the lines of a narration, the clips of a film): call its tool for all of them in one message. They are made one after another and the model is loaded once; a call a message loads you again after every part.",
         "  - Load the media-production skill before making a video, a song or a narrated piece, and follow it: plan, batch by model, check every part.",
       ].join("\n"),
     );
   }
   return facts;
+}
+
+/**
+ * How generate_image is called and comes to the right model. Since OpenCode 2.4.2 it is a Code Mode tool, reached
+ * from a script for `execute`; a call by name still runs, with a note to the agent to use `execute`. Its own
+ * description tells the agent never to name a model unasked, so the model is left out wherever OpenCode's choice is
+ * the right one: the default for a new image, and for a call with input images the model that edits
+ * (opencodeImageModel). The tool takes no size: a size is a variant of its model, so a call that wants one names the
+ * model.
+ */
+function imageFact(media: MediaRegistry): string {
+  const id = (kind: MediaKind, tier: MediaTier): string | null => {
+    const entry = mediaModel(media, kind, tier);
+    return entry === null ? null : `${PROVIDER}/${entry.model}`;
+  };
+  const [fast, quality] = [id("image", "fast"), id("image", "quality")];
+  const [editFast, editQuality] = [id("imageEdit", "fast"), id("imageEdit", "quality")];
+  const makes =
+    fast === null
+      ? []
+      : fast === quality
+        ? [`For a new image leave \`model\` out: ${fast} makes every one.`]
+        : [`For a new image leave \`model\` out for the quality model (${quality}), or give ${fast} for the fast one: the tiers below say what each is for.`];
+  const edits =
+    editFast === null
+      ? "No model here changes an existing image: describe what you want and make a new one."
+      : editFast === editQuality
+        ? `To change images, give them as \`images\` and leave \`model\` out: the tool takes ${editFast} for them itself.`
+        : `To change images, give them as \`images\` with \`model\` ${editFast} for the fast edit or ${editQuality} for the quality one.`;
+  const sized = imageModelIds(media).flatMap((model) => {
+    const sizes = imageSizes(media, model);
+    const [first] = sizes;
+    return first === undefined ? [] : [{ id: `${PROVIDER}/${model}`, sizes, example: `${PROVIDER}/${model}#${first}` }];
+  });
+  // The example is the model a new image goes to, when it has sizes.
+  const shown = sized.find(({ id }) => id === quality) ?? sized[0];
+  const size =
+    shown === undefined
+      ? "Every new image is 1024x1024."
+      : `A new image is 1024x1024 unless \`model\` ends in \`#\` and one of the model's sizes, as in ${shown.example}: ${sized.map(({ id, sizes }) => `${id} makes ${sizes.join(", ")}`).join("; ")}. For such a size you must give \`model\`, even where you would otherwise leave it out.`;
+  return [
+    "- Images: generate_image makes a new image, or changes existing ones. It is a tool of `execute`: call it in a script, as `return await tools.generate_image({ prompt: \"...\", path: \"images/<short-name>.png\" })`. Give it a `path` in the project, so the person finds the file there, and once the image is saved show it in your reply as ![<what it shows>](images/<short-name>.png). Start several images in one script (`await Promise.all([...])`): their model is then loaded once for all of them.",
+    ...makes,
+    edits,
+    size,
+  ].join(" ");
 }
 
 export function renderOpencodeConfig(options: OpencodeConfigOptions): string {
@@ -211,14 +262,18 @@ export function renderOpencodeConfig(options: OpencodeConfigOptions): string {
 /**
  * An image model: OpenCode keeps it out of the model picker, which offers chat models only, and offers it to its
  * generate_image tool, which posts to the provider's /images/generations, or /images/edits with images to change.
+ * A call with input images goes only to a model whose input lists them: that is how an edit reaches the registry's
+ * imageEdit model and never one that only makes new images. generate_image has no size parameter, so each size is a
+ * variant named by it ("<provider>/<id>#1344x768"): OpenCode adds a variant's `body` to the request's.
  */
-function opencodeImageModel(id: string): Record<string, unknown> {
+function opencodeImageModel(id: string, edits: boolean, sizes: readonly string[]): Record<string, unknown> {
   return {
     name: id,
     type: "image",
     // Part of OpenCode itself, like the provider's package.
     package: "@opencode/ai/providers/openai-compatible/images",
-    capabilities: { input: ["text", "image"], output: ["image"] },
+    capabilities: { input: edits ? ["text", "image"] : ["text"], output: ["image"] },
+    ...(sizes.length === 0 ? {} : { variants: sizes.map((size) => ({ id: size, body: { size } })) }),
   };
 }
 

@@ -280,6 +280,10 @@ export async function startGateway(options: GatewayOptions = {}): Promise<Gatewa
     AGENT_PORT_COUNT: String(PORT_COUNT),
     // A Qwen-only install unless a test enables more (a start without a choice then starts Qwen Code).
     WORKSPACE_AGENTS: "qwen",
+    // The versions the fake registry and builder know (fakes.ts), whatever a fresh install builds.
+    QWEN_CODE_VERSION: "0.27.0",
+    DSH_VERSION: "0.2.2-rc.1",
+    OPENCODE_VERSION: "2.4.1",
     ...options.env,
   });
   const db = openDatabase(config.dbFile);

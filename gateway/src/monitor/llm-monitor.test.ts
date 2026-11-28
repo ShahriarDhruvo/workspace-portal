@@ -290,15 +290,15 @@ test("a media request is a session of its kind while the LLM is stopped; a runni
   let pace: { model: string; seconds: number; at: number } | null = null;
   const { clock, queue, requests, engine, monitor } = setup(true, { jobs: { active: () => jobs, pace: () => pace } });
   engine.status = 409;
-  const speech = requests.begin(2, null, false, { kind: "speech", model: "fish-s2-pro" });
+  const speech = requests.begin(2, null, false, { kind: "speech", model: "fish-drama-3" });
   speech.forwarded();
   await monitor.poll();
   let live = monitor.snapshot();
-  assert.deepEqual(live.sessions.map((s) => [s.userName, s.phase, s.model, s.writeTps]), [["Bob", "speech", "fish-s2-pro", null]]);
-  assert.deepEqual(live.generation, { kind: "speech", making: 1, model: "fish-s2-pro", video: null, pace: null });
+  assert.deepEqual(live.sessions.map((s) => [s.userName, s.phase, s.model, s.writeTps]), [["Bob", "speech", "fish-drama-3", null]]);
+  assert.deepEqual(live.generation, { kind: "speech", making: 1, model: "fish-drama-3", video: null, pace: null });
   clock.now += 3000;
   speech.finish("completed");
-  assert.deepEqual(monitor.snapshot().generation?.pace, { model: "fish-s2-pro", seconds: 3 });
+  assert.deepEqual(monitor.snapshot().generation?.pace, { model: "fish-drama-3", seconds: 3 });
 
   jobs.push({ userId: 1, model: "minimax-h3", startedAt: clock.now, progress: 10 });
   const release = queue.hold();
@@ -347,7 +347,7 @@ test("a speech or transcription model beside the LLM is a session while the LLM 
   const asr = requests.begin(2, null, false, { kind: "transcription", model: null });
   asr.forwarded();
   asr.mediaModel("qwen3-asr-1.7b");
-  const fish = requests.begin(2, null, false, { kind: "speech", model: "fish-s2-pro" });
+  const fish = requests.begin(2, null, false, { kind: "speech", model: "fish-drama-3" });
   fish.forwarded();
   clock.now += 1500;
   await monitor.poll();

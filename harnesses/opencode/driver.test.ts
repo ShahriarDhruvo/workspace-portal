@@ -20,7 +20,7 @@ const STUDIO = registry({
   video: { fast: { model: "minimax-h3", name: "H3 fast", request: { gufo: { preset: "fast" } }, sizes: ["512x512"], seconds: { min: 5, max: 14.375 } }, quality: { model: "minimax-h3", name: "H3", sizes: ["512x512", "1344x768"], seconds: { min: 5, max: 14.375 } } },
   speech: {
     fast: { model: "qwen3-tts-1.7b", name: "Qwen3-TTS", besideLlm: true, api: "qwen3-tts", voices: { ryan: "male, English" }, clone: "qwen3-tts-1.7b-clone", design: "qwen3-tts-1.7b-design" },
-    quality: { model: "fish-s2-pro", name: "Fish", api: "fish-speech" },
+    quality: { model: "fish-drama-3", name: "Fish", api: "fish-speech" },
   },
   transcription: { quality: { model: "sov-transcribe-1", name: "SOV", subtitles: true } },
 });
@@ -108,7 +108,8 @@ test("the image build checks OpenCode against settings as the gateway renders th
     ],
   };
   const media = registry({
-    image: { fast: { model: "Check-Image" } },
+    image: { fast: { model: "Check-Image", sizes: ["1344x768"] } },
+    imageEdit: { fast: { model: "Check-Image-Edit", sizes: ["768x1344"] } },
     video: { fast: { model: "Check-Video", sizes: ["512x512"], seconds: { min: 1, max: 5 } } },
     music: { fast: { model: "Check-Music" } },
     speech: { fast: { model: "Check-Speech", api: "qwen3-tts", voices: { check: "a test voice" } } },
@@ -120,7 +121,7 @@ test("the image build checks OpenCode against settings as the gateway renders th
   assert.equal(checked, rendered);
 });
 
-test("opencodeConfig: the AI server's image models are the provider's, for generate_image, the fast one its default", () => {
+test("opencodeConfig: the AI server's image models are the provider's, for generate_image, the quality one its default", () => {
   const config = opencodeConfig({ catalog: CATALOG, media: images("Image-Turbo", "Image"), serviceBaseUrl: SERVICE, browser: false, kind: "private" }) as Record<string, any>;
   const { models } = config.providers.portal;
   assert.deepEqual(Object.keys(models), ["small", "big", "org/free-choice", "Image-Turbo", "Image"]);
@@ -128,9 +129,21 @@ test("opencodeConfig: the AI server's image models are the provider's, for gener
     name: "Image",
     type: "image",
     package: "@opencode/ai/providers/openai-compatible/images",
-    capabilities: { input: ["text", "image"], output: ["image"] },
+    capabilities: { input: ["text"], output: ["image"] },
   });
-  assert.deepEqual(config.experimental, { image_generate: { model: "portal/Image-Turbo" } });
+  assert.deepEqual(config.experimental, { image_generate: { model: "portal/Image" } });
+  const edits =opencodeConfig({ catalog: CATALOG, media: registry({ image: { quality: { model: "Image" } }, imageEdit: { fast: { model: "Edit" } } }), serviceBaseUrl: SERVICE, browser: false, kind: "private" }) as Record<string, any>;
+  const inputs = Object.fromEntries(["Image", "Edit"].map((id) => [id, edits.providers.portal.models[id].capabilities.input]));
+  assert.deepEqual(inputs, { Image: ["text"], Edit: ["text", "image"] }, "only an imageEdit model takes input images: OpenCode sends edits nowhere else");
+  assert.deepEqual(edits.experimental, { image_generate: { model: "portal/Image" } }, "a new image's default is the image kind's, not the editor");
+  const both = registry({ image: { fast: { model: "Turbo", sizes: ["1344x768"] }, quality: { model: "Image" } }, imageEdit: { fast: { model: "Turbo", sizes: ["1344x768", "768x1344"] } } });
+  const sized = opencodeConfig({ catalog: CATALOG, media: both, serviceBaseUrl: SERVICE, browser: false, kind: "private" }) as Record<string, any>;
+  assert.deepEqual(
+    sized.providers.portal.models.Turbo.variants,
+    [{ id: "1344x768", body: { size: "1344x768" } }, { id: "768x1344", body: { size: "768x1344" } }],
+    "a size is a variant named by it, whose body carries it; a model of both kinds is one model with the sizes of both",
+  );
+  assert.equal("variants" in sized.providers.portal.models.Image, false, "no sizes: no variants");
   assert.equal(config.model, "portal/big", "the chat model stays the default");
   const without = opencodeConfig({ catalog: CATALOG, media: NO_MEDIA, serviceBaseUrl: SERVICE, browser: false, kind: "private" }) as Record<string, any>;
   assert.equal("experimental" in without, false, "no image models: OpenCode offers no generate_image");
@@ -148,11 +161,23 @@ test("opencodeConfig: the AI server's image models are the provider's, for gener
 test("opencodeFacts: where to save an image and how to show it, and its model by tier; nothing without image or media models", () => {
   assert.deepEqual(opencodeFacts(NO_MEDIA), []);
   const [fact, tiers, protocol] = opencodeFacts(images("Image-Turbo", "Image"));
-  assert.match(fact!, /^- Images: generate_image makes and edits images\./);
-  assert.match(fact!, /`path` in the project, such as images\/<short-name>\.png/);
+  assert.match(fact!, /^- Images: generate_image makes a new image, or changes existing ones\./);
+  assert.match(fact!, /a tool of `execute`: call it in a script, as `return await tools\.generate_image\(\{ prompt: "\.\.\.", path: "images\/<short-name>\.png" \}\)`\. Give it a `path` in the project/);
   assert.match(fact!, /!\[<what it shows>\]\(images\/<short-name>\.png\)/);
-  assert.match(fact!, /leave it out for the fast one \(portal\/Image-Turbo\), or give portal\/Image for the quality one\.$/);
-  assert.match(opencodeFacts(images("Image"))[0]!, /Leave its `model` out: one model makes every image \(portal\/Image\)\.$/);
+  assert.match(fact!, /leave `model` out for the quality model \(portal\/Image\), or give portal\/Image-Turbo for the fast one: the tiers below say what each is for\. No model here changes an existing image/);
+  assert.match(opencodeFacts(images("Image"))[0]!, /For a new image leave `model` out: portal\/Image makes every one\./);
+  const [edits, editTiers] = opencodeFacts(registry({ image: { quality: { model: "Image" } }, imageEdit: { fast: { model: "Edit", name: "Editor", bestFor: "changes" } } }));
+  assert.match(edits!, /give them as `images` and leave `model` out: the tool takes portal\/Edit for them itself\. Every new image is 1024x1024\.$/);
+  assert.equal(editTiers!.split("\n")[2], "  - generate_image changes the images you give it as `images`. fast: Editor (portal/Edit), for changes. Both tiers use it.");
+  const [two] = opencodeFacts(registry({ imageEdit: { fast: { model: "Quick" }, quality: { model: "Careful" } } }));
+  assert.match(two!, /with `model` portal\/Quick for the fast edit or portal\/Careful for the quality one\. Every new image is 1024x1024\.$/);
+  assert.doesNotMatch(two!, /For a new image/, "no image kind: nothing said of new images");
+  const [sized] = opencodeFacts(registry({ image: { fast: { model: "Turbo", sizes: ["1344x768"] }, quality: { model: "Image", sizes: ["1344x768", "2048x2048"] } }, imageEdit: { fast: { model: "Turbo", sizes: ["768x1344"] } } }));
+  assert.match(
+    sized!,
+    / A new image is 1024x1024 unless `model` ends in `#` and one of the model's sizes, as in portal\/Image#1344x768: portal\/Turbo makes 1344x768, 768x1344; portal\/Image makes 1344x768, 2048x2048\. For such a size you must give `model`, even where you would otherwise leave it out\.$/,
+    "the example is the model a new image goes to",
+  );
   assert.match(tiers!, /^- Media models, by tier: `fast` for drafts/);
   assert.doesNotMatch(tiers!, /The media tools take the tier/, "images alone: no media tools");
   assert.equal(protocol, undefined, "no media tools: nothing about plans");
@@ -163,9 +188,9 @@ test("opencodeFacts: each kind's fast and quality model, which run beside the LL
   assert.equal(rest.length, 0);
   const lines = tiers!.split("\n");
   assert.match(lines[0]!, /The media tools take the tier as `tier`, save the file at the `path`.*\(file_path, tier, model_used, elapsed_sec\), never the file\.$/);
-  assert.equal(lines[1], "  - generate_image makes and edits images. fast: Image Turbo (portal/Image-Turbo), for drafts; about 25 s an image. quality: Image (portal/Image), for final images; about 95 s an image.");
+  assert.equal(lines[1], "  - generate_image makes a new image from a prompt. fast: Image Turbo (portal/Image-Turbo), for drafts; about 25 s an image. quality: Image (portal/Image), for final images; about 95 s an image.");
   assert.equal(lines[2], "  - generate_video makes a short clip with its own sound. fast: H3 fast (minimax-h3). quality: H3 (minimax-h3).");
-  assert.equal(lines[3], "  - synthesize_speech reads text aloud in a built-in, described or cloned voice. fast: Qwen3-TTS (qwen3-tts-1.7b), runs beside you. quality: Fish (fish-s2-pro).");
+  assert.equal(lines[3], "  - synthesize_speech reads text aloud in a built-in, described or cloned voice. fast: Qwen3-TTS (qwen3-tts-1.7b), runs beside you. quality: Fish (fish-drama-3).");
   assert.equal(lines[4], "  - transcribe_audio writes down what an audio or video file says. quality: SOV (sov-transcribe-1). Both tiers use it.");
   assert.match(lines[5]!, /^  Every model not marked as running beside you shares the GPU with you/);
   assert.match(protocol!, /Go ahead when it is one simple asset/);

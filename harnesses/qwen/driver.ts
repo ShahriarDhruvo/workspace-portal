@@ -69,7 +69,7 @@ export const qwenDriver: AgentDriver = {
   kind: "qwen",
   name: AGENT_NAMES.qwen,
   description: "Qwen Code's Web Shell: chat, files, terminal and a headless browser.",
-  release: { packageName: "@qwen-code/qwen-code", versionKey: "QWEN_CODE_VERSION", defaultVersion: "0.27.0", cli: "qwen" },
+  release: { packageName: "@qwen-code/qwen-code", versionKey: "QWEN_CODE_VERSION", defaultVersion: "0.28.7", cli: "qwen" },
   port: 4170,
   credentialEnv: "QWEN_SERVER_TOKEN",
   settingsMount: QWEN_SETTINGS_DIR,

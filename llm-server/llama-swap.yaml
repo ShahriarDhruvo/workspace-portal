@@ -1,4 +1,4 @@
-# llama-swap on the AI server: one address (port 8080) for the LLM, the image model and the media models,
+# llama-swap on the AI server: one address (port 8080) for the LLM, the image models and the media models,
 # which do not fit in memory together. A request names its model; llama-swap starts that model's unit and, when the
 # model belongs to an exclusive group, first stops the models of the other groups. The everyday speech models are the
 # exception: they start beside whatever runs, the LLM included (group `speech`). It waits for requests in flight to
@@ -39,10 +39,16 @@ models:
     checkEndpoint: /ready
   # Ming's own code in PyTorch (llm-server/media/ming.service): Gufo does not run it.
   Ming-Image-0.2-Design:
-    name: Ming-Image-0.2-Design
+    name: Ming-Image-0.2-Design (new images)
     cmd: systemctl --user start --wait ming.service
     cmdStop: systemctl --user stop ming.service
     proxy: http://127.0.0.1:18081
+    checkEndpoint: /ready
+  Qwen-Image-2.1-Turbo:
+    name: Qwen-Image-2.1-Turbo (image edits and fast drafts)
+    cmd: systemctl --user start --wait gufo-image-turbo.service
+    cmdStop: systemctl --user stop gufo-image-turbo.service
+    proxy: http://127.0.0.1:18082
     checkEndpoint: /ready
   # The media models (llm-server/media/ and the gufo-*.container quadlets), as llm-server/media.json names them.
   # The portal reaches video and music at /upstream/<id>/v1/... (MEDIA_MODEL_PATH): llama-swap routes no /v1/videos, nor
@@ -54,8 +60,8 @@ models:
     cmdStop: systemctl --user stop gufo-video.service
     proxy: http://127.0.0.1:18083
     checkEndpoint: /ready
-  fish-s2-pro:
-    name: Fish Audio S2-Pro (speech)
+  fish-drama-3:
+    name: Fish Audio Drama 3 (speech)
     cmd: systemctl --user start --wait fish-speech.service
     cmdStop: systemctl --user stop fish-speech.service
     proxy: http://127.0.0.1:18084
@@ -74,8 +80,7 @@ models:
     cmdStop: systemctl --user stop acestep.service
     proxy: http://127.0.0.1:18086
     checkEndpoint: /ready
-  # Everyday speech (Gufo's Qwen3-TTS and Qwen3-ASR), beside the LLM. The portal reaches the WebSockets
-  # (/v1/audio/speech/stream, /v1/realtime) at /upstream/<id>/...: llama-swap routes neither under /v1.
+  # Everyday speech (Gufo's Qwen3-TTS and Qwen3-ASR), beside the LLM.
   qwen3-tts-1.7b:
     name: Qwen3-TTS 1.7B CustomVoice (speech)
     cmd: systemctl --user start --wait gufo-tts.service
@@ -123,18 +128,18 @@ routing:
           swap: true
           exclusive: true
           members: [qwen3.8-flash-next]
-        # The image model starts with its first request, which loads its weights; starting it stops the LLM first,
-        # and the LLM starting stops it.
+        # One image model at a time, though both would fit (53.6 and 35.2 GiB at most): an agent's calls go back to
+        # the LLM between them, which stops every image model, so a second loaded one would save no swap.
         images:
           swap: true
           exclusive: true
-          members: [Ming-Image-0.2-Design]
+          members: [Ming-Image-0.2-Design, Qwen-Image-2.1-Turbo]
         # One media model at a time, with nothing beside it but an everyday speech model: H3 holds up to 40 GiB while
         # it denoises, and vLLM takes the cache it is given (vllm-sov.container caps it so one speech model fits).
         media:
           swap: true
           exclusive: true
-          members: [minimax-h3, fish-s2-pro, sov-transcribe-1, acestep-1.5-xl-base]
+          members: [minimax-h3, fish-drama-3, sov-transcribe-1, acestep-1.5-xl-base]
         # The everyday speech models, one at a time beside the LLM: it keeps running, and a swap within the group
         # takes about 2.5 s. Two together leave under 12 GiB free (9.8 GiB measured) and three exceed the GPU's
         # eight compute queues (about 23 W more at idle). Persistent: without it any request to a model of an

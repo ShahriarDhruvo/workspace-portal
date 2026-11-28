@@ -12,11 +12,15 @@
 //     browser tools, the instructions file the settings name and Superpowers' introduction, and without OpenCode's
 //     own web tools;
 //   * Safety Net refuses a command that destroys work, and a file the model writes is formatted;
-//   * generate_image asks the stand-in for the settings' default image model and saves the image where the model
-//     says, and the session hears when it is saved;
-//   * the portal's media tools (media-tools) list the settings' media models with what the stand-in says is loaded,
-//     ask it for the model of the tier the call names, follow a video job to its end, save each file where the model
-//     says and tell the model where it is, in JSON;
+//   * generate_image is a Code Mode tool: the turn lists it in the system prompt's catalog and a model calls it inside
+//     `execute`. Called so, it asks the stand-in for the settings' default image model and saves the image where the
+//     model says, and the session hears when it is saved; given an image to change and no model, it asks the
+//     settings' model that takes input images instead of the default, which takes none; its request carries a `size`
+//     only when the call names the model with one (the settings' `variants`), for a new image and for a change;
+//   * the portal's media tools (media-tools) are offered by name, and OpenCode's own generate_video is not offered
+//     beside the plugin's. They list the settings' media models with what the stand-in says is loaded, ask it for
+//     the model of the tier the call names, follow a video job to its end, save each file where the model says and
+//     tell the model where it is, in JSON;
 //   * the routes of the gateway's status check answer as it reads them: a running turn, one that waits for an
 //     approval, and a command left running in the background;
 //   * a terminal's ticket and socket are given to requests without an Origin, as the gateway sends them;
@@ -77,11 +81,19 @@ const model = sample.providers.portal.models[modelId];
 // changes away, then writes a Go file (`goFile`) that gofmt would change.
 const BACKGROUND_PROMPT = "Leave a command running in the background.";
 const TOOLSET_PROMPT = "Throw the changes away, then write a Go file.";
-// Asked to (IMAGE_PROMPT), it calls generate_image once; the stand-in answers with IMAGE_PNG.
+// Asked to (IMAGE_PROMPT), it calls generate_image once, inside `execute` as a model has to call a Code Mode tool; the
+// stand-in answers with IMAGE_PNG.
 const IMAGE_PROMPT = "Draw the check image.";
 const IMAGE_CALL = { prompt: "A red square", path: "images/check.png" };
 const IMAGE_PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
 const imageRequests = [];
+// Asked to (EDIT_PROMPT), it calls generate_image the same way with the check image to change, naming no model.
+const EDIT_PROMPT = "Change the check image.";
+const EDIT_CALL = { prompt: "Make the square blue", images: [IMAGE_CALL.path], path: "images/check-edit.png" };
+const editRequests = [];
+// Asked to (SIZE_PROMPT), it makes an image and changes one in one script, each at a size of its model (`sizeCalls`).
+const SIZE_PROMPT = "Make the check images at a size.";
+let sizeCalls = [];
 // Asked to (MEDIA_PROMPT), it lists the media models, then calls the media tools in turn: a video from the check
 // image, speech, music, and the transcript of the speech. The stand-in answers each as the AI server's media models do.
 const MEDIA_PROMPT = "Make the check media.";
@@ -127,6 +139,9 @@ let serviceUrl = "";
 const sse = (res, data) => res.write(`data: ${typeof data === "string" ? data : JSON.stringify(data)}\n\n`);
 const chunk = (delta, finish = null) => ({ id: "chatcmpl-check", object: "chat.completion.chunk", created: 1, model: modelId, choices: [{ index: 0, delta, finish_reason: finish }] });
 const toolCall = (name, args) => ({ tool_calls: [{ index: 0, id: `call_${name}`, type: "function", function: { name, arguments: JSON.stringify(args) } }] });
+const imageCall = (args) => toolCall("execute", { code: `return await tools.generate_image(${JSON.stringify(args)});` });
+// Several images in one script, as the agent is told to start them.
+const imageCalls = (calls) => toolCall("execute", { code: `return await Promise.all([${calls.map((args) => `tools.generate_image(${JSON.stringify(args)})`).join(", ")}]);` });
 function mcpAnswer(message) {
   if (message.id === undefined) return null;
   const result = (value) => ({ jsonrpc: "2.0", id: message.id, result: value });
@@ -147,11 +162,15 @@ const service = http.createServer((req, res) => {
 async function serve(req, res) {
   let body = "";
   for await (const part of req) body += part;
+  // A multipart form's text field.
+  const field = (name) => new RegExp(`name="${name}"\r\n\r\n([^\r]*)`).exec(body)?.[1] ?? null;
   if (req.url === "/llm/v1/audio/transcriptions" && req.method === "POST") {
-    // Multipart: the model and format fields, and the file.
-    const field = (name) => new RegExp(`name="${name}"\r\n\r\n([^\r]*)`).exec(body)?.[1] ?? null;
     mediaRequests.push({ route: "transcriptions", model: field("model"), response_format: field("response_format"), file: /name="file"/.test(body) });
     return void res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ text: TRANSCRIPT, language: "en" }));
+  }
+  if (req.url === "/llm/v1/images/edits" && req.method === "POST") {
+    editRequests.push({ model: field("model"), prompt: field("prompt"), size: field("size"), image: /name="image(?:\[\])?"; filename=/.test(body) });
+    return void res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ created: 1, data: [{ b64_json: IMAGE_PNG.toString("base64") }] }));
   }
   const message = body === "" ? null : JSON.parse(body);
   if (req.url === "/llm/v1/media" && req.method === "GET") {
@@ -192,13 +211,19 @@ async function serve(req, res) {
   const background = asked(BACKGROUND_PROMPT);
   const toolset = asked(TOOLSET_PROMPT);
   const image = asked(IMAGE_PROMPT);
+  const edit = asked(EDIT_PROMPT);
+  const sized = asked(SIZE_PROMPT);
   const mediaTurn = asked(MEDIA_PROMPT);
   llmRequests.push({ turn, background, toolset, image, media: mediaTurn, step: results.length, authorization: req.headers.authorization, body: message });
   let call = null;
   if (turn && background) {
     if (results.length === 0) call = toolCall("shell", { command: "sleep 300", background: true });
   } else if (turn && image) {
-    if (results.length === 0) call = toolCall("generate_image", IMAGE_CALL);
+    if (results.length === 0) call = imageCall(IMAGE_CALL);
+  } else if (turn && edit) {
+    if (results.length === 0) call = imageCall(EDIT_CALL);
+  } else if (turn && sized) {
+    if (results.length === 0) call = imageCalls(sizeCalls);
   } else if (turn && mediaTurn) {
     if (results.length < MEDIA_CALLS.length) call = toolCall(...MEDIA_CALLS[results.length]);
   } else if (turn && toolset) {
@@ -409,10 +434,14 @@ async function main() {
   expect(tools.includes("search_web_search"), "the search MCP server's tools are offered by name (search_web_search; codemode false)", tools);
   expect(tools.some((name) => name.startsWith("browser_")), "the browser MCP server's tools are offered by name (browser_*)", tools);
   expect(tools.includes("execute") && tools.includes("shell"), "OpenCode offers its `execute` and `shell` tools, which the rest of this check uses", tools);
-  expect(tools.includes("generate_image"), "OpenCode offers generate_image for the settings' image models (type \"image\")", tools);
   const mediaTools = MEDIA_CALLS.map(([name]) => name);
-  expect(mediaTools.every((name) => tools.includes(name)), `the media plugin offers ${mediaTools.join(", ")} for the settings' media models`, tools);
+  expect(mediaTools.every((name) => tools.includes(name)), `the media plugin's tools are offered by name for the settings' media models (${mediaTools.join(", ")}; codemode false)`, tools);
   const said = (text) => JSON.stringify(turn.body.messages).split(text).length - 1;
+  // OpenCode's image tool is not among those: the system prompt lists it for `execute`, as tools.generate_image.
+  const catalog = JSON.stringify(turn.body.messages).match(/- tools\.[\w.]+/g) ?? [];
+  expect(said("- tools.generate_image(") > 0, "OpenCode lists tools.generate_image in its Code Mode catalog for the settings' image models (type \"image\")", catalog);
+  // OpenCode's own generate_video is for models of type "video", which the settings do not have.
+  expect(said("tools.generate_video(") === 0, "generate_video is the media plugin's tool alone: OpenCode's Code Mode catalog lists none of that name", catalog);
   expect(said(INSTRUCTIONS) === 1, "the request carries the text of the managed `instructions` file, once", said(INSTRUCTIONS));
   expect(said("You have superpowers.") === 1, "the request carries Superpowers' introduction, once", said("You have superpowers."));
   expect(tools.includes("skill") && installed.every((id) => JSON.stringify(turn.body).includes(id)), "the request offers the `skill` tool and names the skills of the settings' folders", tools);
@@ -495,6 +524,58 @@ async function main() {
     llmRequests.some((request) => request.image && request.turn && JSON.stringify(request.body.messages).includes(imageFile)),
   );
   passed("generate_image makes an image with the default image model, saves it in the project and wakes the session");
+
+  // The same tool with an image to change and no model named: how an edit reaches media.json's imageEdit model.
+  const imageEntries = Object.entries(sample.providers.portal.models).filter(([, entry]) => entry.type === "image");
+  const editModelId = imageEntries.find(([, entry]) => entry.capabilities.input.includes("image"))?.[0];
+  expect(
+    editModelId !== undefined && !sample.providers.portal.models[imageModelId].capabilities.input.includes("image"),
+    `${process.argv[2]} has an image model that takes input images, and a default image model that takes none`,
+    imageEntries,
+  );
+  const editing = (await api("POST", "/api/session", { body: { location: { directory: project } } })).json?.data;
+  expect(typeof editing?.id === "string", "POST /api/session creates a session for the edit", editing);
+  await api("POST", `/api/session/${editing.id}/prompt`, { body: { text: EDIT_PROMPT } });
+  const editFile = path.join(project, EDIT_CALL.path);
+  await until("generate_image to save the changed image where the model said", async () => fs.existsSync(editFile) && fs.readFileSync(editFile).equals(IMAGE_PNG));
+  expect(
+    editRequests[0]?.model === editModelId && editRequests[0].prompt === EDIT_CALL.prompt && editRequests[0].image,
+    `generate_image with \`images\` and no model sends the image to <service>/llm/v1/images/edits for ${editModelId}, not for the default ${imageModelId}`,
+    editRequests[0],
+  );
+  passed("generate_image sends an image to change to the image model that takes input images");
+
+  // generate_image has no parameter for a size, so the settings make each size a variant of its model, named by the
+  // size, whose `body` OpenCode adds to the request's.
+  const sizeOf = (id) => sample.providers.portal.models[id].variants?.[0];
+  const [imageSize, editSize] = [sizeOf(imageModelId), sizeOf(editModelId)];
+  expect(
+    imageSize !== undefined && imageSize.body?.size === imageSize.id && editSize !== undefined && editSize.body?.size === editSize.id,
+    `${process.argv[2]} gives each image model a size, as a variant named by the size with the size in its \`body\``,
+    imageEntries,
+  );
+  sizeCalls = [
+    { prompt: "A red rectangle", model: `portal/${imageModelId}#${imageSize.id}`, path: "images/check-size.png" },
+    { prompt: "Stretch the square", images: [IMAGE_CALL.path], model: `portal/${editModelId}#${editSize.id}`, path: "images/check-edit-size.png" },
+  ];
+  const sizing = (await api("POST", "/api/session", { body: { location: { directory: project } } })).json?.data;
+  expect(typeof sizing?.id === "string", "POST /api/session creates a session for the sizes", sizing);
+  await api("POST", `/api/session/${sizing.id}/prompt`, { body: { text: SIZE_PROMPT } });
+  await until("generate_image to save the two images asked for at a size", async () => sizeCalls.every((call) => fs.existsSync(path.join(project, call.path))));
+  const imageAsk = imageRequests.find((request) => request.prompt === sizeCalls[0].prompt);
+  expect(
+    imageAsk?.model === imageModelId && imageAsk.size === imageSize.id,
+    `generate_image with \`model\` ${sizeCalls[0].model} asks <service>/llm/v1/images/generations for ${imageModelId} with \`size\` ${imageSize.id}`,
+    imageAsk,
+  );
+  const editAsk = editRequests.find((request) => request.prompt === sizeCalls[1].prompt);
+  expect(
+    editAsk?.model === editModelId && editAsk.size === editSize.id && editAsk.image,
+    `generate_image with \`images\` and \`model\` ${sizeCalls[1].model} asks <service>/llm/v1/images/edits for ${editModelId} with \`size\` ${editSize.id}`,
+    editAsk,
+  );
+  expect(!("size" in sent) && editRequests[0].size === null, "generate_image sends no `size` when its call names no model with one: the image has the server's default size", { image: sent, edit: editRequests[0] });
+  passed("generate_image asks for a size when its model is named with one, and for none otherwise");
 
   // A turn that uses each media tool once, the video from the image just saved.
   const mediaModels = Object.fromEntries(["video", "music", "speech", "transcription"].map((kind) => [kind, checkMedia[kind]?.fast?.model ?? checkMedia[kind]?.quality?.model]));

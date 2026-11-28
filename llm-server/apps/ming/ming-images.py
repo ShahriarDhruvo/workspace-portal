@@ -2,24 +2,26 @@
 and the portal's gateway use it as they used Gufo's image models.
 
   POST /v1/images/generations  JSON: model, prompt, n, size, seed, steps, background, response_format
-  POST /v1/images/edits        a multipart form with the same fields and one image to change (image or image[])
   GET  /v1/models              the model
   GET  /ready                  200 once the model is loaded (llama-swap's check)
-  GET  /health                 200 while the process runs, with the status: loading, ready or unavailable
+  GET  /health                 200 while the process runs, with the status: loading or ready
 
-model must be MODEL_ID. size is "auto" (the default: 1024x1024, or the reference's aspect ratio when editing) or
-WIDTHxHEIGHT, each side a multiple of 16 from 256 to 4096, at most 4.5 megapixels, 1:4 to 4:1. Ming makes an image
-at its 1024 or 2048 level (2048 from about 1536x1536 up; it takes about six times as long) and resizes it to the
-size asked for. n is 1 to 10 images, made one after another, the second with seed + 1 and so on; seed is random if
-left out. steps is 2 to 100, default 12 (the model card's). background "opaque" puts the image on white; "auto" and
-"transparent" keep the alpha channel Ming makes (ask for a transparent background in the prompt). Output is base64
-PNG; response_format "url" and a non-empty negative_prompt (Ming has no negative conditioning) answer 400. Unknown
-fields are ignored, as Gufo does. Errors are {"error": {"message", "type"}}. One image is made at a time; requests
-wait in turn, and a request whose client hung up stops before its next image. Prompts are never logged.
+Ming-Image makes new images only: POST /v1/images/edits answers 404 and says so, and an `image` in a generation
+request answers 400.
 
-When the weights are missing or loading fails, the server stays up without the model ("unavailable"): /ready and
-POST answer 503 with the reason, which the journal also shows. It does not exit, so neither systemd nor llama-swap
-starts it again and again; restart it once the weights are in place.
+model must be MODEL_ID. size is "auto" (the default: 1024x1024) or WIDTHxHEIGHT, each side a multiple of 16 from 256
+to 4096, at most 4.5 megapixels, 1:4 to 4:1. Ming makes an image at its 1024 or 2048 level (2048 from about
+1536x1536 up; it takes about six times as long) and resizes it to the size asked for. n is 1 to 10 images, made one
+after another, the second with seed + 1 and so on; seed is random if left out. steps is 2 to 100, default 12 (the
+model card's). background "opaque" puts the image on white; "auto" and "transparent" keep the alpha channel Ming
+makes (ask for a transparent background in the prompt). Output is base64 PNG; response_format "url" and a non-empty
+negative_prompt (Ming has no negative conditioning) answer 400. Unknown fields are ignored, as Gufo does. Errors are
+{"error": {"message", "type"}}. One image is made at a time; requests wait in turn, and a request whose client hung
+up stops before its next image. Prompts are never logged.
+
+When the weights are missing or loading fails, the server logs the reason and exits with status 1. ming.service has
+Restart=no, so systemd does not start it again, and llama-swap sees the unit end and fails the request at once. A
+server left up with /ready at 503 would keep the LLM stopped until llama-swap's healthCheckTimeout, on every request.
 
 install.sh puts this file in the root of the Ming-Image checkout, whose infer.py it drives in-process; ming.service
 runs it with that venv's Python.
@@ -27,17 +29,14 @@ runs it with that venv's Python.
 
 import argparse
 import base64
-import binascii
-import email.parser
-import email.policy
 import io
 import json
 import logging
+import os
 import re
 import secrets
 import select
 import socket
-import tempfile
 import threading
 import time
 import types
@@ -46,7 +45,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
-from PIL import Image, ImageOps
+from PIL import Image
 
 import infer
 from inference_profile import load_checkpoint_capabilities
@@ -57,8 +56,6 @@ SIDE_MIN, SIDE_MAX = 256, 4096
 PIXELS_MAX = 4_500_000
 # Generation at size auto; Ming's own default is 2048x2048, which takes about six times as long (191 s, not 30).
 AUTO_SIZE = (1024, 1024)
-# Ming's edit level (infer.py's TASK_RESOLUTION_BUCKETS).
-EDIT_LEVEL = 1024
 # The VAE decodes an image larger than 1024 pixels on a side in overlapping tiles of 1024, 896 apart: at 2048x2048
 # it then takes 2.3 GiB beside the weights instead of 35, and the image differs from the untiled one by 0.12 of 255
 # on average. Smaller images are decoded whole, as before.
@@ -69,13 +66,9 @@ SEED_LIMIT = 2**32
 # The prompt's tokens: the language model attends eagerly (BailingMoeV2 has no SDPA path), so its memory grows with
 # the square of the prompt.
 PROMPT_TOKENS = 8192
-IMAGE_BYTES = 20 * 1024 * 1024
-IMAGE_PIXELS = 32_000_000
-IMAGE_FORMATS = {"PNG", "JPEG", "WEBP"}
-# A 20 MiB reference as base64 in a form, with room for the rest.
+# Room for an image edit sent here by mistake: it is read whole, so its sender gets the answer that says so.
 BODY_BYTES = 32 * 1024 * 1024
-BACKGROUNDS = {"auto", "transparent", "opaque"}
-DATA_URL = re.compile(r"data:image/[\w.+-]+;base64,(.*)", re.DOTALL)
+BACKGROUNDS = ("auto", "opaque", "transparent")
 # Every file the model loads, by component: config.json and the weights' index or file.
 FILES = [
     "config.json", "mllm/config.json", "mllm/model.safetensors.index.json", "mllm/tokenizer.json",
@@ -113,76 +106,35 @@ def image_size(value: Any) -> tuple[int, int] | None:
 
 
 def integer(name: str, value: Any, low: int, high: int, default: int | None) -> int | None:
-    """An integer field, from JSON or a form's text."""
+    """An integer field of the request."""
     if value is None:
         return default
-    if isinstance(value, str) and re.fullmatch(r"[0-9]{1,10}", value.strip()):
-        value = int(value)
     if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
         raise BadRequest(f"{name} must be an integer from {low} to {high}")
     return value
 
 
-def reference(data: bytes) -> Image.Image:
-    """The image to edit, upright, checked as Gufo checks references."""
-    if not data or len(data) > IMAGE_BYTES:
-        raise BadRequest(f"the image is empty or larger than {IMAGE_BYTES // 2**20} MiB")
-    try:
-        with Image.open(io.BytesIO(data)) as image:
-            if image.format not in IMAGE_FORMATS:
-                raise BadRequest(f"the image must be PNG, JPEG or WebP, not {image.format}")
-            if image.width * image.height > IMAGE_PIXELS:
-                raise BadRequest(f"the image has more than {IMAGE_PIXELS // 10**6} megapixels")
-            upright = ImageOps.exif_transpose(image)
-            upright.load()
-    except (OSError, ValueError, Image.DecompressionBombError):
-        raise BadRequest("the image is not a decodable PNG, JPEG or WebP image") from None
-    if not 0.25 <= upright.width / upright.height <= 4:
-        raise BadRequest("the image's aspect ratio must be between 1:4 and 4:1")
-    return upright.convert("RGBA")
-
-
-def form(content_type: str, raw: bytes) -> tuple[dict[str, str], list[bytes]]:
-    """A multipart/form-data body's text fields and the files of its image or image[] fields."""
-    message = email.parser.BytesParser(policy=email.policy.HTTP).parsebytes(
-        f"Content-Type: {content_type}\r\n\r\n".encode("latin-1") + raw)
-    if not message.is_multipart():
-        raise BadRequest("send an edit as multipart/form-data")
-    fields: dict[str, str] = {}
-    images: list[bytes] = []
-    for part in message.iter_parts():
-        name = part.get_param("name", header="content-disposition")
-        if name in ("image", "image[]"):
-            images.append(part.get_payload(decode=True) or b"")
-        elif name == "mask":
-            raise BadRequest("masks are not supported: describe the change in the prompt")
-        elif isinstance(name, str) and part.get_filename() is None:
-            fields[name] = (part.get_payload(decode=True) or b"").decode("utf-8", errors="replace")
-    return fields, images
-
-
 class Server:
     def __init__(self, args: argparse.Namespace):
         self.args = args
-        self.status, self.problem = "loading", ""
+        self.status = "loading"
         self.model = self.processor = self.profile = None
         self.gpu = threading.Lock()
 
     def load(self) -> None:
-        """Loads the model onto the GPU. On failure the server stays up as unavailable."""
+        """Loads the model onto the GPU; any failure ends the process so systemd and llama-swap see it."""
         started = time.monotonic()
         directory = self.args.model
-        missing = [name for name in FILES if not (directory / name).is_file()]
-        if missing:  # checked before the GPU is touched
-            return self.unavailable(
-                f"the Ming-Image-0.2-Design weights are missing: {len(missing)} of {len(FILES)} files not in "
-                f"{directory} ({', '.join(missing)}); download them (docs/GUIDE.md) and restart ming.service")
         try:
+            missing = [name for name in FILES if not (directory / name).is_file()]
+            if missing:  # checked before the GPU is touched
+                raise RuntimeError(
+                    f"the Ming-Image-0.2-Design weights are missing: {len(missing)} of {len(FILES)} files not in "
+                    f"{directory} ({', '.join(missing)}); download them (docs/GUIDE.md)")
             if not torch.cuda.is_available():
                 raise RuntimeError("no ROCm GPU visible to torch")
             self.profile = load_checkpoint_capabilities(directory)
             self.profile.validate_task("text-to-image", has_reference_image=False, num_layers=1)
-            self.profile.validate_task("image-edit", has_reference_image=True, num_layers=1)
             # infer.py's defaults: BF16, the model card's precision, everything on the one GPU.
             options = types.SimpleNamespace(processor=None, dtype="bfloat16", attn_implementation="eager",
                                             device="cuda:0", device_map="balanced", num_gpus=1)
@@ -190,24 +142,21 @@ class Server:
             self.model.diffusion_loss.vae.enable_tiling(
                 tile_sample_min_height=VAE_TILE, tile_sample_min_width=VAE_TILE,
                 tile_sample_stride_height=VAE_STRIDE, tile_sample_stride_width=VAE_STRIDE)
-        except Exception as exc:
+        except BaseException:
             log.exception("loading failed")
-            self.model = self.processor = None
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            return self.unavailable(f"loading the model failed: {exc}; see the journal, then restart ming.service")
+            os._exit(1)  # sys.exit would end only this thread
         self.status = "ready"
         log.info("ready in %.1f s; %.1f GiB of GPU memory in use", time.monotonic() - started,
                  torch.cuda.memory_allocated() / 2**30)
 
-    def unavailable(self, problem: str) -> None:
-        self.problem, self.status = problem, "unavailable"
-        log.error("%s. /ready answers 503 and requests are refused until then.", problem)
-
-    def parse(self, body: dict, images: list[bytes] | None) -> dict:
-        """A request's settings, checked, with the defaults filled in. images is None for a generation."""
+    def parse(self, body: Any) -> dict:
+        """A request's settings, checked, with the defaults filled in."""
+        if not isinstance(body, dict):
+            raise BadRequest("the body must be a JSON object")
         if body.get("model") != MODEL_ID:
             raise BadRequest(f"model must be {MODEL_ID}")
+        if body.get("image") is not None:
+            raise BadRequest(f"{MODEL_ID} makes new images only: it cannot change the image sent")
         prompt = body.get("prompt")
         if not isinstance(prompt, str) or not prompt.strip():
             raise BadRequest("prompt is required")
@@ -219,67 +168,52 @@ class Server:
             raise BadRequest("negative_prompt is not supported: Ming-Image has no negative conditioning")
         background = body.get("background") or "auto"
         if background not in BACKGROUNDS:
-            raise BadRequest(f"background must be one of {', '.join(sorted(BACKGROUNDS))}")
-        start = None
-        if images is not None:
-            if len(images) != 1:
-                raise BadRequest("give one image to edit: Ming-Image edits one reference at a time")
-            start = reference(images[0])
+            raise BadRequest(f"background must be one of {', '.join(BACKGROUNDS)}")
         return {
-            "prompt": prompt, "reference": start, "size": image_size(body.get("size")),
+            "prompt": prompt, "size": image_size(body.get("size")),
             "n": integer("n", body.get("n"), 1, N_MAX, 1),
             "steps": integer("steps", body.get("steps"), STEPS_MIN, STEPS_MAX, None),
             "seed": integer("seed", body.get("seed"), 0, SEED_LIMIT - 1, None), "background": background,
         }
 
-    def render(self, req: dict, seed: int, scratch: Path) -> tuple[Image.Image, float]:
+    def render(self, req: dict, seed: int, gone) -> tuple[Image.Image, float]:
         """One image as Ming made it, at the size asked for, and the GPU memory it took at most, in GiB."""
         sampling = self.profile.resolve_sampling_parameters(steps=req["steps"], cfg=None)
-        if req["reference"] is None:
-            width, height = req["size"] or AUTO_SIZE
-            options = {"task": "text-to-image", "input_image": None, "resolution": None, "width": width,
-                       "height": height}
-        else:
-            path = scratch / "reference.png"
-            if not path.exists():
-                req["reference"].save(path)
-            options = {"task": "image-edit", "input_image": path, "resolution": EDIT_LEVEL}
+        width, height = req["size"] or AUTO_SIZE
         with self.gpu:
+            # Checked after the wait for the GPU, during which the client may have hung up.
+            if gone():
+                raise Gone()
             torch.cuda.reset_peak_memory_stats()
             try:
-                images = infer.run_generation(self.model, self.processor, self.profile, prompt=req["prompt"],
-                                              sampling=sampling, seed=seed, num_layers=1, dtype=torch.bfloat16,
-                                              **options)
+                images = infer.run_generation(self.model, self.processor, self.profile, task="text-to-image",
+                                              prompt=req["prompt"], input_image=None, resolution=None, width=width,
+                                              height=height, sampling=sampling, seed=seed, num_layers=1,
+                                              dtype=torch.bfloat16)
                 peak = torch.cuda.max_memory_allocated() / 2**30
             finally:
                 # PyTorch would keep what the image took, about 7 GiB beside the weights, for the next one; a speech
                 # model running beside this server needs it more.
                 torch.cuda.empty_cache()
-        image = images[0]
-        if req["reference"] is not None and req["size"] and image.size != req["size"]:
-            image = image.resize(req["size"], Image.Resampling.LANCZOS)
-        return image, peak
+        return images[0], peak
 
     def generate(self, req: dict, gone) -> list[str]:
         """The request's images as base64 PNG."""
         first = secrets.randbelow(SEED_LIMIT) if req["seed"] is None else req["seed"]
         results = []
-        with tempfile.TemporaryDirectory(prefix="ming-") as scratch:
-            for index in range(req["n"]):
-                if index and gone():
-                    raise Gone()
-                started = time.monotonic()
-                seed = (first + index) % SEED_LIMIT
-                image, peak = self.render(req, seed, Path(scratch))
-                if req["background"] == "opaque":
-                    image = Image.alpha_composite(Image.new("RGBA", image.size, "white"), image.convert("RGBA"))
-                    image = image.convert("RGB")
-                out = io.BytesIO()
-                image.save(out, format="PNG")
-                results.append(base64.b64encode(out.getvalue()).decode("ascii"))
-                log.info("image %d of %d: %s %dx%d, %s steps, seed %d, took %.1f s and %.1f GiB at most",
-                         index + 1, req["n"], "edit" if req["reference"] else "generation", image.width,
-                         image.height, req["steps"] or "default", seed, time.monotonic() - started, peak)
+        for index in range(req["n"]):
+            started = time.monotonic()
+            seed = (first + index) % SEED_LIMIT
+            image, peak = self.render(req, seed, gone)
+            if req["background"] == "opaque":
+                image = Image.alpha_composite(Image.new("RGBA", image.size, "white"), image.convert("RGBA"))
+                image = image.convert("RGB")
+            out = io.BytesIO()
+            image.save(out, format="PNG")
+            results.append(base64.b64encode(out.getvalue()).decode("ascii"))
+            log.info("image %d of %d: %dx%d, %s steps, seed %d, took %.1f s and %.1f GiB at most", index + 1,
+                     req["n"], image.width, image.height, req["steps"] or "default", seed,
+                     time.monotonic() - started, peak)
         return results
 
 
@@ -317,10 +251,8 @@ def handler(server: Server) -> type[BaseHTTPRequestHandler]:
         def do_GET(self) -> None:
             path = self.path.split("?", 1)[0]
             if path in ("/health", "/ready"):
-                state = {"status": server.status}
-                if server.problem:
-                    state["error"] = {"message": server.problem, "type": "server_error"}
-                return self.json(200 if path == "/health" or server.status == "ready" else 503, state)
+                ready = server.status == "ready"
+                return self.json(200 if path == "/health" or ready else 503, {"status": server.status})
             if path == "/v1/models":
                 return self.json(200, {"object": "list", "data": [
                     {"id": MODEL_ID, "object": "model", "created": 0, "owned_by": "inclusionAI"}]})
@@ -348,39 +280,20 @@ def handler(server: Server) -> type[BaseHTTPRequestHandler]:
                 self.close_connection = True
                 return self.error(413, f"the body is larger than {BODY_BYTES // 2**20} MiB")
             path = self.path.split("?", 1)[0]
-            if path not in ("/v1/images/generations", "/v1/images/edits"):
+            if path == "/v1/images/edits":
+                return self.error(404, f"{MODEL_ID} makes new images only: it has no /v1/images/edits")
+            if path != "/v1/images/generations":
                 return self.error(404, "not found")
             if server.status != "ready":
-                return self.error(503, server.problem or "the model is still loading")
-            content_type = self.headers.get("Content-Type") or ""
+                return self.error(503, "the model is still loading")
             try:
-                if path == "/v1/images/generations":
-                    if not content_type.startswith("application/json"):
-                        raise BadRequest("send the request as JSON (Content-Type: application/json)")
-                    try:
-                        body = json.loads(raw)
-                    except ValueError:
-                        raise BadRequest("the body is not valid JSON") from None
-                    if not isinstance(body, dict):
-                        raise BadRequest("the body must be a JSON object")
-                    images = None
-                    if body.get("image") is not None:
-                        raise BadRequest("send an image to change to /v1/images/edits")
-                else:
-                    if content_type.startswith("application/json"):
-                        try:
-                            body = json.loads(raw)
-                        except ValueError:
-                            raise BadRequest("the body is not valid JSON") from None
-                        if not isinstance(body, dict):
-                            raise BadRequest("the body must be a JSON object")
-                        listed = body.get("images") or ([body["image"]] if body.get("image") else [])
-                        images = [self.data_url(entry) for entry in listed]
-                    elif content_type.startswith("multipart/form-data"):
-                        body, images = form(content_type, raw)
-                    else:
-                        raise BadRequest("send an edit as multipart/form-data")
-                req = server.parse(body, images)
+                if not (self.headers.get("Content-Type") or "").startswith("application/json"):
+                    raise BadRequest("send the request as JSON (Content-Type: application/json)")
+                try:
+                    body = json.loads(raw)
+                except (ValueError, RecursionError):
+                    raise BadRequest("the body is not valid JSON") from None
+                req = server.parse(body)
             except BadRequest as exc:
                 return self.error(400, str(exc))
             try:
@@ -393,19 +306,6 @@ def handler(server: Server) -> type[BaseHTTPRequestHandler]:
                 log.exception("generation failed")
                 return self.error(500, f"generation failed: {exc}")
             self.json(200, {"created": int(time.time()), "data": [{"b64_json": entry} for entry in data]})
-
-        @staticmethod
-        def data_url(entry: Any) -> bytes:
-            """An image given in JSON: a data URL or base64, or OpenAI's {"image_url": ...}."""
-            if isinstance(entry, dict):
-                entry = entry.get("image_url")
-            if not isinstance(entry, str):
-                raise BadRequest("an image must be a base64 data URL; URLs are not fetched")
-            match = DATA_URL.fullmatch(entry)
-            try:
-                return base64.b64decode(match.group(1) if match else entry, validate=True)
-            except binascii.Error:
-                raise BadRequest("an image is not a base64 data URL; URLs are not fetched") from None
 
     return Handler
 

@@ -3,13 +3,15 @@
 // it takes. The one place the admin names them: the gateway routes and counts their requests by it, OpenCode's image
 // tool and the portal's media tools (opencode/image/media-tools) use it, and the agent's instructions are written
 // from it (opencode/settings.ts). A kind with one model names it under either tier, and both tiers then use it.
+// Changing an image is a kind of its own (imageEdit), because the best model for it need not be the one that makes
+// new images: OpenCode sends a request with input images only to a model named there.
 import fs from "node:fs";
 import { isRecord } from "@portal/core";
 import { stripJsonComments } from "./models.ts";
 import { AgentConfigError } from "./shared.ts";
 
-/** What a media model makes. Images go through OpenCode's own generate_image; the rest through the portal's tools. */
-export const MEDIA_KINDS = ["image", "video", "music", "speech", "transcription"] as const;
+/** What a media model makes. Both image kinds go through OpenCode's own generate_image; the rest through the portal's tools. */
+export const MEDIA_KINDS = ["image", "imageEdit", "video", "music", "speech", "transcription"] as const;
 export type MediaKind = (typeof MEDIA_KINDS)[number];
 export const MEDIA_TIERS = ["fast", "quality"] as const;
 export type MediaTier = (typeof MEDIA_TIERS)[number];
@@ -33,7 +35,7 @@ export interface MediaModel {
   besideLlm: boolean;
   /** Fields every request to it carries, added to the tool's own (a preset, for instance). */
   request: Readonly<Record<string, unknown>>;
-  /** video: the sizes it makes ("512x512"); the first is the default. */
+  /** video: the sizes it makes ("512x512"); the first is the default. image, imageEdit: the sizes it makes besides the server's default. */
   sizes?: readonly string[];
   /** video: the shortest and longest clip, in seconds. */
   seconds?: { min: number; max: number };
@@ -56,7 +58,8 @@ export type MediaRegistry = Readonly<Partial<Record<MediaKind, MediaTiers>>>;
 
 /** The fields each kind's entries may have, beyond the common ones. */
 const KIND_FIELDS: Record<MediaKind, readonly string[]> = {
-  image: [],
+  image: ["sizes"],
+  imageEdit: ["sizes"],
   video: ["sizes", "seconds"],
   music: [],
   speech: ["api", "voices", "languages", "clone", "design"],
@@ -159,6 +162,10 @@ function parseEntry(kind: MediaKind, where: string, entry: unknown, problems: st
     besideLlm: entry.besideLlm === true,
     request: isRecord(request) ? request : {},
   };
+  if (kind === "image" || kind === "imageEdit") {
+    const sizes = list("sizes", SIZE);
+    if (sizes) result.sizes = sizes;
+  }
   if (kind === "video") {
     const sizes = list("sizes", SIZE);
     if (sizes === undefined) problems.push(`${where}.sizes is required: the sizes it makes, such as ["512x512", "1344x768"]`);
@@ -228,7 +235,7 @@ export function besideLlmIds(registry: MediaRegistry): Set<string> {
   return ids;
 }
 
-/** The image models, fast first, without repeats: what IMAGE_MODELS was. */
+/** The models of /v1/images/*: those that make new images, fast first, then those that only edit. */
 export function imageModels(registry: MediaRegistry): string[] {
-  return mediaModelIds(registry, "image");
+  return [...new Set([...mediaModelIds(registry, "image"), ...mediaModelIds(registry, "imageEdit")])];
 }

@@ -12,7 +12,8 @@ import { FakeImageBuilder, FakeRegistry, FakeRuntime, gate, quiet, recorder } fr
 
 function setup(options: { agents?: string; buildTimeoutMs?: number } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-updater-"));
-  const config = loadConfig({ GATEWAY_CONTROL_SECRET: "c".repeat(32), PORTAL_DATA_DIR: dir, WORKSPACE_AGENTS: options.agents ?? "qwen,dsh" });
+  // The versions installed below, whatever a fresh install builds.
+  const config = loadConfig({ GATEWAY_CONTROL_SECRET: "c".repeat(32), PORTAL_DATA_DIR: dir, WORKSPACE_AGENTS: options.agents ?? "qwen,dsh", QWEN_CODE_VERSION: "0.27.0", DSH_VERSION: "0.2.2-rc.1" });
   const db = openDatabase(config.dbFile);
   const admin = db.insert(users).values({ username: "admin", firstName: "A", lastName: "B", passwordHash: "x", role: "admin", createdAt: 1, updatedAt: 1 }).returning().get();
   assert.equal(admin.id, ADMIN, "the acting admin");

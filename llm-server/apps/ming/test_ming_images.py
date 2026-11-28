@@ -1,8 +1,7 @@
 """python3 -m unittest llm-server/apps/ming/test_ming_images.py
 
 ming-images.py's HTTP side with torch and Ming-Image's code replaced by stand-ins: no GPU, weights or Ming venv,
-only Pillow. The stand-in run_generation records each call and returns an RGBA image of the size Ming would make:
-the size asked for when generating, the reference's aspect ratio at the 1024 level when editing.
+only Pillow. The stand-in run_generation records each call and returns an RGBA image of the size asked for.
 """
 
 import base64
@@ -40,6 +39,7 @@ class Cuda:
 
     @classmethod
     def is_available(cls):
+        cls.calls.append("is_available")
         return cls.available
 
     @classmethod
@@ -55,7 +55,7 @@ class Cuda:
 
 class Profile:
     def validate_task(self, task, has_reference_image, num_layers):
-        assert task in ("text-to-image", "image-edit")
+        assert (task, has_reference_image) == ("text-to-image", False)
 
     def resolve_sampling_parameters(self, steps, cfg):
         return SimpleNamespace(steps=12 if steps is None else steps, cfg=1.0 if cfg is None else cfg)
@@ -86,15 +86,10 @@ class Ming:
 
     @classmethod
     def run_generation(cls, model, processor, profile, *, task, prompt, input_image, resolution, sampling, seed,
-                       num_layers, dtype, width=None, height=None):
-        call = {"task": task, "prompt": prompt, "resolution": resolution, "steps": sampling.steps, "seed": seed,
-                "width": width, "height": height, "num_layers": num_layers}
-        if input_image is not None:
-            with Image.open(input_image) as reference:
-                call["reference"] = (reference.format, reference.mode, reference.size)
-            ratio = reference.width / reference.height
-            width, height = round(1024 * ratio**0.5 / 16) * 16, round(1024 / ratio**0.5 / 16) * 16
-        cls.calls.append(call)
+                       num_layers, dtype, width, height):
+        assert (input_image, resolution) == (None, None)
+        cls.calls.append({"task": task, "prompt": prompt, "steps": sampling.steps, "seed": seed, "width": width,
+                          "height": height, "num_layers": num_layers})
         time.sleep(cls.seconds)
         if cls.fail_run:
             raise cls.fail_run
@@ -114,42 +109,54 @@ _spec.loader.exec_module(M)
 GOOD = {"model": "Ming-Image-0.2-Design", "prompt": "a red ceramic teapot on a wooden table"}
 
 
-def png(width, height, fmt="PNG"):
-    out = io.BytesIO()
-    Image.new("RGB", (width, height), (200, 50, 50)).save(out, fmt)
-    return out.getvalue()
-
-
-def multipart(fields: dict, files: list[tuple[str, bytes]]) -> tuple[bytes, str]:
-    boundary = "----ming-test"
-    parts = [f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode()
-             for name, value in fields.items()]
-    parts += [f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"; filename="ref.png"\r\n'
-              f"Content-Type: image/png\r\n\r\n".encode() + data + b"\r\n" for name, data in files]
-    return b"".join(parts) + f"--{boundary}--\r\n".encode(), f"multipart/form-data; boundary={boundary}"
-
-
 def decode(entry) -> Image.Image:
     image = Image.open(io.BytesIO(base64.b64decode(entry["b64_json"])))
     image.load()
     return image
 
 
-class Adapter(unittest.TestCase):
-    """One ming-images server on an ephemeral port, its weights in a temporary folder."""
-
-    weights = True
+class Weights(unittest.TestCase):
+    """The model's files, empty, in a temporary folder."""
 
     def setUp(self):
         Cuda.available, Cuda.calls[:] = True, []
         Ming.fail_load = Ming.fail_run = None
         Ming.seconds, Ming.calls[:] = 0.0, []
         self.models = Path(self.enterContext(tempfile.TemporaryDirectory()))
-        if self.weights:
-            for file in M.FILES:
-                (self.models / file).parent.mkdir(parents=True, exist_ok=True)
-                (self.models / file).touch()
-        self.prepare()
+        for file in M.FILES:
+            (self.models / file).parent.mkdir(parents=True, exist_ok=True)
+            (self.models / file).touch()
+
+
+class LoadFails(Weights):
+    def died(self) -> str:
+        """Loads the model, which must end the process with status 1; returns what it logged."""
+        with mock.patch.object(M.os, "_exit", side_effect=SystemExit) as leave, \
+                self.assertLogs("ming-images", "ERROR") as logs, self.assertRaises(SystemExit):
+            M.Server(SimpleNamespace(model=self.models)).load()
+        leave.assert_called_once_with(1)
+        return "\n".join(logs.output)
+
+    def test_missing_weights(self):
+        (self.models / "mlp/model.safetensors").unlink()
+        self.assertIn(f"weights are missing: 1 of {len(M.FILES)} files not in {self.models} (mlp/model.safetensors)",
+                      self.died())
+        self.assertEqual(Cuda.calls, [], "the GPU is touched only once the weights are there")
+
+    def test_no_gpu(self):
+        Cuda.available = False
+        self.assertIn("no ROCm GPU visible", self.died())
+
+    def test_the_engine_fails(self):
+        Ming.fail_load = RuntimeError("HIP out of memory")
+        self.assertIn("HIP out of memory", self.died())
+
+
+class Generations(Weights):
+    """One ming-images server on an ephemeral port."""
+
+    def setUp(self):
+        super().setUp()
         self.server = M.Server(SimpleNamespace(model=self.models))
         self.server.load()
         self.httpd = M.ThreadingHTTPServer(("127.0.0.1", 0), M.handler(self.server))
@@ -159,9 +166,7 @@ class Adapter(unittest.TestCase):
         self.addCleanup(self.httpd.shutdown)
         self.port = self.httpd.server_address[1]
         self.base = f"http://127.0.0.1:{self.port}"
-
-    def prepare(self):
-        """Runs before the server loads."""
+        Cuda.calls[:] = []
 
     def call(self, method, path, body=None, raw=None, headers=None):
         data = raw if raw is not None else (json.dumps(body).encode() if body is not None else None)
@@ -179,51 +184,27 @@ class Adapter(unittest.TestCase):
         self.assertEqual(status, 200, answer)
         return [decode(entry) for entry in answer["data"]]
 
-    def edit(self, fields: dict, files: list[tuple[str, bytes]]):
-        body, kind = multipart({**GOOD, **fields}, files)
-        return self.call("POST", "/v1/images/edits", raw=body, headers={"Content-Type": kind})
+    def hang_up(self, body: dict, after: float) -> None:
+        """Sends a generation request and closes the connection `after` seconds later, without reading."""
+        data = json.dumps(body).encode()
+        with socket.create_connection(("127.0.0.1", self.port), timeout=10) as sock:
+            sock.sendall(b"POST /v1/images/generations HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n"
+                         b"Content-Length: " + str(len(data)).encode() + b"\r\n\r\n" + data)
+            time.sleep(after)
 
-
-class MissingWeights(Adapter):
-    weights = False
-
-    def test_stays_up_and_says_why(self):
-        status, answer = self.call("GET", "/ready")
-        self.assertEqual((status, answer["status"]), (503, "unavailable"))
-        self.assertIn(f"{len(M.FILES)} of {len(M.FILES)} files not in", answer["error"]["message"])
-        self.assertEqual(self.call("GET", "/health")[0], 200)
-        status, answer = self.call("POST", "/v1/images/generations", GOOD)
-        self.assertEqual(status, 503)
-        self.assertIn("weights are missing", answer["error"]["message"])
-        self.assertEqual(Ming.calls, [])
-
-
-class LoadFails(Adapter):
-    def prepare(self):
-        Ming.fail_load = RuntimeError("HIP out of memory")
-
-    def test_frees_the_gpu_and_stays_up(self):
-        status, answer = self.call("GET", "/ready")
-        self.assertEqual(status, 503)
-        self.assertIn("loading the model failed: HIP out of memory", answer["error"]["message"])
-        self.assertIn("empty_cache", Cuda.calls)
-
-
-class NoGpu(Adapter):
-    def prepare(self):
-        Cuda.available = False
-
-    def test_says_so(self):
-        self.assertIn("no ROCm GPU", self.call("GET", "/ready")[1]["error"]["message"])
-
-
-class Generations(Adapter):
     def test_ready_and_models(self):
         self.assertEqual(self.call("GET", "/ready"), (200, {"status": "ready"}))
+        self.assertEqual(self.call("GET", "/health"), (200, {"status": "ready"}))
         self.assertEqual(Ming.tiling, {"tile_sample_min_height": 1024, "tile_sample_min_width": 1024,
                                        "tile_sample_stride_height": 896, "tile_sample_stride_width": 896})
         status, answer = self.call("GET", "/v1/models")
         self.assertEqual((status, [m["id"] for m in answer["data"]]), (200, ["Ming-Image-0.2-Design"]))
+
+    def test_while_the_model_loads(self):
+        self.server.status = "loading"
+        self.assertEqual(self.call("GET", "/ready"), (503, {"status": "loading"}))
+        self.assertEqual(self.call("GET", "/health"), (200, {"status": "loading"}))
+        self.assertEqual(self.call("POST", "/v1/images/generations", GOOD)[0], 503)
 
     def test_auto_size_and_a_random_seed(self):
         [image] = self.generate()
@@ -259,24 +240,30 @@ class Generations(Adapter):
             ({**GOOD, "model": "Qwen-Image-2.1"}, "model must be Ming-Image-0.2-Design"),
             ({"model": GOOD["model"]}, "prompt is required"),
             ({**GOOD, "prompt": "  "}, "prompt is required"),
+            ({**GOOD, "prompt": ["a teapot"]}, "prompt is required"),
             ({**GOOD, "prompt": "word " * 8193}, "longer than 8192 tokens"),
             ({**GOOD, "response_format": "url"}, "b64_json"),
+            ({**GOOD, "response_format": {"type": "png"}}, "b64_json"),
             ({**GOOD, "negative_prompt": "blur"}, "no negative conditioning"),
             ({**GOOD, "background": "black"}, "background must be one of"),
+            ({**GOOD, "background": ["opaque"]}, "background must be one of"),
             ({**GOOD, "n": 0}, "n must be an integer from 1 to 10"),
             ({**GOOD, "n": 11}, "n must be"),
             ({**GOOD, "n": True}, "n must be"),
             ({**GOOD, "n": 1.5}, "n must be"),
+            ({**GOOD, "n": "2"}, "n must be"),
             ({**GOOD, "steps": 1}, "steps must be an integer from 2 to 100"),
             ({**GOOD, "seed": -1}, "seed must be"),
             ({**GOOD, "seed": 2**32}, "seed must be"),
+            ({**GOOD, "seed": [7]}, "seed must be"),
             ({**GOOD, "size": "1024"}, 'size must be "auto" or WIDTHxHEIGHT'),
             ({**GOOD, "size": 1024}, "size must be"),
+            ({**GOOD, "size": {"width": 1024}}, "size must be"),
             ({**GOOD, "size": "1000x1000"}, "multiple of 16"),
             ({**GOOD, "size": "128x128"}, "from 256 to 4096"),
             ({**GOOD, "size": "2560x2560"}, "at most 4.5 megapixels"),
             ({**GOOD, "size": "4096x256"}, "aspect ratio"),
-            ({**GOOD, "image": "data:image/png;base64,AAAA"}, "/v1/images/edits"),
+            ({**GOOD, "image": "data:image/png;base64,AAAA"}, "makes new images only"),
             ([GOOD], "JSON object"),
         ]
         for body, words in bad:
@@ -287,10 +274,17 @@ class Generations(Adapter):
                 self.assertIn(words, answer["error"]["message"])
         self.assertEqual(Ming.calls, [], "no bad request reached the model")
 
+    def test_edits_are_refused(self):
+        status, answer = self.call("POST", "/v1/images/edits", {**GOOD, "image": "data:image/png;base64,AAAA"})
+        self.assertEqual((status, answer["error"]["type"]), (404, "invalid_request_error"))
+        self.assertIn("Ming-Image-0.2-Design makes new images only", answer["error"]["message"])
+        self.assertEqual(Ming.calls, [])
+
     def test_other_errors(self):
-        status, answer = self.call("POST", "/v1/images/generations", raw=b"{not json",
-                                   headers={"Content-Type": "application/json"})
-        self.assertEqual((status, answer["error"]["message"]), (400, "the body is not valid JSON"))
+        for raw in (b"{not json", b"[" * 200_000, b'{"prompt": "\xff"}'):
+            status, answer = self.call("POST", "/v1/images/generations", raw=raw,
+                                       headers={"Content-Type": "application/json"})
+            self.assertEqual((status, answer["error"]["message"]), (400, "the body is not valid JSON"), raw[:20])
         status, answer = self.call("POST", "/v1/images/generations", raw=b"prompt=x",
                                    headers={"Content-Type": "application/x-www-form-urlencoded"})
         self.assertEqual(status, 400)
@@ -313,13 +307,19 @@ class Generations(Adapter):
 
     def test_a_client_that_hangs_up_gets_no_more_images(self):
         Ming.seconds = 0.3
-        body = json.dumps({**GOOD, "n": 3}).encode()
-        with socket.create_connection(("127.0.0.1", self.port), timeout=10) as sock:
-            sock.sendall(b"POST /v1/images/generations HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n"
-                         b"Content-Length: " + str(len(body)).encode() + b"\r\n\r\n" + body)
-            time.sleep(0.1)
+        self.hang_up({**GOOD, "n": 3}, after=0.1)
         time.sleep(1.0)
         self.assertEqual(len(Ming.calls), 1)
+
+    def test_a_client_that_hangs_up_while_it_waits_gets_no_image(self):
+        Ming.seconds = 0.4
+        first = threading.Thread(target=self.generate, kwargs={"seed": 1})
+        first.start()
+        time.sleep(0.1)
+        self.hang_up({**GOOD, "seed": 2}, after=0.1)
+        first.join()
+        time.sleep(0.2)
+        self.assertEqual([call["seed"] for call in Ming.calls], [1])
 
     def test_one_image_at_a_time(self):
         Ming.seconds = 0.2
@@ -331,60 +331,6 @@ class Generations(Adapter):
             thread.join()
         self.assertGreaterEqual(time.monotonic() - started, 0.6)
         self.assertEqual(len(Ming.calls), 3)
-
-
-class Edits(Adapter):
-    def test_a_form_with_one_image(self):
-        for name in ("image", "image[]"):
-            with self.subTest(field=name):
-                Ming.calls[:] = []
-                status, answer = self.edit({"n": "2", "seed": "9"}, [(name, png(1600, 900))])
-                self.assertEqual(status, 200, answer)
-                self.assertEqual([call["seed"] for call in Ming.calls], [9, 10])
-                call = Ming.calls[0]
-                self.assertEqual((call["task"], call["resolution"], call["width"]), ("image-edit", 1024, None))
-                self.assertEqual(call["reference"], ("PNG", "RGBA", (1600, 900)))
-                sizes = {decode(entry).size for entry in answer["data"]}
-                self.assertEqual(len(sizes), 1)
-                width, height = sizes.pop()
-                self.assertAlmostEqual(width / height, 16 / 9, delta=0.05, msg="auto keeps the reference's shape")
-
-    def test_size_resizes_the_edit(self):
-        status, answer = self.edit({"size": "512x512"}, [("image", png(800, 600))])
-        self.assertEqual(status, 200, answer)
-        self.assertEqual(decode(answer["data"][0]).size, (512, 512))
-
-    def test_json_with_a_data_url(self):
-        url = "data:image/png;base64," + base64.b64encode(png(640, 640)).decode()
-        for body in ({**GOOD, "image": url}, {**GOOD, "images": [{"image_url": url}]}):
-            with self.subTest(body=list(body)):
-                status, answer = self.call("POST", "/v1/images/edits", body)
-                self.assertEqual(status, 200, answer)
-        status, answer = self.call("POST", "/v1/images/edits", {**GOOD, "image": "https://example.com/a.png"})
-        self.assertEqual(status, 400)
-        self.assertIn("URLs are not fetched", answer["error"]["message"])
-
-    def test_bad_edits(self):
-        bad = [
-            ({}, [], "give one image to edit"),
-            ({}, [("image[]", png(64, 64)), ("image[]", png(64, 64))], "one reference at a time"),
-            ({}, [("image", png(64, 64)), ("mask", png(64, 64))], "masks are not supported"),
-            ({}, [("image", png(64, 64, "GIF"))], "PNG, JPEG or WebP, not GIF"),
-            ({}, [("image", b"not an image")], "decodable"),
-            ({}, [("image", png(1000, 200))], "aspect ratio"),
-            ({}, [("image", b"")], "empty"),
-            ({"model": "other"}, [("image", png(64, 64))], "model must be"),
-            ({"size": "1000x1000"}, [("image", png(64, 64))], "multiple of 16"),
-        ]
-        for fields, files, words in bad:
-            with self.subTest(words=words):
-                status, answer = self.edit(fields, files)
-                self.assertEqual(status, 400, answer)
-                self.assertIn(words, answer["error"]["message"])
-        status, answer = self.call("POST", "/v1/images/edits", raw=b"x", headers={"Content-Type": "text/plain"})
-        self.assertEqual(status, 400)
-        self.assertIn("multipart/form-data", answer["error"]["message"])
-        self.assertEqual(Ming.calls, [])
 
 
 if __name__ == "__main__":

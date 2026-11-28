@@ -15,6 +15,7 @@ import { userRoot, workspacePaths } from "../src/workspaces/paths.ts";
 import { AGENT_UNKNOWN_GRACE_MS } from "../src/workspaces/policy.ts";
 import type { SettingsObject } from "@portal/harnesses";
 import { WorkspaceImageMissingError } from "../src/docker/runtime.ts";
+import { MEDIA_BODY_BYTES } from "../src/service/media-routes.ts";
 import { formatResults, type SearchQuery } from "../src/service/search-mcp.ts";
 import { closeServer, listenLocal } from "./fakes.ts";
 import {
@@ -874,7 +875,8 @@ test("a workspace that hangs up frees its LLM slot and the upstream request", as
   // Per-user limit is 1: a second request from alice queues behind the first.
   const queued = http.request({ host: "127.0.0.1", port: g.ports.service, method: "POST", path: "/llm/v1/chat/completions", agent: false });
   queued.on("error", () => undefined);
-  queued.end(JSON.stringify({ stream: false }));
+  // A body larger than a socket's buffer: left unread while it waits, its hang-up would go unnoticed.
+  queued.end(JSON.stringify({ stream: false, pad: "x".repeat(300 * 1024) }));
   await waitFor(() => g.llmQueue.queued === 1, "the second request to queue");
   assert.deepEqual(g.llmRequests.active().map((entry) => entry.forwardedAt === null), [false, true], "one running, one waiting in the gateway");
   queued.destroy();
@@ -906,6 +908,14 @@ test("a workspace that hangs up before the AI server answers is not that server 
   assert.equal(g.finishedRequests[0]!.ok, false, "an answer that is not 2xx is");
 });
 
+test("an LLM request whose body is larger than the AI server takes is refused before it waits", async () => {
+  const forwarded = g.llm.requests.length;
+  const reply = await request(g.ports.service, { method: "POST", path: "/llm/v1/chat/completions", body: Buffer.alloc(MEDIA_BODY_BYTES + 1, "x") });
+  assert.equal(reply.status, 413);
+  assert.deepEqual(json(reply), { error: { message: "The request body is larger than 64 MiB.", type: "payload_too_large" } });
+  assert.deepEqual([g.llm.requests.length, g.llmRequests.active()], [forwarded, []], "it reached neither the queue nor the AI server");
+});
+
 test("the service API refuses unknown callers and odd paths", async () => {
   g.caller.userId = null;
   const refused = await request(g.ports.service, { path: "/llm/v1/models" });
@@ -915,6 +925,8 @@ test("the service API refuses unknown callers and odd paths", async () => {
   g.caller.userId = g.ids.alice;
   assert.equal((await request(g.ports.service, { path: "/llm/v1/../../props" })).status, 400);
   assert.equal((await request(g.ports.service, { path: "/llm/v1/%2e%2e/props" })).status, 400);
+  assert.equal((await request(g.ports.service, { method: "POST", path: "/llm/v1/audio/%73peech" })).status, 400);
+  assert.equal((await request(g.ports.service, { path: "/llm/v1//models" })).status, 400);
   assert.equal((await request(g.ports.service, { path: "/admin" })).status, 404);
   assert.equal((await request(g.ports.service, { path: "/mcp/search/../../llm/v1/models" })).status, 404);
 });
@@ -976,7 +988,7 @@ const MEDIA = {
     fast: { model: "ltx-2.5-distilled", sizes: ["512x512"], seconds: { min: 1, max: 20 } },
     quality: { model: "minimax-h3", sizes: ["512x512", "1344x768"], seconds: { min: 5, max: 14.375 } },
   },
-  speech: { fast: { model: "qwen3-tts-1.7b", besideLlm: true, api: "qwen3-tts", voices: { ryan: "male, English" } }, quality: { model: "fish-s2-pro", api: "fish-speech" } },
+  speech: { fast: { model: "qwen3-tts-1.7b", besideLlm: true, api: "qwen3-tts", voices: { ryan: "male, English" } }, quality: { model: "fish-drama-3", api: "fish-speech" } },
 };
 
 test("media models: speech goes to the server's own route; video to its model's, read from the body; a video job holds the queue until its video is downloaded", () =>
@@ -986,8 +998,9 @@ test("media models: speech goes to the server's own route; video to its model's,
     const post = (path: string, body: unknown = {}) => request(m.ports.service, { method: "POST", path, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 
     // llama-swap picks the speech model by the request's own.
-    assert.equal((await post("/llm/v1/audio/speech", { model: "fish-s2-pro", input: "hi" })).status, 200);
+    assert.equal((await post("/llm/v1/audio/speech", { model: "fish-drama-3", input: "hi" })).status, 200);
     assert.equal(m.llm.requests.at(-1)!.url, "/v1/audio/speech");
+    assert.equal(m.llmRequests.pace("speech")?.model, "fish-drama-3", "the live view reads the model from the body");
     assert.equal((await post("/llm/v1/audio/music")).status, 404, "no music models: no route");
 
     // What the media tools are told: the registry, what is loaded, the video hold.

@@ -1,7 +1,7 @@
-"""OpenAI-style speech endpoint for Fish Audio S2-Pro, on fish-speech's own inference engine, in one process.
+"""OpenAI-style speech endpoint for Fish Audio Drama 3, on fish-speech's own inference engine, in one process.
 
 POST /v1/audio/speech, JSON:
-  model            "fish-s2-pro" (required; any other is refused)
+  model            "fish-drama-3" (required; any other is refused)
   input            the text, with inline tags such as [whisper] or [laughing] (required)
   response_format  "wav" (the default and the only format)
   reference_audio  a voice to clone: base64 of a WAV, FLAC or MP3 file, or a data:audio/...;base64, URL
@@ -12,7 +12,7 @@ GET /ready is 200 once the model is loaded and warmed up, else 503 (llama-swap's
 200 while the process runs.
 
 install.sh puts this file in the root of the fish-speech checkout, where fish_speech and tools import from:
-  .venv/bin/python fish-speech-openai.py --checkpoint /models/fishaudio-s2-pro --listen 127.0.0.1:18084
+  .venv/bin/python fish-speech-openai.py --checkpoint /models/fishaudio-drama-3 --listen 127.0.0.1:18084
 """
 
 import argparse
@@ -21,6 +21,8 @@ import binascii
 import io
 import json
 import re
+import select
+import socket
 import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -37,7 +39,7 @@ from fish_speech.models.text2semantic.errors import InvalidInputError
 from fish_speech.utils.schema import ServeReferenceAudio, ServeTTSRequest
 from tools.server.model_manager import ModelManager
 
-MODEL = "fish-s2-pro"
+MODEL = "fish-drama-3"
 SAMPLING_FIELDS = ("seed", "temperature", "top_p", "max_new_tokens", "chunk_length")
 DATA_URL = re.compile(r"^data:audio/[\w.+-]+;base64,")
 
@@ -48,6 +50,10 @@ synthesis = threading.Lock()
 
 class RequestError(Exception):
     """A request the client has to change; answered with 400."""
+
+
+class Gone(Exception):
+    """The client hung up while its request waited for its turn."""
 
 
 def reference(audio: Any, text: Any) -> list[ServeReferenceAudio]:
@@ -89,8 +95,11 @@ def tts_request(body: Any) -> ServeTTSRequest:
         ) from error
 
 
-def synthesize(model: TTSInferenceEngine, request: ServeTTSRequest) -> bytes:
+def synthesize(model: TTSInferenceEngine, request: ServeTTSRequest, gone) -> bytes:
     with synthesis:
+        # Checked after the wait for its turn, during which the client may have hung up.
+        if gone():
+            raise Gone()
         for result in model.inference(request):
             if result.code == "error":
                 if isinstance(result.error, InvalidInputError):
@@ -118,6 +127,14 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def gone(self) -> bool:
+        """The client closed its connection (it sends nothing else while it waits)."""
+        try:
+            readable, _, _ = select.select([self.connection], [], [], 0)
+            return bool(readable) and self.connection.recv(1, socket.MSG_PEEK) == b""
+        except OSError:
+            return True
+
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
         if path == "/health":
@@ -142,7 +159,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             request = tts_request(json.loads(body))
-            audio = synthesize(engine, request)
+            audio = synthesize(engine, request, self.gone)
+        except Gone:
+            logger.info("the client hung up; nothing is synthesized")
+            self.close_connection = True
+            return
         except (RequestError, json.JSONDecodeError, UnicodeDecodeError) as error:
             self.send(HTTPStatus.BAD_REQUEST, error_body(str(error), "invalid_request_error"))
             return
@@ -155,8 +176,8 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     global engine
-    parser = argparse.ArgumentParser(description="OpenAI-style speech endpoint for Fish Audio S2-Pro")
-    parser.add_argument("--checkpoint", type=Path, required=True, help="S2-Pro directory, with codec.pth")
+    parser = argparse.ArgumentParser(description="OpenAI-style speech endpoint for Fish Audio Drama 3")
+    parser.add_argument("--checkpoint", type=Path, required=True, help="Drama 3 directory, with codec.pth")
     parser.add_argument("--listen", default="127.0.0.1:18084", help="host:port")
     args = parser.parse_args()
     host, port = args.listen.rsplit(":", 1)
@@ -164,9 +185,8 @@ def main() -> None:
     server = ThreadingHTTPServer((host, int(port)), Handler)
     serving = threading.Thread(target=server.serve_forever, daemon=True)
     serving.start()
-    # fish-speech's ModelManager falls back to the CPU on its own, where S2-Pro is unusably slow.
     if not torch.cuda.is_available():
-        raise SystemExit("torch sees no GPU; refusing to run S2-Pro on the CPU")
+        raise SystemExit("torch sees no GPU; Drama 3 runs on a GPU only")
     logger.info(f"GPU: {torch.cuda.get_device_name(0)} ({torch.cuda.get_device_properties(0).gcnArchName})")
     manager = ModelManager(
         mode="tts",

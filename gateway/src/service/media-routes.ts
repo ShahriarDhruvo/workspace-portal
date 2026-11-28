@@ -11,7 +11,7 @@ import { formField } from "../monitor/image-requests.ts";
 export type VideoCall = { op: "create" } | { op: "status" | "content" | "cancel"; id: string };
 
 export interface MediaRoute {
-  kind: Exclude<MediaKind, "image">;
+  kind: Exclude<MediaKind, "image" | "imageEdit">;
   /**
    * body: the model is read from the body before the request goes on (music, a video's create), to the model's own
    * routes; job: the model is the job's; root: the request goes to the server's own route, which picks the model.

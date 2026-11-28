@@ -37,7 +37,7 @@ if os.path.basename(path) == "system-defaults.json" and not models:
     sys.exit(f'{path}: must define at least one model under modelProviders.openai (an entry with an "id")')
 # The gateway checks the rest of media.json (harnesses/media.ts): this is what an edit gets wrong most.
 if os.path.basename(path) == "media.json":
-    kinds = ("image", "video", "music", "speech", "transcription")
+    kinds = ("image", "imageEdit", "video", "music", "speech", "transcription")
     for kind, tiers in value.items():
         if kind in ("$schema", "$version"): continue
         if kind not in kinds: sys.exit(f'{path}: "{kind}" is no kind of media (use {", ".join(kinds)})')
@@ -78,6 +78,7 @@ case ${1:-} in
         media=true
         if [[ -f $DIR/media.json ]]; then
           previous=$(mktemp)
+          trap 'rm -f "$previous"' EXIT
           cp "$DIR/media.json" "$previous"
         fi
       fi
@@ -87,7 +88,6 @@ case ${1:-} in
     restorecon -R "$DIR" 2>/dev/null || true
     if $media; then
       restart_gateway "$previous"
-      [[ -z $previous ]] || rm -f "$previous"
     fi
     echo "Workspaces use the new settings from their next start: stop running ones in the admin console to apply them now."
     ;;

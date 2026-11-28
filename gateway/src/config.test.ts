@@ -204,7 +204,7 @@ test("every problem is reported at once", () => {
 test("WORKSPACE_AGENTS selects the agents; the version variables set their default versions", () => {
   const config = loadConfig({ ...secrets, WORKSPACE_AGENTS: " DSH , qwen,dsh ", DSH_VERSION: "0.3.0", QWEN_CODE_VERSION: "0.28.1-beta.2" });
   assert.deepEqual(config.workspace.agents, ["dsh", "qwen"], "in the admin's order, without repeats");
-  assert.deepEqual(config.workspace.defaultVersions, { dsh: "0.3.0", qwen: "0.28.1-beta.2", opencode: "2.4.1" });
+  assert.deepEqual(config.workspace.defaultVersions, { dsh: "0.3.0", qwen: "0.28.1-beta.2", opencode: driverFor("opencode").release.defaultVersion });
   for (const kind of AGENT_KINDS) {
     const { versionKey } = driverFor(kind).release;
     assert.equal(loadConfig({ ...secrets, [versionKey]: "9.8.7" }).workspace.defaultVersions[kind], "9.8.7", `${kind}: the driver's versionKey is the env variable`);
