@@ -50,9 +50,10 @@ call a message loads you again after every part, and then the model again.
    tools.generate_image({ prompt: shot.prompt, path: shot.path })))`). One image per shot, at the shot's aspect ratio
    (a new image is 1024x1024 unless `model` names a size: for 1344x768 shots add
    `model: "<image model>#1344x768"`, with a model your instructions list that size for), all with one image model:
-   the quality model, or the fast one when there are many frames to try. Open every image and check it against its
-   shot: subject, composition, style, that faces and hands are right, that there is no stray text. Make again
-   (another prompt) what does not match. The frames the person approves are the keyframes: the other image model
+   the quality model, or the fast one when there are many frames to try. Look at every image with your `read` tool
+   (it shows you a picture when the model you run on takes images) and check it against its shot: subject,
+   composition, style, that faces and hands are right, that there is no stray text. Make again (another prompt)
+   what does not match. The frames the person approves are the keyframes: the other image model
    would make another picture, not a better copy. To change part of a frame (a colour, an object, a word), give the
    frame to generate_image as `images` with what to change; do the changes together, after the new frames, because
    they may run on another model.
@@ -73,7 +74,7 @@ call a message loads you again after every part, and then the model again.
 5. **Clips** (generate_video). One call per shot, with the shot's keyframe as `first_frame` and the plan's length as
    `seconds`. Try a prompt you are unsure of in the fast tier; make the final clips in the quality tier, all of them
    one after another.
-6. **Check the clips.** For each clip, extract its first, middle and last frame and open them:
+6. **Check the clips.** For each clip, extract its first, middle and last frame and look at them with `read`:
    `ffmpeg -v error -ss 0 -i clip.mp4 -frames:v 1 /tmp/shot-01-a.png` (and at the middle and one second before the
    end). Check that it starts on its keyframe, shows the action of the shot, and that nothing melts, flickers or
    jumps. Make again (new `seed`) what fails, at most twice, then tell the person what is still wrong.
