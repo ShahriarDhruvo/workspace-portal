@@ -232,8 +232,8 @@ const ROUTES: Route[] = [
 
 export function createControlServer(deps: ControlDeps): http.Server {
   const expected = digest(`Bearer ${deps.config.controlSecret}`);
-  // No request timeout, as in createStreamingServer: an API key's request waits for its turn with its body unread,
-  // for longer than Node's five minutes.
+  // No request timeout, as in createStreamingServer: an API key's upload (64 MiB at most) may take longer than Node's
+  // five minutes.
   return http.createServer({ requestTimeout: 0, headersTimeout: 60_000 }, (req, res) => {
     const served = isLlmApi(splitTarget(req.url ?? "").pathname) ? serveLlmApi(deps, req, res) : handle(deps, expected, req, res);
     served.catch((error: unknown) => {

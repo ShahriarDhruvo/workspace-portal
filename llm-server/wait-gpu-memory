@@ -1,7 +1,7 @@
 #!/bin/sh
 # Usage: wait-gpu-memory GIB [SECONDS]
 # Waits until at least GIB GiB of the GPU's memory (amdgpu GTT) is free, at most SECONDS (default 60), then exits 0,
-# or 1 if it never is. The Gufo units run it before they start: a model that starts while the one llama-swap just
+# or 1 if it never is. Every model's unit runs it before it starts: a model that starts while the one llama-swap just
 # stopped still holds its memory can fail to load or hang a Strix Halo machine (gufo-org/gufo#1394).
 set -eu
 need_gib=$1

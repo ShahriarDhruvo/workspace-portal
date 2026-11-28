@@ -76,7 +76,7 @@ The files a sample reads are opened once, kept open and read with `pread`; no sa
 | CPU usage, per logical CPU too | `/proc/stat` | same |
 | CPU clock | `msr` perf PMU per CPU: TSC rate × aperf/mperf, each CPU's average clock while it ran (turbostat's busy MHz), of the CPUs more than 1% busy, weighted by the time each ran | same |
 | CPU temperature | hwmon `k10temp` | hwmon `coretemp`, the package |
-| GPU usage, clock, temperature, power | `gpu_metrics` (format 3.0) | usage from the i915 PMU `rcs0-busy`, else the time not in RC6; clock from `gt_act_freq_mhz`; the CPU package's temperature; RAPL's GPU share as power |
+| GPU usage, clock, temperature, power | `gpu_metrics` (format 3.0), read at most every 2 s: each read is a request to the chip's power firmware, so the samples in between repeat the last reading. `throttling` says whether its throttle counters rose between the last two readings | usage from the i915 PMU `rcs0-busy`, else the time not in RC6; clock from `gt_act_freq_mhz`; the CPU package's temperature; RAPL's GPU share as power |
 | GPU memory | `mem_info_vram_used`, `mem_info_vram_total` | none |
 | Power | RAPL perf PMU: the package (CPU, GPU and the rest of the chip); the cores' share from the `power_core` perf PMU, each core's RAPL energy; the GPU's from `gpu_metrics`. Without perf, all three from `gpu_metrics` | RAPL perf PMU: package + DRAM, with the cores' and the GPU's shares |
 | Memory | `/proc/meminfo`; `gpuBytes` is its `GPUActive` | `/proc/meminfo` |
@@ -85,7 +85,7 @@ The files a sample reads are opened once, kept open and read with `pread`; no sa
 | Network | `/proc/net/dev` bytes of the interfaces with hardware behind them (`/sys/class/net/IF/device`): not lo, bridges, veth or tunnels | same |
 | Disk I/O | `/proc/diskstats` sectors of the whole disks (`/sys/block/DEV/device`): no partitions, loop, zram, dm or md | same |
 | Disk space | `statvfs` of the filesystems on local block devices in `/proc/self/mounts`, one per device, at most every 5 s in a thread of its own | same |
-| Energy total | a RAPL perf group of the meter's own: the package. Without perf, the `gpu_metrics` socket power integrated at every meter tick, every 2 s whether or not anyone watches; each read of `gpu_metrics` is a request to the chip's power firmware | a RAPL perf group of the meter's own: package + DRAM |
+| Energy total | a RAPL perf group of the meter's own: the package. Without perf, the `gpu_metrics` socket power integrated at every meter tick: a request to the power firmware every 2 s, whether or not anyone watches | a RAPL perf group of the meter's own: package + DRAM |
 
 A source that is missing gives `null` in the sample; `sources` in `/v1/info` names the ones in use.
 
@@ -134,6 +134,9 @@ HTTP/1.1. Every request but `GET /v1/health` needs `Authorization: Bearer <token
 
 A request whose line, headers and body take more than 10 s is dropped.
 
+A removal (`DELETE`) is refused with `job_running` while a job runs, and no job starts until it has ended: an apply
+could otherwise switch to the image or version being removed.
+
 An apply, which is also how to go back to an older image, runs these steps; each becomes the job's `step`:
 
 1. Check that the image is local.
@@ -165,15 +168,18 @@ by id. Each is one of two kinds:
 
 A version is 1-64 letters, digits and `. + _ -`, the name of its folder. A dir program's install runs its
 `install.sh` in the engine user's systemd manager into `<version>.part` for up to 3 hours, then writes
-`.portal-version` into it and renames it to `<version>`: only a folder with that file counts as installed. An image
+`.portal-version` into it and renames it to `<version>`: only a folder with that file counts as installed. A folder
+of that name without the file, which a removal cut short leaves, is deleted before the install. An image
 program's install pulls `<repository>:<tag>` and checks that the tag still names the digest the gateway chose.
 
 An apply switches `current`, or the quadlet's `Image=` and `daemon-reload`, then restarts: with a model,
 `POST /api/models/unload`, waiting for the unit to stop, and starting the model through llama-swap; without one,
-`systemctl --user restart` and waiting for `check`. Each wait takes up to 15 minutes. If the restart fails, the old
-version is put back and restarted the same way; the job ends `failed`, with `rolledBack: true` once that worked, and
-`error` ends with the program's own last log lines. After it, llama-swap loads the engine's model again. The version
-it replaced is saved as `~/.local/state/portal-hostd/<id>.prev`.
+`systemctl --user restart` and waiting for `check`. Each wait takes up to 15 minutes. A model that llama-swap's
+config does not have (`GET /v1/models`) never runs, so nothing is stopped or started for it: the apply only switches
+the version, and the job's log says so. If the restart fails, the old version is put back and restarted the same
+way; the job ends `failed`, with `rolledBack: true` once that worked, and `error` ends with the program's own last
+log lines. After it, llama-swap loads the engine's model again. The version it replaced is saved as
+`~/.local/state/portal-hostd/<id>.prev`.
 
 ## Run it locally
 

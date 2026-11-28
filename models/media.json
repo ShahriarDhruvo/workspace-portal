@@ -1,7 +1,7 @@
-// The AI server's image and media models, by kind (image, video, music, speech, transcription) and tier: "fast" for
-// drafts and everyday work, "quality" for final work. The gateway routes and counts their requests by this file, and
-// the agents' media tools (OpenCode's) use it and are told what each model is for. A kind left out has no tool; a
-// kind with one model names it under one tier, and both tiers use it. Installed as
+// The AI server's image and media models, by kind (image, imageEdit, video, music, speech, transcription) and tier:
+// "fast" for drafts and everyday work, "quality" for final work. The gateway routes and counts their requests by this
+// file, and the agents' media tools (OpenCode's) use it and are told what each model is for. A kind left out has no
+// tool; a kind with one model names it under one tier, and both tiers use it. Installed as
 // PORTAL_DATA_DIR/config/models/media.json:  sudo bash deploy/models.sh install media.json
 // The reference AI server's file, with every field explained, is llm-server/media.json. This default has no models.
 {}

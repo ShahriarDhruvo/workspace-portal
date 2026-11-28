@@ -602,8 +602,8 @@ Installs [llama-swap](https://github.com/mostlygeek/llama-swap) and Gufo 0.37.0 
 MTP and vision. The image and media models of the [next step](#media-models) don't fit in memory beside it, so
 llama-swap gives them all one address, port 8080, and runs the model a request names: the LLM from boot on, another
 model when it is asked for, the LLM again with the next chat request. It stops the running model first, once its
-requests have finished. The LLM keeps conversations on disk as well as in RAM, so
-after a swap or a restart an agent's next turn resumes instead of reading its whole conversation again.
+requests have finished. The LLM keeps conversations on disk as well as in RAM, so after a swap or a restart an
+agent's next turn resumes instead of reading its whole conversation again.
 
 **AI server**:
 
@@ -679,7 +679,8 @@ Measured on the test machine, with the model files already in the page cache:
 > and holds new requests meanwhile. So an image waits for every running LLM request, and chat requests wait for
 > the image. Each model's unit first waits, up to 60 seconds, until the memory the previous model used is free
 > again (`wait-gpu-memory`: 90 GiB for the LLM): a model that loads while the last one still lets go can fail to
-> load or hang a Strix Halo machine ([gufo#1394](https://github.com/gufo-org/gufo/issues/1394)).
+> load or hang a Strix Halo machine ([gufo#1394](https://github.com/gufo-org/gufo/issues/1394)). That issue was
+> closed on November 25, 2026. A swap without the wait was not tried since, so the wait stays.
 
 > The disk cache (`--cache-disk`) takes up to 32 GiB in `/models/gufo-cache/disk`. Gufo runs as user 1000 in its
 > container, hence `podman unshare chown`. A conversation that no longer fits the 4 GiB in RAM, or that a restart
@@ -736,20 +737,25 @@ of this size were run with four sessions only.
 
 Adds the models behind OpenCode's image and media tools: images, video clips with sound, music, speech and
 transcription. Each kind has a fast model for drafts and everyday work and a quality one for final work, and the
-agent picks one for each call; one image model does both. llama-swap serves them on port 8080, as it serves the
-LLM. Without this step OpenCode makes no images or media.
+agent picks one for each call. llama-swap serves them on port 8080, as it serves the LLM. Without this step
+OpenCode makes no images or media.
 
 | Kind | Fast | Quality |
 |---|---|---|
-| Images | Ming-Image 0.2 Design: text to image and editing, up to 4.5 megapixels | the same model |
+| New images | Qwen-Image-2.1-Turbo, eight steps: 1024x1024, 1344x768 or 768x1344 | Ming-Image 0.2 Design: the same sizes and 2048x2048 |
+| Changes to images | Qwen-Image-2.1-Turbo: one image, or two put together | the same model |
 | Video with sound | MiniMax H3 with its fast preset, 512x512 | MiniMax H3, 512x512 or 1344x768 |
 | Music | ACE-Step 1.5 XL turbo | ACE-Step 1.5 XL |
-| Speech | Qwen3-TTS 1.7B: nine built-in voices, a voice described in words, or one cloned from a recording | Fish Audio S2-Pro |
+| Speech | Qwen3-TTS 1.7B: nine built-in voices, a voice described in words, or one cloned from a recording | Fish Audio Drama 3: its own voice or one cloned from a recording, the delivery set by tags such as `[whisper]` |
 | Transcription | Qwen3-ASR 1.7B: text | SOV-Transcribe-1: text |
 
 The fast speech and transcription models run beside the LLM, which keeps running. Every other media model stops
-the LLM while it works, the image model included. A video holds the AI server until it is downloaded: meanwhile
+the LLM while it works, the image models included. A video holds the AI server until it is downloaded: meanwhile
 every other request waits in the portal, and each person's workspace says why.
+
+Ming-Image makes new images only. Its code can also edit, but the edits damaged the picture and took 78 s against
+Turbo's 30, so its server refuses them and every change goes to Turbo
+([measurements](MEASUREMENTS.md#qwen-image-21-turbo-edits-and-fast-images)).
 
 > **Licences.** Read them before the download: none of these models is under the portal's licence. Read on
 > November 27, 2026:
@@ -761,12 +767,19 @@ every other request waits in the portal, and each person's workspace says why.
 >   agreement invites people there to ask for. Elsewhere, products that earn more than US$20 million a year need
 >   MiniMax's written consent, a commercial product must show "MiniMax H3" on its interface, and machine-made
 >   content posted in public must say that it is.
-> - **Fish Audio S2-Pro**
->   ([Fish Audio Research License](https://huggingface.co/fishaudio/s2-pro/blob/1de9996b6be38b745688de084d87a5633f714e4e/LICENSE.md),
->   March 7, 2026): research and non-commercial use only. Commercial use, a business's internal work included,
->   needs a separate licence from Fish Audio. Its outputs may not be used to build or improve a foundation model.
->   fish-speech, the program that runs it, is under another licence, the
+> - **Fish Audio Drama 3**
+>   ([Fish Audio Community License 1.0](https://huggingface.co/fishaudio/drama-3/blob/78e5ab79e49aa9a25abe8799eff2c4d73a1c3216/LICENSE)):
+>   free for research and non-commercial use. Commercial use is allowed only while annual revenue is under
+>   US$500,000. A hosted service that lets third parties make speech needs a separate licence from Fish Audio,
+>   whatever the revenue. A product or service that uses the model must show "Built with Fish Audio". It may not
+>   imitate an identifiable person's voice without that person's consent, and its outputs may not train or improve
+>   a speech or foundation model. This is the `LICENSE` file of the revision the guide downloads. The model card's
+>   metadata names another licence (`fish-audio-research-license`, in a `LICENSE.md` the repository does not have).
+>   fish-speech, the program that runs it, is under the same
 >   [Fish Audio Community License](https://github.com/fishaudio/fish-speech/blob/v3.0.0-beta/LICENSE).
+> - **Qwen-Image-2.1-Turbo** (Qwen Research License Agreement): research and evaluation only. Any commercial use
+>   needs a separate licence from its maker. A model made or improved with it or with its pictures, and then
+>   distributed, must say "Built with Qwen" or "Improved using Qwen".
 > - **LTX-2.5** ([LTX-2.x Community License Agreement](https://github.com/Lightricks/LTX-2/blob/main/LICENSE-2_x),
 >   August 11, 2026, amended November 11, 2026), the optional model [below](#ltx-25): free for any purpose within
 >   the use restrictions of its Attachment A, but a company with yearly revenue of US$10 million or more needs a
@@ -775,9 +788,10 @@ every other request waits in the portal, and each person's workspace says why.
 > - **Ming-Image-0.2-Design** and **ACE-Step 1.5** are under the MIT licence; Qwen3-TTS, Qwen3-ASR and
 >   SOV-Transcribe-1 are under Apache 2.0.
 
-Checks the free space. The models take 331 GB in `/models`, 403 GB with LTX-2.5. On `/` the test machine holds 29 GiB
-of programs in `/opt/ai-studio` (LTX-2.5's included), vLLM's 12.4 GB image and 16 GiB of uv's downloads in
-`~/.cache/uv`.
+Checks the free space. The models take 396 GB in `/models`, measured with `du`: 195 GB in Gufo's store, 54 GB
+for SOV-Transcribe-1, 53 GB for Ming-Image, 50 GB for ACE-Step and 43 GB for Drama 3. LTX-2.5 adds 72.6 GB. On
+`/` the test machine holds 29 GiB of programs in `/opt/ai-studio` (LTX-2.5's included), vLLM's 12.4 GB image and
+16 GiB of uv's downloads in `~/.cache/uv`.
 
 **AI server**:
 
@@ -785,7 +799,7 @@ of programs in `/opt/ai-studio` (LTX-2.5's included), vLLM's 12.4 GB image and 1
 df -h /models /
 ```
 
-**You should see** at least `335G` free on `/models` and `60G` on `/`.
+**You should see** at least `400G` free on `/models` and `60G` on `/`.
 
 Installs uv and FFmpeg, which the media programs build and run with, and their folders. `/etc/ai-studio/cache.env`
 names the folders in `/var/cache/ai-studio` where they keep what they compile and download, so a swap or a reboot
@@ -806,19 +820,21 @@ mkdir -p /models/gufo-cache/video-jobs
 podman unshare chown 1000:1000 /models/gufo-cache/video-jobs
 ```
 
-Downloads MiniMax H3, Qwen3-TTS's Base model (the one that clones voices) and Qwen3-ASR through Gufo, as in step
-8, at the revisions Gufo 0.37.0 pins. The rest follows from Hugging Face. At the 38 MB/s of step 6 all of it takes
-about two hours (an estimate).
+Downloads MiniMax H3, Qwen3-TTS's Base model (the one that clones voices), Qwen3-ASR and Qwen-Image-2.1-Turbo
+through Gufo, at the revisions Gufo 0.37.0 pins. The rest follows from Hugging Face. At the 38 MB/s of step 6 all
+of it takes about three hours (an estimate).
 
 **AI server**, inside tmux (`tmux new-session -A -s setup`):
 
 ```sh
 GUFO_IMAGE=$(sed -n 's/^Image=//p' ~/workspace-portal/llm-server/gufo.container)
 podman run --rm --user 0 -e GUFO_MODELS_DIR=/models -v /models/gufo-models:/models:z "$GUFO_IMAGE" \
-  sh -c 'gufo model install minimax-h3 && gufo model install qwen3-tts && gufo model install qwen3-asr'
+  sh -c 'gufo model install minimax-h3 && gufo model install qwen3-tts && gufo model install qwen3-asr \
+    && gufo model install qwen-image-2.1-turbo'
 ```
 
-**You should see** the three downloads end without an error: 153 GB together.
+**You should see** the four downloads end without an error: 153 GB for the first three together, then Turbo's
+32.5 GB, which took the test machine 13 minutes 22 seconds.
 
 Fetches the other models from fixed revisions with the Hugging Face CLI of [step 6](#6-download-the-model), and
 checks each file against the SHA256 the Hub lists for it. Each download runs as a unit of its own whose file cache
@@ -829,15 +845,15 @@ stays within 10 GiB (`MemoryHigh`), as the LLM runs meanwhile.
 ```sh
 hf() { systemd-run --user --wait --pipe --collect -p MemoryHigh=10G -E HF_HUB_DISABLE_TELEMETRY=1 ~/.hf-cli/bin/hf "$@"; }
 fetch() { hf download "$1" --revision "$2" --local-dir "$3" "${@:4}" && hf cache verify "$1" --revision "$2" --local-dir "$3"; }
-mkdir -p /models/Ming-Image-0.2-Design /models/fishaudio-s2-pro /models/ACE-Step-1.5 /models/SOV-Transcribe-1 \
+mkdir -p /models/Ming-Image-0.2-Design /models/fishaudio-drama-3 /models/ACE-Step-1.5 /models/SOV-Transcribe-1 \
   /models/SOV-Transcribe-1-DFlash
-chattr +m /models/Ming-Image-0.2-Design /models/fishaudio-s2-pro /models/ACE-Step-1.5 /models/SOV-Transcribe-1 \
+chattr +m /models/Ming-Image-0.2-Design /models/fishaudio-drama-3 /models/ACE-Step-1.5 /models/SOV-Transcribe-1 \
   /models/SOV-Transcribe-1-DFlash
 fetch inclusionAI/Ming-Image-0.2-Design 3538f4c311cf8f5256d631ddb7f47793f741aa2e /models/Ming-Image-0.2-Design \
   --exclude 'assets/*'
 fetch Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice 0c0e3051f131929182e2c023b9537f8b1c68adfe /models/gufo-models/qwen3-tts-customvoice
 fetch Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign 5ecdb67327fd37bb2e042aab12ff7391903235d3 /models/gufo-models/qwen3-tts-voicedesign
-fetch fishaudio/s2-pro 1de9996b6be38b745688de084d87a5633f714e4e /models/fishaudio-s2-pro
+fetch fishaudio/drama-3 78e5ab79e49aa9a25abe8799eff2c4d73a1c3216 /models/fishaudio-drama-3
 fetch ACE-Step/Ace-Step1.5 19671f406d603126926c1b7e2adc169acbcade22 /models/ACE-Step-1.5
 fetch ACE-Step/acestep-v15-xl-base 220c1166efbdd9583eafcb12eb160594bbfcb241 /models/ACE-Step-1.5/acestep-v15-xl-base
 fetch ACE-Step/acestep-v15-xl-turbo d4a0b288b83ebb7e25a8c0b32c573c22e134e8ee /models/ACE-Step-1.5/acestep-v15-xl-turbo
@@ -849,8 +865,8 @@ fetch salesforce-sovereign-intelligence/SOV-Transcribe-1-DFlash 8c0b3f3a98507d2e
 
 **You should see**, after each download, `✓ Verified ... file(s) for model '...'. All checksums match.` Before
 Ming-Image's and SOV-Transcribe-1's comes a warning that 6 and 3 remote files are missing locally: the
-`assets/` folders left out. As in
-step 6, a download that stops with an error goes on when you run the block again.
+`assets/` folders left out. As in step 6, a download that stops with an error goes on when you run the block
+again. Drama 3 is 43 GB on disk.
 
 Builds Ming-Image, fish-speech and ACE-Step, each with a Python environment of its own under `/opt/ai-studio`,
 pulls vLLM's image and puts the transcription model's vLLM plugin beside it. A version's folder holds
@@ -881,16 +897,17 @@ uv pip install --no-deps --python-version 3.12 --python-platform x86_64-manylinu
 3.0.0-beta in /opt/ai-studio/fish-speech/3.0.0-beta`, later
 `installed ACE-Step 0.1.8 (...) in /opt/ai-studio/acestep/0.1.8`, and at the end uv's list of what it installed.
 
-Puts the units in place. Like the LLM's, they have no `[Install]`: llama-swap starts each with its first request
-and stops it when a model of another group is asked for. They listen on this machine only (ports 18081 to 18091),
-so the firewall stays as it is. Restarting llama-swap stops every model and loads the LLM again.
+Puts the units in place, Turbo's quadlet among them. Like the LLM's, they have no `[Install]`: llama-swap starts
+each with its first request and stops it when a model of another group is asked for; the two image models are one
+group and run one at a time. They listen on this machine only (ports 18081 to 18091), so the firewall stays as it
+is. Restarting llama-swap stops every model and loads the LLM again.
 
 **AI server**:
 
 ```sh
 cd ~/workspace-portal/llm-server
-cp gufo-video.container gufo-tts.container gufo-tts-clone.container gufo-tts-design.container gufo-asr.container \
-  vllm-sov.container ~/.config/containers/systemd/
+cp gufo-image-turbo.container gufo-video.container gufo-tts.container gufo-tts-clone.container \
+  gufo-tts-design.container gufo-asr.container vllm-sov.container ~/.config/containers/systemd/
 cp media/ming.service media/fish-speech.service media/acestep.service ~/.config/systemd/user/
 cp llama-swap.yaml ~/.config/llama-swap/config.yaml
 systemctl --user daemon-reload
@@ -922,7 +939,7 @@ curl -s http://127.0.0.1:8080/upstream/acestep-1.5-xl-turbo/v1/audio/music -H 'C
   -o /tmp/music.wav
 ffprobe -v error -show_entries stream=codec_name,sample_rate,channels -of compact /tmp/music.wav
 curl -s http://127.0.0.1:8080/v1/audio/speech -H 'Content-Type: application/json' \
-  -d '{"model":"fish-s2-pro","input":"The portal can speak now.","response_format":"wav"}' -o /tmp/fish.wav
+  -d '{"model":"fish-drama-3","input":"The portal can speak now.","response_format":"wav"}' -o /tmp/fish.wav
 ffprobe -v error -show_entries stream=codec_name,sample_rate,channels -of compact /tmp/fish.wav
 curl -s http://127.0.0.1:8080/v1/audio/transcriptions -F model=sov-transcribe-1 -F response_format=json \
   -F file=@/tmp/fish.wav
@@ -935,21 +952,37 @@ stream|codec_name=pcm_s16le|sample_rate=48000|channels=2
 stream|codec_name=pcm_s16le|sample_rate=44100|channels=1
 ```
 
-and then the sentence back as `{"text":...}`. Neither transcription model writes subtitles: vLLM 0.32.0 answers SOV's
-`srt`, `vtt` and `verbose_json` with 400, so OpenCode's transcribe_audio offers text only. Music goes to
-`/upstream/<model>/` because llama-swap has no route of its own for it, nor for videos; the portal sends both there
-too (`MEDIA_MODEL_PATH`).
+and then the sentence back as `{"text":...}`. Drama 3's server is ready about 33 seconds after its start. Neither
+transcription model writes subtitles: vLLM 0.32.0 answers SOV's `srt`, `vtt` and `verbose_json` with 400, so
+OpenCode's transcribe_audio offers text only. Music goes to `/upstream/<model>/` because llama-swap has no route
+of its own for it, nor for videos; the portal sends both there too (`MEDIA_MODEL_PATH`).
 
-**AI server**, check the image model. It stops the LLM too:
+**AI server**, check the image models. Each stops the model before it:
 
 ```sh
 curl -s http://127.0.0.1:8080/v1/images/generations -H 'Content-Type: application/json' \
   -d '{"model":"Ming-Image-0.2-Design","prompt":"A red ceramic teapot on a wooden table","seed":42}' \
   | jq -r '.data[0].b64_json' | base64 -d > /tmp/teapot.png && file /tmp/teapot.png
+curl -s http://127.0.0.1:8080/v1/images/generations -H 'Content-Type: application/json' \
+  -d '{"model":"Qwen-Image-2.1-Turbo","prompt":"A red ceramic teapot on a wooden table","seed":42}' \
+  | jq -r '.data[0].b64_json' | base64 -d > /tmp/teapot-turbo.png && file /tmp/teapot-turbo.png
+curl -s http://127.0.0.1:8080/v1/images/edits -F model=Qwen-Image-2.1-Turbo -F seed=42 \
+  -F 'prompt=Make the teapot cobalt blue. Keep everything else.' -F 'image=@/tmp/teapot-turbo.png;type=image/png' \
+  | jq -r '.data[0].b64_json' | base64 -d > /tmp/teapot-blue.png && file /tmp/teapot-blue.png
 ```
 
-**You should see** `/tmp/teapot.png: PNG image data, 1024 x 1024, 8-bit/color RGBA, non-interlaced` after about
-50 seconds: 20 to stop the LLM and load Ming-Image, 30 for the image. The same seed gives the same image.
+**You should see**
+
+```text
+/tmp/teapot.png: PNG image data, 1024 x 1024, 8-bit/color RGBA, non-interlaced
+/tmp/teapot-turbo.png: PNG image data, 1024 x 1024, 8-bit/color RGBA, non-interlaced
+/tmp/teapot-blue.png: PNG image data, 1024 x 1024, 8-bit/color RGBA, non-interlaced
+```
+
+the first after about 50 seconds (51.3 s with the LLM stopped first: 20 for the swap, 30 for the image), the second
+about 26 seconds later, Ming-Image stopped first, the third about 30 seconds after that. Ming-Image gives the same
+image again for the same seed. The edit was measured with these fields through the portal's API, on another
+picture: 29.3 s for a bicycle made green.
 
 Checks the video model: about 4 minutes once H3 is loaded, longer while it loads. Run it while the portal sends
 nothing: a request for any other model would stop H3, and the job with it. The portal holds every other request
@@ -978,16 +1011,18 @@ The next chat request stops H3 and starts the LLM again. Measured on the test ma
 
 | What happens | Time |
 |---|---|
-| An image, Ming-Image, 1024x1024 | 51.3 s, the LLM stopped first; 30.5 s once loaded, as at 1344x768. 2048x2048: 191 s. An edit of a 1024x1024 image: 79 s |
+| A new image, Ming-Image, 1024x1024 | 51.3 s, the LLM stopped first; 53.2 s, Turbo stopped first; 30.5 s once loaded, as at 1344x768 and 768x1344. 2048x2048: 191 s |
+| A new image, Turbo, 1024x1024 | 25.7 s, the LLM or Ming-Image stopped first; 18.7 to 18.9 s once loaded, 18.2 s at 1344x768 and 17.9 s at 768x1344 |
+| A change to an image, Turbo | 29.2 to 30.2 s for one 1024x1024 image; 40.2 s to put two images together. The result keeps the image's size unless the request names one |
 | A video, H3's fast preset, 5 s at 512x512 | 220.9 s from the request to the finished job, an image model stopped first; 205.3 s with H3 loaded. Decoding the video takes about 118 s of it, longer than the denoising |
 | A video, H3's default (exact) preset, the quality tier, 5 s at 512x512 | 1,056 s (17.6 minutes); 1,101 s starting on a first frame |
 | A video at 1344x768, exact preset | Not run to the end: 95.4 s for each of its 49 denoising steps, six times a 512x512 step. That is about 78 minutes of denoising and about 95 minutes in all (an estimate), with the AI server busy throughout |
-| Music, ACE-Step 1.5 XL turbo / XL | 1.7 to 3.2 s for 10 to 30 s of music, 29.7 s for 30 s with the swap from SOV-Transcribe-1 / 15.1 s for 30 s, 39.1 s with the swap from Fish S2-Pro |
+| Music, ACE-Step 1.5 XL turbo / XL | 1.7 to 3.2 s for 10 to 30 s of music, 29.7 s for 30 s with the swap from SOV-Transcribe-1 / 15.1 s for 30 s, 39.1 s with a swap (from Fish Audio S2-Pro, the quality speech model then) |
 | Speech, Qwen3-TTS | 0.38 to 0.42 s for each second of speech: 2.8 s for 7.1 s once it is loaded, 5.3 s for the first request after it starts. Its transcript matched the text word for word |
-| Speech, Fish S2-Pro | 2.1 s for each second of speech: 16.5 s for 7.8 s, 53.3 s with the swap from H3. A cloned voice: 18.4 to 19.2 s |
+| Speech, Fish Audio Drama 3 | About 2.9 s for each second of speech: 16.3 s for 5.6 s, 48.8 s with the swap from the LLM; 71.9 to 75.9 s for 64 words, about 25 s of speech. A cloned voice: 16.8 to 17.8 s for about 5 s. Qwen3-ASR heard each word for word; no person listened |
 | Transcription, Qwen3-ASR | 12.5 s of speech in 0.80 s; 34.6 s in 2.3 s once it is loaded, 4.9 s for the first request; 5 minutes in 24 to 25 s (0.97% and 2.8% of the words wrong in two recordings); 25 minutes in 113 s, 1.64% wrong |
 | Transcription, SOV-Transcribe-1 | 34.6 s of speech in 1.5 s; 5 minutes in 44 s, 2.9% of the words wrong; eight 5-minute files at once in 97 s. It takes 86 to 89 s to start, the swap included |
-| A chat request after any of these, which llama-swap stops first | 18.6 to 20.4 s |
+| A chat request after any of these, which llama-swap stops first | 17.1 to 20.6 s |
 
 > **Beside the LLM.** Qwen3-TTS takes a language by its full name: `english`, `chinese`, `german`, `italian`,
 > `portuguese`, `spanish`, `japanese`, `korean`, `french` or `russian`; a code such as `en` gets HTTP 500. A
@@ -1003,16 +1038,19 @@ The next chat request stops H3 and starts the LLM again. Measured on the test ma
 > 10 GiB once it has made a WAV of 24 s or more; Qwen3-ASR 5.1 GiB. Two of them together left 9.3 to 9.9 GiB after
 > use, and a third exceeded the GPU's eight compute queues (Gufo warns `queue_budget_exceeded`; the idle power rose
 > from 7.2 to 30.4 W): llama-swap runs one at a time. Of the others, H3 peaked at 34.3 GiB of GPU memory with its
-> fast preset and 39.3 GiB with its exact one, ACE-Step at 24.9 GiB and Fish S2-Pro at 22.5 GiB. SOV-Transcribe-1's
-> KV cache is capped at 36 GiB (`llm-server/vllm-sov.container`): it peaks at 89.4 GiB and leaves 28.4 GiB free, room
-> for an everyday speech model beside it. Ming-Image takes 46.4 GiB loaded and at most 53.7 GiB while it makes an
-> image, at 2048x2048 too: its server decodes images larger than 1024 pixels in tiles, without which 2048x2048 took
+> fast preset and 39.3 GiB with its exact one, ACE-Step at 24.9 GiB, Turbo at 31.7 GiB for a new 1024x1024 image and
+> 35.2 GiB for an edit. Drama 3 takes 72.4 GiB loaded and 76.0 GiB at most, so its unit waits for 78 GiB to be
+> free: fish-speech's documentation asks for an NVIDIA GPU and 48 GB, and here, without the FP8 kernels, it loads
+> the model's experts as BF16 ([measurements](MEASUREMENTS.md#fish-audio-drama-3)). SOV-Transcribe-1's KV cache is
+> capped at 36 GiB (`llm-server/vllm-sov.container`): it peaks at 89.4 GiB and leaves 28.4 GiB free, room for an
+> everyday speech model beside it. Ming-Image takes 46.4 GiB loaded and at most 53.7 GiB while it makes an image,
+> at 2048x2048 too: its server decodes images larger than 1024 pixels in tiles, without which 2048x2048 took
 > 89 GiB. Beside it Qwen3-TTS spoke in 4.0 s and the next image took as long as before. The least free memory
 > measured with a speech model beside another model was 15.9 GiB: the LLM, with Qwen3-TTS speaking 24.6 s.
 
 Names the media models for the portal and restarts its gateway. Video and music also need
-`MEDIA_MODEL_PATH=/upstream/{model}` in `.env`, because llama-swap serves them only under `/upstream/<model>/`:
-step 10 sets it, and the first line here sets it on a portal installed before.
+`MEDIA_MODEL_PATH=/upstream/{model}` in `.env` ([why](#settings)): step 10 sets it, and the first line here sets
+it on a portal installed before.
 
 **Portal server**, once [step 10](#10-workspace-portal) is done (a portal installed before: after [Update the
 portal](#update-the-portal)):
@@ -1036,8 +1074,8 @@ LTX-2.5 22B distilled can take the place of H3's fast preset as the fast video m
 weights are 72.6 GB on disk and take about 66.2 GiB of GPU memory (an estimate from their sizes). Read its licence
 [above](#media-models) first.
 
-Turn it on only once its weights pass the check below. Without them its server stays up but answers 503, and a
-request for it would stop the LLM and then wait out llama-swap's 600-second health check.
+Turn it on only once its weights pass the check below. Without them its server logs what is missing and exits,
+and llama-swap fails every request for it at once.
 
 Accept the licence at [huggingface.co/Lightricks/LTX-2.5](https://huggingface.co/Lightricks/LTX-2.5) with your
 Hugging Face account, and create a read token at
@@ -1198,14 +1236,16 @@ python3 ~/workspace-portal/llm-server/acceptance.py
 Prompts: 4 of 255997 to 256000 tokens. Sending them all at once.
 user 0: first word after 293.5 s, follow-up after 289.3 s: PASS
 ...
-Sessions busy at once: 4 of 4. Lowest free memory: 13.2 GiB. Swap pages moved: 0. Killed for memory: 0. Hottest: 103 °C.
+Sessions busy at once: 4 of 4. Lowest free memory: 13.2 GiB. Swap pages moved: 0. Killed for memory: 0. Hottest: 99 °C.
 FUNCTIONAL PASS
 CAPACITY PASS
 ```
 
-> With the limits of step 7 the chip holds its 98 °C limit for most of the run, both fans at their top speed. The
-> follow-ups' times vary from about 150 to 480 seconds: Gufo often reclaims a waiting session's memory, and the
-> follow-up then reads its prompt again.
+> With the limits of step 7 the chip holds its 98 °C limit for most of the run, both fans at their top speed.
+> `Hottest` is the CPU's own sensor (`k10temp`), which peaked at 99 °C in the run with these settings
+> ([measurements](MEASUREMENTS.md#freezes)); the GPU's is not read, as each reading of it is a request to the power
+> firmware. The follow-ups' times vary from about 150 to 480 seconds: Gufo often reclaims a waiting session's
+> memory, and the follow-up then reads its prompt again.
 
 ## Part 3: Portal server
 
@@ -1252,9 +1292,9 @@ sudo bash deploy/install.sh
     Previews:   ports 22020-23999 (the apps running in a workspace, 10000 above its port)
     Online:     on (ONLINE_WORKSPACES; Admin > Users switches it off per user)
     Admin:      admin   (first sign-in: grep ^ADMIN_PASSWORD /home/YOUR_LOGIN/workspace-portal/.env; you choose a new one then)
-    Agent:      Qwen Code 0.27.0
-    Agent:      DeepSeek Harness 0.2.2-rc.1
-    Agent:      OpenCode 2.4.1
+    Agent:      Qwen Code 0.28.7
+    Agent:      DeepSeek Harness 0.2.2-rc.5
+    Agent:      OpenCode 2.4.2
     Models:       /srv/workspace-portal/config/models (deploy/models.sh; used by every agent)
     Instructions: /srv/workspace-portal/config/instructions.md (every agent is told them)
     Web:        web_search through the built-in SearXNG (http://127.0.0.1:8888); page reader on (read_page)
@@ -1339,7 +1379,7 @@ public GitHub repositories; both are public services, so what the agent asks the
 
 **In every workspace**, whichever agent runs it:
 
-- **Tools.** Node.js 24 with npm and pnpm, Python 3 with uv and ruff, Go, Rust with cargo, rustfmt and clippy, GCC
+- **Tools.** Node.js 26 with npm and pnpm, Python 3 with uv and ruff, Go, Rust with cargo, rustfmt and clippy, GCC
   and G++ with make and gdb, Bash with shellcheck and shfmt, PowerShell (`pwsh`) and git. They are part of the
   image, because a Private workspace can download nothing; an Online one installs more into its home folder.
   There is no root and no `apt`. `/tmp` runs no program, so build in `/workspace` or the home folder.
@@ -1498,7 +1538,7 @@ do: Docker clears the limit of project 1 each time it starts.
 | `LLM_MAX_CONCURRENCY=4` | Matches the four sessions. More requests wait in the portal instead of in Gufo. |
 | `LLM_MAX_CONCURRENCY_PER_USER=3` | One person with many subagents cannot take every session. |
 | `MEDIA_MODEL_PATH=/upstream/{model}` | Where the AI server answers a video or music model's own routes: llama-swap at `/upstream/<model>/`, which starts that model. Video and music need it, as llama-swap has no route of its own for them; with the default, `none`, they go to its root and get 404. Images, speech and transcription go to llama-swap's own routes either way. |
-| `media.json` | Not in `.env`: the image and media models, in `/srv/workspace-portal/config/models`, by kind and tier: a fast model for drafts and everyday work and a quality one for final work, which the agent picks for each call. [Media models](#media-models) installs `llm-server/media.json`, with one image model for both tiers; until then it names none. OpenCode gets a tool for each kind the file names: asked for an image, the agent saves it in the project as `images/<name>.png` and shows it in its reply. With media models it first proposes a plan for several parts, any video or work of more than a few minutes, with each step's tier and estimated time, and starts when the person replies **go**. Images and media share the LLM's queue, and every model but the everyday speech and transcription ones stops the LLM while it works ([swaps](#8-start-the-models)). OpenCode's model picker lists chat models only. `sudo bash deploy/models.sh show` prints the file and `install` replaces it, which restarts the gateway; workspaces get the change at their next start. |
+| `media.json` | Not in `.env`: the image and media models, in `/srv/workspace-portal/config/models`, by kind and tier: a fast model for drafts and everyday work and a quality one for final work, which the agent picks for each call. [Media models](#media-models) installs `llm-server/media.json`; until then it names none. Images are two kinds there: new images, with a fast and a quality model, and changes to images, which go to the one model that edits. An image model's `sizes` are what the agent may ask for besides 1024x1024. OpenCode gets a tool for each kind the file names: asked for an image, the agent saves it in the project as `images/<name>.png` and shows it in its reply. With media models it first proposes a plan for several parts, any video or work of more than a few minutes, with each step's tier and estimated time, and starts when the person replies **go**. Images and media share the LLM's queue, and every model but the everyday speech and transcription ones stops the LLM while it works ([swaps](#8-start-the-models)). OpenCode's model picker lists chat models only. `sudo bash deploy/models.sh show` prints the file and `install` replaces it, which restarts the gateway; workspaces get the change at their next start. |
 | `LLM_SLOTS_PATH=/upstream/qwen3.8-flash-next/slots` | Where **Admin > Usage** reads the LLM's sessions through llama-swap. It never starts the LLM. While the LLM is stopped for an image or a media model, Usage says what is being made (*Making images*, *Making a video*, *Making music*, *Making speech*, *Transcribing*) and shows no Read or Write rate, since those servers report no tokens. Its generation tile follows the kind being made, or made last: how many are in progress, a video's percent done and time so far, and the median time of the last five per image, video, track, speech request or file. |
 | `DEFAULT_REASONING_EFFORT=low` | The default. Every new agent session starts at low effort, which answers faster; raise it inside a session for a hard task. `medium` and `xhigh` are this model's other two efforts. |
 | `WORKSPACE_AGENTS=qwen,dsh,opencode` | The default: the agents people choose from, the first being a new person's. One that is left out is off everywhere: Home does not show it, its ports are closed, its image is not built, and a workspace of it that still runs is stopped. Its people's files stay, and are there again when it comes back. `WORKSPACE_AGENTS=opencode` offers OpenCode alone. |
@@ -1597,10 +1637,10 @@ sessions live, and **Admin > Users** the running workspaces; these are the comma
 
 | AI server | What it does |
 |---|---|
-| `curl -s http://127.0.0.1:8080/running \| jq -c '[.running[] \| {model, state}]'` | Which models run: the LLM, the image model or another media model, and at most one everyday speech or transcription model beside it. |
+| `curl -s http://127.0.0.1:8080/running \| jq -c '[.running[] \| {model, state}]'` | Which models run: the LLM, an image model or another media model, and at most one everyday speech or transcription model beside it. |
 | `systemctl --user status llama-swap.service --no-pager` | State and uptime of llama-swap, which starts and stops the models. |
 | `journalctl --user -u llama-swap -u gufo -f` | Live log of llama-swap and the LLM. |
-| `journalctl --user -u ming -u gufo-video -u gufo-tts -u gufo-tts-clone -u gufo-tts-design -u gufo-asr -u vllm-sov -u fish-speech -u acestep -f` | Live log of the image and media models. |
+| `journalctl --user -u ming -u gufo-image-turbo -u gufo-video -u gufo-tts -u gufo-tts-clone -u gufo-tts-design -u gufo-asr -u vllm-sov -u fish-speech -u acestep -f` | Live log of the image and media models. |
 | `curl -s http://127.0.0.1:18080/slots \| jq -c '[.[] \| .is_processing]'` | Which of the four sessions are busy, while the LLM runs. |
 | `systemctl --user restart llama-swap.service` | Restart; the LLM loads again. Requests in progress are lost. |
 | `grep . /sys/class/ec_su_axb35/apu/power_mode /sys/class/ec_su_axb35/temp1/temp /sys/class/ec_su_axb35/fan[12]/{rpm,duty}` | Power profile, controller temperature, fan speeds and duty. |
@@ -1657,28 +1697,30 @@ sudo grubby --set-default-index=1        # the index of the kernel that worked
 sudo reboot
 ```
 
-**A new Gufo release** is installed under **Admin > Updates > Gufo** in the portal, which lists the releases
-with their notes and marks breaking changes. The new image downloads, running requests and a video being made finish
-while new ones wait in the portal (up to 15 minutes, or **Restart now**), then Gufo restarts and must report the new version. If it
-does not come up, the previous version is put back by itself, and the failed update ends with Gufo's own last log
-lines: why it did not start. An update changes the image of every Gufo model: the LLM and, with the
-[media models](#media-models), video, everyday speech and transcription. llama-swap stops them and starts the LLM,
-and each other model starts with its next request. To go back to an older version later, pick it under **Package
-images**. By hand: replace the image digest in every `~/.config/containers/systemd/gufo*.container` file, then
-`systemctl --user daemon-reload` and `curl -X POST http://127.0.0.1:8080/api/models/unload`.
+**A new Gufo release** is installed under **Admin > Updates > Gufo** in the portal, which lists the releases with
+their notes and marks breaking changes. The new image downloads, running requests and a video being made finish
+while new ones wait in the portal (up to 15 minutes, or **Restart now**), then Gufo restarts and must report the new
+version. If it does not come up, the previous version is put back by itself, and the failed update ends with Gufo's
+own last log lines: why it did not start. An update changes the image of every Gufo model: the LLM and, with the
+[media models](#media-models), Turbo, video, everyday speech and transcription. llama-swap stops them and starts the
+LLM, and each other model starts with its next request. To go back to an older version later, pick it under
+**Package images**. By hand: replace the image digest in every `~/.config/containers/systemd/gufo*.container` file,
+then `systemctl --user daemon-reload` and `curl -X POST http://127.0.0.1:8080/api/models/unload`.
 
 **llama-swap, vLLM and the media programs** have a card each under **Admin > Updates**, below Gufo's: the programs
 of `llm-server/apps.json` that are installed. Each lists its releases (from GitHub, or for vLLM from its image
-registry) with their notes, and what is installed. An update installs the new version beside the old one while
-the old one serves (llama-swap is one download; a media program also builds its Python environment, which takes
-longer), then waits for running requests like Gufo's, switches and restarts the program, and switches back
-by itself if it doesn't come up. A program behind llama-swap is started once to check it, then the LLM loads
-again; llama-swap's own restart stops every model. **Use…** switches to an installed version, **Remove…** deletes
-one that is not in use. One update runs at a time on the AI server, Gufo's included.
+registry) with their notes, and what is installed. An update installs the new version beside the old one while the
+old one serves (llama-swap is one download; a media program also builds its Python environment, which takes longer),
+then waits for running requests like Gufo's, switches and restarts the program, and switches back by itself if it
+doesn't come up. A program behind llama-swap is started once to check it, then the LLM loads again; one whose model
+llama-swap's configuration does not have (LTX-2 before [LTX-2.5](#ltx-25) is turned on) is only switched, and the
+update's log says so. llama-swap's own restart stops every model. **Use…** switches to an installed version,
+**Remove…** deletes one that is not in use. One update runs at a time on the AI server, Gufo's included.
 
 > **vLLM** runs the transcription model with the model's own vLLM plugin, set up and tested with vLLM 0.32.0
 > (`llm-server/vllm-sov.container`). An update checks only that the model starts and answers: read the release
-> notes, and try a transcription after it.
+> notes, and try a transcription after it. No newer vLLM was tried with the plugin: on November 27, 2026 kyuz0's
+> image went up to 0.33.0 and vLLM itself to 0.34.0, which still writes no `srt` or `vtt`.
 
 **An install from before these cards** has llama-swap in `~/.local/bin`. Move it into the folder layout once; the
 running llama-swap goes on serving until its next restart:
@@ -1804,32 +1846,39 @@ sudo bash deploy/verify-isolation.sh
 - **Kept:** `.env`, the model settings, the accounts, every person's files and chat history. The installer adds the
   settings your `.env` lacks and changes none. It refuses to run while an update from **Admin > Updates** is in
   progress or a video is being made.
-- **The image models** moved from `IMAGE_MODELS` in `.env` to `media.json` ([step 10](#settings)). On an install
-  from before, the installer writes that line's models into `media.json`, the first as the fast model and the second
-  as the quality one (any others are dropped with a warning), and removes the line from `.env`. The [media
-  models](#media-models) need their own step.
-- **The image model** is Ming-Image-0.2-Design now, one model for drafts and final images, and it is set up with
-  the [media models](#media-models). Gufo's Qwen-Image-2.1 and Turbo are gone. On an AI server set up before, run
-  that step's lines for Ming-Image: its folders, its download, its build and `media/ming.service`. Then remove the
-  old units and weights, which frees 65.6 GB, and load the new `llama-swap.yaml`:
+- **The image and media models** are named in `media.json` ([step 10](#settings)). An `IMAGE_MODELS` line in the
+  `.env` of an older install is read by nothing, and the installer no longer carries it over: the [media
+  models](#media-models) step installs the file.
+- **The image and speech models changed.** New images come from Ming-Image-0.2-Design and Qwen-Image-2.1-Turbo,
+  changes to images from Turbo, and the quality speech model is Fish Audio Drama 3. Gufo's Qwen-Image-2.1 and Fish
+  Audio S2-Pro are gone. On an AI server set up before, run the [media models](#media-models) step's lines for
+  what it lacks: Ming-Image's folders, download, build and `media/ming.service`; Turbo's download and
+  `gufo-image-turbo.container`; Drama 3's folder and download and the new `media/fish-speech.service`. Then remove
+  the old unit and weights and load the new `llama-swap.yaml`:
 
   ```sh
-  rm ~/.config/containers/systemd/gufo-image.container ~/.config/containers/systemd/gufo-image-turbo.container
+  rm -f ~/.config/containers/systemd/gufo-image.container
   podman run --rm --user 0 -e GUFO_MODELS_DIR=/models -v /models/gufo-models:/models:z \
-    "$(sed -n 's/^Image=//p' ~/workspace-portal/llm-server/gufo.container)" \
-    sh -c 'gufo model remove qwen-image-2.1 && gufo model remove qwen-image-2.1-turbo'
+    "$(sed -n 's/^Image=//p' ~/workspace-portal/llm-server/gufo.container)" gufo model remove qwen-image-2.1
+  rm -rf /models/fishaudio-s2-pro
   cp ~/workspace-portal/llm-server/llama-swap.yaml ~/.config/llama-swap/config.yaml
   systemctl --user daemon-reload
   systemctl --user restart llama-swap.service
   ```
 
-  On the portal server, install `llm-server/media.json` again, as that step's **Portal server** block does.
+  On the portal server, install `llm-server/media.json` again, as that step's **Portal server** block does. This
+  update path was not run as written.
 - **Running workspaces** keep the image they started with and get the new one at their next start.
 - **The agents** stay at their versions. **Admin > Updates** shows the current and the latest release of each
   enabled agent and updates it with one button. An update fails, and the current version stays, when the portal's
   changes do not fit the new version or it does not pass the portal's check; the failed update names what did not
   fit. From the shell: `sudo bash deploy/update-image.sh qwen VERSION`, with `dsh` for DeepSeek Harness and
   `opencode` for OpenCode.
+- **OpenCode before 2.4.2** no longer passes the image's check: in 2.4.2 `generate_image` became a tool of
+  `execute`, and the portal's instructions and check follow it. With an older version in use the installer stops at
+  the image build. On the test server the version came from `.env`, so `OPENCODE_VERSION=2.4.2` was set there
+  before the installer ran. A version set in **Admin > Updates** is in
+  `/srv/workspace-portal/config/agent-versions.env`, which comes first; that case was not tried.
 - **A new agent** (OpenCode, for an install from before it) stays off, because the installer keeps
   `WORKSPACE_AGENTS` in your `.env`: add `opencode` to it, as in `WORKSPACE_AGENTS=qwen,dsh,opencode`, and run the
   installer again. It builds the agent's image: 4.2 to 4.9 GB, of which the agents' images share 3.7 GB.
@@ -1854,7 +1903,7 @@ sudo bash deploy/verify-isolation.sh
 | `gufo.service` stays `activating` | It loads the model and waits for the first health check: 17 to 18 seconds on the test machine. |
 | Gufo is stopped while loading | Loading took over 10 minutes, usually a slow disk. Raise `TimeoutStartSec` in `gufo.container` and `healthCheckTimeout` in `~/.config/llama-swap/config.yaml`. |
 | An image takes minutes before it starts | llama-swap stops the LLM only once every running LLM request has ended, and agents' requests can run for minutes. `curl -s http://127.0.0.1:8080/running` shows what runs. |
-| A unit fails with `wait-gpu-memory: ... GiB needed` | The model before it still held the memory after 60 seconds. `journalctl --user -u gufo`, or with the image or media unit's name (`ming` for images), says why; the next request of that model tries again. |
+| A unit fails with `wait-gpu-memory: ... GiB needed` | The model before it still held the memory after 60 seconds. `journalctl --user -u gufo`, or with the image or media unit's name (`ming` or `gufo-image-turbo` for images), says why; the next request of that model tries again. |
 | Prompts wait, and the workspace says a video is being made | A video holds the AI server until it is downloaded. **Admin > Usage** shows how far it is; stopping the agent's turn cancels it. |
 | A video made with curl on the AI server never finishes | A request for another model through llama-swap stopped H3, and the job with it. The portal holds such requests while its own video runs; a request sent to port 8080 directly does not wait. |
 | Speech gets HTTP 500 | Qwen3-TTS takes a language by its full name, such as `english`, not `en`. Text whose prompt plus `max_new_tokens` does not fit its 8,192-token context fails too; the media tool sends long text in pieces. |
@@ -1918,7 +1967,7 @@ fan service is running and that the vents have space on all sides. How each was 
 - Most numbers with the 8.5-bit n-gram table. The full-load test and 20 of the 99 writing speeds are from it; the
   others were taken with Unsloth's 4.5-bit table or the full-precision one, which side by side read and write
   within 2% of it ([measurements](MEASUREMENTS.md#n-gram-table)).
-- The older numbers on the current kernel. The reading speeds on the fan curve, the image timings and the
+- The older numbers on the current kernel. The reading speeds on the fan curve, the photo timings and the
   full-machine run date from kernel 7.2.15 and were not repeated with 7.3.4.
 - Fedora 45 on the AI server, and a Fedora release upgrade on either server.
 - Coming back after a real power cut.
@@ -1961,7 +2010,9 @@ fan service is running and that the vents have space on all sides. How each was 
 - A kernel update on the AI server with this fan driver. DKMS has built it for the running kernel only.
 - [Media models](#media-models) as written. The test machine got the same models at the same revisions, the same
   programs and units, piece by piece; the blocks here are put together from what it recorded, and their checks
-  send the requests its measurements sent. Swaps to and from each media model were not timed.
+  send the requests its measurements sent.
+- Drama 3 by ear. Its speech was checked by transcribing it; no person listened to it or compared it with
+  S2-Pro's.
 - [LTX-2.5](#ltx-25). Its program is built on the test machine, but its weights were never downloaded: nothing of it
   has run.
 - Fan noise and power at the wall. No meters were at hand.
@@ -1974,13 +2025,13 @@ fan service is running and that the vents have space on all sides. How each was 
 | Engine | [Gufo 0.37.0](https://github.com/gufo-org/gufo/releases/tag/v0.37.0) (build 684b716), image digest `sha256:9548e994...5bb1d4dc` |
 | Model router | [llama-swap v277](https://github.com/mostlygeek/llama-swap/releases/tag/v277) (1112737) |
 | Model | [Qwen3.8-Flash-Next](https://huggingface.co/Qwen/Qwen3.8-Flash-Next), [UD-Q4_K_XL from Unsloth](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/tree/f5d175de2cf7f720d45d6064019a81fcf056e986) with the Q8_0 n-gram table, shared Q8 MTP, BF16 vision projector; downloaded with huggingface_hub 2.4.0 and hf-xet 1.8.0 |
-| Image model | [Ming-Image-0.2-Design](https://huggingface.co/inclusionAI/Ming-Image-0.2-Design/tree/3538f4c311cf8f5256d631ddb7f47793f741aa2e) (3538f4c), BF16; MIT |
-| Media models | [MiniMax-H3](https://huggingface.co/MiniMaxAI/MiniMax-H3/tree/42ed227ee7df40d41602854ae760620d6eb651fe) (42ed227), Qwen3-TTS-12Hz-1.7B [Base](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base/tree/fd4b254389122332181a7c3db7f27e918eec64e3) (fd4b254), [CustomVoice](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice/tree/0c0e3051f131929182e2c023b9537f8b1c68adfe) (0c0e305) and [VoiceDesign](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign/tree/5ecdb67327fd37bb2e042aab12ff7391903235d3) (5ecdb67), [Qwen3-ASR-1.7B](https://huggingface.co/Qwen/Qwen3-ASR-1.7B/tree/7278e1e70fe206f11671096ffdd38061171dd6e5) (7278e1e), [Fish Audio S2-Pro](https://huggingface.co/fishaudio/s2-pro/tree/1de9996b6be38b745688de084d87a5633f714e4e) (1de9996), [ACE-Step 1.5](https://huggingface.co/ACE-Step/Ace-Step1.5/tree/19671f406d603126926c1b7e2adc169acbcade22) (19671f4) with [XL base](https://huggingface.co/ACE-Step/acestep-v15-xl-base/tree/220c1166efbdd9583eafcb12eb160594bbfcb241) (220c116) and [XL turbo](https://huggingface.co/ACE-Step/acestep-v15-xl-turbo/tree/d4a0b288b83ebb7e25a8c0b32c573c22e134e8ee) (d4a0b28), [SOV-Transcribe-1](https://huggingface.co/salesforce-sovereign-intelligence/SOV-Transcribe-1/tree/505d8fae243924c0d8acdc622f7f0abab344eba3) (505d8fa) with [its DFlash draft](https://huggingface.co/salesforce-sovereign-intelligence/SOV-Transcribe-1-DFlash/tree/8c0b3f3a98507d2e3dd35b1bee0f147fa3bded05) (8c0b3f3); [LTX-2.5](https://huggingface.co/Lightricks/LTX-2.5/tree/69ecadd4932572caf956135d41cbcdbd697aa442) (69ecadd) not downloaded |
-| Media programs | [Ming-Image](https://github.com/inclusionAI/Ming-Image/tree/d5615110e3ae7d27f270eafe5556d669b2069971) (d561511) on AMD's PyTorch 2.14.0 for ROCm 10.2.0, [fish-speech](https://github.com/fishaudio/fish-speech/tree/v3.0.0-beta) 3.0.0-beta, [ACE-Step 1.5](https://github.com/ace-step/ACE-Step-1.5) 0.1.8, [LTX-2](https://github.com/Lightricks/LTX-2/tree/v1.6.3) 1.6.3 (built, not run), vLLM 0.32.0 in [kyuz0's image](https://github.com/kyuz0/amd-strix-halo-vllm-toolboxes) `rocm10.0.0-torch2.11.0-vllm0.32.0`; uv 0.13.7, ffmpeg-free 8.1.3 |
+| Image models | [Ming-Image-0.2-Design](https://huggingface.co/inclusionAI/Ming-Image-0.2-Design/tree/3538f4c311cf8f5256d631ddb7f47793f741aa2e) (3538f4c), BF16; MIT. Qwen-Image-2.1-Turbo, installed with `gufo model install` at the revision Gufo 0.37.0 pins ([fc13ba1](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo/tree/fc13ba1986fcb905854dc8de2f52eee395f49b5b)); Qwen Research License Agreement |
+| Media models | [MiniMax-H3](https://huggingface.co/MiniMaxAI/MiniMax-H3/tree/42ed227ee7df40d41602854ae760620d6eb651fe) (42ed227), Qwen3-TTS-12Hz-1.7B [Base](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base/tree/fd4b254389122332181a7c3db7f27e918eec64e3) (fd4b254), [CustomVoice](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice/tree/0c0e3051f131929182e2c023b9537f8b1c68adfe) (0c0e305) and [VoiceDesign](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign/tree/5ecdb67327fd37bb2e042aab12ff7391903235d3) (5ecdb67), [Qwen3-ASR-1.7B](https://huggingface.co/Qwen/Qwen3-ASR-1.7B/tree/7278e1e70fe206f11671096ffdd38061171dd6e5) (7278e1e), [Fish Audio Drama 3](https://huggingface.co/fishaudio/drama-3/tree/78e5ab79e49aa9a25abe8799eff2c4d73a1c3216) (78e5ab7), [ACE-Step 1.5](https://huggingface.co/ACE-Step/Ace-Step1.5/tree/19671f406d603126926c1b7e2adc169acbcade22) (19671f4) with [XL base](https://huggingface.co/ACE-Step/acestep-v15-xl-base/tree/220c1166efbdd9583eafcb12eb160594bbfcb241) (220c116) and [XL turbo](https://huggingface.co/ACE-Step/acestep-v15-xl-turbo/tree/d4a0b288b83ebb7e25a8c0b32c573c22e134e8ee) (d4a0b28), [SOV-Transcribe-1](https://huggingface.co/salesforce-sovereign-intelligence/SOV-Transcribe-1/tree/505d8fae243924c0d8acdc622f7f0abab344eba3) (505d8fa) with [its DFlash draft](https://huggingface.co/salesforce-sovereign-intelligence/SOV-Transcribe-1-DFlash/tree/8c0b3f3a98507d2e3dd35b1bee0f147fa3bded05) (8c0b3f3); [LTX-2.5](https://huggingface.co/Lightricks/LTX-2.5/tree/69ecadd4932572caf956135d41cbcdbd697aa442) (69ecadd) not downloaded |
+| Media programs | [Ming-Image](https://github.com/inclusionAI/Ming-Image/tree/d5615110e3ae7d27f270eafe5556d669b2069971) (d561511) on AMD's PyTorch 2.15.0 for ROCm 10.2.0, [fish-speech](https://github.com/fishaudio/fish-speech/tree/v3.0.0-beta) 3.0.0-beta on PyTorch 2.15.0 for ROCm 10.0, [ACE-Step 1.5](https://github.com/ace-step/ACE-Step-1.5) 0.1.8, [LTX-2](https://github.com/Lightricks/LTX-2/tree/v1.6.3) 1.6.3 (built, not run), vLLM 0.32.0 in [kyuz0's image](https://github.com/kyuz0/amd-strix-halo-vllm-toolboxes) `rocm10.0.0-torch2.11.0-vllm0.32.0`; uv 0.13.7, ffmpeg-free 8.1.3 |
 | Fan driver | `llm-server/fans/ec_su_axb35.c` in the repository, version m5-2: reduced from [cmetz/ec-su_axb35-linux](https://github.com/cmetz/ec-su_axb35-linux/tree/f62c2c228959a08683273a26ef3afd8991e69f6d) at f62c2c2, duty registers after [FanControl.AXB35](https://github.com/crmaris/FanControl.AXB35) |
 | APU tuning | [RyzenAdj](https://github.com/FlyGoat/RyzenAdj) 0.18.0 (527cacc) from [COPR shdwchn10/ryzenadj](https://copr.fedorainfracloud.org/coprs/shdwchn10/ryzenadj/), with its `ryzen_smu` driver (d298366) |
 | Portal server | Pentium G4400T (2 cores), 8 GB; Fedora 45 Server, kernel 7.3.4-300.fc45, moby-engine 29.9.3, Tailscale 1.102.5 |
-| Portal | [Workspace Portal](https://github.com/ShahriarDhruvo/workspace-portal), [Qwen Code](https://github.com/QwenLM/qwen-code) 0.28.0 (a fresh install builds 0.27.0; updated under **Admin > Updates**), DeepSeek Harness 0.2.2-rc.1, OpenCode 2.4.1 (the only agent enabled on the test server since November 24, 2026), [SearXNG](https://github.com/searxng/searxng) 2026.11.12. Page reader: [Defuddle](https://github.com/kepano/defuddle) 0.19.6, pypdfium2 5.15.2 |
+| Portal | [Workspace Portal](https://github.com/ShahriarDhruvo/workspace-portal), as a fresh install builds it: Node.js 26, [Qwen Code](https://github.com/QwenLM/qwen-code) 0.28.7, DeepSeek Harness 0.2.2-rc.5, OpenCode 2.4.2 (the only agent enabled on the test server since November 24, 2026), [SearXNG](https://github.com/searxng/searxng) 2026.11.26. Page reader: [Defuddle](https://github.com/kepano/defuddle) 0.19.13, pypdfium2 5.15.2 |
 
 Further reading: [Gufo server options](https://github.com/gufo-org/gufo/blob/v0.37.0/docs/server.md) · [llama-swap
 configuration](https://github.com/mostlygeek/llama-swap/blob/v277/docs/config.example.yaml) · [amdgpu
@@ -1989,4 +2040,4 @@ toolboxes](https://github.com/kyuz0/amd-strix-halo-toolboxes) · [strixhalo.wiki
 [Hardware Busters on the test machine's fans](https://hwbusters.com/?p=116224) · [Tailscale on
 Linux](https://tailscale.com/docs/install/linux)
 
-*Strix Halo local agent server, November 20, 2026. Results come from one unit and will differ a little on yours.*
+*Strix Halo local agent server, November 27, 2026. Results come from one unit and will differ a little on yours.*

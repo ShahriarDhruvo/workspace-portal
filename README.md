@@ -91,8 +91,9 @@ The models are not in `.env` but in two files in Qwen Code's settings format, in
 `settings.json` what users cannot override. Every agent takes its models from these files. Every model `id`
 must be one the model server serves. Start from the copies in [`models/`](models); workspaces read the
 installed files at their next start. The image and media models are in a third file there, `media.json`, by kind
-and tier (a fast and a quality model): [`llm-server/media.json`](llm-server/media.json) is the reference AI server's.
-Installing it restarts the gateway, so `models.sh` refuses while an update or a video runs.
+(new images, image edits, video, music, speech, transcription) and tier (a fast and a quality model):
+[`llm-server/media.json`](llm-server/media.json) is the reference AI server's. Installing it restarts the gateway,
+so `models.sh` refuses while an update or a video runs.
 
 ```sh
 sudo bash deploy/models.sh install models/system-defaults.json models/settings.json
@@ -140,9 +141,11 @@ curl https://<portal>/llm/api/v1/models -H "Authorization: Bearer $KEY"
 ```
 
 Software that speaks the OpenAI API takes `https://<portal>/llm/api/v1` as its base URL and the key as its API
-key; `x-api-key` carries the key as well. Every path, method, header and body reaches the model server as it
-was sent, with `LLM_API_KEY` in the user's key's place, and the answer streams back. A body may be 64 MiB.
-Generations wait in the workspaces' queue, within the same limit per user (`LLM_MAX_CONCURRENCY_PER_USER`).
+key; `x-api-key` carries the key as well. Every method, header and body reaches the model server as it was sent,
+with `LLM_API_KEY` in the user's key's place, and the answer streams back. So does every path but two kinds:
+llama-swap's own routes, which run the AI server (404), and a path with a dot segment, a `%`, a doubled slash or
+a backslash (400). A body may be 64 MiB. Generations wait in the workspaces' queue, within the same limit per
+user (`LLM_MAX_CONCURRENCY_PER_USER`).
 
 ## Operate
 
@@ -181,9 +184,8 @@ sudo bash deploy/uninstall.sh --purge-data    # deletes the data directory too
 
 A re-run of the installer rebuilds the images and restarts what changed. It keeps `.env`, adding the settings
 it lacks, the model settings and all data, and refuses while an update from Admin > Updates is running or a video
-is being made. An agent
-the portal has gained since the install (OpenCode) stays off, because `WORKSPACE_AGENTS` in `.env` is kept: add
-`opencode` to it and run the installer again.
+is being made. An agent the portal has gained since the install (OpenCode) stays off, because `WORKSPACE_AGENTS`
+in `.env` is kept: add `opencode` to it and run the installer again.
 
 An install from before every agent had its own workspaces (its `.env` has `ONLINE_AGENT_PORT_BASE`) updates
 once in another way, because the ports, the UIDs and the folders are numbered anew. People start with empty
@@ -210,9 +212,10 @@ files into one of the new workspaces.
 `HOSTD_LLM_URL` and `HOSTD_LLM_TOKEN` for the portal's `.env`. With them Admin > Usage and Energy show that
 server too, and Admin > Updates updates its engine: see [hostd/README.md](hostd/README.md).
 
-[`llm-server/`](llm-server) holds what the reference AI server runs: the engine's service file, a full-load
-test, and fan control for the one board it was tested on. [docs/GUIDE.md](docs/GUIDE.md) sets up both servers
-step by step from a fresh Fedora, the model download included.
+[`llm-server/`](llm-server) holds what the reference AI server runs: llama-swap's configuration, the models'
+unit files, the media programs' installers, a full-load test, and fan control for the one board it was tested on.
+[docs/GUIDE.md](docs/GUIDE.md) sets up both servers step by step from a fresh Fedora, the model downloads
+included.
 
 ## Security model
 
@@ -241,12 +244,13 @@ The contracts behind this are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 The portal's licence does not cover the models. Some of the ones the reference AI server runs
 ([docs/GUIDE.md](docs/GUIDE.md#media-models)) limit who may use them and how. Read each licence before you download
-a model and before you use what it makes; the guide links each one. As read on November 27, 2026:
+a model and before you use what it makes. As read on November 27, 2026:
 
 | Model | Licence | What it limits |
 |---|---|---|
 | MiniMax H3 (video) | MiniMax H3 Community License Agreement | Grants nothing in the United States, the European Union, the United Kingdom or South Korea: there neither the model nor its videos may be used without a separate licence from MiniMax. Elsewhere: MiniMax's written consent above US$20 million a year in revenue, "MiniMax H3" shown in a commercial product, machine-made content posted in public marked as such |
-| Fish Audio S2-Pro (quality speech) | Fish Audio Research License | Research and non-commercial use only, a business's internal work included; its outputs may not train or improve a foundation model |
+| Fish Audio Drama 3 (quality speech) | Fish Audio Community License 1.0, the `LICENSE` file of the model's repository (its model card's metadata names another) | Free for research and non-commercial use. Commercial use only while annual revenue is under US$500,000. A hosted service that lets third parties make speech needs a separate licence, whatever the revenue. A product or service that uses it must show "Built with Fish Audio". No imitation of an identifiable person's voice without consent. Its outputs may not train or improve a speech or foundation model |
+| Qwen-Image-2.1-Turbo (image edits, fast images) | Qwen Research License Agreement | Research and evaluation only; any commercial use needs a separate licence from its maker. A model made or improved with it or with its pictures, and then distributed, must say "Built with Qwen" or "Improved using Qwen" |
 | Qwen3.8-Flash-Next (LLM) | Qwen Community License | Selling it as a paid AI service needs a separate licence |
 | LTX-2.5 (optional fast video, off by default) | LTX-2.x Community License Agreement | A company with US$10 million or more in yearly revenue needs a paid licence for any use that is not non-commercial |
 | Ming-Image-0.2-Design, ACE-Step 1.5 | MIT | |
@@ -258,7 +262,7 @@ A kind with one model left uses it for both tiers, and a kind with none has no t
 ## Development
 
 ```sh
-npm ci                # Node.js 24 or newer; npm workspaces: packages/core, harnesses, container, gateway, web
+npm ci                # Node.js 26 or newer; npm workspaces: packages/core, harnesses, container, gateway, web
 npm test              # all five; the gateway's integration tests need no Docker
 npm run typecheck
 npm run build         # the gateway bundle, then the web app
@@ -268,6 +272,7 @@ python3 -m unittest hostd/test_hostd.py llm-server/fans/test_fans.py llm-server/
 
 The page reader's tests run in its image build. `npm run dev -w @portal/gateway` runs the gateway from source
 with the settings in `.env`; it needs Docker and a data directory it can write. `npm run dev -w @portal/web`
-runs the web app on port 3000 with the settings in its environment. Licensed under the GNU GPL version 2 or, at your option, any later version
-([GPL-2.0-or-later](LICENSE)), except the kernel module in `llm-server/fans`, which is
-[GPL-2.0-only](llm-server/fans/COPYING).
+runs the web app on port 3000 with the settings in its environment.
+
+Licensed under the GNU GPL version 2 or, at your option, any later version ([GPL-2.0-or-later](LICENSE)), except
+the kernel module in `llm-server/fans`, which is [GPL-2.0-only](llm-server/fans/COPYING).

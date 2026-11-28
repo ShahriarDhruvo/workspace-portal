@@ -7,8 +7,8 @@ numbers led to are in [`llm-server/`](../llm-server).
 - **Portal server:** Pentium G4400T (2 cores), 8 GB, Fedora 45.
 - One unit of each, at room temperature. Power and temperature are the chip's own sensors, not a wall meter.
 - tok/s is tokens per second. Reading is prompt processing, writing is the answer.
-- The fan, model, engine, image and full-machine measurements date from kernel 7.2.15 and were not repeated
-  with 7.3.4.
+- The fan, model, engine, photo and full-machine measurements date from kernel 7.2.15 and were not repeated
+  with 7.3.4. The sections measured on 7.3.4 say so.
 
 ## Settings and what they buy
 
@@ -547,11 +547,13 @@ answer. GPU memory is the GTT counter and free memory MemAvailable, read every 0
 | Request | Time | GPU memory at most |
 |---|--:|--:|
 | Through llama-swap, 1024 × 1024, the LLM stopped first | 51.3 s | 95.9 GiB, both for a moment |
+| Through llama-swap, 1024 × 1024, Turbo stopped first | 53.2 s | 52.6 GiB |
+| Through llama-swap, 1344 × 768, the LLM stopped first | 52.4 s | |
 | 1024 × 1024, loaded | 30.4 to 30.7 s | 53.3 GiB |
-| 1344 × 768 | 30.3 s | |
+| 1344 × 768 | 30.3 to 30.4 s | 51.4 to 51.6 GiB, with the next row |
+| 768 × 1344 | 30.2 s | |
 | A poster with a headline and a line of small text | 30.6 s | |
 | Two images in one request (`n` 2) | 61.6 s | |
-| An edit of a 1024 × 1024 image | 78.9 s | 53.0 GiB |
 | 2048 × 2048, the VAE decoding in tiles | 190.1 to 190.7 s | 53.7 GiB |
 | 2048 × 2048, decoded whole | 195.2 s | 89.0 GiB |
 | Qwen3-TTS beside Ming-Image, 3 s of speech | 4.0 s | 54.6 GiB |
@@ -560,9 +562,14 @@ answer. GPU memory is the GTT counter and free memory MemAvailable, read every 0
 
 - The server is ready 17.9 s after it starts, with 46.4 GiB in use; the swap from the LLM adds about 21 s.
 - The same seed and request gave a byte-identical image again. Text came out letter for letter: "BLUE HOUR" and
-  "Friday 9 PM · Harbor Hall" at 1024 and at 2048. Asked to make the teapot cobalt blue and put a white cup beside
-  it, the edit changed the colour and kept the rest of the picture; the cup was there already. Its wood and glaze
-  came out coarser and over-sharpened, unlike the image it started from.
+  "Friday 9 PM · Harbor Hall" at 1024 and at 2048.
+- That evening its install moved to AMD's PyTorch 2.15.0 for ROCm 10.2.0, which the other programs use, and the
+  numbers stayed: 30.5 s at 1024 × 1024 (53.7 s with the LLM stopped first), 30.2 s at 1344 × 768, 30.5 s at
+  768 × 1344 and 189.7 s at 2048 × 2048, with 53.2, 51.4, 51.4 and 53.8 GiB at most.
+- Ming-Image's code also has an edit task, which its model card does not describe. It took 78.2 to 78.9 s for a
+  1024 × 1024 image and damaged the picture ([below](#qwen-image-21-turbo-edits-and-fast-images)), so the server
+  no longer offers it: `/v1/images/edits` answers 404, an `image` in a generation 400, and edits go to
+  Qwen-Image-2.1-Turbo. The edit timings cannot be repeated through the server.
 - Decoding 2048 × 2048 whole takes 35 GiB more than the 48.4 GiB the denoising needs. In tiles of 1024 pixels, 896
   apart, it takes 2.3 GiB more, and the image differs from the whole one by 0.12 of 255 on average, 17 at most, in
   0.001% of its pixels by more than 8. The server tiles images larger than 1024 pixels on a side.
@@ -572,31 +579,46 @@ answer. GPU memory is the GTT counter and free memory MemAvailable, read every 0
   `TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL`, 250 ms each for 16,384 tokens of 30 heads.
 - The weights take 52.9 GB on disk, the program with its Python packages 6.8 GiB.
 
-### Qwen-Image-2.1 and Turbo on Gufo, before Ming-Image
+### Qwen-Image-2.1-Turbo: edits and fast images
 
-For comparison. Measured on November 26, 2026 with Gufo 0.37.0 and llama-swap v276 (the guide's step 8 then), one
-request at a time, 1024 × 1024, the model files already in the page cache. Times are from sending the request to the
-whole answer.
+Measured on November 27, 2026 with Gufo 0.37.0 through llama-swap v277 (`llm-server/gufo-image-turbo.container`,
+eight steps), one request at a time, seed 42, the weights in the page cache; 1024 × 1024 where a row names no size.
+Times run from sending the request to the whole answer; GPU memory is the GTT counter, read every 0.25 s.
 
-| Request | Time | Of which Gufo's own (text encoder, denoising, VAE) |
-|---|--:|---|
-| llama-swap starts at boot, the LLM loads | 18 s | loading 15.4 s |
-| Turbo image, 8 steps, the LLM stopped first | 26.5 s | 6.3 + 17.5 + 1.0 = 24.8 s |
-| The same again after a swap | 26.6 s | |
-| Qwen-Image-2.1 image, 40 steps, started beside Turbo | 96.7 s | 5.9 + 88.5 + 1.1 = 95.5 s |
-| A chat request, both image models stopped first | 17.3 s | loading 15.3 s |
-| An engine update through llama-swap (hostd), unload to version check | 16 s | |
+| Request | Time | GPU memory at most |
+|---|--:|--:|
+| A new image, the LLM stopped first | 25.7 s | |
+| A new image, Ming-Image stopped first | 25.7 s | |
+| A new image, loaded | 18.7 to 18.9 s | 31.7 GiB |
+| A new image, 1344 × 768 | 18.2 s | |
+| A new image, 768 × 1344 | 17.9 s | |
+| A new image, 2048 × 2048 | 143.2 s | 41.9 GiB |
+| An edit of one image | 29.2 to 30.2 s | 35.2 GiB |
+| An edit of a 1344 × 768 image, no size sent | 31.5 s | |
+| An edit of a square image with `size` 1344x768 | 29.0 s | |
+| An edit of two images (`image[]` twice) | 40.2 s | |
+| For comparison: the same edits on Ming-Image, before its server refused them | 78.2 to 78.5 s | 53.6 GiB |
 
-The weights reach the GPU with each model's first request after a start, which is in the image rows above.
-llama-swap's own part of a swap was under 2 seconds.
-
-| Running | GPU memory in use (GTT) |
-|---|--:|
-| The LLM, four 256K sessions | 95.8 GiB |
-| Turbo | 31.7 GiB |
-| Turbo and Qwen-Image-2.1 | 63 GiB |
-
-Downloading both image models (65.6 GB) with `gufo model install` took 26 minutes 54 seconds, at about 41 MB/s.
+- Both models edited the same two Ming-Image pictures. Asked to make a red teapot cobalt blue and put a white cup
+  beside it, Turbo did both and kept the table, the window and the light. Ming-Image changed the colour, added no
+  cup, and broke the table's wood grain into black speckles. Asked to change a poster's headline to "GOLDEN HOUR"
+  on a warm orange background, both wrote the headline letter for letter and kept the small line and the drawing.
+- As new images, Turbo's teapot was a clean photograph and its poster had the right text; Ming-Image's poster was
+  the tidier design. So the registry's default for a new image is Ming-Image, with Turbo as the fast tier.
+- An edit keeps its input's size when the request names none: the 1344 × 768 image came back 1344 × 768. With
+  `size` the square image came back 1344 × 768.
+- The two-image edit was asked to "put the teapot from the first picture on the stage of the poster in the
+  second". It came back 1024 × 1024, with the teapot on the poster and the poster's text intact.
+- `llm-server/media.json` offers the agent 1344x768 and 768x1344 from Turbo, and not 2048x2048 with its 143 s.
+- The weights reach the GPU with the first request after a start: 7 s of the first row. The day before, with
+  llama-swap v276: a chat request after an image, the image model stopped first, took 17.3 s (loading 15.3 s);
+  llama-swap's start at boot loaded the LLM in 18 s; an engine update through llama-swap (hostd) took 16 s from
+  the unload to the version check; llama-swap's own part of a swap was under 2 s.
+- Downloading the weights (32.5 GB) with `gufo model install` took 13 minutes 22 seconds, at about 41 MB/s.
+- Through the portal's LLM API after the deploy that evening, one request after another with one key: a 1344 × 768
+  image from Ming-Image 50.5 s (the LLM stopped first), a new image from Turbo 26.1 s, an edit of it 29.3 s, an edit
+  asked of Ming-Image 404 after 9.9 s, a tagged line from Drama 3 47.9 s for 4.3 s of speech (Turbo stopped
+  first), and the next chat request 19.5 s.
 
 ## Media models
 
@@ -607,6 +629,9 @@ Qwen3-ASR; Fish Speech v3.0.0-beta for S2-Pro; ACE-Step 1.5 v0.1.8 with both XL 
 (kyuz0's gfx1151 image) for SOV-Transcribe-1 with its DFlash draft. Times run from sending the request to the whole
 answer, for a video from creating the job to its MP4 downloaded. GPU memory is the GTT counter and free memory is
 MemAvailable, both read every 0.25 s. The model files were in the page cache.
+
+"Fish" in these tables is Fish Audio S2-Pro. [Drama 3](#fish-audio-drama-3) replaced it later the same day, so
+its rows cannot be repeated: S2-Pro is no longer installed.
 
 The test recordings are LibriSpeech readings with their reference text: 12.5 s, 34.6 s, and 302.9 s (the first 46
 utterances of test-clean, two speakers). The word error rate (WER) counts words after lowercasing and removing
@@ -627,6 +652,10 @@ loaded, which it stopped.
 | A chat request | ACE | 19.8 s | 0.19 s | 96.1 GiB |
 
 Other swaps: Fish to ACE base 39.1 s; SOV and Fish back to the LLM 20.4 and 18.6 s.
+
+Later the same day, with `StopTimeout=50` on every model container: a chat request sent straight to llama-swap took
+20.6 s after SOV-Transcribe-1, 17.1 s after Qwen-Image-2.1-Turbo, 19.3 s after Drama 3 and 20.3 s after Ming-Image,
+and no container was killed.
 
 - H3 starts in 0.2 s and reads its weights during each job, so a first video is only 16 s slower than the next.
 - SOV takes about 85 s to start. Its log shows 20 s for the 49.7 GiB of weights and 19 s to prepare the engine.
@@ -728,9 +757,10 @@ at 32 kHz, 5.18 s long.
   rate the steps would end after about 78 minutes; with the decoding scaled up from 512 × 512 by the number of
   pixels, the video would take about 95 minutes (estimate, not run).
 - Cancelling that job with `DELETE /v1/videos/{id}` answered `deleted` and the job then answered 404, but the job
-  went on: Gufo logged no cancellation and left its folder as `in_progress`. When llama-swap stopped H3 27 s later,
-  the container ignored SIGTERM and podman killed it after 10 s. The folder was deleted by hand, so the job could
-  not start again with H3.
+  went on: Gufo logged no cancellation and left its folder as `in_progress`. Seen once, on November 27, 2026:
+  Gufo's documentation says a `DELETE` cancels the job, and it was not tested again. When llama-swap stopped H3
+  27 s later, the container ignored SIGTERM and podman killed it after 10 s; the Gufo quadlets now set
+  `StopTimeout=50`. The folder was deleted by hand, so the job could not start again with H3.
 - H3's `POST /v1/videos` answers 202. When llama-swap stopped H3 at the start of a 5 s job, Gufo cancelled the
   running job, but a second job queued behind it stayed in the jobs folder as `queued` (Gufo keeps jobs across
   restarts). It was deleted by hand before H3 started again, so whether it would have run was not seen.
@@ -746,7 +776,54 @@ at 32 kHz, 5.18 s long.
   `fast` shows short transients and tonal bands, `exact` a low rumble and one call with harmonics, `first_frame`
   regular footstep-like clicks and calls at 0.8 s and 4.5 s. Nobody listened to them.
 
+### Fish Audio Drama 3
+
+Measured on November 27, 2026 through llama-swap v277: fish-speech 3.0.0-beta on PyTorch 2.15.0+rocm10.0
+(`llm-server/media/fish-speech.service`), the weights `fishaudio/drama-3` at revision 78e5ab7, seed 42, one request
+at a time, no reference voice unless the row names one. Times run from sending the request to the whole answer.
+
+| Request | Speech made | Time, loaded |
+|---|--:|--:|
+| A short text | 5.6 s | 16.3 s |
+| A text with the tags `[whisper]`, `[laughing]` and `[excited]` | 7.1 s | 20.4 to 20.6 s |
+| 64 words, made in two chunks | 24.8 to 25.8 s | 71.9 to 75.9 s |
+| A cloned voice: a 4.6 or 5.6 s reference with its text | 4.9 to 5.5 s | 16.8 to 17.8 s |
+
+- About 2.9 s for each second of speech. With the swap from the LLM the first text took 48.8 s, both times. The
+  server is ready about 33 s after its start. The swap back to the LLM took 17.6 s.
+- GPU memory: 72.4 GiB loaded, 76.0 GiB at most, so the unit waits for 78 GiB. fish-speech's documentation says
+  "Drama 3 runs on NVIDIA GPUs only: CPU, Apple MPS and AMD ROCm are not supported" and asks for at least 48 GB
+  with the FP8 experts. On gfx1151 the FP8 kernels are missing: fish-speech then picks dequantized experts on its
+  own and loads them as BF16, which runs.
+- The tags were not spoken. Qwen3-ASR heard the three texts and the clone word for word.
+- The same seed again: the two short texts were byte-identical in three runs, across restarts of the server; the
+  long one in two runs of three.
+- With PyTorch's TunableOp on, as `/etc/ai-studio/cache.env` sets it, the three texts took 25.9, 33.2 and
+  163.9 s: the unit unsets `PYTORCH_TUNABLEOP_ENABLED`.
+- S2-Pro on the same texts the same day: 8.2 s of speech in 17.6 s and 23.8 s in 52.8 s, 2.1 to 2.2 s for each
+  second of speech, in 22.5 GiB. Drama 3 is about a third slower and takes 3.4 times the memory. It replaced
+  S2-Pro because it is the newer and more capable model and both gave word-perfect speech here. No listening test
+  by a person was done.
+- The weights take 43 GB on disk.
+
+### Agent turns with the image and speech models
+
+Three turns of OpenCode 2.4.2 in one Private workspace on the test servers, November 27, 2026, each one prompt in
+plain words, nobody else on the AI server. Times run from the prompt to the last reply, to within 2 s.
+
+| Asked for | What the agent did | Time |
+|---|---|--:|
+| A picture, then the same picture with one colour changed | One `generate_image` in an `execute` script with no model named, so Ming-Image made it; then one with `images`, which went to Turbo. Both files saved and shown in the reply | 166 s |
+| Three quick wide draft thumbnails | One script with three calls in `Promise.all`, each naming `portal/Qwen-Image-2.1-Turbo#1344x768`. Turbo was loaded once and ran for 62 s; the three files are 1344 × 768 | 113 s |
+| Two lines of a radio play "in the best quality", one whispered, one excited | Two `synthesize_speech` calls in one message with `[whisper]` and `[excited]`. Drama 3 was loaded once and ran for 52 s; the agent then transcribed both lines and found every word | 111 s |
+
+- In the third turn the agent first asked the quality tier for a built-in voice and then for a described one. The
+  tool refused both at once, with no model swap, but the two rounds are in the time. The tool's description has
+  since been changed to say what each tier takes; the turn was not repeated with it.
+
 ### Fish S2-Pro and ACE-Step
+
+The two Fish rows are S2-Pro's, from before Drama 3 replaced it: S2-Pro is no longer installed.
 
 | Request | Time, loaded | With the swap | Output | GPU memory |
 |---|--:|--:|---|--:|
@@ -755,7 +832,7 @@ at 32 kHz, 5.18 s long.
 | ACE turbo, 8 steps, 30 s with lyrics | 3.0 s | 29.7 s from SOV | 30.0 s, 48 kHz stereo WAV | 22.4 GiB, 24.5 at most |
 | ACE base, 50 steps, the same | 15.1 s | 39.1 s from Fish | 30.0 s, 48 kHz stereo WAV | 24.4 GiB at most |
 
-- Fish takes about 2.1 seconds for each second of speech.
+- S2-Pro took about 2.1 seconds for each second of speech.
 - The model name picks ACE's model: its log shows the turbo settings for every `acestep-1.5-xl-turbo` request,
   sent to `/upstream/acestep-1.5-xl-turbo/` (llama-swap's alias), and the base settings for `acestep-1.5-xl-base`.
 - Both tracks are peak-normalized to -1 dB, mean level -16.5 dB (turbo) and -19.6 dB (base). Their spectrograms
