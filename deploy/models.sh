@@ -76,7 +76,8 @@ case ${1:-} in
     for file in "${@:2}"; do
       if [[ ${file##*/} == media.json ]]; then
         media=true
-        if [[ -f $DIR/media.json ]]; then
+        # Once: with media.json named twice, the copy to put back is the one from before this run.
+        if [[ -f $DIR/media.json && -z $previous ]]; then
           previous=$(mktemp)
           trap 'rm -f "$previous"' EXIT
           cp "$DIR/media.json" "$previous"
