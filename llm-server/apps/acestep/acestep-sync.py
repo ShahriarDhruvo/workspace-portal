@@ -3,8 +3,9 @@
 Runs with ACE-Step's venv from the root of its checkout (install.sh copies it there), so it imports ACE-Step from the
 source tree, and drives its Python API in-process: both XL DiTs load at start, and the request's `model` picks one:
 acestep-1.5-xl-base for final tracks, acestep-1.5-xl-turbo for quick ones (one llama-swap entry, the second name its
-alias, so both reach this one process). One track is generated at a time. GET /ready answers 200 once both can
-generate (llama-swap's health check); GET /health always answers. acestep.service runs it.
+alias, so both reach this one process). One track is generated at a time; a request whose client hung up while it
+waited gets none. GET /ready answers 200 once both can generate (llama-swap's health check); GET /health always
+answers. acestep.service runs it.
 """
 
 import io
@@ -18,6 +19,7 @@ import time
 import soundfile as sf
 import torch
 import uvicorn
+from anyio import from_thread
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from loguru import logger
@@ -60,6 +62,10 @@ gpu = threading.Lock()
 
 class BadRequest(Exception):
     pass
+
+
+class Gone(Exception):
+    """The client hung up before its track was started."""
 
 
 def error(status: int, message: str, kind: str) -> JSONResponse:
@@ -119,7 +125,7 @@ def encode(wav: torch.Tensor, sample_rate: int, response_format: str) -> bytes:
     return out.getvalue()
 
 
-def render(req: dict) -> tuple[torch.Tensor, int, int]:
+def render(req: dict, gone) -> tuple[torch.Tensor, int, int]:
     """One track as ACE-Step decoded it, not yet normalized: waveform [channels, samples], sample rate and seed."""
     dit = DITS[req["draft"]]
     seed = req["seed"]
@@ -131,6 +137,9 @@ def render(req: dict) -> tuple[torch.Tensor, int, int]:
     )
     config = GenerationConfig(batch_size=1, use_random_seed=seed is None, seeds=None if seed is None else [seed])
     with gpu:
+        # Checked after the wait for the GPU, during which the client may have hung up.
+        if gone():
+            raise Gone()
         result = generate_music(handlers[req["draft"]], None, params, config, save_dir=None)
     if not result.success:
         raise RuntimeError(result.error or result.status_message or "generation failed")
@@ -143,13 +152,13 @@ def render(req: dict) -> tuple[torch.Tensor, int, int]:
     return wav, audio["sample_rate"], audio["params"]["seed"]
 
 
-def generate(req: dict) -> bytes:
+def generate(req: dict, gone) -> bytes:
     """One track, peak-normalized like ACE-Step's own output and encoded."""
     started = time.monotonic()
     # Some prompt and seed pairs give near-silence, which normalizing would turn into a full-scale DC level. Without
     # a chosen seed, a second seed is tried.
     for _ in range(1 if req["seed"] is not None else 2):
-        wav, sample_rate, seed = render(req)
+        wav, sample_rate, seed = render(req, gone)
         peak = wav.abs().max().item()
         if peak >= MIN_PEAK:
             break
@@ -221,7 +230,11 @@ async def music(request: Request) -> Response:
     if state["status"] != "ready":
         return error(503, "the model is still loading", "server_error")
     try:
-        data = await run_in_threadpool(generate, req)
+        # generate runs in a worker thread, and asks the event loop whether the client is still there.
+        data = await run_in_threadpool(generate, req, lambda: from_thread.run(request.is_disconnected))
+    except Gone:
+        logger.info("the client hung up; its track is not made")
+        return Response(status_code=499)  # nobody reads it: the access log shows why no track was sent
     except Exception as exc:
         logger.exception("generation failed")
         return error(500, f"generation failed: {exc}", "server_error")
