@@ -873,6 +873,17 @@ video from creating the job to its end.
   95.4 to 95.9 s. Twelve chat requests, one every 3 s, with an image asked for at 2.0 s: the image was made last, by
   78.3 s, after the last answer at 51.5 s. With agents at work an image could wait without end, so the portal's
   gateway gives each model its turn itself ([architecture](ARCHITECTURE.md#service-api)).
+- **Through the portal's gateway**, the same evening with one API key, 4 requests at once and 3 a user. The same
+  twelve chat requests of 300 tokens with a Turbo image asked for at 2.0 s: the first answer ended at 6.9 s, the
+  image came next, at 33.8 s, and the eleven other answers between 62.7 and 98.4 s. The image no longer waits for
+  the chat requests to stop coming, and they pay for its two swaps instead.
+- **Speech while the LLM's sessions are busy.** Five chat requests of 900 tokens from one user, so three ran and
+  two waited in the gateway's queue, then a Qwen3-TTS request at 3.0 s: it was answered at 9.6 s, its model's
+  start included, while the first chat answer ended at 29.6 s and the last at 63.7 s. The live view showed four
+  sessions, three of the LLM and one marked as beside it, and two requests waiting.
+- **A model on the wrong address** was refused with HTTP 400 after 1 to 3 ms, and llama-swap kept the LLM loaded:
+  Ming-Image on `/v1/images/edits`, an image model on `/v1/chat/completions`, the transcription model on
+  `/v1/audio/speech`, a speech model on `/v1/images/generations`.
 
 ### Fish S2-Pro and ACE-Step
 
