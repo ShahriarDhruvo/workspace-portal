@@ -1,9 +1,22 @@
+"use client";
+
+import { useState } from "react";
 import type { UsageToday as Usage } from "@/lib/usage";
 import { formatCount } from "@/lib/format";
+import { usePoll } from "@/components/common/use-poll";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
-/** Home's secondary card: the user's LLM requests and tokens so far today. */
-export function UsageToday({ usage }: { usage: Usage }) {
+const REFRESH_MS = 30_000;
+
+/**
+ * Home's secondary card: the user's requests to the AI server (text, images and media) and their tokens so far today,
+ * read again every half minute. A failed read keeps the last numbers.
+ */
+export function UsageToday({ initial }: { initial: Usage }) {
+  const [usage, setUsage] = useState(initial);
+  usePoll<Usage>("/api/usage/today", REFRESH_MS, (result) => {
+    if (result.ok) setUsage(result.data);
+  });
   const tiles = [
     { label: "Requests", value: usage.requests },
     { label: "Tokens in", value: usage.promptTokens },
@@ -13,9 +26,11 @@ export function UsageToday({ usage }: { usage: Usage }) {
     <Card>
       <CardHeader>
         <CardTitle>
-          <h2 className="text-16">LLM usage today</h2>
+          <h2 className="text-16">AI usage today</h2>
         </CardTitle>
-        <CardDescription>Your requests to the LLM since midnight, from your workspace and your API keys.</CardDescription>
+        <CardDescription>
+          Your requests to the AI server since midnight, images and media included, from your workspace and your API keys.
+        </CardDescription>
       </CardHeader>
       <CardContent>
         <dl className="grid grid-cols-3 gap-2">

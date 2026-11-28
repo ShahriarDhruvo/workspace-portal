@@ -17,10 +17,10 @@ export interface Polled<T> {
 }
 
 /**
- * An updater's overview, live: GETs `route` every second while its job runs, else every 15 s, again whenever the
- * window gets the focus back, and at once when asked; refresh POSTs there. Requests run one after another, so an older
- * answer never replaces a newer one. Signed out or no longer an admin (401/403) re-renders the page, which redirects;
- * a failed poll keeps the last data with the error.
+ * An updater's overview, live: GETs `route` every second while its job runs, else every 15 s (not while the tab is
+ * hidden), again whenever the tab is shown again or the window gets the focus back, and at once when asked; refresh
+ * POSTs there. Requests run one after another, so an older answer never replaces a newer one. Signed out or no longer
+ * an admin (401/403) re-renders the page, which redirects; a failed poll keeps the last data with the error.
  */
 export function usePolled<T extends { job: Pick<UpdateJob<string>, "finishedAt"> | null }>(initial: Loaded<T>, route: string): Polled<T> {
   const router = useRouter();
@@ -58,14 +58,22 @@ export function usePolled<T extends { job: Pick<UpdateJob<string>, "finishedAt">
 
   const delay = pollDelay(data.data?.job ?? null);
   useEffect(() => {
-    const timer = setTimeout(() => void load(false), delay);
+    const timer = setTimeout(() => {
+      if (!document.hidden) void load(false);
+    }, delay);
     return () => clearTimeout(timer);
   }, [delay, answers, load]);
 
   useEffect(() => {
-    const onFocus = () => void load(false);
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
+    const onShown = () => {
+      if (!document.hidden) void load(false);
+    };
+    window.addEventListener("focus", onShown);
+    document.addEventListener("visibilitychange", onShown);
+    return () => {
+      window.removeEventListener("focus", onShown);
+      document.removeEventListener("visibilitychange", onShown);
+    };
   }, [load]);
 
   const pollNow = useCallback(() => void load(false), [load]);

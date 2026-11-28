@@ -12,6 +12,8 @@ export default function EnergyLoading() {
         <HeadingSkeleton className="w-20" />
         <Skeleton className="h-8 w-44" />
       </div>
+      {/* A touch screen's two lines about what is measured and priced, each wrapped once on a phone. */}
+      <Skeleton className="-mt-4 hidden h-11 w-80 max-w-full pointer-coarse:block max-sm:h-21" />
       <div className="flex flex-col gap-4" aria-busy="true" aria-label="Loading energy">
         <Card className="py-0">
           <CardContent className="flex flex-col gap-4 p-4">

@@ -107,9 +107,10 @@ test("the status badge: updating this program, can't read, not running, update a
   assert.equal(appStatusBadge(overview(), entry()).label, "Update available");
   assert.equal(appStatusBadge(overview(), entry({ version: "277" })).label, "Up to date");
   assert.equal(appStatusBadge(overview(), entry({}, [])).label, "Latest unknown");
+  assert.equal(appStatusBadge(overview(), entry({}, [release("276"), release("99")])).label, "Latest unknown", "the releases were never read: only the installed versions are listed");
   assert.equal(appStatusBadge(overview(), entry({ error: "cannot read /x" })).label, "Can't read");
   assert.equal(appStatusBadge(overview(), entry({ state: "inactive" })).label, "Not running", "llama-swap must run");
-  const onDemand = entry({ id: "fish-speech", name: "Fish Speech", model: "fish-s2-pro", state: "inactive", version: "277" });
+  const onDemand = entry({ id: "fish-speech", name: "Fish Speech", model: "fish-drama-3", state: "inactive", version: "277" });
   assert.equal(appStatusBadge(overview(), onDemand).label, "Up to date", "llama-swap starts it with its model");
   assert.equal(appStatusBadge(overview(), entry({ state: "failed" })).label, "Failed");
 });

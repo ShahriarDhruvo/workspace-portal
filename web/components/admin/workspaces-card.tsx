@@ -80,7 +80,9 @@ export function WorkspacesCard({ workspaces, names, maxRunning, now }: Workspace
             <DataTableHead>Harness</DataTableHead>
             <DataTableHead>Status</DataTableHead>
             <DataTableHead align="right">Memory</DataTableHead>
-            <DataTableHead align="right">LLM requests</DataTableHead>
+            <DataTableHead align="right" title="The user's requests running on the AI server now: text, images and media">
+              AI requests
+            </DataTableHead>
             <DataTableHead align="right">Viewers</DataTableHead>
             <DataTableHead align="right">Up for</DataTableHead>
             <DataTableHead>
@@ -126,7 +128,7 @@ export function WorkspacesCard({ workspaces, names, maxRunning, now }: Workspace
                     {workspace.startedAt === null ? "—" : formatElapsed(now - workspace.startedAt)}
                   </TableCell>
                   <TableCell className="w-0">
-                    <OpenWorkspaceForm userId={workspace.userId} />
+                    <OpenWorkspaceForm userId={workspace.userId} compact />
                   </TableCell>
                 </TableRow>
               );

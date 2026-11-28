@@ -153,8 +153,8 @@ function UserDialogBody({ kind, user, onDone }: { kind: UserDialogKind; user: Di
               </p>
             ) : (
               <p>
-                Anything running in {whose} workspace ends; files are kept. It starts again the next time it&apos;s
-                opened.
+                Anything running in {whose} workspace ends; files are kept. It stays stopped until {name} or an
+                administrator starts it again.
               </p>
             )
           }
@@ -341,7 +341,7 @@ function EraseFilesForm({ user, whose, onDone }: { user: DialogUser; whose: Reac
                   <Field orientation="horizontal" data-disabled={running ? true : undefined}>
                     <FieldContent>
                       <FieldTitle>{AGENT_NAMES[workspace.agent]}</FieldTitle>
-                      <FieldDescription className="text-13">
+                      <FieldDescription className="text-13 leading-5">
                         <span className="flex items-center gap-1.5 group-data-[disabled=true]/field:opacity-50">
                           <Icon className="size-3.5 shrink-0" />
                           {WORKSPACE_KIND_NAMES[workspace.kind]}

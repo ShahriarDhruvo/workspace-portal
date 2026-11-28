@@ -3,13 +3,16 @@
 import { useState } from "react";
 import { CopyButton, SecretValue } from "@/components/common/secret-value";
 import { Section } from "@/components/layout/section";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { CardContent } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { ChevronDownIcon } from "@/components/ui/icons";
+import { ChevronDownIcon, WarningIcon } from "@/components/ui/icons";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
 const KEY = "YOUR_API_KEY";
+/** Stands in for the model's name while the gateway can't say it. */
+const MODEL = "YOUR_MODEL";
 
 /** A first request in each language, written for `baseUrl` and `model`. */
 const EXAMPLES: ReadonlyArray<{ id: string; label: string; code: (baseUrl: string, model: string) => string }> = [
@@ -63,7 +66,7 @@ interface ConnectProps {
 /** What a program needs besides a key: where the API is and which model to ask for, then a first request to copy. */
 export function Connect({ baseUrl, model }: ConnectProps) {
   const [language, setLanguage] = useState("curl");
-  const code = EXAMPLES.find((example) => example.id === language)!.code(baseUrl, model ?? "MODEL");
+  const code = EXAMPLES.find((example) => example.id === language)!.code(baseUrl, model ?? MODEL);
   return (
     <Section
       id="connect"
@@ -75,6 +78,15 @@ export function Connect({ baseUrl, model }: ConnectProps) {
           <Value label="Base URL" value={baseUrl} />
           {model ? <Value label="Model" value={model} /> : null}
         </dl>
+        {model ? null : (
+          <Alert variant="warning" role="status">
+            <WarningIcon />
+            <AlertTitle className="line-clamp-none">The model name can&apos;t be read right now</AlertTitle>
+            <AlertDescription>
+              The code examples say <code className="font-mono">{MODEL}</code> in its place. Reload this page to try again.
+            </AlertDescription>
+          </Alert>
+        )}
         <Collapsible className="flex flex-col gap-3">
           <CollapsibleTrigger asChild>
             <Button type="button" variant="ghost" size="sm" className="group -ml-2.5 self-start text-muted-foreground">

@@ -172,6 +172,28 @@
   }
 }
 
+/* A table's actions column (its heading and cells), kept at the frame's right edge while the other columns scroll
+   sideways under it. Solid, so nothing shows through; a row's hover tint (TableRow's) is laid over it. What scrolls
+   under it fades out at its edge instead of being cut. */
+@utility sticky-actions {
+  position: sticky;
+  right: 0;
+  background-color: var(--card);
+  &::before {
+    content: "";
+    position: absolute;
+    inset-block: 0;
+    right: 100%;
+    width: 1rem;
+    background-image: linear-gradient(to right, transparent, var(--sticky-edge, var(--card)));
+    pointer-events: none;
+  }
+  tbody tr:is(:hover, :has([aria-expanded="true"])) > & {
+    --sticky-edge: color-mix(in oklab, var(--muted) 50%, var(--card));
+    background-image: linear-gradient(color-mix(in oklab, var(--muted) 50%, transparent) 0 0);
+  }
+}
+
 /* Uppercase section labels. */
 @utility label-caps {
   font-size: 12px;

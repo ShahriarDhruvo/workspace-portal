@@ -19,10 +19,12 @@ export const appVersionRefSchema = z.object({ app: appIdSchema, version: appVers
 /** One program on the Updates page: as portal-hostd reports it, with its releases. */
 export type AppEntry = AppsOverview["apps"][number];
 
-/** The release marked latest, else the first listed (the gateway sorts newest first). */
+/**
+ * The release marked latest. null until the program's releases have been read: before that the list holds only the
+ * installed versions, none of them marked.
+ */
 export function latestAppRelease(entry: AppEntry): AppRelease | null {
-  const releases = entry.releases.releases;
-  return releases.find((release) => release.latest) ?? releases[0] ?? null;
+  return entry.releases.releases.find((release) => release.latest) ?? null;
 }
 
 /** The version "Update to …" installs: the latest release, when it is newer than the one in use. */

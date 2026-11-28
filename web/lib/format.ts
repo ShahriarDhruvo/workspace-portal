@@ -124,7 +124,8 @@ export function summarizeWorkspace(info: WorkspaceInfo | null, idleTimeoutMinute
 
 export interface WorkspaceState {
   tone: "info" | "warning" | "danger" | "idle";
-  label: "Stopped" | "Starting" | "Running" | "Stopping" | "Error";
+  /** The last two are the workspace page's own, before the first status answer and after a failed one. */
+  label: "Stopped" | "Starting" | "Running" | "Stopping" | "Error" | "Connecting…" | "Status unknown";
   /** While running: whether the agent is working or idle. */
   activity: "working" | "idle" | null;
   /** Something is under way (starting, stopping, working): the status dot breathes. */

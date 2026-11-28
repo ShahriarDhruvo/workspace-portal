@@ -71,14 +71,15 @@
   --primary: #151517;
   --primary-foreground: #fafafa;
   --secondary: #f3f3f5;
-  --secondary-foreground: #747476;
+  --secondary-foreground: #6b6b6d;      /* darker than --muted-foreground: 4.5:1 on --secondary, where that grey has 4.2 */
   --muted: #f3f3f5;
   /* Qwen's light muted grey (#a3a3a5) is too faint for body descriptions: they take its secondary grey, and
      the faint grey is left to placeholders (--subtle-foreground). */
   --muted-foreground: #747476;
   --accent: #f3f3f5;
   --accent-foreground: #151517;
-  --destructive: #e7000b;
+  /* This, --warning and --info are dark enough for 4.5:1 as 12px text on their own 10-12% tint, also in a card footer. */
+  --destructive: #c80009;
   --border: #e3e4e6;
   --input: #e5e5e5;
   --ring: #a3a3a5;
@@ -87,10 +88,10 @@
   --brand: #0033ff;
   --brand-2: #7755fe;
   --success: #1f7a3a;
-  --warning: #9a6a00;
+  --warning: #855b00;
   --danger: #c0362c;
   --attention: #9a6a00;
-  --info: #335cff;
+  --info: #2f55f0;
   --idle: #808598;
 
   --canvas: #ffffff;

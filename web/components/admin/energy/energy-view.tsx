@@ -54,6 +54,13 @@ export function EnergyView({ initial }: { initial: EnergyMonth }) {
     const { kwh = null, cost = null } = byDay.get(day) ?? {};
     return { day, value: kwh, lines: [["Energy", `${formatKwh(kwh)} kWh`], ...(currency ? [["Cost", formatMoney(cost, currency)] as const] : [])] as const };
   });
+  // The info button's tooltip; a touch screen, where no tooltip opens, has it under the heading instead.
+  const measured = (
+    <>
+      <p>Measured by each server&apos;s own power sensor, not at the wall.</p>
+      {data.location ? <p>{priceSourceText(data.location)}</p> : null}
+    </>
+  );
 
   return (
     <>
@@ -63,14 +70,11 @@ export function EnergyView({ initial }: { initial: EnergyMonth }) {
           <>
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label="What is measured">
+                <Button variant="ghost" size="icon-sm" className="text-muted-foreground pointer-coarse:hidden" aria-label="What is measured">
                   <InfoIcon />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent className="flex max-w-80 flex-col gap-1">
-                <p>Measured by each server&apos;s own power sensor, not at the wall.</p>
-                {data.location ? <p>{priceSourceText(data.location)}</p> : null}
-              </TooltipContent>
+              <TooltipContent className="flex max-w-80 flex-col gap-1">{measured}</TooltipContent>
             </Tooltip>
             <Select value={month ?? current} onValueChange={(next) => choose(next === current ? null : next)}>
               <SelectTrigger aria-label="Month" className="min-w-36">
@@ -87,6 +91,7 @@ export function EnergyView({ initial }: { initial: EnergyMonth }) {
           </>
         }
       />
+      <div className="-mt-4 hidden flex-col gap-1 text-13 text-muted-foreground pointer-coarse:flex">{measured}</div>
       <div aria-busy={pending || undefined} className={cn("flex flex-col gap-4 transition-opacity", pending && "opacity-60")}>
         {error ? (
           <Alert variant="warning">
@@ -167,7 +172,7 @@ export function EnergyView({ initial }: { initial: EnergyMonth }) {
 }
 
 /**
- * What each user's LLM requests used in the month, the most first, then the same per day. The first table ends with
+ * What each user's requests used in the month, the most first, then the same per day. The first table ends with
  * what no request used, so it adds up to the month.
  */
 function UserEnergy({ data, currency }: { data: EnergyMonth; currency: EnergyCurrency | null }) {
@@ -187,6 +192,12 @@ function UserEnergy({ data, currency }: { data: EnergyMonth; currency: EnergyCur
       <DataTableHead align="right">Cost</DataTableHead>
     </>
   );
+  // A long name is cut short (in full in its tooltip) rather than pushing Energy and Cost out of the frame.
+  const name = (text: string) => (
+    <span className="block max-w-48 truncate" title={text}>
+      {text}
+    </span>
+  );
   const cells = (wh: number | null, cost: number | null) => (
     <>
       <TableCell className="text-right tabular-nums">{wh === null ? "—" : formatWh(wh)}</TableCell>
@@ -197,7 +208,7 @@ function UserEnergy({ data, currency }: { data: EnergyMonth; currency: EnergyCur
     return (
       <DataTable>
         <TableBody>
-          <DataTableEmpty colSpan={1}>No requests to the LLM in {formatMonth(data.month)}.</DataTableEmpty>
+          <DataTableEmpty colSpan={1}>No energy was attributed to users in {formatMonth(data.month)}.</DataTableEmpty>
         </TableBody>
       </DataTable>
     );
@@ -214,7 +225,7 @@ function UserEnergy({ data, currency }: { data: EnergyMonth; currency: EnergyCur
         <TableBody>
           {users.map(([id, user]) => (
             <TableRow key={id}>
-              <TableCell className="font-medium">{user.name}</TableCell>
+              <TableCell className="font-medium">{name(user.name)}</TableCell>
               {cells(user.wh, user.cost)}
             </TableRow>
           ))}
@@ -239,7 +250,7 @@ function UserEnergy({ data, currency }: { data: EnergyMonth; currency: EnergyCur
           {rows.map((row) => (
             <TableRow key={`${row.day} ${row.userId}`}>
               <TableCell>{formatDay(row.day)}</TableCell>
-              <TableCell>{row.name}</TableCell>
+              <TableCell>{name(row.name)}</TableCell>
               {cells(row.wh, row.cost)}
             </TableRow>
           ))}

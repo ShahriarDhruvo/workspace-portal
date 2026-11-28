@@ -56,7 +56,7 @@ export default async function HomePage() {
       ) : (
         <>
           <HomeCard initial={initial} initialError={initialError} idleTimeoutMinutes={config.idleTimeoutMinutes} />
-          <UsageToday usage={loadUsageToday(user.id)} />
+          <UsageToday initial={loadUsageToday(user.id)} />
         </>
       )}
     </PageMain>

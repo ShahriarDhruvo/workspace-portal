@@ -3,7 +3,7 @@
 import { useRef } from "react";
 import { removeEngineImage, restartEngineNow, updateEngine } from "@/lib/actions/updates";
 import type { AppUpdateJob, EngineImage, EngineOverview, UpdateDrain } from "@portal/core/wire";
-import { cutOffText, isJobActive, type Loaded } from "@/lib/update-jobs";
+import { cutOffText, drainLimitText, isJobActive, type Loaded } from "@/lib/update-jobs";
 import {
   enginePackageRows,
   engineRemoveBlocker,
@@ -116,7 +116,7 @@ export function EngineCard({ data, appJob, onChanged }: EngineCardProps) {
       title={title}
       subtitle={engine.repository}
       status={status}
-      version={{ label: "Running on the AI server", value: engine.version ?? "unknown" }}
+      version={{ label: "In use on the AI server", value: engine.version ?? "unknown" }}
       actions={
         targetRow && !(job && isJobActive(job)) ? (
           <GuardedButton blockedReason={blocked} onClick={(event) => show({ kind: "install", row: targetRow, update: true }, event.currentTarget)}>
@@ -128,7 +128,7 @@ export function EngineCard({ data, appJob, onChanged }: EngineCardProps) {
         <PackageImages
           name="Gufo"
           rows={rows}
-          currentLabel="Running"
+          currentLabel="In use"
           missingLabel="Download first"
           where="the AI server"
           empty="Unknown until the image registry answers."
@@ -193,7 +193,6 @@ interface EngineDialogsProps {
 /** The confirmation of whichever action was asked for; it stays mounted while it closes. */
 function EngineDialogs({ dialog, overview, open, onOpenChange, onDone, opener }: EngineDialogsProps) {
   const current = overview.engine?.version ?? "the running version";
-  const drain = `Then new LLM requests wait in the portal's queue while the running ones finish (at most ${overview.drainMinutes} minutes; nothing fails), and the engine restarts`;
   const common = { open, onOpenChange, onDone, returnFocusTo: opener };
   const em = (text: string) => <span className="font-mono text-foreground">{text}</span>;
   switch (dialog.kind) {
@@ -217,8 +216,10 @@ function EngineDialogs({ dialog, overview, open, onOpenChange, onDone, opener }:
           ) : null}
           <p>
             {row.image ? "Its image is on the AI server already. " : "Its image downloads first, while the engine keeps serving. "}
-            {drain} with {em(row.version)}.
+            Then new LLM requests wait in the portal&apos;s queue while the running ones finish, and the engine restarts with{" "}
+            {em(row.version)}.
           </p>
+          <p>{drainLimitText(overview.drainMinutes)}</p>
           <p>If it doesn&apos;t start properly, the AI server puts {em(current)} back by itself.</p>
         </ConfirmDialog>
       );

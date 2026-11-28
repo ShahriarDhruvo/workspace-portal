@@ -22,10 +22,14 @@ export function compareEngineVersions(a: string, b: string): number {
   return compareVersions(release(a), release(b))!;
 }
 
-/** The release `latest` points at, else the first X.Y.Z one listed (the gateway sorts newest first), else the first. */
+/**
+ * The release `latest` points at, else the first X.Y.Z one listed (the gateway sorts newest first). null until a
+ * registry check has succeeded: before that the list holds only the versions on the AI server.
+ */
 export function latestEngineRelease(overview: Pick<EngineOverview, "releases">): EngineRelease | null {
-  const releases = overview.releases?.releases ?? [];
-  return releases.find((release) => release.latest) ?? releases.find((release) => isStableVersion(release.version)) ?? releases[0] ?? null;
+  if (!overview.releases?.checkedAt) return null;
+  const { releases } = overview.releases;
+  return releases.find((release) => release.latest) ?? releases.find((release) => isStableVersion(release.version)) ?? null;
 }
 
 /** The version "Update to …" installs: the latest release, when it is newer than what runs. */
@@ -87,10 +91,27 @@ export function engineStatusBadge(overview: EngineOverview | null, unreachable: 
   if (unreachable) return { label: "Can't reach", variant: "destructive", pending: false };
   // Behind llama-swap the engine is stopped on purpose while an image or media model runs, and starts with the next request.
   if (overview.engine?.unloaded) return { label: "Not loaded", variant: "secondary", pending: false };
-  if (overview.engine && !overview.engine.ready) return { label: "Starting", variant: "warning", pending: true };
+  if (overview.engine && !overview.engine.ready) return notReadyBadge(overview.engine.state);
   if (engineUpdateTarget(overview)) return { label: "Update available", variant: "warning", pending: false };
   if (!latestEngineRelease(overview) || !overview.engine?.version) return { label: "Latest unknown", variant: "secondary", pending: false };
   return { label: "Up to date", variant: "success", pending: false };
+}
+
+/** An engine that doesn't answer, by its systemd unit's state (portal-hostd's unit_state). */
+function notReadyBadge(state: string): CardStatus {
+  switch (state) {
+    case "active":
+    case "activating":
+      return { label: "Starting", variant: "warning", pending: true };
+    case "deactivating":
+      return { label: "Stopping", variant: "warning", pending: true };
+    case "failed":
+      return { label: "Failed", variant: "destructive", pending: false };
+    case "inactive":
+      return { label: "Not running", variant: "destructive", pending: false };
+    default:
+      return { label: "Not answering", variant: "destructive", pending: false };
+  }
 }
 
 const JOB_RUNNING = "An engine update is running. Wait for it to finish, or cancel it.";

@@ -32,6 +32,11 @@ export function drainRunning({ inFlight, video }: Pick<UpdateDrain, "inFlight" |
   return video ? (inFlight === 0 ? "A video job" : `${requests} and a video job`) : requests;
 }
 
+/** What the wait for running requests ends with (the gateway's drainQueue), for the dialogs that start an update. */
+export function drainLimitText(minutes: number): string {
+  return `Requests still running after ${minutes} ${minutes === 1 ? "minute" : "minutes"} are cut off: their agents get an error and may retry. A video still being made then is lost.`;
+}
+
 /** The "Restart now" dialog's warning. */
 export function cutOffText(drain: Pick<UpdateDrain, "inFlight" | "video"> | null): string {
   if (drain === null || (drain.inFlight === 0 && !drain.video)) return "Requests still running are cut off: their agents get an error and may retry.";

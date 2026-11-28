@@ -13,7 +13,7 @@ import {
   type AppPackageRow,
 } from "@/lib/app-updates";
 import { formatBytes } from "@/lib/format";
-import { cutOffText, isJobActive, type Loaded } from "@/lib/update-jobs";
+import { cutOffText, drainLimitText, isJobActive, type Loaded } from "@/lib/update-jobs";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { GuardedButton } from "@/components/common/guarded-button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -269,9 +269,10 @@ function AppDialogs({ dialog, entry, drainMinutes, open, onOpenChange, onDone, o
               : files
                 ? `It installs first, while ${name} keeps serving. `
                 : `Its image downloads first, while ${name} keeps serving. `}
-            Then new LLM requests wait in the portal&apos;s queue while the running ones finish (at most {drainMinutes} minutes;
-            nothing fails), and {name} restarts with {em(row.version)}.
+            Then new LLM requests wait in the portal&apos;s queue while the running ones finish, and {name} restarts with{" "}
+            {em(row.version)}.
           </p>
+          <p>{drainLimitText(drainMinutes)}</p>
           <p>
             {status.model
               ? `To check it, llama-swap stops the running models and starts ${name}; then the LLM starts again.`

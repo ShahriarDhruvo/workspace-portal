@@ -172,12 +172,16 @@ function phaseOf(state: State, targetId: number): Phase {
 
 const stateOf = (status: WorkspaceStatus) => workspaceState({ status, ready: false, busy: false });
 
+/** A status request failed: that says nothing about the workspace, whose agent may well keep working. */
+const STATUS_UNKNOWN: WorkspaceState = { tone: "warning", label: "Status unknown", activity: null, pulse: false };
+
 /** The bar's status pill for each phase. */
 function pillOf(phase: Phase, state: State): WorkspaceState {
   switch (phase.kind) {
     case "ready":
-      return state.pollError || !state.info ? stateOf("error") : workspaceState(state.info);
+      return state.pollError || !state.info ? STATUS_UNKNOWN : workspaceState(state.info);
     case "connecting":
+      return { tone: "idle", label: "Connecting…", activity: null, pulse: true };
     case "starting":
       return stateOf("starting");
     case "stopping":
@@ -187,7 +191,7 @@ function pillOf(phase: Phase, state: State): WorkspaceState {
     case "idle":
       return stateOf(phase.idle.kind === "fresh" || phase.idle.kind === "stopped" ? "stopped" : "error");
     case "unreachable":
-      return stateOf("error");
+      return STATUS_UNKNOWN;
   }
 }
 
@@ -335,6 +339,8 @@ export function WorkspaceShell({ viewer, target, frames, idleTimeoutMinutes, ban
       ) : null;
       break;
     case "connecting":
+      content = <BootScreen hint={`Connecting to ${whose} workspace…`} />;
+      break;
     case "starting":
       content = <BootScreen hint={`Starting ${whose} workspace…`} />;
       break;
@@ -413,11 +419,11 @@ export function WorkspaceShell({ viewer, target, frames, idleTimeoutMinutes, ban
         </Link>
         <Separator orientation="vertical" className="data-vertical:h-4 data-vertical:self-center" />
         {/*
-          On a phone the badges keep only their icons and the state's label is cut short, rather than the buttons
-          being pushed off the bar.
+          On a phone the badges keep only their icons and a running workspace only its activity, rather than the
+          buttons being pushed off the bar.
         */}
         <div className="flex min-w-0 items-center gap-3 overflow-hidden max-sm:gap-2">
-          <StatusPill state={pill} className="min-w-0 shrink" />
+          <StatusPill state={pill} compact className="min-w-0 shrink" />
           {shownKind ? <KindBadge kind={shownKind} compact /> : null}
           {adminConnected ? (
             <Badge role="status" title={ADMIN_CONNECTED} variant="warning">

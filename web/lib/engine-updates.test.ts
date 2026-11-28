@@ -119,9 +119,15 @@ test("the status badge: not set up, can't reach, updating, update available, up 
   assert.equal(engineStatusBadge(overview(), false).label, "Update available");
   assert.equal(engineStatusBadge(overview({}, "0.34.0"), false).label, "Up to date");
   assert.equal(engineStatusBadge(overview({ releases: null }), false).label, "Latest unknown");
+  const neverChecked = overview({ releases: { repository: "r", releases: [release("0.31.0")], checkedAt: null, error: "registry down" } });
+  assert.equal(engineStatusBadge(neverChecked, false).label, "Latest unknown", "only the versions on the AI server are listed");
+  assert.equal(engineUpdateTarget(neverChecked), null);
   const stopped = overview({ engine: { ...overview().engine!, state: "inactive", ready: false, unloaded: true } });
   assert.deepEqual(engineStatusBadge(stopped, false), { label: "Not loaded", variant: "secondary", pending: false }, "llama-swap stopped it for the image models");
-  assert.equal(engineStatusBadge(overview({ engine: { ...overview().engine!, ready: false } }), false).label, "Starting");
+  const notReady = (state: string) => engineStatusBadge(overview({ engine: { ...overview().engine!, state, ready: false } }), false);
+  assert.deepEqual(notReady("active"), { label: "Starting", variant: "warning", pending: true });
+  assert.deepEqual(notReady("failed"), { label: "Failed", variant: "destructive", pending: false });
+  assert.deepEqual(notReady("inactive"), { label: "Not running", variant: "destructive", pending: false });
 });
 
 test("one job at a time; the running image can't be removed", () => {

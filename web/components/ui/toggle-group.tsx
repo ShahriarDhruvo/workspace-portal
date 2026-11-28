@@ -8,7 +8,7 @@ import { ToggleGroup as ToggleGroupPrimitive } from "radix-ui";
 // shadcn/ui ToggleGroup, radix-nova style, with the variants of its Toggle; horizontal, in one size.
 
 const toggleVariants = cva(
-  "group/toggle inline-flex h-8 min-w-8 items-center justify-center gap-1 rounded-lg px-2.5 text-sm font-medium whitespace-nowrap transition-all outline-none hover:bg-muted hover:text-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 aria-pressed:bg-muted has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2 data-[state=on]:bg-muted dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+  "group/toggle relative hit-area inline-flex h-8 min-w-8 items-center justify-center gap-1 rounded-lg px-2.5 text-sm font-medium whitespace-nowrap transition-all outline-none hover:bg-muted hover:text-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 aria-pressed:bg-muted has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2 data-[state=on]:bg-muted dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
   {
     variants: {
       variant: {

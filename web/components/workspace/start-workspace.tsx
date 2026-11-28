@@ -31,7 +31,10 @@ const KIND_LINES: Readonly<Record<WorkspaceKind, string>> = {
   online: "Public internet access, for installing packages and using online services.",
 };
 
-/** What each kind means for the files in it and for the agent's work: the tooltip of its card's info button. */
+/**
+ * What each kind means for the files in it and for the agent's work: the tooltip of its card's info button, and on a
+ * touch screen the card's own text.
+ */
 const KIND_DETAILS: Readonly<Record<WorkspaceKind, readonly string[]>> = {
   private: [
     "Starts without internet access: only the portal's web search and page reader reach the internet for it.",
@@ -56,8 +59,9 @@ interface KindPickerProps {
 
 /**
  * The two kinds as radio cards, each with an info button in its bottom right corner, under the radio: its tooltip
- * shows on hover and focus, so the button is left out where the pointer cannot hover (a touch screen). With Online
- * unavailable its card is disabled and its line says why; its info button still answers.
+ * shows on hover and focus, so where the pointer cannot hover (a touch screen) the button is left out and the card
+ * says the tooltip's text under its line. With Online unavailable its card is disabled and its line says why; its
+ * info button still answers.
  */
 export function KindPicker({ value, onValueChange, onlineBlocked, idPrefix, className }: KindPickerProps) {
   return (
@@ -83,7 +87,14 @@ export function KindPicker({ value, onValueChange, onlineBlocked, idPrefix, clas
                     <Icon className="shrink-0" />
                     {WORKSPACE_KIND_NAMES[kind]}
                   </FieldTitle>
-                  <FieldDescription className="text-13">{blocked ?? KIND_LINES[kind]}</FieldDescription>
+                  <FieldDescription className="text-13 leading-5">
+                    {blocked ?? KIND_LINES[kind]}
+                    {KIND_DETAILS[kind].map((line) => (
+                      <span key={line} className="mt-1 hidden pointer-coarse:block">
+                        {line}
+                      </span>
+                    ))}
+                  </FieldDescription>
                 </FieldContent>
                 <RadioGroupItem value={kind} id={`${idPrefix}-${kind}`} disabled={blocked !== null} />
               </Field>

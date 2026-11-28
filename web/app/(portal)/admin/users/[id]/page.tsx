@@ -24,6 +24,7 @@ import { OpenWorkspaceForm } from "@/components/admin/open-workspace-form";
 import { ProfileForm } from "@/components/admin/profile-form";
 import { UserDialogButton } from "@/components/admin/user-dialogs";
 import { UserHarness } from "@/components/admin/user-harness";
+import { WorkspaceRefresh } from "@/components/admin/workspace-refresh";
 import { UserAvatar } from "@/components/brand";
 import { FormError } from "@/components/forms/form-error";
 import { PageMain } from "@/components/layout/page-main";
@@ -70,6 +71,7 @@ export default async function UserPage({ params }: PageProps<"/admin/users/[id]"
     agentsError = toApiError(error).message;
   }
   const running = workspace?.status === "running" || workspace?.status === "starting";
+  const pill = workspaceError ? null : workspaceState(workspace ?? { status: "stopped", ready: false, busy: false });
   // The harness the workspace starts with: the user's choice while enabled, else the install's default.
   const chosen = enabled ? startingAgent(user.agent, enabled) : null;
   // The harness the workspace runs; stopped, the one it starts with next.
@@ -89,6 +91,7 @@ export default async function UserPage({ params }: PageProps<"/admin/users/[id]"
 
   return (
     <PageMain width="md">
+      <WorkspaceRefresh userId={user.id} shown={pill} />
       <div className="flex flex-col gap-3">
         <BackLink href="/admin/users">Users</BackLink>
         <div className="flex flex-wrap items-center justify-between gap-4">
@@ -104,15 +107,12 @@ export default async function UserPage({ params }: PageProps<"/admin/users/[id]"
                 {user.role === "admin" ? <Badge>Admin</Badge> : <Badge variant="outline">User</Badge>}
                 {user.active ? <Badge variant="success">Active</Badge> : <Badge variant="secondary">Deactivated</Badge>}
                 {user.mustChangePassword ? <Badge variant="warning">Temporary password</Badge> : null}
-                {workspaceError ? (
-                  <Badge variant="secondary" title={workspaceError}>
+                {pill ? (
+                  <StatusPill state={pill} title={facts || undefined} />
+                ) : (
+                  <Badge variant="secondary" title={workspaceError ?? undefined}>
                     Workspace status unknown
                   </Badge>
-                ) : (
-                  <StatusPill
-                    state={workspaceState(workspace ?? { status: "stopped", ready: false, busy: false })}
-                    title={facts || undefined}
-                  />
                 )}
                 {workspace && hasContainer(workspace.status) ? <KindBadge kind={workspace.kind} /> : null}
                 {harness ? (

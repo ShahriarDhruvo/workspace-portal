@@ -9,7 +9,10 @@ export interface UsageToday {
   completionTokens: number;
 }
 
-/** The user's LLM requests and tokens so far today, from the gateway's llm_usage rows (zeros before the first). */
+/**
+ * The user's requests to the AI server and their tokens so far today, from the gateway's llm_usage rows (zeros before
+ * the first). The gateway counts every finished generation there: text, images and media.
+ */
 export function loadUsageToday(userId: number): UsageToday {
   const row = getDb()
     .select({ requests: llmUsage.requests, promptTokens: llmUsage.promptTokens, completionTokens: llmUsage.completionTokens })

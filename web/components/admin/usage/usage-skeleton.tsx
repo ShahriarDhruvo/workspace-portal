@@ -43,14 +43,20 @@ export function LiveSkeleton({ rows = SESSION_PAGE_SIZE }: { rows?: number }) {
             <Skeleton className="my-0.5 h-5 w-40" />
             <Skeleton className="my-0.5 h-4 w-36" />
           </div>
-          <div className="flex">
-            {[0, 1].map((key) => (
+          {/* Read, Write and the image and media models' tile, which has a line more and its own row in a phone's card. */}
+          <div className="flex flex-wrap">
+            {[0, 1, 2].map((key) => (
               <div
                 key={key}
-                className="flex flex-1 flex-col gap-1 border-t px-4 py-3 even:border-l @3xl/llm:min-w-40 @3xl/llm:border-t-0 @3xl/llm:border-l @3xl/llm:px-6"
+                className={cn(
+                  "flex flex-1 flex-col gap-1 border-t px-4 py-3 @3xl/llm:min-w-40 @3xl/llm:border-t-0 @3xl/llm:border-l @3xl/llm:px-6",
+                  key === 1 && "border-l",
+                  key === 2 && "basis-full @md/llm:basis-auto @md/llm:border-l",
+                )}
               >
                 <Skeleton className="my-0.5 h-3 w-12" />
                 <Skeleton className="my-px h-6 w-20" />
+                {key === 2 ? <Skeleton className="my-0.5 h-3 w-24" /> : null}
               </div>
             ))}
           </div>

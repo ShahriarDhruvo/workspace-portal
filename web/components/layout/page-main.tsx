@@ -12,13 +12,14 @@ export type PageWidth = keyof typeof WIDTHS;
 
 /**
  * The body of every page under the top bar, and of its loading skeleton (loading.tsx), so both sit in the same
- * place: centred across, and centred down while it is shorter than the screen (a longer page starts at the top
- * and scrolls). Its children are a column with a 24px gap.
+ * place: centred across, starting at the top. Only a narrow page (sm) is also centred down while it is shorter than
+ * the screen: the others' skeletons are shorter than their pages, which would jump up when the data arrives. Its
+ * children are a column with a 24px gap.
  */
 export function PageMain({ width, className, children }: { width: PageWidth; className?: string; children: ReactNode }) {
   return (
     <main className={cn("flex flex-1 flex-col px-5 py-8 max-sm:px-4 max-sm:py-6", width === "wide" && "3xl:px-8")}>
-      <div className={cn("mx-auto my-auto flex w-full min-w-0 flex-col gap-6", WIDTHS[width], className)}>{children}</div>
+      <div className={cn("mx-auto flex w-full min-w-0 flex-col gap-6", width === "sm" && "my-auto", WIDTHS[width], className)}>{children}</div>
     </main>
   );
 }

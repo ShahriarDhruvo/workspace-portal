@@ -51,13 +51,21 @@ export function UsersDashboard({ users, initialOverview, currentAdminId, enabled
   return (
     <>
       {overview.error ? <ServiceIssue message={overview.error.message}>Workspace status may be out of date.</ServiceIssue> : null}
-      <DataTable footer={<DataTablePagination {...pagination} label="Users pages" />} tableProps={{ "aria-label": "Users" }}>
+      <DataTable
+        footer={<DataTablePagination {...pagination} label="Users pages" />}
+        tableProps={{
+          "aria-label": "Users",
+          // A phone keeps the name and the actions, a wider narrow screen also role and account: the rest is on the user's page.
+          className:
+            "max-md:[&_:is(th,td):is(:nth-child(2),:nth-child(5),:nth-child(6))]:hidden max-sm:[&_:is(th,td):is(:nth-child(3),:nth-child(4))]:hidden",
+        }}
+      >
         <TableHeader>
-          <TableRow>
+          <TableRow className="hover:bg-transparent">
             {["Name", "Username", "Role", "Account", "Harness", "Last sign-in"].map((heading) => (
               <DataTableHead key={heading}>{heading}</DataTableHead>
             ))}
-            <DataTableHead>
+            <DataTableHead className="sticky-actions">
               <span className="sr-only">Actions</span>
             </DataTableHead>
           </TableRow>
@@ -110,7 +118,7 @@ function UserRow({ user, isSelf, workspace, nextAgent }: UserRowProps) {
           className="hit-area relative flex min-w-0 items-center gap-2 rounded-sm font-medium text-foreground"
         >
           <UserAvatar initials={user.initials} />
-          <span className="max-w-56 truncate" title={user.name}>
+          <span className="max-w-56 truncate max-sm:max-w-36" title={user.name}>
             {user.name}
           </span>
           {isSelf ? <Badge variant="outline">You</Badge> : null}
@@ -137,9 +145,9 @@ function UserRow({ user, isSelf, workspace, nextAgent }: UserRowProps) {
       <TableCell className="text-muted-foreground">
         {user.lastLoginAt ? <LocalTime at={user.lastLoginAt} relative /> : "Never"}
       </TableCell>
-      <TableCell className="w-0">
+      <TableCell className="sticky-actions w-0">
         <div className="flex items-center justify-end gap-1 pointer-coarse:gap-2">
-          <OpenWorkspaceForm userId={user.id} />
+          <OpenWorkspaceForm userId={user.id} compact />
           <UserActions user={{ ...user, busy: workspace?.busy ?? false }} isSelf={isSelf} running={running} active={user.active} />
         </div>
       </TableCell>

@@ -30,9 +30,9 @@ interface SessionsTableProps {
 }
 
 /**
- * The Sessions card's table: each run of a user's workspace and what its LLM requests added up to, the running
- * ones first. The page is read again whenever the live frame says the sessions changed (a quarter second's wait
- * folds a burst into one read) and on paging.
+ * The Sessions card's table: each run of a user's workspace and what its requests to the AI server added up to, the
+ * running ones first. The page is read again whenever the live frame says the sessions changed (a quarter second's
+ * wait folds a burst into one read) and on paging.
  */
 export function SessionsTable({ initial, version, llm, now }: SessionsTableProps) {
   const router = useRouter();
@@ -81,8 +81,8 @@ export function SessionsTable({ initial, version, llm, now }: SessionsTableProps
         <TableHeader>
           <TableRow>
             <DataTableHead>User</DataTableHead>
-            <DataTableHead title="When it started, or what the LLM is doing for it now; then how long it ran">Started</DataTableHead>
-            <DataTableHead align="right" title="Requests to the LLM">
+            <DataTableHead title="When it started, or what the AI server is doing for it now; then how long it ran">Started</DataTableHead>
+            <DataTableHead align="right" title="Requests to the AI server: text, images and media">
               Reqs
             </DataTableHead>
             <DataTableHead align="right" title="Prompt tokens read per second of the engine's time">
@@ -98,7 +98,7 @@ export function SessionsTable({ initial, version, llm, now }: SessionsTableProps
               Out
             </DataTableHead>
             <DataTableHead align="right" title="Time its requests took on the AI server">
-              LLM time
+              AI time
             </DataTableHead>
             <DataTableHead align="right" title="Its share of the AI server's measured energy while its requests ran">
               Energy

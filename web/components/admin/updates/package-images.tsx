@@ -49,7 +49,7 @@ interface PackageImagesProps {
   /** The column that says what is on the server: "Image" by default, "Installed" for files. */
   column?: string;
   rows: PackageImageRow[];
-  /** The current row's badge: "Current" (an agent's) or "Running" (the engine's). */
+  /** The current row's badge: "Current" (an agent's) or "In use" (the AI server's). */
   currentLabel: string;
   /** A row without an image: "Build first", "Download first" or "Install first". */
   missingLabel: string;
@@ -81,18 +81,24 @@ export function PackageImages({
 }: PackageImagesProps) {
   const { rows: page, pagination } = usePagination(rows);
   const notes = useDialog<ReleaseNotesTarget | null>(null);
-  const columns = workspaces ? 7 : 6;
+  const columns = workspaces ? 5 : 4;
+  // A kind of button no row on the page has takes no room.
+  const slots = { action: page.some((row) => row.action), remove: page.some((row) => row.remove) };
 
   return (
     <VersionSection title={title} summary={packageSummary(rows, where)} triggerRef={triggerRef}>
-      <DataTable footer={<DataTablePagination {...pagination} label={`${name} images pages`} />}>
+      <DataTable
+        footer={<DataTablePagination {...pagination} label={`${name} images pages`} />}
+        // A phone keeps the version and the buttons, whose labels say what is on the server.
+        tableProps={{ className: "max-sm:[&_:is(th,td):not(:first-child,:last-child)]:hidden" }}
+      >
         <TableHeader>
           <TableRow className="hover:bg-transparent">
             <DataTableHead>Version</DataTableHead>
             <DataTableHead>Released</DataTableHead>
             <DataTableHead>{column}</DataTableHead>
             {workspaces ? <DataTableHead align="right">Workspaces</DataTableHead> : null}
-            <DataTableHead colSpan={3}>
+            <DataTableHead className="sticky-actions">
               <span className="sr-only">Actions</span>
             </DataTableHead>
           </TableRow>
@@ -104,7 +110,7 @@ export function PackageImages({
             page.map((row) => (
               <TableRow key={row.version} className="h-12">
                 <TableCell>
-                  <span className="flex items-center gap-2">
+                  <span className="flex items-center gap-2 max-sm:flex-wrap">
                     <span className="font-mono text-13">{row.version}</span>
                     {row.current ? <Badge>{currentLabel}</Badge> : null}
                     {row.latest ? <Badge variant="outline">latest</Badge> : null}
@@ -118,22 +124,25 @@ export function PackageImages({
                 {workspaces ? (
                   <TableCell className="text-right text-muted-foreground tabular-nums">{row.image ? (row.inUse ?? 0) : "—"}</TableCell>
                 ) : null}
-                <TableCell className="w-0 pr-0">
-                  {row.notes ? (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={(event) => {
-                        if (row.notes) notes.show({ name, version: row.version, notes: row.notes }, event.currentTarget);
-                      }}
-                    >
-                      Release notes
-                    </Button>
-                  ) : null}
+                <TableCell className="sticky-actions w-0">
+                  {/* One cell, which stays in view: its buttons are in line down the table, and stacked on a phone. */}
+                  <div className="flex items-center justify-end gap-2 max-sm:w-40 max-sm:flex-wrap max-sm:gap-y-3">
+                    {row.notes ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={(event) => {
+                          if (row.notes) notes.show({ name, version: row.version, notes: row.notes }, event.currentTarget);
+                        }}
+                      >
+                        Release notes
+                      </Button>
+                    ) : null}
+                    {slots.action ? <div className={SLOT}>{row.action ? <RowButton action={row.action} /> : null}</div> : null}
+                    {slots.remove ? <div className={SLOT}>{row.remove ? <RowButton action={row.remove} /> : null}</div> : null}
+                  </div>
                 </TableCell>
-                <TableCell className="w-0 pr-0">{row.action ? <RowButton action={row.action} /> : null}</TableCell>
-                <TableCell className="w-0">{row.remove ? <RowButton action={row.remove} /> : null}</TableCell>
               </TableRow>
             ))
           )}
@@ -143,6 +152,9 @@ export function PackageImages({
     </VersionSection>
   );
 }
+
+/** A row button's place: wide enough for the longest label ("Download…"), and kept empty by a row without that button. */
+const SLOT = "w-24 max-sm:w-auto max-sm:empty:hidden";
 
 function RowButton({ action }: { action: RowAction }) {
   return (
