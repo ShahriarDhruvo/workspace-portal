@@ -13,8 +13,6 @@ interface ForwardOptions {
   bodyLimit?: number;
   /** The body to send, already read from the request (whose own body is then not read again); its length is sent. */
   body?: Buffer;
-  /** Sees every chunk of the request body on its way upstream. It must not throw or keep the chunk from flowing. */
-  observeBody?: (chunk: Buffer) => void;
   responseHeaders: (upstream: IncomingMessage) => HeaderMap;
   /** A pass-through stream the response body flows through (a usage tap). */
   tap?: (upstream: IncomingMessage) => Transform | null;
@@ -58,7 +56,12 @@ export function forward(req: IncomingMessage, res: ServerResponse, options: Forw
 
     upstream.once("response", (incoming) => {
       status = incoming.statusCode ?? 502;
-      res.writeHead(status, options.responseHeaders(incoming));
+      try {
+        res.writeHead(status, options.responseHeaders(incoming));
+      } catch (error) {
+        // Node will not send on a status below 100, and nothing catches what this listener throws.
+        return fail(error as Error);
+      }
       res.flushHeaders();
       const done = (error: Error | null): void => settle(error ? "failed" : "completed");
       const tap = options.tap?.(incoming) ?? null;
@@ -74,8 +77,6 @@ export function forward(req: IncomingMessage, res: ServerResponse, options: Forw
     }
     const body: Readable = options.bodyLimit === undefined ? req : req.pipe(byteLimit(options.bodyLimit));
     if (body !== req) body.on("error", fail);
-    // Attached in the same tick as the pipe, so both see every chunk.
-    if (options.observeBody) body.on("data", options.observeBody);
     body.pipe(upstream);
   });
 }

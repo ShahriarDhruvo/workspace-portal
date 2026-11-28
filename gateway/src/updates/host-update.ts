@@ -115,8 +115,10 @@ export async function followHostJob<J extends HostJob>({ job, started, current, 
     );
     if (job.finishedAt !== null) throw new Cancelled();
     unreachable = seen === null;
-    const hostJob = seen?.value;
-    if (!hostJob || hostJob.id !== started.id) continue;
+    if (seen === null) continue;
+    const hostJob = seen.value;
+    // hostd keeps its job in memory only: one it no longer reports will never end.
+    if (hostJob?.id !== started.id) throw new Error(`portal-hostd restarted and lost its ${started.kind}, so how it ended is not known.`);
     live(hostJob);
     if (hostJob.step) job.step = hostJob.step;
     if (hostJob.phase !== "running") {

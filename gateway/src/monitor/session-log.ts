@@ -1,6 +1,6 @@
 // Each run of a user's workspace, from Start to its stop (workspace_sessions), and what its LLM requests added up to,
 // for Admin > Usage's sessions table. The workspace manager reports every state it saves (sync): a session opens when
-// the workspace starts and closes once it has stopped; a start that fails before the workspace ran leaves none. A
+// the workspace starts and closes once it has stopped; a start that ends before the workspace ran leaves none. A
 // request that reaches the AI server belongs to its user's session open at that moment, which counts its tokens and
 // the engine's timings when it ends; llm-energy.ts adds each request's share of the AI server's energy as it is
 // measured. `version` changes with every write, so the live view tells the page to read the table again.
@@ -91,9 +91,8 @@ export class SessionLog {
     }
     if (!open) return false;
     const where = eq(workspaceSessions.id, open.id);
-    const failedStart =
-      state.status === "error" && !open.ran && this.#db.delete(workspaceSessions).where(and(where, eq(workspaceSessions.requests, 0))).run().changes > 0;
-    if (!failedStart) {
+    const neverRan = !open.ran && this.#db.delete(workspaceSessions).where(and(where, eq(workspaceSessions.requests, 0))).run().changes > 0;
+    if (!neverRan) {
       this.#db
         .update(workspaceSessions)
         .set({ endedAt: Math.max(open.startedAt, state.stoppedAt ?? this.#now()) })

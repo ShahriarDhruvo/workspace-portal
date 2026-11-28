@@ -53,17 +53,17 @@ export const AGENT_TIMEOUT_MS = 3_000;
 
 /**
  * JSON from a workspace's agent over HTTP: the body of a 200, or null on any failure (refused, not JSON, longer than
- * `maxBytes`, no answer within AGENT_TIMEOUT_MS). `body` is what a POST sends.
+ * `maxBytes`, not all there within AGENT_TIMEOUT_MS). `body` is what a POST sends.
  */
 export function agentJson(options: http.RequestOptions, maxBytes: number, body?: string): Promise<unknown> {
   return new Promise((resolve) => {
-    const request = http.request({ ...options, agent: false, timeout: AGENT_TIMEOUT_MS }, (response) => {
+    // One deadline for the whole answer: a socket timeout starts again with every byte an agent drips.
+    const request = http.request({ ...options, agent: false, signal: AbortSignal.timeout(AGENT_TIMEOUT_MS) }, (response) => {
       readBounded(response, maxBytes).then(
         (bytes) => resolve(response.statusCode === 200 && bytes !== null ? parseJson(bytes.toString("utf8")) : null),
         () => resolve(null),
       );
     });
-    request.on("timeout", () => request.destroy());
     request.on("error", () => resolve(null));
     request.end(body);
   });

@@ -60,7 +60,7 @@ test("every path, method, header and body reaches the AI server as it was sent, 
       ["GET", "", "/"],
       ["POST", "/v1/responses", "/v1/responses"],
       ["POST", "/tokenize", "/tokenize"],
-      ["DELETE", "/v1/videos/video%201", "/v1/videos/video%201"],
+      ["DELETE", "/v1/videos/video_1", "/v1/videos/video_1"],
     ] as const) {
       const reply = await api(g, path, { method, headers: { "content-type": "application/json", "x-trace": "abc", cookie: "portal_session=x" }, body: method === "POST" ? body : undefined });
       assert.equal(reply.status, 200, `${method} ${path}`);
@@ -68,7 +68,8 @@ test("every path, method, header and body reaches the AI server as it was sent, 
       assert.deepEqual([seen.method, seen.url], [method, upstream]);
       assert.equal(seen.headers.authorization, "Bearer test-llm-key", "the user's key stays in the portal");
       assert.equal(seen.headers["x-trace"], "abc");
-      if (method === "POST") assert.equal(seen.headers["content-length"], String(Buffer.byteLength(body)), "not chunked: the engine reads no chunked bodies");
+      if (method === "POST") assert.deepEqual([seen.body, seen.headers["content-length"]], [body, String(Buffer.byteLength(body))], "whole and not chunked: the engine reads no chunked bodies");
+      else assert.equal(seen.headers["content-length"], undefined, "no body, as it came");
     }
 
     // Anthropic's clients send the key as x-api-key.
@@ -106,6 +107,10 @@ test("llama-swap's routes that run the AI server are left out", async () => {
       const reply = await api(g, path, { method });
       assert.equal(reply.status, 404, `${method} ${path}`);
       assert.match(json<{ error: { message: string } }>(reply).error.message, /runs the AI server/);
+    }
+    // llama-swap decodes a path and folds its slashes before it routes it: no other spelling of a route gets there.
+    for (const path of ["/%75nload", "//unload", "/log%73", "/%75pstream/qwen3.8-flash-next/slots", "/v1\\models", "/v1/audio/%73peech", "/v1/videos/video%201"]) {
+      assert.equal((await api(g, path)).status, 400, path);
     }
     assert.equal(g.llm.requests.length, sent, "none reached the AI server");
     for (const path of ["/v1/images/generations", "/apis", "/v1/metrics"]) {

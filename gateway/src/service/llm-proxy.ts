@@ -9,7 +9,7 @@ import type { Config } from "../config.ts";
 import { forward, type ForwardResult } from "../lib/forward.ts";
 import { sendJson } from "../lib/http-util.ts";
 import type { Logger } from "../lib/log.ts";
-import { IMAGE_PATH, bodyModelReader, imageAskReader } from "../monitor/image-requests.ts";
+import { IMAGE_PATH, imageAsk, mediaModelNamed } from "../monitor/image-requests.ts";
 import type { LlmRequests } from "../monitor/llm-requests.ts";
 import { recordUsage, usageParserFor, usageTap, type UsageParser } from "../monitor/usage.ts";
 import { endToEndHeaders, llmRequestHeaders } from "../proxy/headers.ts";
@@ -49,9 +49,12 @@ export function sendLlmError(res: ServerResponse, status: number, type: string, 
   sendJson(res, status, { error: { message, type } }, headers);
 }
 
-/** No dot segments or encoded separators, so the AI server only ever sees the path that was checked. */
+/**
+ * No dot segments, escapes, doubled slashes or backslashes: the AI server decodes a path and folds its slashes before
+ * it routes it, so it must only ever see the path that was checked. None of its routes needs them.
+ */
 export function isPlainPath(pathname: string): boolean {
-  return !/%2e|%2f|%5c|\\/i.test(pathname) && new URL(pathname, "http://localhost").pathname === pathname;
+  return !/%|\/\/|\\/.test(pathname) && new URL(pathname, "http://localhost").pathname === pathname;
 }
 
 export async function proxyLlm(deps: LlmProxyDeps, req: IncomingMessage, res: ServerResponse, { caller, pathname, search, observeBody }: LlmCall): Promise<void> {
@@ -63,17 +66,19 @@ export async function proxyLlm(deps: LlmProxyDeps, req: IncomingMessage, res: Se
   if (video !== null && video.op !== "create" && (caller === null || !deps.videoJobs.owns(caller.userId, video.id))) {
     return sendLlmError(res, 404, "not_found", "No such video job.");
   }
-  // Music and a video's create go to their model's own routes: its id is read from the body before anything waits.
   let model: string | null = video !== null && video.op !== "create" ? deps.videoJobs.modelOf(video.id) : null;
-  let body: Buffer | undefined;
-  if (media?.model === "body") {
-    try {
-      ({ model, body } = bodyModel(registry, media.kind, req.headers["content-type"], await readBody(req, MEDIA_BODY_BYTES)));
-    } catch (error) {
-      if (error instanceof MediaRequestError) return sendLlmError(res, error.status, error.type, error.message);
-      if (req.socket.destroyed) return;
-      return sendLlmError(res, 400, "invalid_request_error", "The request body could not be read.");
-    }
+  // The body is read before anything waits: Node stops reading a socket whose body nobody takes, and then never
+  // learns that a client waiting in the queue hung up.
+  let body: Buffer;
+  try {
+    body = await readBody(req, MEDIA_BODY_BYTES, observeBody);
+    // Music and a video's create go to their model's own routes: its id is read from the body.
+    if (media?.model === "body") ({ model, body } = bodyModel(registry, media.kind, req.headers["content-type"], body));
+  } catch (error) {
+    // A body over the limit is not read to its end: the answer closes the connection.
+    if (error instanceof MediaRequestError) return sendLlmError(res, error.status, error.type, error.message, error.status === 413 ? { connection: "close" } : undefined);
+    if (req.socket.destroyed) return;
+    return sendLlmError(res, 400, "invalid_request_error", "The request body could not be read.");
   }
   const upstreamPath = model !== null && media?.model !== "root" ? `${modelPrefix(mediaModelPath, model)}${pathname}` : pathname;
   // Only a generation waits for a slot: listing the models or counting a prompt's tokens never queues behind one.
@@ -81,12 +86,11 @@ export async function proxyLlm(deps: LlmProxyDeps, req: IncomingMessage, res: Se
   const image = generating !== null && IMAGE_PATH.test(pathname);
   const progress = generating ? deps.requests.begin(generating.userId, generating.keyId, image, media && { kind: media.kind, model }) : null;
   const contentType = req.headers["content-type"];
-  const readModel =
-    image && progress
-      ? imageAskReader(contentType, deps.config.llm.imageModels, progress.imageAsk)
-      : media?.model === "root" && progress
-        ? bodyModelReader(contentType, mediaModelIds(registry, media.kind), progress.mediaModel)
-        : null;
+  if (progress && image) progress.imageAsk(imageAsk(contentType, deps.config.llm.imageModels, body));
+  else if (progress && media?.model === "root") {
+    const named = mediaModelNamed(contentType, mediaModelIds(registry, media.kind), body);
+    if (named !== null) progress.mediaModel(named);
+  }
 
   let release: ReleaseSlot = () => undefined;
   // A video job's create has the AI server to itself, and holds the queue from its grant until the job ends.
@@ -123,19 +127,16 @@ export async function proxyLlm(deps: LlmProxyDeps, req: IncomingMessage, res: Se
   const answer: Buffer[] = [];
   const started = Date.now();
   const tapped: { parser: UsageParser | null } = { parser: null };
+  const headers = llmRequestHeaders(req.headers, deps.config.llm.apiKey);
+  // A body that came chunked, or was written anew, goes on with its length: the engine reads no chunked bodies.
+  if (body.length > 0) headers["content-length"] = String(body.length);
   let result: ForwardResult | null = null;
   try {
     result = await forward(req, res, {
       url: new URL(`${deps.config.llm.upstreamUrl}${upstreamPath}${search}`),
       method,
-      headers: body ? { ...llmRequestHeaders(req.headers, deps.config.llm.apiKey), "content-length": String(body.length) } : llmRequestHeaders(req.headers, deps.config.llm.apiKey),
+      headers,
       body,
-      observeBody: readModel
-        ? (chunk) => {
-            observeBody?.(chunk);
-            readModel(chunk);
-          }
-        : observeBody,
       responseHeaders: (incoming) => endToEndHeaders(incoming.headers),
       tap: (incoming) => {
         if (job) return copyTap(answer, CREATE_ANSWER_BYTES);
@@ -182,12 +183,13 @@ export async function proxyLlm(deps: LlmProxyDeps, req: IncomingMessage, res: Se
   });
 }
 
-/** The request's whole body; more than `limit` bytes is a MediaRequestError (413). */
-function readBody(req: IncomingMessage, limit: number): Promise<Buffer> {
+/** The request's whole body, each chunk shown to `observe` as it comes; more than `limit` bytes is a MediaRequestError (413). */
+function readBody(req: IncomingMessage, limit: number, observe?: (chunk: Buffer) => void): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
     req.on("data", (chunk: Buffer) => {
+      observe?.(chunk);
       size += chunk.length;
       if (size > limit) {
         req.removeAllListeners("data");

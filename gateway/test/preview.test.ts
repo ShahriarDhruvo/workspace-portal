@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
-import type { AddressInfo } from "node:net";
+import net, { type AddressInfo } from "node:net";
 import WebSocket, { WebSocketServer } from "ws";
 import { hashSessionToken, type WorkspaceRef, type WorkspaceServers } from "@portal/core";
 import { BOTH, cookie, json, NAVIGATE, request, startGateway, withGateway, type Gateway, type Reply, type WorkspaceChoice } from "./harness.ts";
@@ -260,6 +260,26 @@ test("no app chosen, nothing listening, a stopped workspace: a page for page loa
     const stopped = await previewNavigate(g, g.tokens.alice, alice, "/", { cookie: chosen });
     assert.equal(stopped.status, 503);
     assert.match(stopped.body, /<h1>Your Private Qwen Code workspace is stopped<\/h1>/);
+  }));
+
+test("an app that answers with a status no HTTP response may have is one that does not answer", () =>
+  withApp(async (g, app, alice) => {
+    const raw = net.createServer((socket) => {
+      socket.on("error", () => undefined);
+      socket.once("data", () => socket.end("HTTP/1.1 099 x\r\nContent-Length: 0\r\n\r\n"));
+    });
+    await new Promise<void>((resolve) => raw.listen(0, g.manager.upstream(alice, QWEN_PRIVATE)!.host, resolve));
+    try {
+      const { port } = raw.address() as AddressInfo;
+      const bad = await previewNavigate(g, g.tokens.alice, alice, "/", { cookie: await choose(g, g.tokens.alice, alice, port) });
+      assert.equal(bad.status, 502);
+      assert.match(bad.body, new RegExp(`Nothing answers on port ${port}`));
+      // The gateway still serves.
+      const page = await previewNavigate(g, g.tokens.alice, alice, "/", { cookie: await choose(g, g.tokens.alice, alice, app.port) });
+      assert.equal(page.status, 200);
+    } finally {
+      raw.close();
+    }
   }));
 
 test("a harness's preview port never serves another harness's apps: another_running for a page, a fetch and a socket", () =>

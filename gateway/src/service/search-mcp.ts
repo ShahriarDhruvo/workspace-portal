@@ -420,7 +420,7 @@ export function formatResults(query: SearchQuery, data: SearxngResponse): string
   for (const box of data.infoboxes ?? []) {
     const title = text(box.infobox);
     const content = clip(text(box.content), MAX_SNIPPET_CHARS);
-    if (title || content) lines.push(`Infobox — ${title}${content ? `: ${content}` : ""}`, "");
+    if (title || content) lines.push(`Infobox: ${[title, content].filter(Boolean).join(". ")}`, "");
   }
   const results = usableResults(data).slice(0, MAX_RESULTS);
   if (results.length === 0) {

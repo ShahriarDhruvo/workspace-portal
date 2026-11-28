@@ -176,7 +176,7 @@ test("formatResults handles answers, infoboxes and no results", () => {
   assert.equal(formatResults(query, {}), 'No results for "q".\nThe search engines answered and found nothing. Try fewer or different words.');
   assert.equal(formatResults({ ...query, page: 3 }, {}), 'No results for "q" on page 3.');
   const out = formatResults(query, { answers: ["42"], infoboxes: [{ infobox: "Thing", content: "About it" }], results: [{ url: "https://a", title: "A" }] });
-  assert.match(out, /^Answer: 42\n\nInfobox — Thing: About it\n\nResults for "q"/);
+  assert.match(out, /^Answer: 42\n\nInfobox: Thing\. About it\n\nResults for "q"/);
 });
 
 test("an empty answer names the engines that failed, so the model does not blame its query", () => {

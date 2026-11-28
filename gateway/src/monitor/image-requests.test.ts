@@ -1,28 +1,23 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { bodyModelReader, generationPace, imageAskReader, type ImageAsk } from "./image-requests.ts";
+import { generationPace, imageAsk, mediaModelNamed, type ImageAsk } from "./image-requests.ts";
 import { LlmRequests } from "./llm-requests.ts";
 
 const MODELS = ["Qwen-Image-2.1-Turbo", "Qwen-Image-2.1"];
 
-function read(contentType: string, chunks: string[]): ImageAsk[] {
-  const asks: ImageAsk[] = [];
-  const observe = imageAskReader(contentType, MODELS, (ask) => asks.push(ask));
-  for (const chunk of chunks) observe(Buffer.from(chunk));
-  return asks;
-}
+const read = (contentType: string, body: string): ImageAsk => imageAsk(contentType, MODELS, Buffer.from(body));
 
-test("the model and the number of images are read from a JSON or multipart body, also split across chunks", () => {
-  assert.deepEqual(read("application/json", ['{"prompt":"a teapot","mod', 'el": "Qwen-Image-2.1-Turbo","n":3}']), [{ model: "Qwen-Image-2.1-Turbo", images: 3 }]);
+test("the model and the number of images are read from a JSON or multipart body", () => {
+  assert.deepEqual(read("application/json", '{"prompt":"a teapot","model": "Qwen-Image-2.1-Turbo","n":3}'), { model: "Qwen-Image-2.1-Turbo", images: 3 });
   const form = '--b\r\nContent-Disposition: form-data; name="model"\r\n\r\nQwen-Image-2.1\r\n--b\r\nContent-Disposition: form-data; name="n"\r\n\r\n2\r\n--b--';
-  assert.deepEqual(read("multipart/form-data; boundary=b", [form.slice(0, 50), form.slice(50)]), [{ model: "Qwen-Image-2.1", images: 2 }]);
+  assert.deepEqual(read("multipart/form-data; boundary=b", form), { model: "Qwen-Image-2.1", images: 2 });
   const typed = '--b\r\nContent-Disposition: form-data; name="model"\r\nContent-Type: text/plain\r\n\r\nQwen-Image-2.1\r\n--b--';
-  assert.deepEqual(read("multipart/form-data; boundary=b", [typed]), [{ model: "Qwen-Image-2.1", images: 1 }], "a field with its own headers");
+  assert.deepEqual(read("multipart/form-data; boundary=b", typed), { model: "Qwen-Image-2.1", images: 1 }, "a field with its own headers");
   const file = '--b\r\nContent-Disposition: form-data; name="image"; filename="model"\r\n\r\nQwen-Image-2.1\r\n--b--';
-  assert.deepEqual(read("multipart/form-data; boundary=b", [file]), [], "a file named model is no model field");
-  assert.deepEqual(read("application/json", ['{"model":"gpt-image-1","n":50}']), [{ model: null, images: 10 }], "an unknown model is not shown; n is capped");
-  assert.deepEqual(read("application/json", ['{"model":"Qwen-Image-2.1","n":1000}']), [{ model: "Qwen-Image-2.1", images: 10 }], "however large");
-  assert.deepEqual(read("application/json", ['{"prompt":"x"}']), [], "nothing found: one image of no known model");
+  assert.deepEqual(read("multipart/form-data; boundary=b", file), { model: null, images: 1 }, "a file named model is no model field");
+  assert.deepEqual(read("application/json", '{"model":"gpt-image-1","n":50}'), { model: null, images: 10 }, "an unknown model is not shown; n is capped");
+  assert.deepEqual(read("application/json", '{"model":"Qwen-Image-2.1","n":1000}'), { model: "Qwen-Image-2.1", images: 10 }, "however large");
+  assert.deepEqual(read("application/json", '{"prompt":"x"}'), { model: null, images: 1 }, "nothing found: one image of no known model");
 });
 
 test("an image's pace leaves out its wait behind other images and behind the LLM's requests", () => {
@@ -116,14 +111,9 @@ test("a pace is the median of the last five of its kind on the model of its kind
 });
 
 test("a media request's model is read from its JSON or multipart body, when it is one of its kind's", () => {
-  const read = (contentType: string, chunks: string[]) => {
-    const models: string[] = [];
-    const observe = bodyModelReader(contentType, ["qwen3-asr-1.7b", "sov-transcribe-1"], (model) => models.push(model));
-    for (const chunk of chunks) observe(Buffer.from(chunk));
-    return models;
-  };
+  const named = (contentType: string, body: string) => mediaModelNamed(contentType, ["qwen3-asr-1.7b", "sov-transcribe-1"], Buffer.from(body));
   const form = '--b\r\nContent-Disposition: form-data; name="model"\r\n\r\nqwen3-asr-1.7b\r\n--b\r\nContent-Disposition: form-data; name="file"; filename="a.flac"\r\n\r\n';
-  assert.deepEqual(read("multipart/form-data; boundary=b", [form.slice(0, 40), form.slice(40)]), ["qwen3-asr-1.7b"]);
-  assert.deepEqual(read("application/json", ['{"model": "sov-transcribe-1"}', '{"model": "qwen3-asr-1.7b"}']), ["sov-transcribe-1"], "heard once");
-  assert.deepEqual(read("application/json", ['{"model":"whisper-1"}']), [], "not one of its kind's");
+  assert.equal(named("multipart/form-data; boundary=b", form), "qwen3-asr-1.7b");
+  assert.equal(named("application/json", '{"model": "sov-transcribe-1"}'), "sov-transcribe-1");
+  assert.equal(named("application/json", '{"model":"whisper-1"}'), null, "not one of its kind's");
 });

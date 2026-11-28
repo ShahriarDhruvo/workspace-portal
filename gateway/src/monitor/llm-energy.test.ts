@@ -61,6 +61,34 @@ test("a session's time counts its parallel requests once, so its energy over it 
   ]);
 });
 
+test("while the meter can't be read its energy goes to no one, and the reading stops with the last request", async () => {
+  const { meter, clock, energy, shares } = setup();
+  energy.started(1, { sessionId: 7 }, 0);
+  energy.started(2, { sessionId: 8 }, 0);
+  await energy.read();
+  meter.error = new Error("connect ECONNREFUSED");
+  energy.ended(1, 1_000);
+  clock.now = 2_000;
+  await energy.read();
+  meter.error = null;
+  meter.tick(10_000, 100);
+  clock.now = 10_000;
+  await energy.read();
+  assert.deepEqual(shares, [], "10 s without a reading are not all request 2's, which ran beside request 1");
+  meter.tick(12_000, 50);
+  clock.now = 12_000;
+  await energy.read();
+  assert.deepEqual(shares, [{ sessionId: 8, joules: 100, ms: 2_000 }]);
+
+  meter.error = new Error("connect ECONNREFUSED");
+  energy.ended(2, 13_000);
+  await energy.read();
+  const calls = meter.calls;
+  energy.started(3, { sessionId: 9 }, 14_000);
+  assert.equal(meter.calls, calls + 1, "the reading had stopped: a new request starts it again");
+  energy.stop();
+});
+
 test("a restarted hostd, an unmeasurable server or a clock far off share nothing wrong", async () => {
   const { meter, clock, energy, total, shares } = setup();
   energy.started(1, { sessionId: 7 }, 0);

@@ -238,6 +238,18 @@ test("a job that shutdown recorded as failed stays so: its run, still under way,
   }
 });
 
+test("a job hostd lost in a restart of its own fails the update at once, and the queue opens again", async () => {
+  const { updater, host, queue, done, cleanup } = setup();
+  host.local.add("0.34.0");
+  // hostd keeps its job in memory: after a restart it reports none.
+  const status = host.status.bind(host);
+  host.status = async () => ({ ...(await status()), job: null });
+  await updater.startUpdate({ version: "0.34.0", actorUserId: null });
+  const job = await done();
+  assert.deepEqual([job.phase, job.error, queue.paused], ["failed", "portal-hostd restarted and lost its apply, so how it ended is not known.", false]);
+  cleanup();
+});
+
 test("removing an engine image: not while a job runs, not the running one", async () => {
   const { updater, host, cleanup } = setup();
   host.local.add("0.30.0");

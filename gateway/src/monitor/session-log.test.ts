@@ -62,11 +62,14 @@ test("a session opens at the start, stays open while it runs and closes at the s
   assert.deepEqual(rows().map((row) => [row.kind, row.startedAt, row.endedAt]), [["online", 1_000, 4_000], ["private", 6_000, null]], "the next start is a new session");
 });
 
-test("a start that fails before it runs leaves no session; a run that fails later keeps its own", () => {
+test("a start that fails or is refused before it runs leaves no session; a run that fails later keeps its own", () => {
   const { log, state, rows, userId } = setup();
   log.sync(state({ status: "starting" }));
   log.sync(state({ status: "error", stoppedAt: 2_000 }));
   assert.equal(rows().length, 0);
+  log.sync(state({ status: "starting" }));
+  log.sync(state({ status: "stopped", stoppedAt: 2_000 }));
+  assert.equal(rows().length, 0, "an Online start refused for the firewall ends as stopped");
 
   log.sync(state({ startedAt: 3_000 }));
   assert.equal(log.forwarded(1, userId), rows()[0]!.id);

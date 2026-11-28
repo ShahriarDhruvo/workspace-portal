@@ -5,7 +5,7 @@
 // count once, so its energy over that time is its average draw). Nothing is read while the AI server has no
 // request, so its idle draw goes to no one. Each stretch is bounded by the meter's own times (the AI server's
 // clock), unless that clock is off by more than CLOCK_SKEW_MS; a request keeps its place until a reading covers its
-// end.
+// end. A reading that fails ends the stretch: the energy until the next reading goes to no one.
 import { isMeterReading, type MeterSource } from "./energy-meter.ts";
 import type { Logger } from "../lib/log.ts";
 import { singleFlight } from "../lib/single-flight.ts";
@@ -91,6 +91,11 @@ export class LlmEnergy {
     } catch (error) {
       if (!this.#failing) this.#log.warn("LLM energy: cannot read the AI server's meter", { url: this.#source.url, error });
       this.#failing = true;
+      // The requests that ended must not pile up while the meter is down, and without them the stretch can't be
+      // shared: its energy would all go to those still running.
+      this.#last = null;
+      for (const [id, request] of this.#requests) if (request.to !== null) this.#requests.delete(id);
+      if (this.#requests.size === 0) this.#idle();
       return;
     }
     if (this.#stopped) return;
