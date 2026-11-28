@@ -121,7 +121,12 @@ export function PackageImages({
                     </span>
                     {row.current ? <Badge>{currentLabel}</Badge> : null}
                     {row.latest ? <Badge variant="outline">latest</Badge> : null}
-                    {row.notes?.breaking ? <Badge variant="destructive">Breaking changes</Badge> : null}
+                    {/* Cut short for a phone's eye: the whole badge beside the buttons is wider than its screen. */}
+                    {row.notes?.breaking ? (
+                      <Badge variant="destructive">
+                        Breaking<span className="max-sm:sr-only"> changes</span>
+                      </Badge>
+                    ) : null}
                     {row.commit ? (
                       <span className="hidden font-mono text-12 break-all whitespace-normal text-muted-foreground pointer-coarse:inline">{row.commit}</span>
                     ) : null}

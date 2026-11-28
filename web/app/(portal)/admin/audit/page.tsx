@@ -52,7 +52,11 @@ export default async function AuditPage({ searchParams }: PageProps<"/admin/audi
       <PageHeading title="Audit log" />
       <DataTable
         footer={<DataTableUrlPagination page={page} pageSize={pageSize} total={total} label="Audit log pages" />}
-        tableProps={{ "aria-label": "Audit log" }}
+        tableProps={{
+          "aria-label": "Audit log",
+          // Below a wide screen the details are under the action; below a medium one the actor and the target are too.
+          className: "max-xl:[&_:is(th,td):nth-child(5)]:hidden max-lg:[&_:is(th,td):is(:nth-child(2),:nth-child(4))]:hidden",
+        }}
       >
         <TableHeader>
           <TableRow>
@@ -65,30 +69,35 @@ export default async function AuditPage({ searchParams }: PageProps<"/admin/audi
           {entries.length === 0 ? <DataTableEmpty colSpan={COLUMNS.length}>Nothing has been recorded yet.</DataTableEmpty> : null}
           {entries.map((entry) => {
             const subject = entry.target ? displayName(entry.target) : auditDetailsSubject(entry.details);
+            const actor = entry.actor ? displayName(entry.actor) : <span className="text-muted-foreground">{auditActorFallback(entry.action)}</span>;
+            const target = subject ? <span className={cn(!entry.target && "text-muted-foreground")}>{subject}</span> : null;
+            const details = formatAuditDetails(entry.details);
             return (
               <TableRow key={entry.id}>
-                <TableCell className="align-top text-muted-foreground tabular-nums">
+                <TableCell className="align-top text-muted-foreground tabular-nums max-md:w-24 max-md:whitespace-normal">
                   <LocalTime at={entry.at} />
                 </TableCell>
-                <TableCell className="max-w-56 truncate align-top">
-                  {entry.actor ? (
-                    displayName(entry.actor)
-                  ) : (
-                    <span className="text-muted-foreground">{auditActorFallback(entry.action)}</span>
-                  )}
+                <TableCell className="max-w-56 truncate align-top">{actor}</TableCell>
+                <TableCell className="align-top font-medium max-xl:whitespace-normal">
+                  {auditActionLabel(entry.action, entry.actor !== null, entry.details)}
+                  <dl className="mt-1 font-normal lg:hidden">
+                    {[
+                      ["Actor", actor],
+                      ["Target", target],
+                    ].map(([label, value]) =>
+                      value ? (
+                        <div key={label as string} className="flex gap-1.5">
+                          <dt className="text-muted-foreground">{label}</dt>
+                          <dd className="wrap-anywhere">{value}</dd>
+                        </div>
+                      ) : null,
+                    )}
+                  </dl>
+                  {details ? <p className="mt-1 font-normal wrap-anywhere text-muted-foreground xl:hidden">{details}</p> : null}
                 </TableCell>
-                <TableCell className="align-top font-medium">{auditActionLabel(entry.action, entry.actor !== null, entry.details)}</TableCell>
-                <TableCell className="max-w-56 truncate align-top">
-                  {subject ? (
-                    <span className={cn(!entry.target && "text-muted-foreground")}>{subject}</span>
-                  ) : (
-                    <span className="text-muted-foreground">—</span>
-                  )}
-                </TableCell>
+                <TableCell className="max-w-56 truncate align-top">{target ?? <span className="text-muted-foreground">—</span>}</TableCell>
                 {/* The one column that wraps, at a readable width: details can be long (an error message). */}
-                <TableCell className="min-w-72 align-top whitespace-normal wrap-anywhere text-muted-foreground">
-                  {formatAuditDetails(entry.details)}
-                </TableCell>
+                <TableCell className="min-w-72 align-top whitespace-normal wrap-anywhere text-muted-foreground">{details}</TableCell>
               </TableRow>
             );
           })}

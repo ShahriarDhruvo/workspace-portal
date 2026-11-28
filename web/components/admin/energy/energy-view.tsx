@@ -221,9 +221,11 @@ function UserEnergy({ data, currency }: { data: EnergyMonth; currency: EnergyCur
       <DataTableHead align="right">Cost</DataTableHead>
     </>
   );
-  // A long name is cut short (in full in its tooltip) rather than pushing Energy and Cost out of the frame.
+  // A long name is cut short (in full in its tooltip) rather than pushing Energy and Cost out of the frame. A phone
+  // opens no tooltip, so there it wraps.
+  const nameCell = "max-md:whitespace-normal";
   const name = (text: string) => (
-    <span className="block max-w-48 truncate" title={text}>
+    <span className="block max-md:wrap-anywhere md:max-w-48 md:truncate" title={text}>
       {text}
     </span>
   );
@@ -254,12 +256,15 @@ function UserEnergy({ data, currency }: { data: EnergyMonth; currency: EnergyCur
         <TableBody>
           {users.map(([id, user]) => (
             <TableRow key={id}>
-              <TableCell className="font-medium">{name(user.name)}</TableCell>
+              <TableCell className={cn("font-medium", nameCell)}>{name(user.name)}</TableCell>
               {cells(user.wh, user.cost)}
             </TableRow>
           ))}
           <TableRow className="text-muted-foreground">
-            <TableCell title="Both servers' energy outside anyone's requests">Idle and the portal server</TableCell>
+            <TableCell title="Both servers' energy outside anyone's requests" className={nameCell}>
+              Idle and the portal server
+              <span className="block text-12 md:hidden">Both servers&apos; energy outside anyone&apos;s requests</span>
+            </TableCell>
             {cells(
               data.total.kwh === null ? null : Math.max(0, data.total.kwh * 1000 - used.wh),
               data.total.cost === null ? null : Math.max(0, data.total.cost - used.cost),
@@ -279,7 +284,7 @@ function UserEnergy({ data, currency }: { data: EnergyMonth; currency: EnergyCur
           {rows.map((row) => (
             <TableRow key={`${row.day} ${row.userId}`}>
               <TableCell>{formatDay(row.day)}</TableCell>
-              <TableCell>{name(row.name)}</TableCell>
+              <TableCell className={nameCell}>{name(row.name)}</TableCell>
               {cells(row.wh, row.cost)}
             </TableRow>
           ))}

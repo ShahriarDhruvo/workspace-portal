@@ -62,6 +62,11 @@ export function SessionsTable({ initial, version, llm, now }: SessionsTableProps
       <DataTable
         variant="flush"
         className="flex flex-1 flex-col"
+        tableProps={{
+          // Below a wide screen the speeds and the AI time are under the name; on a narrow one all but the cost is.
+          className:
+            "max-lg:[&_:is(th,td):is(:nth-child(4),:nth-child(5),:nth-child(8))]:hidden max-md:[&_:is(th,td):not(:first-child,:last-child)]:hidden",
+        }}
         footer={
           <DataTablePagination
             className="mt-auto"
@@ -110,42 +115,81 @@ export function SessionsTable({ initial, version, llm, now }: SessionsTableProps
           {data.rows.length === 0 ? (
             <DataTableEmpty colSpan={COLUMNS}>No sessions yet.</DataTableEmpty>
           ) : (
-            data.rows.map((row) => (
-              <TableRow key={row.id}>
-                <TableCell>
-                  <span className="flex items-center gap-2">
-                    <KindIcon kind={row.kind} />
-                    <span className="max-w-36 truncate 3xl:max-w-28" title={row.userName}>
-                      {row.userName}
-                    </span>
-                  </span>
-                </TableCell>
-                <TableCell>
+            data.rows.map((row) => {
+              const started = (
+                <>
                   {row.endedAt === null ? <LiveStatus userId={row.userId} llm={llm} /> : <LocalTime at={row.startedAt} relative />}
                   <Quiet>{formatDuration(((row.endedAt ?? now) - row.startedAt) / 1000)}</Quiet>
-                </TableCell>
-                <TableCell className={number}>
+                </>
+              );
+              const requests = (
+                <>
                   {formatCount(row.requests)}
                   {row.failed > 0 ? <Quiet className="text-destructive">{formatCount(row.failed)} failed</Quiet> : null}
-                </TableCell>
-                <TableCell className={number}>{formatNumber(row.readTps)}</TableCell>
-                <TableCell className={number}>{formatNumber(row.writeTps)}</TableCell>
-                <TableCell className={number} title={`${row.tokensIn.toLocaleString("en")} tokens, ${row.cachedTokens.toLocaleString("en")} from the cache`}>
-                  {formatCount(row.tokensIn)}
-                </TableCell>
-                <TableCell className={number}>{formatCount(row.tokensOut)}</TableCell>
-                <TableCell className={number}>{row.requests > 0 ? formatElapsed(row.llmMs) : "—"}</TableCell>
-                <TableCell className={number} title={row.watts !== null ? `${formatWatts(row.watts)} on average while its requests ran` : undefined}>
-                  {row.energyWh === null ? "—" : formatWh(row.energyWh)}
-                </TableCell>
-                <TableCell className={number}>
-                  <Cost row={row} currency={data.currency} />
-                </TableCell>
-              </TableRow>
-            ))
+                </>
+              );
+              const aiTime = row.requests > 0 ? formatElapsed(row.llmMs) : "—";
+              const energy = row.energyWh === null ? "—" : formatWh(row.energyWh);
+              // What is under the name where its column is folded: the last three on a medium screen, all on a narrow one.
+              const folded: Array<[label: string, value: ReactNode, narrow: boolean]> = [
+                ["Requests", requests, true],
+                ["Tokens in", formatCount(row.tokensIn), true],
+                ["Tokens out", formatCount(row.tokensOut), true],
+                ["Energy", energy, true],
+                ["Avg read t/s", formatNumber(row.readTps), false],
+                ["Avg write t/s", formatNumber(row.writeTps), false],
+                ["AI time", aiTime, false],
+              ];
+              return (
+                <TableRow key={row.id}>
+                  <TableCell className="max-lg:align-top max-lg:whitespace-normal">
+                    <span className="flex items-center gap-2">
+                      <KindIcon kind={row.kind} />
+                      <span className="max-md:wrap-anywhere md:max-w-36 md:truncate 3xl:max-w-28" title={row.userName}>
+                        {row.userName}
+                      </span>
+                    </span>
+                    <div className="mt-1 md:hidden">{started}</div>
+                    <dl className="mt-1 flex flex-wrap gap-x-3 text-12 tabular-nums lg:hidden">
+                      {folded.map(([label, value, narrow]) => (
+                        <div key={label} className={cn("flex gap-1 whitespace-nowrap", narrow && "md:hidden")}>
+                          <dt className="text-muted-foreground">{label}</dt>
+                          <dd>{value}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  </TableCell>
+                  <TableCell className="max-lg:align-top">{started}</TableCell>
+                  <TableCell className={cn(number, "max-lg:align-top")}>{requests}</TableCell>
+                  <TableCell className={number}>{formatNumber(row.readTps)}</TableCell>
+                  <TableCell className={number}>{formatNumber(row.writeTps)}</TableCell>
+                  <TableCell
+                    className={cn(number, "max-lg:align-top")}
+                    title={`${row.tokensIn.toLocaleString("en")} tokens, ${row.cachedTokens.toLocaleString("en")} from the cache`}
+                  >
+                    {formatCount(row.tokensIn)}
+                  </TableCell>
+                  <TableCell className={cn(number, "max-lg:align-top")}>{formatCount(row.tokensOut)}</TableCell>
+                  <TableCell className={number}>{aiTime}</TableCell>
+                  <TableCell
+                    className={cn(number, "max-lg:align-top")}
+                    title={row.watts !== null ? `${formatWatts(row.watts)} on average while its requests ran` : undefined}
+                  >
+                    {energy}
+                  </TableCell>
+                  <TableCell className={cn(number, "max-lg:align-top")}>
+                    <Cost row={row} currency={data.currency} />
+                  </TableCell>
+                </TableRow>
+              );
+            })
           )}
         </TableBody>
       </DataTable>
+      {/* A phone opens no tooltip: what an underlined cost's tooltip says is written out. */}
+      {data.rows.some((row) => row.costEstimate && row.cost !== null) ? (
+        <p className="px-4 pb-3 text-13 text-muted-foreground md:hidden">An underlined cost is at the latest published price.</p>
+      ) : null}
     </div>
   );
 }
@@ -212,10 +256,14 @@ function liveState(userId: number, llm: LlmLive): { state: LiveState; title?: st
 function LiveStatus({ userId, llm }: { userId: number; llm: LlmLive }) {
   const { state, title } = liveState(userId, llm);
   return (
-    <span title={title}>
-      <span aria-hidden="true" className={cn("mr-1.5 inline-block size-1.5 rounded-full align-middle", STATUS_DOTS[state])} />
-      {STATUS_NAMES[state]}
-    </span>
+    <>
+      <span title={title}>
+        <span aria-hidden="true" className={cn("mr-1.5 inline-block size-1.5 rounded-full align-middle", STATUS_DOTS[state])} />
+        {STATUS_NAMES[state]}
+      </span>
+      {/* Where the columns are folded under the name, what the tooltip says is written out: a phone opens none. */}
+      {title ? <span className="block text-12 text-muted-foreground md:hidden">{title}</span> : null}
+    </>
   );
 }
 
