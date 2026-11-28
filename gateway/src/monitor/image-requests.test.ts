@@ -1,11 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { generationPace, imageAsk, mediaModelNamed, type ImageAsk } from "./image-requests.ts";
+import { generationPace, imageAsk, namedModel, type ImageAsk } from "./image-requests.ts";
 import { LlmRequests } from "./llm-requests.ts";
 
 const MODELS = ["Qwen-Image-2.1-Turbo", "Qwen-Image-2.1"];
 
-const read = (contentType: string, body: string): ImageAsk => imageAsk(contentType, MODELS, Buffer.from(body));
+const read = (contentType: string, text: string): ImageAsk => {
+  const body = Buffer.from(text);
+  return imageAsk(contentType, MODELS, body, namedModel(contentType, body));
+};
 
 test("the model and the number of images are read from a JSON or multipart body", () => {
   assert.deepEqual(read("application/json", '{"prompt":"a teapot","model": "Qwen-Image-2.1-Turbo","n":3}'), { model: "Qwen-Image-2.1-Turbo", images: 3 });
@@ -110,10 +113,17 @@ test("a pace is the median of the last five of its kind on the model of its kind
   assert.deepEqual(generationPace(more, "speech"), { model: "c", seconds: 3 });
 });
 
-test("a media request's model is read from its JSON or multipart body, when it is one of its kind's", () => {
-  const named = (contentType: string, body: string) => mediaModelNamed(contentType, ["qwen3-asr-1.7b", "sov-transcribe-1"], Buffer.from(body));
-  const form = '--b\r\nContent-Disposition: form-data; name="model"\r\n\r\nqwen3-asr-1.7b\r\n--b\r\nContent-Disposition: form-data; name="file"; filename="a.flac"\r\n\r\n';
-  assert.equal(named("multipart/form-data; boundary=b", form), "qwen3-asr-1.7b");
+test("the model a body names is read from JSON, and from a multipart body wherever the field is", () => {
+  const named = (contentType: string, body: string) => namedModel(contentType, Buffer.from(body, "latin1"));
+  const field = 'Content-Disposition: form-data; name="model"\r\n\r\nqwen3-asr-1.7b\r\n';
+  const file = (bytes: string) => `Content-Disposition: form-data; name="file"; filename="a.flac"\r\n\r\n${bytes}\r\n`;
+  assert.equal(named("multipart/form-data; boundary=b", `--b\r\n${field}--b\r\n${file("fLaC")}--b--`), "qwen3-asr-1.7b");
+  const recording = `fLaC name="model" ${"\xff".repeat(200_000)}`;
+  assert.equal(named("multipart/form-data; boundary=b", `--b\r\n${file(recording)}--b\r\n${field}--b--`), "qwen3-asr-1.7b", "after a file, whose bytes are no field");
+  assert.equal(named("multipart/form-data; boundary=b", `--b\r\n${file(recording)}--b--`), null);
   assert.equal(named("application/json", '{"model": "sov-transcribe-1"}'), "sov-transcribe-1");
-  assert.equal(named("application/json", '{"model":"whisper-1"}'), null, "not one of its kind's");
+  assert.equal(named("application/json", '{"input":"hi"}'), null);
+  const chat = '{"messages":[{"role":"assistant","content":[{"type":"tool_use","input":{"model":"Qwen-Image-2.1-Turbo"}}]}],"model":"qwen3.8-flash-next"}';
+  assert.equal(named("application/json", chat), "qwen3.8-flash-next", "its own field, not one nested in it");
+  assert.equal(named("application/json", '{"model":'), null, "no JSON: the AI server answers that");
 });

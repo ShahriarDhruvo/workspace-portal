@@ -1060,7 +1060,8 @@ export async function startFakeLlm(): Promise<FakeUpstream> {
       if (req.method === "GET") return answer({ id, object: "video", status: fake.videoStatus, progress: fake.videoStatus === "completed" ? 100 : 40 });
       if (req.method === "DELETE") return answer({ id, object: "video.deleted", deleted: true });
     }
-    const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}") as { stream?: boolean; hold?: boolean; fail?: boolean };
+    const form = /^multipart\//.test(req.headers["content-type"] ?? "");
+    const body = JSON.parse(form ? "{}" : record.body || "{}") as { stream?: boolean; hold?: boolean; fail?: boolean };
     if (body.fail) return void res.writeHead(500, { "content-type": "application/json" }).end('{"error":{"message":"out of memory"}}');
     res.on("close", () => {
       if (!res.writableFinished) fake.abandoned++;

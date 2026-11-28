@@ -9,13 +9,13 @@ import type { Config } from "../config.ts";
 import { forward, type ForwardResult } from "../lib/forward.ts";
 import { sendJson } from "../lib/http-util.ts";
 import type { Logger } from "../lib/log.ts";
-import { IMAGE_PATH, imageAsk, mediaModelNamed } from "../monitor/image-requests.ts";
+import { IMAGE_PATH, imageAsk, namedModel } from "../monitor/image-requests.ts";
 import type { LlmRequests } from "../monitor/llm-requests.ts";
 import { recordUsage, usageParserFor, usageTap, type UsageParser } from "../monitor/usage.ts";
 import { endToEndHeaders, llmRequestHeaders } from "../proxy/headers.ts";
 import type { LlmQueue, ReleaseSlot } from "./llm-queue.ts";
 import { mediaModelIds } from "@portal/harnesses";
-import { MEDIA_BODY_BYTES, MediaRequestError, bodyModel, mediaRoute, modelPrefix } from "./media-routes.ts";
+import { MEDIA_BODY_BYTES, MediaRequestError, bodyModel, checkRouteModel, mediaRoute, modelPrefix } from "./media-routes.ts";
 import type { VideoJobs } from "./video-jobs.ts";
 
 export interface LlmProxyDeps {
@@ -70,10 +70,17 @@ export async function proxyLlm(deps: LlmProxyDeps, req: IncomingMessage, res: Se
   // The body is read before anything waits: Node stops reading a socket whose body nobody takes, and then never
   // learns that a client waiting in the queue hung up.
   let body: Buffer;
+  const contentType = req.headers["content-type"];
+  // The model the body names, on the routes that do not go by bodyModel's.
+  let named: string | null = null;
   try {
     body = await readBody(req, MEDIA_BODY_BYTES, observeBody);
     // Music and a video's create go to their model's own routes: its id is read from the body.
-    if (media?.model === "body") ({ model, body } = bodyModel(registry, media.kind, req.headers["content-type"], body));
+    if (media?.model === "body") ({ model, body } = bodyModel(registry, media.kind, contentType, body));
+    else if (caller !== null && method === "POST") {
+      named = namedModel(contentType, body);
+      checkRouteModel(registry, pathname, media, named);
+    }
   } catch (error) {
     // A body over the limit is not read to its end: the answer closes the connection.
     if (error instanceof MediaRequestError) return sendLlmError(res, error.status, error.type, error.message, error.status === 413 ? { connection: "close" } : undefined);
@@ -85,15 +92,14 @@ export async function proxyLlm(deps: LlmProxyDeps, req: IncomingMessage, res: Se
   const generating = method === "POST" && !NOT_A_GENERATION.test(pathname) ? caller : null;
   const image = generating !== null && IMAGE_PATH.test(pathname);
   const progress = generating ? deps.requests.begin(generating.userId, generating.keyId, image, media && { kind: media.kind, model }) : null;
-  const contentType = req.headers["content-type"];
   // The image or media model the request is for: its turn in the queue goes by it.
   let asked = model;
   if (progress && image) {
-    const ask = imageAsk(contentType, deps.config.llm.imageModels, body);
+    const ask = imageAsk(contentType, deps.config.llm.imageModels, body, named);
     progress.imageAsk(ask);
     asked = ask.model;
   } else if (progress && media?.model === "root") {
-    asked = mediaModelNamed(contentType, mediaModelIds(registry, media.kind), body);
+    asked = named !== null && mediaModelIds(registry, media.kind).includes(named) ? named : null;
     if (asked !== null) progress.mediaModel(asked);
   }
 

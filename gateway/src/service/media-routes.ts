@@ -4,8 +4,8 @@
 // OpenAI's job API, whose jobs run after the request that created them has ended (video-jobs.ts). Music and video go
 // to the model's own routes (MEDIA_MODEL_PATH): llama-swap routes neither, so the gateway reads the model from the
 // body first, and a job's later requests go to the model that made it.
-import { MEDIA_TIERS, mediaModel, mediaModelIds, type MediaKind, type MediaRegistry } from "@portal/harnesses";
-import { formField } from "../monitor/image-requests.ts";
+import { MEDIA_KINDS, MEDIA_TIERS, mediaModel, mediaModelIds, type MediaKind, type MediaRegistry } from "@portal/harnesses";
+import { IMAGE_PATH, namedModel } from "../monitor/image-requests.ts";
 
 /** What a request does to a video job: create one, or read, download or cancel the job `id`. */
 export type VideoCall = { op: "create" } | { op: "status" | "content" | "cancel"; id: string };
@@ -77,6 +77,21 @@ export class MediaRequestError extends Error {
 }
 
 /**
+ * Refuses a POST to `pathname` that names a model the registry has for other routes only: the AI server would stop
+ * the loaded model to start that one, which then has no such route. `media` is the request's media route; without
+ * one the path says whether it makes or edits images, and any other is the LLM's. A model the registry does not
+ * name is the AI server's to answer.
+ */
+export function checkRouteModel(registry: MediaRegistry, pathname: string, media: MediaRoute | null, named: string | null): void {
+  if (named === null) return;
+  const kind: MediaKind | null = media?.kind ?? (IMAGE_PATH.test(pathname) ? (pathname.endsWith("/edits") ? "imageEdit" : "image") : null);
+  const own = kind === null ? [] : mediaModelIds(registry, kind);
+  if (own.includes(named) || !MEDIA_KINDS.some((other) => mediaModelIds(registry, other).includes(named))) return;
+  const theirs = own.length > 0 ? ` Its models are ${own.join(", ")}.` : "";
+  throw new MediaRequestError(400, "invalid_request_error", `${JSON.stringify(named)} is not a model of ${pathname}.${theirs}`);
+}
+
+/**
  * The model a music or video create goes to, and the body to send: the one it names, which must be one of its kind's
  * in the registry, or else its fast model's, written into a JSON body. A multipart body (a video's keyframes as files)
  * is read for its `model` field and sent as it came.
@@ -90,10 +105,7 @@ export function bodyModel(registry: MediaRegistry, kind: MediaRoute["kind"], con
     if (typeof model === "string" && known.includes(model)) return model;
     throw new MediaRequestError(400, "invalid_request_error", `The ${kind} models are ${known.join(" and ")}: ${JSON.stringify(model)} is neither.`);
   };
-  if (/^multipart\/form-data/i.test(contentType ?? "")) {
-    const named = formField("model", "[^\\r\\n]{0,200}").exec(body.subarray(0, 256 * 1024).toString("latin1"))?.[1];
-    return { model: check(named), body };
-  }
+  if (/^multipart\/form-data/i.test(contentType ?? "")) return { model: check(namedModel(contentType, body)), body };
   let parsed: unknown;
   try {
     parsed = JSON.parse(body.toString("utf8"));

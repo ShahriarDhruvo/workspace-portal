@@ -1433,6 +1433,9 @@ The page counts for each key and day the requests, the tokens in and out and the
 - **Each model has its turn:** a request for an image or media model that replaces the LLM waits until the
   answers being written have ended, and LLM requests that come after it wait until it is made. The everyday
   speech and transcription models run beside the LLM and answer at any time.
+- **A model on the wrong address gets HTTP 400:** `/v1/images/edits` with Ming-Image, which only makes new
+  images, or `/v1/chat/completions` with an image model. The answer names the models of that address. The portal
+  answers this itself: the AI server would stop the loaded model first and only then find the request wrong.
 - **Waiting is silent:** nothing reaches the program while its request waits for a session and while the model
   reads the prompt. Three 252,000-token requests at once were each answered after 8 minutes, and a fourth from the
   same person started 7.4 minutes late. The OpenAI and Anthropic libraries give up after 10 minutes unless told

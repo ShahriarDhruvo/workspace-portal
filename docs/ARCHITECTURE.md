@@ -321,7 +321,7 @@ account, the same user's included. State is per listener: nothing carries betwee
 |---|---|
 | `POST /llm/v1/chat/completions`, `/completions`, `/embeddings` | forwarded to `LLM_UPSTREAM_URL/v1/...` |
 | `POST /llm/v1/images/generations`, `/llm/v1/images/edits` | the same; OpenCode's `generate_image` uses them with the models of `media.json`'s `image` and `imageEdit` |
-| `POST /llm/v1/audio/speech`, `/llm/v1/audio/transcriptions` | only when `media.json` has the kind: forwarded to `LLM_UPSTREAM_URL/v1/audio/...`, whose server picks the model by the request's own (llama-swap does); the gateway reads the model only to count the request, from the JSON or from the multipart form, and sends the body as it came |
+| `POST /llm/v1/audio/speech`, `/llm/v1/audio/transcriptions` | only when `media.json` has the kind: forwarded to `LLM_UPSTREAM_URL/v1/audio/...`, whose server picks the model by the request's own (llama-swap does); the gateway reads the model to check it against the route (below), for its turn in the queue and to count the request, and sends the body as it came |
 | `POST /llm/v1/audio/music`, `POST /llm/v1/videos` | only when `media.json` has the kind. Its `model` must be one of the kind's (400 otherwise); without one it goes to the kind's fast model, or its only one, which is written into a JSON body (a multipart one, a video's keyframes as files, is sent as it came). Then forwarded to that model's own routes, `LLM_UPSTREAM_URL` + `MEDIA_MODEL_PATH` with the id + the path (behind llama-swap `/upstream/<id>/v1/...`, as llama-swap routes neither) |
 | `GET /llm/v1/videos/<id>`, `GET /llm/v1/videos/<id>/content`, `DELETE /llm/v1/videos/<id>` | OpenAI's video job API: to the model that made the job; a job is its creator's alone (`video-jobs.ts`) |
 | `GET /llm/v1/media` | the gateway's own answer (`media-catalog.ts`): `{ kinds, loaded, videoHold }`, the kinds and tiers of `media.json`, the models llama-swap has ready (from its `/running`; null when that cannot be read), and the running video job as the caller's workspace page shows it. The media tools' `list_media_models` reads it |
@@ -337,6 +337,13 @@ account, the same user's included. State is per listener: nothing carries betwee
   reading a socket whose body nobody takes, and then never learns that a client waiting in the queue hung up.
   The body goes on with its length, as the engine reads no chunked bodies. An answer whose status Node will not
   send (one below 100) becomes 502 `llm_unreachable`, as does an AI server that does not answer.
+- **Model and route** (`media-routes.ts`, `checkRouteModel`): a POST that names a model `media.json` has for
+  other routes only gets 400 `invalid_request_error` before it waits or reaches the AI server: an edit that names
+  a model which only makes new images, a chat request that names an image model, a speech request that names a
+  transcription model. llama-swap would stop the loaded model to start the named one, whose server then has no
+  such route. The model is the body's own `model` field: of a JSON body its top level (a conversation's earlier
+  tool calls may name a model too), of a multipart form the field wherever it stands. A model `media.json` does
+  not name is the AI server's to answer.
 - **Queue** (`llm-queue.ts`): generation requests take a slot, at most `LLM_MAX_CONCURRENCY` in all and
   `LLM_MAX_CONCURRENCY_PER_USER` each, first come first served; a user at the limit does not hold up the users
   behind. An engine update pauses the queue, and requests wait instead of failing. An image or media request

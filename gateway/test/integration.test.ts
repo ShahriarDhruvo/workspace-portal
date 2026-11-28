@@ -1105,6 +1105,39 @@ test("media models: one loaded in the LLM's place waits for the LLM's requests, 
     m.caller.userId = null;
   }));
 
+test("media models: a request that names a model of another route is refused before it waits or reaches the AI server", () =>
+  withGateway({ media: { ...MEDIA, image: { fast: { model: "Qwen-Image-2.1-Turbo" }, quality: { model: "Ming-Image-0.2-Design" } }, imageEdit: { fast: { model: "Qwen-Image-2.1-Turbo" } } } }, async (m) => {
+    m.caller.userId = m.ids.alice;
+    const post = (path: string, body: unknown) => request(m.ports.service, { method: "POST", path, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    // An edit as OpenAI's clients send it: the picture first, the model after it.
+    const edit = (model: string) =>
+      request(m.ports.service, {
+        method: "POST",
+        path: "/llm/v1/images/edits",
+        headers: { "content-type": "multipart/form-data; boundary=b" },
+        body: `--b\r\nContent-Disposition: form-data; name="image"; filename="a.png"\r\n\r\n${"x".repeat(100_000)}\r\n--b\r\nContent-Disposition: form-data; name="model"\r\n\r\n${model}\r\n--b--`,
+      });
+    const forwarded = m.llm.requests.length;
+    const wrong = [
+      [await edit("Ming-Image-0.2-Design"), '"Ming-Image-0.2-Design" is not a model of /v1/images/edits. Its models are Qwen-Image-2.1-Turbo.'],
+      [await post("/llm/v1/chat/completions", { model: "Qwen-Image-2.1-Turbo", messages: [] }), '"Qwen-Image-2.1-Turbo" is not a model of /v1/chat/completions.'],
+      [await post("/llm/v1/audio/speech", { model: "minimax-h3", input: "hi" }), '"minimax-h3" is not a model of /v1/audio/speech. Its models are qwen3-tts-1.7b, fish-drama-3.'],
+    ] as const;
+    for (const [reply, message] of wrong) {
+      assert.equal(reply.status, 400);
+      assert.deepEqual(json(reply), { error: { message, type: "invalid_request_error" } });
+    }
+    assert.deepEqual([m.llm.requests.length, m.llmRequests.active(), m.llmQueue.inFlight], [forwarded, [], 0], "none of them reached the queue or the AI server");
+
+    assert.equal((await edit("Qwen-Image-2.1-Turbo")).status, 200);
+    assert.equal((await post("/llm/v1/images/generations", { model: "Ming-Image-0.2-Design", prompt: "a fox" })).status, 200);
+    // A conversation that used a media model earlier is the LLM's request all the same.
+    const earlier = { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "generate_image", input: { model: "Qwen-Image-2.1-Turbo" } }] };
+    assert.equal((await post("/llm/v1/chat/completions", { messages: [earlier], model: "qwen3.8-flash-next" })).status, 200);
+    assert.equal(m.llm.requests.length, forwarded + 3);
+    m.caller.userId = null;
+  }));
+
 test("agent and service servers wait at most a minute for request headers, and never time out a request", () => {
   for (const server of [g.createAgentServer(), g.createServiceServer({ kind: "private" })]) {
     assert.equal(server.headersTimeout, 60_000, "a client that never finishes its headers is dropped (slowloris)");
