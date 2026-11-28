@@ -41,7 +41,7 @@ async function fakeHostd(): Promise<{ port: number; streams: () => number; opene
     open++;
     opened++;
     res.writeHead(200, { "content-type": "text/event-stream" });
-    res.write(`event: info\ndata: ${JSON.stringify({ hostname: "locust", role: "portal" })}\n\n`);
+    res.write(`event: info\ndata: ${JSON.stringify({ hostname: "portal-1", role: "portal" })}\n\n`);
     const timer = setInterval(() => res.write(`: ping\n\nevent: sample\ndata: ${JSON.stringify(sample((t += 500)))}\n\n`), 20);
     res.on("close", () => {
       clearInterval(timer);
@@ -88,7 +88,7 @@ test("HostMonitor streams only while watched, keeps recent readings, and reports
     const leaveToo = monitor.watch();
     await waitFor(() => monitor.live().state === "online" && monitor.history().length >= 3, "readings");
     const live = monitor.live();
-    assert.equal(live.info?.hostname, "locust");
+    assert.equal(live.info?.hostname, "portal-1");
     assert.equal(live.sample, monitor.history().at(-1));
     assert.equal(hostd.opened(), 1, "one stream for all viewers");
     const times = monitor.history().map((s) => s.t);
