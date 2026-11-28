@@ -57,9 +57,13 @@ call a message loads you again after every part, and then the model again.
    frame to generate_image as `images` with what to change; do the changes together, after the new frames, because
    they may run on another model.
 2. **Speech** (synthesize_speech). One call per line and speaker. Give each speaker one voice for the whole piece: the
-   same built-in `voice`, the same `voice_description` and `seed`, or the same `reference_audio`. The fast tier runs
-   beside you and stops nothing; use the quality tier for the final narration when the person wants the most natural
-   delivery, with a tag such as `[whisper]` or `[laughing]` before the words it applies to.
+   same built-in `voice`, the same `voice_description` and `seed`, or the same `reference_audio`. A tier may take
+   only some of these; the tool's description says which. Where a tier takes only `reference_audio`, the model
+   picks the voice of a line that has none: for a speaker who must sound the same in every line, first make a short
+   sample of the voice (5 to 10 s, in the tier with built-in or described voices) and give it to every line as
+   `reference_audio`, with its words as `reference_text`. The fast tier runs beside you and stops nothing; use the
+   quality tier for the final narration when the person wants the most natural delivery, with a tag such as
+   `[whisper]` or `[laughing]` before the words it applies to.
 3. **Check the speech** (transcribe_audio, fast tier). Transcribe every line and compare it with the script; make again
    any line with a missing, added or wrong word. Then measure each file:
    `ffprobe -v error -show_entries format=duration -of csv=p=0 media/<piece>/speech/shot-01.wav`.

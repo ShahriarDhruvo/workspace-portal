@@ -367,12 +367,18 @@ function speechTool(api, tiers, projectDir) {
   }
   properties.seed = seedField;
   properties.overwrite = overwriteField;
+  // Said per tier in the description: with only the fields' own notes, an agent tried a built-in and then a described voice on a tier that takes neither.
+  const takes = (entry) => {
+    const ways = [entry.api === "qwen3-tts" && entry.voices ? "`voice` with `instructions`" : null, entry.design ? "`voice_description`" : null, entry.clone || entry.api === "fish-speech" ? "`reference_audio`" : null].filter(Boolean);
+    return `${entry.tier} (${entry.name}) takes ${ways.join(" or ")}${entry.api === "fish-speech" ? " or no voice setting at all, for its own voice" : ""}`;
+  };
   return {
     name: "synthesize_speech",
     options: DIRECT,
     description: [
       "Reads text aloud and saves it as a WAV in the project: narration, dialogue, a voice-over.",
       "Pick a voice one of three ways: a built-in `voice` (with `instructions` for the delivery), a `voice_description` for a new one, or `reference_audio` to speak in the voice of a recording.",
+      `Not every tier takes every way: ${all.map(takes).join("; ")}.`,
       "One voice per call: make each speaker's lines separately with the same voice settings and seed, and join the files with ffmpeg.",
     ].join(" "),
     input: { type: "object", properties, required: ["input", "path", "tier"], additionalProperties: false },
