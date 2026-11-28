@@ -10,12 +10,12 @@ commit=$1
 dest=$2
 here=$(dirname "$(readlink -f "$0")")
 repo=https://github.com/inclusionAI/Ming-Image.git
-# AMD's PyTorch with the ROCm libraries and kernels of gfx1151 alone, as ACE-Step and LTX-2 use it; 2.14, as AMD has
-# no torchvision for 2.15 yet. Ming uses torchvision for PIL transforms on the CPU alone.
+# AMD's PyTorch with the ROCm libraries and kernels of gfx1151 alone, as ACE-Step and LTX-2 use it. Ming uses
+# torchvision for PIL transforms on the CPU alone.
 torch_index=https://stable.repo.amd.com/rocm/whl-next/
-torch_version=2.14.0+rocm10.2.0
+torch_version=2.15.0+rocm10.2.0
 torch="torch[device-gfx1151]==$torch_version"
-torchvision=torchvision==0.29.0+rocm10.2.0
+torchvision=torchvision==0.29.2+rocm10.2.0
 
 set -a
 . /etc/ai-studio/cache.env
