@@ -14,6 +14,14 @@
     "model": "sov-transcribe-1",
     "releases": { "tag": "^rocm[0-9.]+-torch[0-9.]+-vllm([0-9]+\\.[0-9]+\\.[0-9]+)$", "github": "vllm-project/vllm" }
   },
+  "ming": {
+    "name": "Ming-Image",
+    "kind": "dir",
+    "root": "/opt/ai-studio/ming",
+    "unit": "ming.service",
+    "model": "Ming-Image-0.2-Design",
+    "releases": { "github": "inclusionAI/Ming-Image", "commits": "main" }
+  },
   "fish-speech": {
     "name": "Fish Speech",
     "kind": "dir",

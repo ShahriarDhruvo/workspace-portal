@@ -1,6 +1,7 @@
 // Release notes from GitHub, for Admin > Updates: one anonymous request lists a repository's newest releases with their
-// notes. GitHub allows 60 anonymous requests an hour per address, so the answers are cached (release-cache.ts) and
-// asked for only while an admin has the Updates page open (its polls are what asks).
+// notes, or the newest commits of a branch (a program whose repository has no releases). GitHub allows 60 anonymous
+// requests an hour per address, so the answers are cached (release-cache.ts) and asked for only while an admin has the
+// Updates page open (its polls are what asks).
 import { failureReason, fetchBounded, isVersion, type ReleaseNotes } from "@portal/core";
 
 /**
@@ -24,9 +25,18 @@ export interface GitHubRelease {
   notes: ReleaseNotes;
 }
 
+export interface GitHubCommit {
+  /** The full 40-character id. */
+  id: string;
+  /** Its message as notes: the first line is the title, the rest the body, the committer's date the date. */
+  notes: ReleaseNotes;
+}
+
 export interface GitHubReleases {
   /** The repository's (owner/name) newest releases, drafts left out. Rejects with GitHubError. */
   list(repo: string): Promise<GitHubRelease[]>;
+  /** The `count` newest commits of the repository's `branch`, newest first. Rejects with GitHubError. */
+  commits(repo: string, branch: string, count: number): Promise<GitHubCommit[]>;
 }
 
 export class GitHubError extends Error {
@@ -41,23 +51,28 @@ export function isGitHubRepo(value: string): boolean {
   return /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/.test(value) && !value.endsWith("/.") && !value.endsWith("/..");
 }
 
+const cutNotes = (body: string): string => (body.length > NOTES_CHARS ? `${body.slice(0, NOTES_CHARS)}\n\n…` : body);
+
 export function createGitHubReleases(fetchImpl: typeof fetch = fetch): GitHubReleases {
+  /** GitHub's JSON for `path` of the repository; `what` names the list in an error. */
+  async function ask(repo: string, path: string, what: string): Promise<unknown> {
+    if (!isGitHubRepo(repo)) throw new GitHubError(`${repo} is not a GitHub repository (owner/name)`);
+    try {
+      const { ok, status, text } = await fetchBounded(fetchImpl, `https://api.github.com/repos/${repo}/${path}`, {
+        headers: { accept: "application/vnd.github+json", "user-agent": "workspace-portal", "x-github-api-version": "2022-11-28" },
+        maxBytes: MAX_BYTES,
+      });
+      if (!ok) throw new GitHubError(`GitHub answered ${status} for ${repo}'s ${what}`);
+      if (text === null) throw new GitHubError(`GitHub's list of ${repo}'s ${what} is too large`);
+      return JSON.parse(text);
+    } catch (error) {
+      if (error instanceof GitHubError) throw error;
+      throw new GitHubError(`GitHub is unreachable (${failureReason(error)})`);
+    }
+  }
   return {
     async list(repo) {
-      if (!isGitHubRepo(repo)) throw new GitHubError(`${repo} is not a GitHub repository (owner/name)`);
-      let releases: unknown;
-      try {
-        const { ok, status, text } = await fetchBounded(fetchImpl, `https://api.github.com/repos/${repo}/releases?per_page=${PER_PAGE}`, {
-          headers: { accept: "application/vnd.github+json", "user-agent": "workspace-portal", "x-github-api-version": "2022-11-28" },
-          maxBytes: MAX_BYTES,
-        });
-        if (!ok) throw new GitHubError(`GitHub answered ${status} for ${repo}'s releases`);
-        if (text === null) throw new GitHubError(`GitHub's list of ${repo}'s releases is too large`);
-        releases = JSON.parse(text);
-      } catch (error) {
-        if (error instanceof GitHubError) throw error;
-        throw new GitHubError(`GitHub is unreachable (${failureReason(error)})`);
-      }
+      const releases = await ask(repo, `releases?per_page=${PER_PAGE}`, "releases");
       if (!Array.isArray(releases)) return [];
       const list: GitHubRelease[] = [];
       for (const release of releases as Array<Record<string, unknown>>) {
@@ -72,12 +87,36 @@ export function createGitHubReleases(fetchImpl: typeof fetch = fetch): GitHubRel
             title: typeof release.name === "string" && release.name !== "" ? release.name : tag,
             url: typeof release.html_url === "string" && release.html_url.startsWith("https://github.com/") ? release.html_url : `https://github.com/${repo}/releases`,
             publishedAt: Number.isFinite(published) ? published : null,
-            body: body.length > NOTES_CHARS ? `${body.slice(0, NOTES_CHARS)}\n\n…` : body,
+            body: cutNotes(body),
             breaking: hasBreakingChanges(body),
           },
         });
       }
       return list;
+    },
+    async commits(repo, branch, count) {
+      const what = `commits on ${branch}`;
+      const commits = await ask(repo, `commits?sha=${encodeURIComponent(branch)}&per_page=${count}`, what);
+      // Only the list's order says which commit is newer: an answer that is no list, or lacks an id, is refused whole.
+      if (!Array.isArray(commits)) throw new GitHubError(`GitHub's answer for ${repo}'s ${what} is not a list`);
+      return commits.map((entry: { sha?: unknown; commit?: { message?: unknown; committer?: { date?: unknown } | null } | null } | null) => {
+        const id = entry?.sha;
+        if (typeof id !== "string" || !/^[0-9a-f]{40}$/.test(id)) throw new GitHubError(`GitHub's list of ${repo}'s ${what} has an entry without a commit id`);
+        const message = typeof entry?.commit?.message === "string" ? entry.commit.message : "";
+        const [first = "", ...rest] = message.split("\n");
+        const date = entry?.commit?.committer?.date;
+        const committed = typeof date === "string" ? Date.parse(date) : NaN;
+        return {
+          id,
+          notes: {
+            title: first.trim() || id,
+            url: `https://github.com/${repo}/commit/${id}`,
+            publishedAt: Number.isFinite(committed) ? committed : null,
+            body: cutNotes(rest.join("\n").trim()),
+            breaking: hasBreakingChanges(message),
+          },
+        };
+      });
     },
   };
 }

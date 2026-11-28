@@ -13,7 +13,7 @@ import {
   type AppPackageRow,
 } from "@/lib/app-updates";
 import { formatBytes } from "@/lib/format";
-import { cutOffText, drainLimitText, isJobActive, staleReleasesText, type Loaded } from "@/lib/update-jobs";
+import { cutOffText, drainLimitText, isCommitId, isJobActive, staleReleasesText, versionName, type Loaded } from "@/lib/update-jobs";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { GuardedButton } from "@/components/common/guarded-button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -36,8 +36,8 @@ interface AppCardsProps {
 }
 
 /**
- * A card for each program portal-hostd updates on the AI server (llama-swap, vLLM, the media programs). Without
- * portal-hostd there it shows nothing: Gufo's card says how to set it up.
+ * A card for each program portal-hostd updates on the AI server (llama-swap, vLLM, Ming-Image, the media programs).
+ * Without portal-hostd there it shows nothing: Gufo's card says how to set it up.
  */
 export function AppCards({ data, engineJob, onChanged }: AppCardsProps) {
   const overview = data.data;
@@ -125,6 +125,8 @@ function AppCard({ entry, overview, unreachable, unreachableMessage, engineJob, 
     const installed = row.image;
     return {
       ...row,
+      version: versionName(row.version),
+      commit: isCommitId(row.version) ? row.version : undefined,
       current: row.running,
       action: row.running
         ? null
@@ -151,11 +153,15 @@ function AppCard({ entry, overview, unreachable, unreachableMessage, engineJob, 
       title={status.name}
       subtitle={releases.source}
       status={badge}
-      version={{ label: "In use on the AI server", value: status.version ?? "unknown" }}
+      version={{
+        label: "In use on the AI server",
+        value: status.version ? versionName(status.version) : "unknown",
+        full: status.version && isCommitId(status.version) ? status.version : undefined,
+      }}
       actions={
         targetRow && !isJobActive(job) ? (
           <GuardedButton blockedReason={blocked} onClick={(event) => show({ kind: "install", row: targetRow, update: true }, event.currentTarget)}>
-            Update to {targetRow.version}…
+            Update to {versionName(targetRow.version)}…
           </GuardedButton>
         ) : null
       }
@@ -164,6 +170,7 @@ function AppCard({ entry, overview, unreachable, unreachableMessage, engineJob, 
           name={status.name}
           title={files ? "Versions" : "Package images"}
           column={files ? "Installed" : "Image"}
+          dateColumn={status.releases.commits === undefined ? "Released" : "Committed"}
           rows={rows}
           currentLabel="In use"
           missingLabel={files ? "Install first" : "Download first"}
@@ -203,6 +210,7 @@ function AppCard({ entry, overview, unreachable, unreachableMessage, engineJob, 
         <AppJob
           key={shownJob.id}
           job={shownJob}
+          entry={entry}
           onChanged={onChanged}
           onRestartNow={(from) => show({ kind: "restart", drain: shownJob.drain }, from)}
           onDismiss={() => onDismissJob(shownJob.id)}
@@ -241,26 +249,29 @@ function AppDialogs({ dialog, entry, drainMinutes, open, onOpenChange, onDone, o
   const { status } = entry;
   const name = status.name;
   const files = status.kind === "dir";
-  const current = status.version ?? "the version in use";
+  const current = status.version ? versionName(status.version) : "the version in use";
   const common = { open, onOpenChange, onDone, returnFocusTo: opener };
   const em = (text: string) => <span className="font-mono text-foreground">{text}</span>;
   switch (dialog.kind) {
     case "install": {
       const { row } = dialog;
+      const version = versionName(row.version);
       // Said as the button that opened it said it.
       const verb = row.image ? "Use" : files ? "Install" : "Download";
       return (
         <ConfirmDialog
           {...common}
-          title={dialog.update ? `Update ${name} to ${row.version}?` : `${verb} ${name} ${row.version}?`}
-          confirm={dialog.update ? `Update to ${row.version}` : `${verb} ${row.version}`}
+          title={dialog.update ? `Update ${name} to ${version}?` : `${verb} ${name} ${version}?`}
+          confirm={dialog.update ? `Update to ${version}` : `${verb} ${version}`}
           pending="Starting…"
           onConfirm={() => updateApp(status.id, row.version)}
         >
           {row.notes?.breaking ? (
             <span className="flex flex-col items-center gap-1.5 sm:items-start">
               <Badge variant="destructive">Breaking changes</Badge>
-              <span>Read its release notes first: {em(row.version)} changes how {name} behaves.</span>
+              <span>
+                Read its {isCommitId(row.version) ? "commit message" : "release notes"} first: {em(version)} changes how {name} behaves.
+              </span>
             </span>
           ) : null}
           <p>
@@ -270,7 +281,7 @@ function AppDialogs({ dialog, entry, drainMinutes, open, onOpenChange, onDone, o
                 ? `It installs first, while ${name} keeps serving. `
                 : `Its image downloads first, while ${name} keeps serving. `}
             Then new LLM requests wait in the portal&apos;s queue while the running ones finish, and {name} restarts with{" "}
-            {em(row.version)}.
+            {em(version)}.
           </p>
           <p>{drainLimitText(drainMinutes)}</p>
           <p>
@@ -301,14 +312,14 @@ function AppDialogs({ dialog, entry, drainMinutes, open, onOpenChange, onDone, o
       return (
         <ConfirmDialog
           {...common}
-          title={`Remove ${name} ${version.version}?`}
+          title={`Remove ${name} ${versionName(version.version)}?`}
           confirm="Remove"
           pending="Removing…"
           destructive
           onConfirm={() => removeAppVersion(status.id, version.version)}
         >
           <p>
-            Remove {em(version.version)}
+            Remove {em(versionName(version.version))}
             {version.sizeBytes ? ` (${formatBytes(version.sizeBytes)})` : ""} from the AI server? Using that version later{" "}
             {files ? "installs" : "downloads"} it again.
           </p>

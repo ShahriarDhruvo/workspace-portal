@@ -4,7 +4,7 @@ One daemon per server, for the portal's gateway. It needs only `python3` (standa
 
 - Both roles: live hardware readings (CPU, GPU, memory, memory bandwidth, power, fans, network, disks) and running totals of energy and network bytes.
 - `llm` role only: updates the engine container, a rootless Podman quadlet, and the [other software](#other-software)
-  in `llm-server/apps.json` (llama-swap, vLLM, the media programs), when the gateway asks.
+  in `llm-server/apps.json` (llama-swap, vLLM, Ming-Image, the media programs), when the gateway asks.
 
 While nobody watches, nothing is sampled: only the meter wakes, every 2 s, to read the power source and `/proc/net/dev`.
 
@@ -164,7 +164,7 @@ by id. Each is one of two kinds:
 | `root`, `unit` | `dir` only: the folder (`~/` is the engine user's home) and the systemd user unit |
 | `model` | The program's llama-swap model: it is restarted through llama-swap, like the engine. Without one (llama-swap itself) the unit is restarted and `check` must answer 200 |
 | `check` | `dir` without `model`: its `http://` health URL |
-| `releases` | `tag`: a pattern over GitHub's tags (`dir`) or the registry's (`image`) whose first group is the version; `github`: owner/name of the releases and notes; `prerelease`: offer prereleases too |
+| `releases` | Either `tag` or `commits`. `tag`: a pattern over GitHub's tags (`dir`) or the registry's (`image`) whose first group is the version. `commits`: a branch of `github`, for a `dir` program whose repository has no releases: its versions are that branch's commits, each by its full 40-character id. `github`: owner/name of the releases and notes, or of the commits; `prerelease`: offer prereleases too |
 
 A version is 1-64 letters, digits and `. + _ -`, the name of its folder. A dir program's install runs its
 `install.sh` in the engine user's systemd manager into `<version>.part` for up to 3 hours, then writes

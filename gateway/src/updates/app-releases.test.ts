@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { AppStatus } from "@portal/core";
-import { appTagVersion, byNewestAppVersion, githubAppReleases, registryAppReleases, withInstalled } from "./app-releases.ts";
-import type { GitHubRelease } from "./github-releases.ts";
+import { appTagVersion, byNewestAppVersion, commitAppReleases, githubAppReleases, registryAppReleases, withInstalled } from "./app-releases.ts";
+import type { GitHubCommit, GitHubRelease } from "./github-releases.ts";
 
 const release = (tag: string, prerelease = false): GitHubRelease => ({
   tag,
@@ -52,14 +52,41 @@ test("registry tags: per version its newest tag", () => {
   );
 });
 
+/** What withInstalled reads of an app: where its releases come from, and what is installed. */
+const app = (releases: AppStatus["releases"], installed: string[]): AppStatus =>
+  ({ releases, versions: installed.map((version) => ({ version, image: null, createdAt: 0, sizeBytes: null, current: false, previous: false })) }) as unknown as AppStatus;
+
 test("the card lists the releases and every installed version, with notes by version", () => {
-  const app = { versions: [{ version: "270", image: null, createdAt: 0, sizeBytes: null, current: true, previous: false }] } as unknown as AppStatus;
-  const listed = withInstalled([{ version: "277", tag: null, latest: true }], app, new Map([["270", release("v270").notes]]));
+  const listed = withInstalled([{ version: "277", tag: null, latest: true }], app({ tag: "^v([0-9]+)$" }, ["270"]), new Map([["270", release("v270").notes]]));
   assert.deepEqual(
     listed.map((r) => [r.version, r.latest, r.notes?.title ?? null]),
     [
       ["277", true, null],
       ["270", false, "v270"],
+    ],
+  );
+});
+
+test("a commits app: GitHub's order with the first latest; installed commits GitHub did not list come after, never sorted", () => {
+  // In text order they would be second, old, older, newest.
+  const [newest, second, old, older] = ["2", "f", "a", "9"].map((digit) => digit.repeat(40)) as [string, string, string, string];
+  const commit = (id: string): GitHubCommit => ({ id, notes: { title: `fix ${id[0]}`, url: `https://github.com/o/r/commit/${id}`, publishedAt: 0, body: "", breaking: false } });
+  const releases = commitAppReleases([commit(newest), commit(second)]);
+  assert.deepEqual(
+    releases.map((r) => [r.version, r.tag, r.latest]),
+    [
+      [newest, null, true],
+      [second, null, false],
+    ],
+  );
+  const listed = withInstalled(releases, app({ github: "o/r", commits: "main" }, [old, second, older]), new Map());
+  assert.deepEqual(
+    listed.map((r) => [r.version, r.latest, r.notes?.title ?? null]),
+    [
+      [newest, true, "fix 2"],
+      [second, false, "fix f"],
+      [old, false, null],
+      [older, false, null],
     ],
   );
 });

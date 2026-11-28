@@ -1734,6 +1734,7 @@ class Engine:
 APP_ID_RE = re.compile(r'[a-z0-9][a-z0-9-]{0,31}')
 APP_VERSION_RE = re.compile(r'[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}')
 TAG_RE = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}')
+BRANCH_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9._/-]{0,99}')    # stricter than git: the gateway asks GitHub for it
 APP_MARKER = '.portal-version'    # written into a version's directory once its install.sh succeeded
 APP_INSTALL_TIMEOUT = 3 * 3600
 
@@ -1756,14 +1757,23 @@ def load_apps(path, home, quadlet_dir):
         if not isinstance(a.get('name'), str) or not a['name'].strip():
             bad('name is required')
         releases = a.get('releases')
-        if not isinstance(releases, dict) or not isinstance(releases.get('tag'), str):
-            bad('releases.tag (a pattern whose first group is the version) is required')
-        try:
-            tag = re.compile(releases['tag'])
-        except re.error as e:
-            bad(f'releases.tag: {e}')
-        if tag.groups < 1:
-            bad('releases.tag needs a group: the version')
+        if not isinstance(releases, dict) or ('tag' in releases) == ('commits' in releases):
+            bad('releases needs either tag (a pattern whose first group is the version) or commits (a branch)')
+        tag = None      # stays None for a commits app: it is a dir app, and only an image app's tags are matched
+        if 'commits' in releases:
+            if not isinstance(releases['commits'], str) or not BRANCH_RE.fullmatch(releases['commits']):
+                bad('releases.commits must be a branch name')
+            if a.get('kind') != 'dir' or not isinstance(releases.get('github'), str) or not releases['github']:
+                bad('releases.commits is for a dir app with releases.github (owner/name)')
+        else:
+            if not isinstance(releases['tag'], str):
+                bad('releases.tag must be a pattern whose first group is the version')
+            try:
+                tag = re.compile(releases['tag'])
+            except re.error as e:
+                bad(f'releases.tag: {e}')
+            if tag.groups < 1:
+                bad('releases.tag needs a group: the version')
         model = a.get('model')
         if model is not None and (not isinstance(model, str) or not model.strip() or '/' in model):
             bad('model must be a llama-swap model id')

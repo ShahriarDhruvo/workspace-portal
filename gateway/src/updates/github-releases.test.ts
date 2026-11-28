@@ -92,3 +92,47 @@ test("list: GitHub's refusals and odd repositories are a GitHubError", async () 
   await fails(repo, () => new Response("<html>"), /^GitHub is unreachable \(Unexpected token .* is not valid JSON\)$/);
   await fails("../etc", () => Response.json([]), "../etc is not a GitHub repository (owner/name)");
 });
+
+test("commits: a branch's newest in GitHub's order; the message's first line is the title, the rest the body", async () => {
+  const [newest, second, third] = ["d5615110e3ae7d27f270eafe5556d669b2069971", "a27da44d54d3146c06e4f4adcb96b6cb8c293b09", "aa67cca4cc3c1c557a936efb5b875319c988f800"] as const;
+  const { fetch, calls } = fakeFetch({
+    "https://api.github.com/repos/inclusionAI/Ming-Image/commits?sha=release%2F0.2&per_page=3": () =>
+      Response.json([
+        { sha: newest, html_url: "javascript:alert(1)", commit: { message: "docs: add DiT parameter counts to the model overview", author: { date: "2026-11-20T08:00:00Z" }, committer: { date: "2026-11-26T12:07:32Z" } } },
+        { sha: second, commit: { message: "feat: one sampler for every size\r\n\r\nThe 2048 path had its own.\n\nBREAKING CHANGE: `--sampler` is gone\n", committer: { date: "2026-11-26T10:43:47Z" } } },
+        { sha: third, commit: { message: "", committer: null } },
+      ]),
+  });
+  const commits = await createGitHubReleases(fetch).commits("inclusionAI/Ming-Image", "release/0.2", 3);
+  const url = (id: string) => `https://github.com/inclusionAI/Ming-Image/commit/${id}`;
+  assert.deepEqual(commits, [
+    { id: newest, notes: { title: "docs: add DiT parameter counts to the model overview", url: url(newest), publishedAt: Date.parse("2026-11-26T12:07:32Z"), body: "", breaking: false } },
+    {
+      id: second,
+      notes: {
+        title: "feat: one sampler for every size",
+        url: url(second),
+        publishedAt: Date.parse("2026-11-26T10:43:47Z"),
+        body: "The 2048 path had its own.\n\nBREAKING CHANGE: `--sampler` is gone",
+        breaking: true,
+      },
+    },
+    { id: third, notes: { title: third, url: url(third), publishedAt: null, body: "", breaking: false } },
+  ]);
+  assert.equal(calls[0]!.auth, null, "anonymous");
+});
+
+test("commits: GitHub's refusals, and an answer whose order can't be relied on, are a GitHubError", async () => {
+  const repo = "inclusionAI/Ming-Image";
+  const fails = (answer: () => Response, message: string): Promise<void> =>
+    assert.rejects(
+      createGitHubReleases(fakeFetch({ [`https://api.github.com/repos/${repo}/commits?sha=main&per_page=5`]: answer }).fetch).commits(repo, "main", 5),
+      (error: unknown) => error instanceof GitHubError && error.message === message,
+    );
+  await fails(() => Response.json({ message: "Not Found" }, { status: 404 }), "GitHub answered 404 for inclusionAI/Ming-Image's commits on main");
+  await fails(() => new Response("x".repeat(32 * 1024 * 1024 + 1)), "GitHub's list of inclusionAI/Ming-Image's commits on main is too large");
+  await fails(() => Response.json({ message: "Moved" }), "GitHub's answer for inclusionAI/Ming-Image's commits on main is not a list");
+  await fails(() => Response.json([{ sha: "d561511", commit: { message: "x" } }]), "GitHub's list of inclusionAI/Ming-Image's commits on main has an entry without a commit id");
+  await fails(() => Response.json([null]), "GitHub's list of inclusionAI/Ming-Image's commits on main has an entry without a commit id");
+  await assert.rejects(createGitHubReleases(fakeFetch({}).fetch).commits("../etc", "main", 5), { name: "GitHubError", message: "../etc is not a GitHub repository (owner/name)" });
+});

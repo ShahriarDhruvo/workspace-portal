@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { auditLog, openDatabase } from "@portal/core";
-import { engineDigest, FakeAppHost, FakeAppNotes, FakeAppRegistry, quiet, VLLM_REPOSITORY, vllmTag } from "../../test/fakes.ts";
+import { engineDigest, FakeAppHost, FakeAppNotes, FakeAppRegistry, MING_COMMITS, quiet, VLLM_REPOSITORY, vllmTag } from "../../test/fakes.ts";
 import { waitFor } from "../../test/harness.ts";
 import { loadConfig } from "../config.ts";
 import { AppReleases } from "./app-releases.ts";
@@ -70,6 +70,31 @@ test("overview: each app as hostd reports it, with its releases from GitHub or i
   assert.deepEqual(github.calls.sort(), ["mostlygeek/llama-swap", "vllm-project/vllm"]);
   await updater.overview({ refresh: true });
   assert.equal(registry.calls, 2);
+  cleanup();
+});
+
+test("a commits app: its branch's newest commits in GitHub's order, an older installed one after them; an update installs the full id", async () => {
+  const { updater, host, github, done, cleanup } = setup();
+  const [newest, second, third] = MING_COMMITS;
+  const old = "f".repeat(40);
+  host.apps.set("ming", { id: "ming", name: "Ming-Image", kind: "dir", model: "Ming-Image-0.2-Design", commits: "main", version: second, previous: null, installed: new Set([old, second]) });
+  const ming = (await updater.overview()).apps.find((entry) => entry.status.id === "ming")!;
+  assert.deepEqual(ming.status.releases, { github: "inclusionAI/Ming-Image", commits: "main" });
+  assert.equal(ming.releases.source, "inclusionAI/Ming-Image");
+  assert.deepEqual(
+    ming.releases.releases.map((r) => [r.version, r.latest, r.notes?.url ?? null]),
+    [
+      [newest, true, `https://github.com/inclusionAI/Ming-Image/commit/${newest}`],
+      [second, false, `https://github.com/inclusionAI/Ming-Image/commit/${second}`],
+      [third, false, `https://github.com/inclusionAI/Ming-Image/commit/${third}`],
+      [old, false, null],
+    ],
+    "not sorted: f… would come first",
+  );
+  assert.ok(github.calls.includes("inclusionAI/Ming-Image@main"), "the commits of its branch, not its releases");
+  await updater.startUpdate({ app: "ming", version: newest, actorUserId: null });
+  assert.equal((await done())!.phase, "succeeded");
+  assert.deepEqual(host.calls, [`install ming ${newest}`, `apply ming ${newest}`]);
   cleanup();
 });
 

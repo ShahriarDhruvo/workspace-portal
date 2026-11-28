@@ -51,6 +51,16 @@ export function cutOffText(drain: Pick<UpdateDrain, "inFlight" | "video"> | null
   return `${requests}${video}`.trim();
 }
 
+/** A commit's full id: the versions of a program whose releases are a branch's commits (llm-server/apps.json, `commits`). */
+export function isCommitId(version: string): boolean {
+  return /^[0-9a-f]{40}$/.test(version);
+}
+
+/** A version as the page says it: a commit by the first 7 characters of its id, as git abbreviates one. */
+export function versionName(version: string): string {
+  return isCommitId(version) ? version.slice(0, 7) : version;
+}
+
 export const OFFLINE = "The workspace service is unavailable right now.";
 
 /** The badge beside a card's title. */

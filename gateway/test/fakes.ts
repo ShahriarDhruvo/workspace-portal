@@ -35,7 +35,7 @@ import {
   type WorkspaceImageSummary,
 } from "../src/docker/image-builder.ts";
 import type { RegistryClient } from "../src/updates/engine-releases.ts";
-import type { GitHubRelease, GitHubReleases } from "../src/updates/github-releases.ts";
+import type { GitHubCommit, GitHubRelease, GitHubReleases } from "../src/updates/github-releases.ts";
 import type { EngineHost } from "../src/updates/engine-updater.ts";
 import type { AppHost } from "../src/updates/app-updater.ts";
 import { HostdError, type MeterReading } from "../src/monitor/hostd.ts";
@@ -1250,6 +1250,9 @@ export class FakeNotes implements GitHubReleases {
       { tag: "v0.33.0", prerelease: false, notes: { title: "v0.33.0", url: "https://github.com/gufo-org/gufo/releases/tag/v0.33.0", publishedAt: 0, body: "### Features", breaking: false } },
     ];
   }
+  async commits(): Promise<GitHubCommit[]> {
+    return [];
+  }
 }
 
 export const VLLM_REPOSITORY = "docker.io/kyuz0/vllm-therock-gfx1151";
@@ -1262,10 +1265,15 @@ interface FakeApp {
   name: string;
   kind: "dir" | "image";
   model: string | null;
+  /** The branch of a commits app; a dir app without one has llama-swap's releases. */
+  commits?: string;
   version: string;
   previous: string | null;
   installed: Set<string>;
 }
+
+/** The commit ids FakeAppNotes lists for Ming-Image's main branch, newest first. */
+export const MING_COMMITS = ["d5615110e3ae7d27f270eafe5556d669b2069971", "a27da44d54d3146c06e4f4adcb96b6cb8c293b09", "aa67cca4cc3c1c557a936efb5b875319c988f800"] as const;
 
 /**
  * portal-hostd's /v1/apps with two apps: llama-swap (a dir app on release 276) and vLLM (an image app on 0.32.0).
@@ -1297,7 +1305,12 @@ export class FakeAppHost implements AppHost {
       kind: app.kind,
       unit: app.kind === "dir" ? `${app.id}.service` : "vllm-sov.service",
       model: app.model,
-      releases: app.kind === "dir" ? { github: "mostlygeek/llama-swap", tag: "^v([0-9]+)$" } : { github: "vllm-project/vllm", tag: "^rocm[0-9.]+-torch[0-9.]+-vllm([0-9]+\\.[0-9]+\\.[0-9]+)$" },
+      releases:
+        app.commits !== undefined
+          ? { github: "inclusionAI/Ming-Image", commits: app.commits }
+          : app.kind === "dir"
+            ? { github: "mostlygeek/llama-swap", tag: "^v([0-9]+)$" }
+            : { github: "vllm-project/vllm", tag: "^rocm[0-9.]+-torch[0-9.]+-vllm([0-9]+\\.[0-9]+\\.[0-9]+)$" },
       version: app.version,
       previous: app.previous,
       state: "active",
@@ -1398,9 +1411,16 @@ export class FakeAppRegistry implements RegistryClient {
   }
 }
 
-/** GitHub's releases of llama-swap and vLLM. */
+/** GitHub's releases of llama-swap and vLLM, and the commits of Ming-Image's main branch. */
 export class FakeAppNotes implements GitHubReleases {
   readonly calls: string[] = [];
+  async commits(repo: string, branch: string, count: number): Promise<GitHubCommit[]> {
+    this.calls.push(`${repo}@${branch}`);
+    return MING_COMMITS.slice(0, count).map((id, index) => ({
+      id,
+      notes: { title: `docs: change ${index}`, url: `https://github.com/${repo}/commit/${id}`, publishedAt: 0, body: "", breaking: false },
+    }));
+  }
   async list(repo: string): Promise<GitHubRelease[]> {
     this.calls.push(repo);
     const release = (tag: string, prerelease = false): GitHubRelease => ({

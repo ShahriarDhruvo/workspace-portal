@@ -687,15 +687,20 @@ container; the steps hostd runs are in [hostd/README.md](../hostd/README.md). Ph
 
 ## Updates of the other software
 
-The AI server's other programs, llama-swap, vLLM and the media programs, are listed in `llm-server/apps.json`, which
-portal-hostd's installer copies beside each program's `install.sh`. hostd's half (how it installs, switches and
-switches back) is in [hostd/README.md](../hostd/README.md#other-software); the gateway's is
-`gateway/src/updates/app-updater.ts`, one job at a time for all programs. Phases: `installing`, `draining`,
+The AI server's other programs, llama-swap, vLLM, Ming-Image and the media programs, are listed in
+`llm-server/apps.json`, which portal-hostd's installer copies beside each program's `install.sh`. hostd's half (how
+it installs, switches and switches back) is in [hostd/README.md](../hostd/README.md#other-software); the gateway's
+is `gateway/src/updates/app-updater.ts`, one job at a time for all programs. Phases: `installing`, `draining`,
 `restarting`, then `succeeded`, `failed` or `cancelled`.
 
 - A program is a `dir` (versions side by side under its root, `current` a symlink to one) or an `image` (a quadlet
   of its own). Its releases (`app-releases.ts`) are a dir program's GitHub releases, or an image program's registry
-  tags, both read through the program's `releases.tag` pattern, whose first group is the version. Cached and
+  tags, both read through the program's `releases.tag` pattern, whose first group is the version. A dir program
+  whose repository has no releases names a branch instead (`releases.commits`, Ming-Image's `main`): its versions
+  are that branch's five newest commits by their full ids, in GitHub's order, the first one the latest, each with
+  its message as notes. Installed commits GitHub did not list follow them, without notes. Commit ids are never
+  ordered by `compareAppVersions`: the page's `isNewerAppVersion` goes by a commit's place in that list, and one
+  not listed is older than all that are. The page shows a commit by its first seven characters. Cached and
   refreshed like Gufo's.
 - Installing runs the program's `install.sh` (a dir program: a download, or a checkout with its Python environment)
   or pulls the digest the gateway resolved for the tag (an image program), while the old version keeps serving. A

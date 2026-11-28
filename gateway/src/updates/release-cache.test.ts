@@ -55,6 +55,7 @@ function fakeGitHub(releases: GitHubRelease[]) {
       if (state.down) throw new Error("GitHub answered 403 for QwenLM/qwen-code's releases");
       return state.releases;
     },
+    commits: () => Promise.reject(new Error("the cache asks for no commits")),
   };
   return { state, github };
 }

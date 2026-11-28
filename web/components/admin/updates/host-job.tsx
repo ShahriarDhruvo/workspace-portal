@@ -2,9 +2,9 @@
 
 import type { AppUpdateJob, EngineUpdateJob } from "@portal/core/wire";
 import { cancelAppUpdate, cancelEngineUpdate } from "@/lib/actions/updates";
-import { appJobOutcome, appJobStep, appJobTitle, appPhaseLabel } from "@/lib/app-updates";
+import { appJobOutcome, appJobStep, appJobTitle, appPhaseLabel, type AppEntry } from "@/lib/app-updates";
 import { engineJobOutcome, engineJobStep, engineJobTitle, enginePhaseLabel } from "@/lib/engine-updates";
-import { drainRunning, isJobActive, type JobStep } from "@/lib/update-jobs";
+import { drainRunning, isJobActive, versionName, type JobStep } from "@/lib/update-jobs";
 import type { ActionResult } from "@/lib/validation";
 import { LocalTime } from "@/components/local-time";
 import { Button } from "@/components/ui/button";
@@ -30,13 +30,13 @@ export function EngineJob({ job, ...rest }: JobProps<EngineUpdateJob>) {
   );
 }
 
-/** A program's job (llama-swap, vLLM…), inline in its card. */
-export function AppJob({ job, ...rest }: JobProps<AppUpdateJob>) {
+/** A program's job (llama-swap, vLLM…), inline in the card of that program (`entry`). */
+export function AppJob({ job, entry, ...rest }: JobProps<AppUpdateJob> & { entry: AppEntry }) {
   return (
     <HostJob
       {...rest}
       job={job}
-      words={{ title: appJobTitle(job), phase: appPhaseLabel(job), step: appJobStep(job), outcome: appJobOutcome(job), subject: job.appName }}
+      words={{ title: appJobTitle(job, entry), phase: appPhaseLabel(job), step: appJobStep(job), outcome: appJobOutcome(job), subject: job.appName }}
       cancel={cancelAppUpdate}
     />
   );
@@ -95,8 +95,9 @@ function HostJob({ job, words, cancel, onChanged, onRestartNow, onDismiss }: Hos
         </p>
       ) : job.phase === "restarting" && job.rolledBack ? (
         <p className="text-13 text-muted-foreground">
-          {job.toVersion} didn&apos;t start properly, so the AI server is putting{" "}
-          {job.fromVersion ?? "the previous version"} back. New requests keep waiting in the portal&apos;s queue.
+          {versionName(job.toVersion)} didn&apos;t start properly, so the AI server is putting{" "}
+          {job.fromVersion === null ? "the previous version" : versionName(job.fromVersion)} back. New requests keep waiting in the
+          portal&apos;s queue.
         </p>
       ) : job.phase === "restarting" ? (
         <p className="text-13 text-muted-foreground">

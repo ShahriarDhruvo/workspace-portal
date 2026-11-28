@@ -1704,6 +1704,12 @@ def apps_json(root):
     }
 
 
+def ming_json(root):
+    """An app whose versions are the commits of a branch: its repository has no releases."""
+    return {'name': 'Ming-Image', 'kind': 'dir', 'root': root + '/opt/ming', 'unit': 'ming.service',
+            'model': 'Ming-Image-0.2-Design', 'releases': {'github': 'inclusionAI/Ming-Image', 'commits': 'main'}}
+
+
 class FakeAppsState:
     def __init__(self, root):
         self.root = root
@@ -1829,7 +1835,7 @@ def make_apps(case):
     case.addCleanup(srv.server_close)
     case.addCleanup(srv.shutdown)
     url = f'http://127.0.0.1:{srv.server_port}'
-    spec = apps_json(case.root)
+    spec = {**apps_json(case.root), 'ming': ming_json(case.root)}
     spec['llama-swap']['check'] = url + '/health'
     write(case.root, '/apps/apps.json', json.dumps(spec))
     for app_id in spec:
@@ -1877,13 +1883,28 @@ class TestAppsConfig(TmpRoot):
         self.assertEqual(apps['vllm']['quadlet'], '/home/u/.config/containers/systemd/vllm-sov.container')
         self.assertEqual(apps['vllm']['unit'], 'vllm-sov.service')
 
+    def test_a_commits_app_names_a_branch_and_no_tag(self):
+        apps = self.load({**apps_json('/srv'), 'ming': ming_json('/srv')})
+        self.assertEqual((apps['ming']['root'], apps['ming']['tag']), ('/srv/opt/ming', None))
+        self.assertEqual(apps['ming']['releases'], {'github': 'inclusionAI/Ming-Image', 'commits': 'main'})
+        branch = {**ming_json('/srv'), 'releases': {'github': 'inclusionAI/Ming-Image', 'commits': 'release/0.2.x'}}
+        self.assertIsNone(self.load({'ming': branch})['ming']['tag'])
+
     def test_refuses_what_it_could_not_act_on(self):
         good = apps_json('/srv')
+        ming = ming_json('/srv')
         for change, why in [
             ({'vllm': {**good['vllm'], 'model': None}}, 'needs quadlet'),
             ({'acestep': {**good['acestep'], 'root': '/'}}, 'root must be'),
             ({'llama-swap': {**good['llama-swap'], 'check': None}}, 'needs check'),
             ({'acestep': {**good['acestep'], 'releases': {'tag': '^v.+$'}}}, 'needs a group'),
+            ({'acestep': {**good['acestep'], 'releases': {'tag': 277}}}, 'must be a pattern'),
+            ({'acestep': {**good['acestep'], 'releases': {'github': 'ace-step/ACE-Step-1.5'}}}, 'either tag'),
+            ({'ming': {**ming, 'releases': {**ming['releases'], 'tag': '^v(.+)$'}}}, 'either tag'),
+            ({'ming': {**ming, 'releases': {**ming['releases'], 'commits': 'main&per_page=100'}}}, 'a branch name'),
+            ({'ming': {**ming, 'releases': {**ming['releases'], 'commits': ''}}}, 'a branch name'),
+            ({'ming': {**ming, 'releases': {'commits': 'main'}}}, 'with releases.github'),
+            ({'vllm': {**good['vllm'], 'releases': ming['releases']}}, 'for a dir app'),
             ({'Bad_Id': good['acestep']}, 'the id must be'),
             ({'acestep': {**good['acestep'], 'kind': 'zip'}}, 'kind must be'),
         ]:
@@ -1994,6 +2015,24 @@ class TestApps(AppsCase):
         j = self.wait_job()
         self.assertEqual(j['phase'], 'failed')
         self.assertIn('check for updates again', j['error'])
+
+    def test_a_commits_app_installs_switches_and_removes_by_commit_id(self):
+        old, new = 'd5' * 20, 'a2' * 20
+        write(self.root, f'/opt/ming/{old}/{H.APP_MARKER}', old + '\n')
+        os.symlink(old, self.root + '/opt/ming/current')
+        ming = self.status('ming')
+        self.assertEqual((ming['version'], [v['version'] for v in ming['versions']]), (old, [old]))
+        self.assertEqual(ming['releases'], {'github': 'inclusionAI/Ming-Image', 'commits': 'main'}, 'the gateway reads the branch here')
+        self.apps.start_install('ming', {'version': new})
+        self.assertEqual(self.wait_job()['phase'], 'succeeded')
+        self.assertEqual(read(f'{self.root}/opt/ming/{new}/{H.APP_MARKER}'), new + '\n')
+        self.apps.start_apply('ming', {'version': new})
+        j = self.wait_job()
+        self.assertEqual(j['phase'], 'succeeded', j)
+        self.assertEqual(os.readlink(self.root + '/opt/ming/current'), new)
+        self.assertEqual(self.status('ming')['previous'], old)
+        self.assertEqual(self.apps.remove('ming', old), {'ok': True})
+        self.assertEqual([v['version'] for v in self.status('ming')['versions']], [new])
 
     def test_remove_keeps_what_runs(self):
         with self.assertRaises(H.ApiError) as c:

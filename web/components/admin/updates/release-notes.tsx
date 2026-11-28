@@ -52,6 +52,8 @@ function safeUrl(url: string): string | null {
 export interface ReleaseNotesTarget {
   name: string;
   version: string;
+  /** The whole id of the commit `version` cuts short: the notes are that commit's message, not a release's. */
+  commit?: string;
   notes: ReleaseNotes;
 }
 
@@ -68,6 +70,7 @@ interface ReleaseNotesDialogProps {
  * One release's notes, the same for the engine and the agents (each Package images row's "Release notes"): its
  * Breaking changes badge and date, the notes as simple text (lib/release-notes.ts; never HTML), and the release on
  * GitHub for the whole of a long changelog. The notes scroll inside the dialog, which never outgrows the screen.
+ * For a commit (a program whose versions are commits) it is the commit's message, under its id and date.
  */
 export function ReleaseNotesDialog({ target, open, onOpenChange, returnFocusTo }: ReleaseNotesDialogProps) {
   const url = target ? safeUrl(target.notes.url) : null;
@@ -85,15 +88,18 @@ export function ReleaseNotesDialog({ target, open, onOpenChange, returnFocusTo }
                   {target.notes.breaking ? <Badge variant="destructive">Breaking changes</Badge> : null}
                   {target.notes.publishedAt ? (
                     <span>
-                      Released <LocalTime at={target.notes.publishedAt} relative />
+                      {target.commit ? "Committed" : "Released"} <LocalTime at={target.notes.publishedAt} relative />
                     </span>
-                  ) : (
+                  ) : target.commit ? null : (
                     <span>{target.notes.title}</span>
                   )}
+                  {target.commit ? <span className="font-mono text-12 wrap-anywhere">{target.commit}</span> : null}
                 </div>
               </DialogDescription>
             </DialogHeader>
             <div className="-mx-4 flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto px-4 text-13 text-muted-foreground">
+              {/* A release's title only repeats its version; a commit's is the first line of its message. */}
+              {target.commit ? <h3 className="text-13 font-medium wrap-anywhere text-foreground">{target.notes.title}</h3> : null}
               {group(parseReleaseNotes(target.notes.body, 60, target.version)).map((block, index) =>
                 block.kind === "list" ? (
                   <ul key={index} className="flex list-disc flex-col gap-1 pl-5">

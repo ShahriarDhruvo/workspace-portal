@@ -1,10 +1,11 @@
 // The releases of the other software on the AI server (llm-server/apps.json, as portal-hostd reports it), for Admin >
 // Updates: a dir app's from its GitHub releases, an image app's from its registry's tags, each tag's version being the
-// first group of the app's `releases.tag` pattern. Cached like the agents' and Gufo's (release-cache.ts).
+// first group of the app's `releases.tag` pattern. A dir app with `releases.commits` has no releases: its versions are
+// the newest commits of that branch, each by its full id. Cached like the agents' and Gufo's (release-cache.ts).
 import { compareAppVersions, type AppRelease, type AppReleaseList, type AppStatus, type ReleaseNotes } from "@portal/core";
 import { RELEASES_OFFERED } from "./agent-overview.ts";
 import { EngineReleaseError, stableNotes, type RegistryClient } from "./engine-releases.ts";
-import type { GitHubRelease, GitHubReleases } from "./github-releases.ts";
+import type { GitHubCommit, GitHubRelease, GitHubReleases } from "./github-releases.ts";
 import type { Logger } from "../lib/log.ts";
 import { ReleaseCache } from "./release-cache.ts";
 
@@ -49,13 +50,28 @@ export function registryAppReleases(tags: readonly string[], pattern: RegExp): L
   return versions.map((version, index) => ({ version, tag: byVersion.get(version)!, latest: index === 0 }));
 }
 
-/** The releases the card lists: `releases`, plus each installed version not among them. */
+/** A commits app's releases: its branch's newest commits in GitHub's order, the first the latest. */
+export function commitAppReleases(commits: readonly GitHubCommit[]): Listed[] {
+  return commits.map(({ id, notes }, index) => ({ version: id, tag: null, latest: index === 0, notes }));
+}
+
+/**
+ * The releases the card lists: `releases`, plus each installed version not among them, newest first. Commit ids have
+ * no order of their own: a commits app (`releases.commits`) keeps GitHub's, and its installed commits that GitHub did
+ * not list come after, as older than all it listed. Those have no notes, which is how the page tells them apart.
+ */
 export function withInstalled(releases: readonly Listed[], app: AppStatus, notes: ReadonlyMap<string, ReleaseNotes>): AppRelease[] {
   const listed = new Map(releases.map((release) => [release.version, release]));
   for (const { version } of app.versions) if (!listed.has(version)) listed.set(version, { version, tag: null, latest: false });
-  return [...listed.values()]
-    .sort((a, b) => byNewestAppVersion(a.version, b.version))
-    .map((release) => ({ version: release.version, tag: release.tag, latest: release.latest, notes: release.notes ?? notes.get(release.version) ?? null }));
+  const all = [...listed.values()];
+  if (app.releases.commits === undefined) all.sort((a, b) => byNewestAppVersion(a.version, b.version));
+  return all.map((release) => ({ version: release.version, tag: release.tag, latest: release.latest, notes: release.notes ?? notes.get(release.version) ?? null }));
+}
+
+/** The app's `releases.tag` as a pattern. A commits app has none, and nothing here asks for one. */
+function tagPattern(app: AppStatus): RegExp {
+  if (app.releases.tag === undefined) throw new EngineReleaseError(`${app.name} has no releases.tag`);
+  return new RegExp(app.releases.tag);
 }
 
 export interface AppReleasesOptions {
@@ -65,16 +81,11 @@ export interface AppReleasesOptions {
   log?: Logger;
 }
 
-interface Source {
-  app: AppStatus;
-  pattern: RegExp;
-}
-
 export class AppReleases {
   readonly #registry: RegistryClient;
   readonly #github: GitHubReleases;
-  /** What each app's releases come from, as hostd last said: the cache asks by app id. */
-  readonly #sources = new Map<string, Source>();
+  /** Each app as hostd last reported it: the cache asks by app id. */
+  readonly #apps = new Map<string, AppStatus>();
   readonly #cache: ReleaseCache<{ githubRepo: string | null; releases: Listed[] }>;
 
   constructor({ registry, github, ...rest }: AppReleasesOptions) {
@@ -85,17 +96,21 @@ export class AppReleases {
       github,
       notes: stableNotes,
       source: async (id) => {
-        const source = this.#sources.get(id);
-        if (source === undefined) throw new EngineReleaseError(`no app ${id}`);
-        const { app, pattern } = source;
+        const app = this.#apps.get(id);
+        if (app === undefined) throw new EngineReleaseError(`no app ${id}`);
+        const { github: repo, commits: branch } = app.releases;
         if (app.kind === "dir") {
-          if (!app.releases.github) throw new EngineReleaseError(`${app.name} names no GitHub repository`);
-          // A dir app's notes come with its releases: no second request to GitHub.
-          return { etag: null, package: { githubRepo: null, releases: githubAppReleases(await github.list(app.releases.github), pattern, app.releases.prerelease === true) } };
+          if (!repo) throw new EngineReleaseError(`${app.name} names no GitHub repository`);
+          // A dir app's notes come with its releases or commits: no second request to GitHub.
+          const releases =
+            branch === undefined
+              ? githubAppReleases(await github.list(repo), tagPattern(app), app.releases.prerelease === true)
+              : commitAppReleases(await github.commits(repo, branch, RELEASES_OFFERED));
+          return { etag: null, package: { githubRepo: null, releases } };
         }
         if (!app.repository) throw new EngineReleaseError(`${app.name} has no image repository`);
-        const releases = registryAppReleases(await this.#registry.tags(app.repository), pattern);
-        return { etag: null, package: { githubRepo: app.releases.github ?? null, releases } };
+        const releases = registryAppReleases(await this.#registry.tags(app.repository), tagPattern(app));
+        return { etag: null, package: { githubRepo: repo ?? null, releases } };
       },
     });
   }
@@ -107,7 +122,7 @@ export class AppReleases {
 
   /** Each app's releases, with its installed versions. */
   async list(apps: readonly AppStatus[], options: { refresh?: boolean } = {}): Promise<Map<string, AppReleaseList>> {
-    for (const app of apps) this.#sources.set(app.id, { app, pattern: new RegExp(app.releases.tag) });
+    for (const app of apps) this.#apps.set(app.id, app);
     const { packages, checkedAt, error } = await this.#cache.snapshot(apps.map((app) => app.id), options);
     const lists = new Map<string, AppReleaseList>();
     for (const app of apps) {
@@ -124,7 +139,7 @@ export class AppReleases {
   async resolve(app: AppStatus, version: string): Promise<{ image: string; tag: string } | null> {
     if (app.kind === "dir") return null;
     if (!app.repository) throw new EngineReleaseError(`${app.name} has no image repository`);
-    const tag = registryAppReleases(await this.#registry.tags(app.repository), new RegExp(app.releases.tag)).find((release) => release.version === version)?.tag;
+    const tag = registryAppReleases(await this.#registry.tags(app.repository), tagPattern(app)).find((release) => release.version === version)?.tag;
     if (!tag) throw new EngineReleaseError(`${app.repository} has no tag of ${version}`);
     const digest = await this.#registry.digest(app.repository, tag);
     if (digest === null) throw new EngineReleaseError(`the registry has no digest for ${app.repository}:${tag}`);

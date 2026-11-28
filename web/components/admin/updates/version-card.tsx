@@ -24,8 +24,11 @@ interface VersionCardProps {
   /** The package or image repository, in mono. */
   subtitle?: string | null;
   status: CardStatus;
-  /** The focal point; omitted when there is no version to show (not set up, unreachable). */
-  version?: { label: string; value: string };
+  /**
+   * The focal point; omitted when there is no version to show (not set up, unreachable). `full` is the whole id of
+   * a commit that `value` cuts short, written under it.
+   */
+  version?: { label: string; value: string; full?: string };
   /** The primary action; none while the card's job runs (its panel is the focus, and nothing else can start). */
   actions?: ReactNode;
   /** Under the version: the job panel, notices, an empty state. */
@@ -73,6 +76,7 @@ export function VersionCard({ title, subtitle, status, version, actions, childre
                 <div className="flex min-w-0 flex-col gap-1">
                   <span className="text-12 text-muted-foreground">{version.label}</span>
                   <span className="font-mono text-24 leading-8 font-semibold break-all tabular-nums">{version.value}</span>
+                  {version.full ? <span className="font-mono text-12 break-all text-muted-foreground">{version.full}</span> : null}
                 </div>
               ) : null}
               {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}

@@ -25,11 +25,13 @@ interface RowAction {
 /** One version in a card's Package images table (agentPackageRows, enginePackageRows, appPackageRows). */
 export interface PackageImageRow {
   version: string;
+  /** The whole id of a commit that `version` cuts short: its tooltip, and written out on a touch screen. */
+  commit?: string;
   /** What new workspaces start with (the agents), or what runs (the engine). */
   current: boolean;
   latest: boolean;
   publishedAt: number | null;
-  /** Its GitHub release; null: no Release notes button. */
+  /** Its GitHub release, or the commit's message; null: no Release notes (Commit message) button. */
   notes: ReleaseNotes | null;
   /** Its image (or install) on the server and its size (null: unknown); null when it is built, downloaded or installed first. */
   image: { sizeBytes: number | null } | null;
@@ -48,6 +50,8 @@ interface PackageImagesProps {
   title?: string;
   /** The column that says what is on the server: "Image" by default, "Installed" for files. */
   column?: string;
+  /** The date column: "Released" by default, "Committed" for a program whose versions are commits. */
+  dateColumn?: string;
   rows: PackageImageRow[];
   /** The current row's badge: "Current" (an agent's) or "In use" (the AI server's). */
   currentLabel: string;
@@ -71,6 +75,7 @@ export function PackageImages({
   name,
   title = "Package images",
   column = "Image",
+  dateColumn = "Released",
   rows,
   currentLabel,
   missingLabel,
@@ -95,7 +100,7 @@ export function PackageImages({
         <TableHeader>
           <TableRow className="hover:bg-transparent">
             <DataTableHead>Version</DataTableHead>
-            <DataTableHead>Released</DataTableHead>
+            <DataTableHead>{dateColumn}</DataTableHead>
             <DataTableHead>{column}</DataTableHead>
             {workspaces ? <DataTableHead align="right">Workspaces</DataTableHead> : null}
             <DataTableHead className="sticky-actions">
@@ -108,13 +113,18 @@ export function PackageImages({
             <DataTableEmpty colSpan={columns}>{empty}</DataTableEmpty>
           ) : (
             page.map((row) => (
-              <TableRow key={row.version} className="h-12">
+              <TableRow key={row.commit ?? row.version} className="h-12">
                 <TableCell>
                   <span className="flex items-center gap-2 max-sm:flex-wrap">
-                    <span className="font-mono text-13">{row.version}</span>
+                    <span className="font-mono text-13" title={row.commit}>
+                      {row.version}
+                    </span>
                     {row.current ? <Badge>{currentLabel}</Badge> : null}
                     {row.latest ? <Badge variant="outline">latest</Badge> : null}
                     {row.notes?.breaking ? <Badge variant="destructive">Breaking changes</Badge> : null}
+                    {row.commit ? (
+                      <span className="hidden font-mono text-12 break-all whitespace-normal text-muted-foreground pointer-coarse:inline">{row.commit}</span>
+                    ) : null}
                   </span>
                 </TableCell>
                 <TableCell className="text-muted-foreground">{row.publishedAt ? <LocalTime at={row.publishedAt} relative /> : "—"}</TableCell>
@@ -133,10 +143,10 @@ export function PackageImages({
                         variant="ghost"
                         size="sm"
                         onClick={(event) => {
-                          if (row.notes) notes.show({ name, version: row.version, notes: row.notes }, event.currentTarget);
+                          if (row.notes) notes.show({ name, version: row.version, commit: row.commit, notes: row.notes }, event.currentTarget);
                         }}
                       >
-                        Release notes
+                        {row.commit ? "Commit message" : "Release notes"}
                       </Button>
                     ) : null}
                     {slots.action ? <div className={SLOT}>{row.action ? <RowButton action={row.action} /> : null}</div> : null}

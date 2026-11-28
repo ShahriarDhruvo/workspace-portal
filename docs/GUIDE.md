@@ -874,16 +874,18 @@ again. Drama 3 is 43 GB on disk.
 Builds Ming-Image, fish-speech and ACE-Step, each with a Python environment of its own under `/opt/ai-studio`,
 pulls vLLM's image and puts the transcription model's vLLM plugin beside it. A version's folder holds
 `.portal-version`, and `current` points at the version that runs: that is how **Admin > Updates** installs a newer
-one beside it later. Ming-Image has no releases, so its folder is named after the commit it is built from, and
-**Admin > Updates** does not offer it: to update it, build a newer commit the same way and point `current` at it.
+one beside it later. Ming-Image's repository has no releases, so its versions are the commits of its `main`
+branch: a folder is named after the full id of the commit it is built from, and **Admin > Updates** offers the
+branch's five newest commits.
 
 **AI server**:
 
 ```sh
 cd ~/workspace-portal/llm-server
-bash apps/ming/install.sh d5615110e3ae7d27f270eafe5556d669b2069971 /opt/ai-studio/ming/d561511
-echo d561511 > /opt/ai-studio/ming/d561511/.portal-version
-ln -s d561511 /opt/ai-studio/ming/current
+ming=d5615110e3ae7d27f270eafe5556d669b2069971
+bash apps/ming/install.sh $ming /opt/ai-studio/ming/$ming
+echo $ming > /opt/ai-studio/ming/$ming/.portal-version
+ln -s $ming /opt/ai-studio/ming/current
 bash apps/fish-speech/install.sh 3.0.0-beta /opt/ai-studio/fish-speech/3.0.0-beta
 echo 3.0.0-beta > /opt/ai-studio/fish-speech/3.0.0-beta/.portal-version
 ln -s 3.0.0-beta /opt/ai-studio/fish-speech/current
@@ -896,8 +898,8 @@ uv pip install --no-deps --python-version 3.12 --python-platform x86_64-manylinu
   --target /opt/ai-studio/vllm-sov/site-packages /tmp/sov-plugin soundfile==0.14.0 av==19.0.2 soxr==1.1.0
 ```
 
-**You should see** `installed Ming-Image d561511 in /opt/ai-studio/ming/d561511`, then `installed fish-speech
-3.0.0-beta in /opt/ai-studio/fish-speech/3.0.0-beta`, later
+**You should see** `installed Ming-Image d561511 in /opt/ai-studio/ming/d5615110...`, the folder with the whole
+id, then `installed fish-speech 3.0.0-beta in /opt/ai-studio/fish-speech/3.0.0-beta`, later
 `installed ACE-Step 0.1.8 (...) in /opt/ai-studio/acestep/0.1.8`, and at the end uv's list of what it installed.
 
 The models' units and quadlets are in place since [step 8](#8-start-the-models), Turbo's among them. Like the
@@ -1719,7 +1721,10 @@ then `systemctl --user daemon-reload` and `curl -X POST http://127.0.0.1:8080/ap
 
 **llama-swap, vLLM and the media programs** have a card each under **Admin > Updates**, below Gufo's: the programs
 of `llm-server/apps.json` that are installed. Each lists its releases (from GitHub, or for vLLM from its image
-registry) with their notes, and what is installed. An update installs the new version beside the old one while the
+registry) with their notes, and what is installed. Ming-Image's card lists the five newest commits of its `main`
+branch instead, each by the first seven characters of its id, with its date and message: **Update available** there
+means that the branch has a newer commit, which may change no more than its documentation, so read the message
+first. An update installs the new version beside the old one while the
 old one serves (llama-swap is one download; a media program also builds its Python environment, which takes longer),
 then waits for running requests like Gufo's, switches and restarts the program, and switches back by itself if it
 doesn't come up. A program behind llama-swap is started once to check it, then the LLM loads again; one whose model
@@ -1750,6 +1755,23 @@ rm ~/.local/bin/llama-swap
 
 **You should see** `install.sh: updates of other software: ...` among the installer's lines, and a llama-swap card
 on **Admin > Updates**. This path was not run with the installer.
+
+**A Ming-Image built before it had a card** is in a folder named after the short id, `d561511`, which the card
+does not take for an installed version. Rename it once to the whole id, while Ming-Image is not running:
+
+**AI server**:
+
+```sh
+curl -s -X POST http://127.0.0.1:8080/api/models/unload
+cd /opt/ai-studio/ming
+ming=d5615110e3ae7d27f270eafe5556d669b2069971
+mv d561511 $ming
+echo $ming > $ming/.portal-version
+ln -sfn $ming current
+```
+
+**You should see**, after a reload of **Admin > Updates**, a Ming-Image card with `d561511` in use. The next chat
+request loads the LLM again.
 
 </details>
 

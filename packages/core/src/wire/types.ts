@@ -113,10 +113,13 @@ export interface AgentInfo {
   version: string;
 }
 
-/** A release's notes on GitHub (the agents' and Gufo's). */
+/**
+ * A release's notes on GitHub (the agents', Gufo's and the other software's). For an app whose versions are commits,
+ * a commit's message: `title` is its first line, `body` the rest, `publishedAt` its committer date.
+ */
 export interface ReleaseNotes {
   title: string;
-  /** The release's page on github.com. */
+  /** The release's page on github.com, or the commit's. */
   url: string;
   publishedAt: number | null;
   /** Markdown, cut when long (the page links to the full notes). */
@@ -334,11 +337,16 @@ export interface EngineOverview {
   drainMinutes: number;
 }
 
-/** Where an app's releases come from (llm-server/apps.json): `tag`'s first group is the version. */
+/** Where an app's releases come from (llm-server/apps.json): it has either `tag` or `commits`. */
 export interface AppReleaseSource {
-  /** A pattern over the tags (GitHub's for a dir app, the registry's for an image app). */
-  tag: string;
-  /** owner/name: a dir app's releases, an image app's release notes (tag v<version>). */
+  /** A pattern over the tags (GitHub's for a dir app, the registry's for an image app) whose first group is the version. */
+  tag?: string;
+  /**
+   * A branch of `github`, for a dir app whose repository has no releases: its versions are the branch's commits, each
+   * by its full 40-character id. They have no order but GitHub's list, newest first.
+   */
+  commits?: string;
+  /** owner/name: a dir app's releases or commits, an image app's release notes (tag v<version>). */
   github?: string;
   /** Prereleases are offered too. */
   prerelease?: boolean;
@@ -399,13 +407,17 @@ export interface AppRelease {
   tag: string | null;
   /** The newest release offered. */
   latest: boolean;
+  /** A commits app's release (`releases.commits`) has them when GitHub listed the commit, and only then. */
   notes: ReleaseNotes | null;
 }
 
 export interface AppReleaseList {
   /** Where they come from: owner/name on GitHub, or the image repository. */
   source: string;
-  /** The newest releases, and the versions installed, newest first. */
+  /**
+   * The newest releases, and the versions installed, newest first. Of a commits app: GitHub's newest commits in its
+   * order, then the installed ones it did not list, which are older than all of those.
+   */
   releases: AppRelease[];
   checkedAt: number | null;
   error: string | null;
