@@ -827,6 +827,53 @@ plain words, nobody else on the AI server. Times run from the prompt to the last
   opened a frame with `read` and described the teapot, the steam and the window behind it. The media skill said
   "open" the images and frames; it now names `read`.
 
+### Requests at once
+
+Measured on November 27, 2026, straight at llama-swap with nobody else on the server. Each model was loaded
+first, and the requests of a cell were sent at the same moment. Times run from sending to the whole answer, for a
+video from creating the job to its end.
+
+| Model and request | One alone | Sent together |
+|---|--:|---|
+| Qwen-Image-2.1-Turbo, 1024 × 1024 | 18.3 s | Two: 18.4 and 36.7 s. Three: 18.5, 36.9 and 55.3 s |
+| The same, as one request with `n` | | `n` 2: 37.0 s. `n` 4: 74.6 s |
+| Ming-Image, 1024 × 1024 | 30.5 s | Two: 30.5 s, and an HTTP 502 after 0.0 s (a fault, fixed: below) |
+| Qwen3-TTS, a line of about 10 s | 3.9 s | Two: 3.9 and 7.7 s. Four different lines: 5.7, 9.5, 14.1 and 18.8 s |
+| Qwen3-ASR, a 17.2 s recording | 1.2 s | Two: 1.2 and 2.4 s. Four: 1.2, 2.4, 3.6 and 4.8 s |
+| ACE-Step turbo, 30 s track | 2.7 s | Two: 2.7 and 5.7 s |
+| ACE-Step base, 30 s track | 14.6 s | Two: 14.7 and 29.5 s |
+| Fish Audio Drama 3, about 13.3 s of speech | 37.9 s | Two: 40.6 and 78.5 s |
+| MiniMax H3, 5 s at 512 × 512, `fast` preset | 221 and 201 s | Two jobs created together: 206 and 407 s |
+| SOV-Transcribe-1, a 34.6 s recording | 1.51 s | Eight: all answered within 3.0 s |
+
+- **Every model but SOV makes one thing at a time.** A second request waits inside the model's server and is
+  answered as late as if it had been sent after the first. SOV runs under vLLM with `--max-num-seqs 8` and
+  transcribes eight recordings together.
+- **A second copy of a model gains nothing: the GPU is the limit.** Two Turbo containers with one image each
+  ended after 38.3 s both, with 63.4 GiB in use, where one container makes two images in 36.7 s. Two Qwen3-TTS
+  containers: 7.3 and 7.4 s, against 3.9 and 7.7 s from one. Two Qwen3-ASR containers: 2.2 s both, against 1.2 and
+  2.4 s.
+- **Gufo has sessions for the LLM only.** `gufo serve image`, `tts` and `asr` answer `--sessions 2` with
+  `Error: Unknown option: --sessions`; `gufo serve video` takes it and logs `sessions=1 queue_capacity=1`.
+- **ACE-Step in batches**, with its Python API outside the server, `batch_size` 1, 2 and 4. Turbo, 30 s tracks:
+  2.7, 4.3 and 8.1 s, so 2.0 s a track in a batch of four; 180 s tracks: 14.7, 27.9 and 54.8 s. Base, 30 s tracks:
+  14.8, 29.9 and 62.4 s; 180 s tracks: 117.1, 232.7 and 465.2 s, no faster a track. GPU memory stayed between 22.8
+  and 23.5 GiB. The server keeps one track per request: the gain is turbo's alone, and at most 0.7 s a track.
+- **The everyday speech models swap among themselves.** With Qwen3-TTS loaded, a first request for the voice
+  design model took 6.2 s and the next 3.8 s; a first transcription 3.8 s and the next 1.2 s. Sent together: speech
+  and voice design 4.8 and 11.2 s, speech and a transcription 6.3 and 10.1 s.
+- **Ming-Image's 502.** Its server counted each prompt's tokens with the model's own tokenizer, outside the lock
+  that lets one image be made at a time. A second request did that while the first one's image was being made,
+  the tokenizer raised `RuntimeError: Already borrowed`, the request's thread ended, and llama-swap answered 502.
+  The server now counts with a copy of the tokenizer. With it, two requests sent together were answered after 30.5
+  and 60.8 s, three after 30.6, 60.9 and 91.4 s, each with its image.
+- **llama-swap serves the loaded model's requests first**, however many keep coming. A 2,500-token answer in
+  progress ended after 61.0 s before the image asked for at 5.0 s was made, by 87.9 s. Three images and three chat
+  requests sent in turn: the three images came first, after 28.0, 46.4 and 64.8 s, then the three answers, after
+  95.4 to 95.9 s. Twelve chat requests, one every 3 s, with an image asked for at 2.0 s: the image was made last, by
+  78.3 s, after the last answer at 51.5 s. With agents at work an image could wait without end, so the portal's
+  gateway gives each model its turn itself ([architecture](ARCHITECTURE.md#service-api)).
+
 ### Fish S2-Pro and ACE-Step
 
 The two Fish rows are S2-Pro's, from before Drama 3 replaced it: S2-Pro is no longer installed.
