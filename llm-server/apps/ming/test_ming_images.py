@@ -62,7 +62,19 @@ class Profile:
 
 
 class Tokenizer:
+    """Like the real one, it fails when a second thread uses it before the first is done."""
+
+    seconds = 0.0
+
+    def __init__(self):
+        self.busy = False
+
     def __call__(self, text):
+        if self.busy:
+            raise RuntimeError("Already borrowed")
+        self.busy = True
+        time.sleep(self.seconds)
+        self.busy = False
         return {"input_ids": text.split()}
 
 
@@ -90,6 +102,7 @@ class Ming:
         assert (input_image, resolution) == (None, None)
         cls.calls.append({"task": task, "prompt": prompt, "steps": sampling.steps, "seed": seed, "width": width,
                           "height": height, "num_layers": num_layers})
+        processor.tokenizer(prompt)
         time.sleep(cls.seconds)
         if cls.fail_run:
             raise cls.fail_run
@@ -121,7 +134,7 @@ class Weights(unittest.TestCase):
     def setUp(self):
         Cuda.available, Cuda.calls[:] = True, []
         Ming.fail_load = Ming.fail_run = None
-        Ming.seconds, Ming.calls[:] = 0.0, []
+        Ming.seconds, Ming.calls[:], Tokenizer.seconds = 0.0, [], 0.0
         self.models = Path(self.enterContext(tempfile.TemporaryDirectory()))
         for file in M.FILES:
             (self.models / file).parent.mkdir(parents=True, exist_ok=True)
@@ -331,6 +344,24 @@ class Generations(Weights):
             thread.join()
         self.assertGreaterEqual(time.monotonic() - started, 0.6)
         self.assertEqual(len(Ming.calls), 3)
+
+    def test_requests_sent_at_once_are_all_answered(self):
+        Tokenizer.seconds = 0.05
+        failed = []
+
+        def one():
+            try:
+                self.generate()
+            except Exception as error:
+                failed.append(error)
+
+        threads = [threading.Thread(target=one) for _ in range(4)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(failed, [])
+        self.assertEqual(len(Ming.calls), 4)
 
 
 if __name__ == "__main__":

@@ -29,6 +29,7 @@ runs it with that venv's Python.
 
 import argparse
 import base64
+import copy
 import io
 import json
 import logging
@@ -118,8 +119,9 @@ class Server:
     def __init__(self, args: argparse.Namespace):
         self.args = args
         self.status = "loading"
-        self.model = self.processor = self.profile = None
+        self.model = self.processor = self.profile = self.tokenizer = None
         self.gpu = threading.Lock()
+        self.tokenizing = threading.Lock()
 
     def load(self) -> None:
         """Loads the model onto the GPU; any failure ends the process so systemd and llama-swap see it."""
@@ -139,6 +141,9 @@ class Server:
             options = types.SimpleNamespace(processor=None, dtype="bfloat16", attn_implementation="eager",
                                             device="cuda:0", device_map="balanced", num_gpus=1)
             self.model, self.processor = infer.load_model_and_processor(directory, options)
+            # Counts a request's prompt while the model uses its own tokenizer for another's image: one tokenizer
+            # used by two threads at once raises "Already borrowed", and that request got no answer.
+            self.tokenizer = copy.deepcopy(self.processor.tokenizer)
             self.model.diffusion_loss.vae.enable_tiling(
                 tile_sample_min_height=VAE_TILE, tile_sample_min_width=VAE_TILE,
                 tile_sample_stride_height=VAE_STRIDE, tile_sample_stride_width=VAE_STRIDE)
@@ -160,7 +165,9 @@ class Server:
         prompt = body.get("prompt")
         if not isinstance(prompt, str) or not prompt.strip():
             raise BadRequest("prompt is required")
-        if len(self.processor.tokenizer(prompt)["input_ids"]) > PROMPT_TOKENS:
+        with self.tokenizing:
+            tokens = len(self.tokenizer(prompt)["input_ids"])
+        if tokens > PROMPT_TOKENS:
             raise BadRequest(f"prompt is longer than {PROMPT_TOKENS} tokens")
         if body.get("response_format", "b64_json") not in (None, "b64_json"):
             raise BadRequest('response_format must be "b64_json": images are returned as base64 PNG')
