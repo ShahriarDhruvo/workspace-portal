@@ -15,6 +15,8 @@ PublishPort=127.0.0.1:18089:8080
 # Gufo's catalog offers only the Base variant: this one is `hf download Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign` at a
 # pinned revision into qwen3-tts-voicedesign, beside the weights `gufo model install` downloaded (docs/GUIDE.md).
 Volume=/models/gufo-models:/models:ro,z
+# Without it podman kills the container 10 s after SIGTERM, whatever TimeoutStopSec says.
+StopTimeout=50
 HealthCmd=curl -fsS -o /dev/null http://127.0.0.1:8080/ready
 HealthInterval=30s
 HealthTimeout=10s

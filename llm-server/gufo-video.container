@@ -16,6 +16,8 @@ Volume=/models/gufo-models:/models:ro,z
 Environment=GUFO_MODELS_DIR=/models
 # The jobs and their finished MP4s, kept until --ttl; owned by the container's user (uid 1000).
 Volume=/models/gufo-cache/video-jobs:/jobs:Z
+# Without it podman kills the container 10 s after SIGTERM, whatever TimeoutStopSec says.
+StopTimeout=50
 HealthCmd=curl -fsS -o /dev/null http://127.0.0.1:8080/ready
 HealthInterval=30s
 HealthTimeout=10s

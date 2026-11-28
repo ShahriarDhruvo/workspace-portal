@@ -40,6 +40,7 @@ BUSY_PCT = 1.0          # a logical CPU counts as busy (for clock averages) abov
 PING_EVERY = 15.0
 STATUS_CACHE = 5.0
 METER_PERIOD = 2.0
+GPU_METRICS_PERIOD = 2.0    # the samples read amdgpu's gpu_metrics at most this often
 SPACE_PERIOD = 5.0      # filesystem space is measured at most this often
 SECTOR = 512            # /proc/diskstats counts 512-byte sectors, whatever the disk's block size
 
@@ -763,14 +764,21 @@ class Host:
                 per[int(f[0][3:])] = pair
         return agg, per
 
-    def read(self):
+    def read(self, prev=None):
+        """One reading; prev is the one before it, None after a pause. Its gm is amdgpu's gpu_metrics and gm_before
+        the gpu_metrics read before that one, which the throttle counters are compared with."""
         raw = {'mono': time.monotonic(), 't': now_ms(), 'gen': self.perf_gen}
         raw['agg'], raw['per'] = self._stat()
         raw['mem'] = self._meminfo()
         raw['temp'] = self.cpu_temp.int() if self.cpu_temp else None
         g = self.gpu
         if self.amd:
-            raw['gm'], raw['vram'] = g.read(), g.vram_used.int()
+            raw['vram'] = g.vram_used.int()
+            # Each read of gpu_metrics is a request to the SMU firmware, which has stopped answering under load before.
+            if prev and raw['mono'] - prev['gm_mono'] < GPU_METRICS_PERIOD:
+                raw['gm'], raw['gm_mono'], raw['gm_before'] = prev['gm'], prev['gm_mono'], prev['gm_before']
+            else:
+                raw['gm'], raw['gm_mono'], raw['gm_before'] = g.read(), raw['mono'], prev and prev['gm']
         elif g is not None:
             raw['act'], raw['rc6'] = g.act.int(), g.rc6.int() if g.rc6 else None
         for name, grp in self.groups.items():
@@ -825,8 +833,8 @@ class Host:
             gpu = {'usage': act if act is not None and act <= 100 else None, 'mhz': gm.get('average_gfxclk_frequency'),
                    'tempC': r2(gm.get('temperature_gfx'), 100), 'powerW': gpu_power,
                    'memUsedBytes': cur['vram'], 'memTotalBytes': self.gpu.vram_total}
-            if gm and prev and prev['gm']:
-                throttling = any(c > p for p, c in zip(prev['gm']['throttle'], gm['throttle']))
+            if gm and cur['gm_before']:
+                throttling = any(c > p for p, c in zip(cur['gm_before']['throttle'], gm['throttle']))
         else:
             cpu_power, gpu_power = r2(rapl.get('cores')), r2(rapl.get('gpu'))
             if self.gpu is not None:
@@ -956,7 +964,7 @@ class Sampler:
             t0 = time.monotonic()
             try:
                 self.host.open_perf()
-                cur = self.host.read()
+                cur = self.host.read(prev)
                 sample = self.host.compute(prev, cur, self.fan_values)
                 prev = cur
             except Exception as e:  # never let one bad reading kill the sampler
@@ -1282,6 +1290,16 @@ class Router:
         """True while llama-swap runs or starts the engine's model, False when it does not, None when it can't say."""
         state = self.state(self.model)
         return None if state is None else state in ('starting', 'ready')
+
+    def knows(self, model):
+        """True when llama-swap's config has `model` (its /v1/models leaves out only a model marked unlisted)."""
+        status, body = self._call('GET', '/v1/models', self.http_timeout)
+        if status == 200:
+            try:
+                return any(m['id'] == model for m in json.loads(body)['data'])
+            except (ValueError, LookupError, TypeError):
+                pass
+        raise StepError(f'llama-swap did not list its models: {status or body.decode("utf-8", "replace")}')
 
     def unload_all(self, timeout):
         status, body = self._call('POST', '/api/models/unload', timeout)
@@ -1688,23 +1706,24 @@ class Engine:
     def delete_image(self, digest):
         if not isinstance(digest, str) or not DIGEST_RE.fullmatch(digest):
             raise ApiError(400, 'invalid_image', 'digest must be sha256:<64 hex>')
-        self._busy()
-        current = self._image()
-        repo = repository_of(current)
-        try:
-            imgs = self.images(repo, fresh=True)
-        except StepError as e:
-            raise ApiError(503, 'podman_failed', str(e))
-        target = image_with(imgs, digest)
-        if target is None:
-            raise ApiError(404, 'not_found', 'no such local image of the engine repository')
-        in_use = [current] + [quadlet_image(self._read_quadlet(p))[1] for p in self.companions()]
-        if any(target is image_with(imgs, digest_of(image)) for image in in_use):
-            raise ApiError(409, 'image_current', 'this is the engine image in use')
-        rc, out, err = self.runner.run(self.runner.podman(['rmi', f'{repo}@{digest}']), 300)
-        self._images_cache = (0.0, None)
-        if rc != 0:
-            raise ApiError(409, 'rmi_failed', (err or out).strip()[-500:] or f'podman rmi exited with {rc}')
+        with self.lock:     # no job starts meanwhile: an apply would switch to the image being removed
+            self._busy()
+            current = self._image()
+            repo = repository_of(current)
+            try:
+                imgs = self.images(repo, fresh=True)
+            except StepError as e:
+                raise ApiError(503, 'podman_failed', str(e))
+            target = image_with(imgs, digest)
+            if target is None:
+                raise ApiError(404, 'not_found', 'no such local image of the engine repository')
+            in_use = [current] + [quadlet_image(self._read_quadlet(p))[1] for p in self.companions()]
+            if any(target is image_with(imgs, digest_of(image)) for image in in_use):
+                raise ApiError(409, 'image_current', 'this is the engine image in use')
+            rc, out, err = self.runner.run(self.runner.podman(['rmi', f'{repo}@{digest}']), 300)
+            self._images_cache = (0.0, None)
+            if rc != 0:
+                raise ApiError(409, 'rmi_failed', (err or out).strip()[-500:] or f'podman rmi exited with {rc}')
         return {'ok': True}
 
 
@@ -1996,6 +2015,11 @@ class Apps:
         dest = os.path.join(app['root'], job.version)
         part = dest + '.part'
         shutil.rmtree(part, ignore_errors=True)
+        if os.path.lexists(dest):
+            # It has no marker (start_install looked): what a removal cut short left, unless `current` points at it.
+            if self._dir_current(app) == job.version:
+                raise StepError(f'{job.version} is the version in use, but its folder has no {APP_MARKER}')
+            shutil.rmtree(dest)
         job.set_step(f'Installing {app["name"]} {job.version}')
         argv = self.runner.in_user_manager([app['install'], job.version, part], unit=f'portal-hostd-{job.id}')
         rc = self.runner.stream(argv, job.add, APP_INSTALL_TIMEOUT)
@@ -2066,6 +2090,10 @@ class Apps:
         return self._start(Job('apply', None, version, app_id), self._apply)
 
     def _apply(self, job, app):
+        versions, before = self._versions(app)
+        target = next((v for v in versions if v['version'] == job.version), None)
+        if target is None:      # removed between start_apply's look and this job
+            raise StepError(f'{job.version} is not installed any more')
         if app['kind'] == 'dir':
             link = os.path.join(app['root'], 'current')
             old = os.readlink(link)
@@ -2075,8 +2103,6 @@ class Apps:
                 atomic_symlink(target, link)
         else:
             old, _ = self._quadlet(app)
-            versions, _ = self._versions(app)
-            target = next(v for v in versions if v['version'] == job.version)
             job.image = target['image']
             new = quadlet_rewrite(old, target['image'], None)
 
@@ -2085,7 +2111,6 @@ class Apps:
                 rc, _, err = self.runner.run(['systemctl', '--user', 'daemon-reload'], 120)
                 if rc != 0:
                     raise StepError(f'daemon-reload failed: {err.strip() or rc}')
-        before = self._dir_current(app) if app['kind'] == 'dir' else self._image_current(app, self._versions(app)[0])
         try:
             job.set_step(f'Switching to {job.version}')
             switch(new)
@@ -2117,6 +2142,10 @@ class Apps:
         if app['model']:
             if self.router is None:
                 raise StepError('no llama-swap to start the model through (ENGINE_ROUTER_URL)')
+            # A model llama-swap's config lacks never runs: stopping every model to start it could only fail.
+            if not self.router.knows(app['model']):
+                job.set_step(f'Not restarting {app["name"]}: llama-swap has no model {app["model"]}')
+                return
             job.set_step('Stopping the models (llama-swap)')
             self.router.unload_all(self.restart_timeout)
             deadline = time.monotonic() + self.restart_timeout
@@ -2166,23 +2195,24 @@ class Apps:
         app = self._app(app_id)
         if not isinstance(version, str) or not APP_VERSION_RE.fullmatch(version):
             raise ApiError(400, 'invalid_version', 'no such version')
-        self._busy()
-        versions, current = self._versions_or_503(app)
-        target = next((v for v in versions if v['version'] == version), None)
-        if target is None:
-            raise ApiError(404, 'not_found', f'{version} is not installed')
-        if version == current:
-            raise ApiError(409, 'version_current', f'{version} runs now')
-        if app['kind'] == 'dir':
-            path = os.path.join(app['root'], version)
-            # The marker first, so a removal cut short leaves no version that looks whole.
-            os.unlink(os.path.join(path, APP_MARKER))
-            shutil.rmtree(path)
-        else:
-            rc, out, err = self.runner.run(self.runner.podman(['rmi', target['image']]), 300)
-            self._listing = (0.0, None)
-            if rc != 0:
-                raise ApiError(409, 'rmi_failed', (err or out).strip()[-500:] or f'podman rmi exited with {rc}')
+        with self.lock:     # no job starts meanwhile: an apply would switch to the version being removed
+            self._busy()
+            versions, current = self._versions_or_503(app)
+            target = next((v for v in versions if v['version'] == version), None)
+            if target is None:
+                raise ApiError(404, 'not_found', f'{version} is not installed')
+            if version == current:
+                raise ApiError(409, 'version_current', f'{version} runs now')
+            if app['kind'] == 'dir':
+                path = os.path.join(app['root'], version)
+                # The marker first, so a removal cut short leaves no version that looks whole.
+                os.unlink(os.path.join(path, APP_MARKER))
+                shutil.rmtree(path)
+            else:
+                rc, out, err = self.runner.run(self.runner.podman(['rmi', target['image']]), 300)
+                self._listing = (0.0, None)
+                if rc != 0:
+                    raise ApiError(409, 'rmi_failed', (err or out).strip()[-500:] or f'podman rmi exited with {rc}')
         return {'ok': True}
 
 
@@ -2507,7 +2537,7 @@ def main(argv):
             app.host.open_perf()
             a = app.host.read()
             time.sleep(cfg['interval_ms'] / 1000.0)
-            print(json.dumps(app.host.compute(a, app.host.read(), app.host.fans.read()), indent=1))
+            print(json.dumps(app.host.compute(a, app.host.read(a), app.host.fans.read()), indent=1))
         return 0
     app = build(cfg, load_token())
     if app.engine and not os.path.exists(app.engine.quadlet):

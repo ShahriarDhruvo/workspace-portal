@@ -365,7 +365,8 @@ class TestHostAmd(TmpRoot):
         write(self.root, '/sys/class/drm/card1/device/gpu_metrics',
               gpu_metrics_blob(activity=97, gfxclk=2720, gfx_temp=6150, gfx_mw=55200, socket_mw=150000, core_mw=6100,
                                throttle=(0, 11, 0, 0, 0, 0, 0)), 'wb')
-        b = self.host.read()
+        a['gm_mono'] -= H.GPU_METRICS_PERIOD        # gpu_metrics is due again
+        b = self.host.read(a)
         b['mono'] = a['mono'] + 0.5
         a['perf_clock'] = [(0, 0, [0, 0, 0])] * 4
         a['perf_rapl'], b['perf_rapl'] = (0, 0, [0]), (1, 1, [int(78.1 * 2 ** 32)])   # 156.2 W, not the socket's 150
@@ -398,6 +399,20 @@ class TestHostAmd(TmpRoot):
         self.assertEqual(s['fans'][0], {'label': 'Fan 1', 'rpm': 1200, 'duty': 40})
         self.assertEqual(s['fans'][2], {'label': 'Fan 3', 'rpm': 0, 'duty': None})
         json.dumps(s, allow_nan=False)
+
+    def test_gpu_metrics_is_read_at_most_every_two_seconds(self):
+        a = self.host.read()
+        write(self.root, '/sys/class/drm/card1/device/gpu_metrics',
+              gpu_metrics_blob(activity=97, throttle=(0, 11, 0, 0, 0, 0, 0)), 'wb')
+        b = self.host.read(a)
+        s = self.host.compute(a, b)
+        self.assertEqual((s['gpu']['usage'], s['throttling']), (0, None), "a's reading serves")
+        b['gm_mono'] -= H.GPU_METRICS_PERIOD
+        c = self.host.read(b)
+        s = self.host.compute(b, c)
+        self.assertEqual((s['gpu']['usage'], s['throttling']), (97, True))
+        self.assertTrue(self.host.compute(c, self.host.read(c))['throttling'], 'until the next reading')
+        self.assertIsNone(self.host.compute(None, self.host.read())['throttling'], 'after a pause')
 
     def test_df_bandwidth_from_group(self):
         g = FakeGroup(['rd0', 'rd4', 'rd8', 'rd12', 'wr0', 'wr4', 'wr8', 'wr12'], [256.0] * 8)
@@ -648,6 +663,7 @@ class TestSampler(TmpRoot):
     def setUp(self):
         super().setUp()
         make_amd(self.root)
+        self.enterContext(mock.patch.object(H, 'GPU_METRICS_PERIOD', 0.0))  # every sample reads gpu_metrics
         self.host = H.Host(H.Fs(self.root), 'llm', 50)
         self.group = FakeGroup(['x'], [1.0])
         self.host.groups['test'] = self.group
@@ -1092,7 +1108,14 @@ class TestEngine(EngineCase):
             with self.assertRaises(H.ApiError) as c:
                 self.engine.delete_image(bad)
             self.assertEqual(c.exception.code, 'invalid_image')
-        self.assertEqual(self.engine.delete_image(D_THIRD), {'ok': True})
+        done = []
+        with self.engine.lock:      # as while a job starts
+            deletion = threading.Thread(target=lambda: done.append(self.engine.delete_image(D_THIRD)))
+            deletion.start()
+            deletion.join(0.2)
+            self.assertIn(f'{REPO}@{D_THIRD}', self.state.local, 'it waits for the lock')
+        deletion.join(5)
+        self.assertEqual(done, [{'ok': True}])
         self.assertNotIn(f'{REPO}@{D_THIRD}', self.state.local)
         rmi = [c for c in self.state.calls if 'rmi' in c]
         self.assertEqual(rmi[0][-2:], ['rmi', f'{REPO}@{D_THIRD}'])
@@ -1232,6 +1255,7 @@ class TestHttp(HttpCase):
         st, body = self.req('POST', '/v1/info', {})
         self.assertEqual((st, body['error']), (405, 'method_not_allowed'))
 
+    @mock.patch.object(H, 'GPU_METRICS_PERIOD', 0.0)    # every sample reads gpu_metrics
     def test_sample(self):
         st, s = self.req('GET', '/v1/sample')
         self.assertEqual(st, 200)
@@ -1671,7 +1695,7 @@ def apps_json(root):
                        'check': 'http://127.0.0.1:1/health',
                        'releases': {'github': 'mostlygeek/llama-swap', 'tag': '^v([0-9]+)$'}},
         'fish-speech': {'name': 'Fish Speech', 'kind': 'dir', 'root': root + '/opt/fish-speech',
-                        'unit': 'fish-speech.service', 'model': 'fish-s2-pro',
+                        'unit': 'fish-speech.service', 'model': 'fish-drama-3',
                         'releases': {'github': 'fishaudio/fish-speech', 'tag': '^v(.+)$'}},
         'vllm': {'name': 'vLLM', 'kind': 'image', 'quadlet': 'vllm-sov.container', 'model': 'sov-transcribe-1',
                  'releases': {'tag': '^rocm[0-9.]+-torch[0-9.]+-vllm([0-9]+[.][0-9]+[.][0-9]+)$'}},
@@ -1688,6 +1712,7 @@ class FakeAppsState:
         self.broken = {'2.0.0', '0.34.0'}        # versions that never become ready
         self.failing_installs = {'9.9.9'}
         self.calls, self.router_calls = [], []
+        self.models = {'fish-drama-3', 'sov-transcribe-1', 'qwen3.8-flash-next'}    # those llama-swap's config has
         self.running = set()                    # models llama-swap runs
         self.healthy = True                      # the check URL of the app without a model
         self.journal = []
@@ -1754,7 +1779,7 @@ class FakeAppsRunner(H.Runner):
         return 0
 
 
-MODEL_UNITS = {'fish-s2-pro': 'fish-speech.service', 'sov-transcribe-1': 'vllm-sov.service',
+MODEL_UNITS = {'fish-drama-3': 'fish-speech.service', 'sov-transcribe-1': 'vllm-sov.service',
                'acestep-1.5-xl': 'acestep.service', 'qwen3.8-flash-next': 'gufo.service'}
 
 
@@ -1775,8 +1800,12 @@ class FakeAppsRouter(http.server.BaseHTTPRequestHandler):
             return self._send(200 if s.healthy else 503, b'OK')
         if self.path == '/running':
             return self._send(200, json.dumps({'running': [{'model': m, 'state': 'ready'} for m in s.running]}).encode())
+        if self.path == '/v1/models':
+            return self._send(200, json.dumps({'object': 'list', 'data': [{'id': m} for m in sorted(s.models)]}).encode())
         model = self.path.split('/')[2]
-        version = {'fish-s2-pro': lambda: os.readlink(s.root + '/opt/fish-speech/current'),
+        if model not in s.models:
+            return self._send(404, b'{"error":{"message":"model not found"}}')
+        version = {'fish-drama-3': lambda: os.readlink(s.root + '/opt/fish-speech/current'),
                    'sov-transcribe-1': lambda: s.local.get(H.quadlet_image(read(s.root + '/quadlets/vllm-sov.container'))[1].split('@')[1], '').rsplit('vllm', 1)[-1],
                    'qwen3.8-flash-next': lambda: 'llm'}[model]()
         if version in s.broken:
@@ -1868,7 +1897,7 @@ class TestApps(AppsCase):
         ids = [a['id'] for a in self.apps.status()['apps']]
         self.assertEqual(ids, ['llama-swap', 'fish-speech', 'vllm'], 'acestep is not installed here')
         fish = self.status('fish-speech')
-        self.assertEqual((fish['version'], fish['model'], fish['state']), ('1.5.1', 'fish-s2-pro', 'inactive'))
+        self.assertEqual((fish['version'], fish['model'], fish['state']), ('1.5.1', 'fish-drama-3', 'inactive'))
         self.assertEqual([v['version'] for v in fish['versions']], ['1.5.1', '2.0.0', '3.0.0'], 'not the one cut short')
         vllm = self.status('vllm')
         self.assertEqual((vllm['version'], vllm['repository']), ('0.32.0', VLLM))
@@ -1876,11 +1905,13 @@ class TestApps(AppsCase):
         self.assertEqual(vllm['releases']['tag'], apps_json('')['vllm']['releases']['tag'], 'the gateway reads releases here')
 
     def test_install_builds_the_version_beside_the_others(self):
+        write(self.root, '/opt/fish-speech/3.1.0/bin/old', '')     # no marker: a removal cut short
         self.apps.start_install('fish-speech', {'version': '3.1.0'})
         j = self.wait_job()
         self.assertEqual((j['phase'], j['app']), ('succeeded', 'fish-speech'), j)
         self.assertIn('installing 3.1.0', ' '.join(j['log']))
         self.assertEqual(read(self.root + '/opt/fish-speech/3.1.0/' + H.APP_MARKER), '3.1.0\n')
+        self.assertEqual(os.listdir(self.root + '/opt/fish-speech/3.1.0/bin'), ['app'], 'what the removal left is gone')
         self.assertFalse(os.path.exists(self.root + '/opt/fish-speech/3.1.0.part'))
         self.assertEqual(os.readlink(self.root + '/opt/fish-speech/current'), '1.5.1', 'an install switches nothing')
         with self.assertRaises(H.ApiError) as c:
@@ -1892,6 +1923,10 @@ class TestApps(AppsCase):
         j = self.wait_job()
         self.assertEqual((j['phase'], j['error']), ('failed', 'install.sh exited with status 1'))
         self.assertFalse(os.path.exists(self.root + '/opt/fish-speech/9.9.9.part'))
+        os.unlink(self.root + '/opt/fish-speech/1.5.1/' + H.APP_MARKER)     # the version in use, set up by hand
+        self.apps.start_install('fish-speech', {'version': '1.5.1'})
+        self.assertIn('1.5.1 is the version in use', self.wait_job()['error'])
+        self.assertTrue(os.path.isdir(self.root + '/opt/fish-speech/1.5.1'))
 
     def test_apply_switches_starts_the_model_and_serves_the_llm_again(self):
         self.apps.start_apply('fish-speech', {'version': '3.0.0'})
@@ -1899,7 +1934,7 @@ class TestApps(AppsCase):
         self.assertEqual(j['phase'], 'succeeded', j)
         self.assertEqual(os.readlink(self.root + '/opt/fish-speech/current'), '3.0.0')
         gets = [c[1] for c in self.state.router_calls if c[0] == 'GET' and c[1] != '/running']
-        self.assertEqual(gets, ['/upstream/fish-s2-pro/v1/models', '/upstream/qwen3.8-flash-next/v1/models'])
+        self.assertEqual(gets, ['/v1/models', '/upstream/fish-drama-3/v1/models', '/upstream/qwen3.8-flash-next/v1/models'])
         fish = self.status('fish-speech')
         self.assertEqual((fish['version'], fish['previous']), ('3.0.0', '1.5.1'))
 
@@ -1908,11 +1943,24 @@ class TestApps(AppsCase):
         self.apps.start_apply('fish-speech', {'version': '2.0.0'})
         j = self.wait_job()
         self.assertEqual((j['phase'], j['rolledBack']), ('failed', True), j)
-        self.assertIn('llama-swap did not start fish-s2-pro: 502', j['error'])
+        self.assertIn('llama-swap did not start fish-drama-3: 502', j['error'])
         self.assertIn('Fish Speech said:\nHIP error: invalid device function', j['error'])
         self.assertEqual(os.readlink(self.root + '/opt/fish-speech/current'), '1.5.1')
         self.assertIsNone(self.status('fish-speech')['previous'], 'nothing new ran')
         self.assertEqual(self.state.running, {'qwen3.8-flash-next'}, 'the LLM serves again')
+
+    def test_an_app_whose_model_llama_swap_lacks_is_only_switched(self):
+        for version in ('0.1.8', '0.1.9'):
+            write(self.root, f'/opt/acestep/{version}/{H.APP_MARKER}', version + '\n')
+        os.symlink('0.1.8', self.root + '/opt/acestep/current')
+        self.state.running = {'fish-drama-3'}
+        self.apps.start_apply('acestep', {'version': '0.1.9'})
+        j = self.wait_job()
+        self.assertEqual((j['phase'], j['error']), ('succeeded', None), j)
+        self.assertEqual(os.readlink(self.root + '/opt/acestep/current'), '0.1.9')
+        self.assertIn('Not restarting ACE-Step: llama-swap has no model acestep-1.5-xl', ' '.join(j['log']))
+        self.assertEqual([c for c in self.state.router_calls if c[0] == 'POST'], [], 'no model was stopped')
+        self.assertEqual(self.status('acestep')['previous'], '0.1.8')
 
     def test_an_app_without_a_model_restarts_its_unit_and_waits_for_its_check(self):
         write(self.root, '/home/lib/llama-swap/277/' + H.APP_MARKER, '277\n')
@@ -1958,6 +2006,25 @@ class TestApps(AppsCase):
         with self.assertRaises(H.ApiError) as c:
             self.apps.remove('fish-speech', '../../etc')
         self.assertEqual(c.exception.code, 'invalid_version')
+
+    def test_a_removal_and_a_job_do_not_cross(self):
+        with self.apps.lock:        # as while a job starts
+            removal = threading.Thread(target=self.apps.remove, args=('fish-speech', '2.0.0'))
+            removal.start()
+            removal.join(0.2)
+            self.assertTrue(os.path.exists(self.root + '/opt/fish-speech/2.0.0'), 'it waits for the lock')
+        removal.join(5)
+        self.assertFalse(os.path.exists(self.root + '/opt/fish-speech/2.0.0'))
+        start = self.apps._start
+
+        def removed_first(job, target):     # a removal between start_apply's look and its job
+            self.apps.remove('fish-speech', '3.0.0')
+            return start(job, target)
+        with mock.patch.object(self.apps, '_start', removed_first):
+            self.apps.start_apply('fish-speech', {'version': '3.0.0'})
+        j = self.wait_job()
+        self.assertEqual((j['phase'], j['error']), ('failed', '3.0.0 is not installed any more'))
+        self.assertEqual(os.readlink(self.root + '/opt/fish-speech/current'), '1.5.1')
 
     def test_one_job_at_a_time_with_the_engine(self):
         self.apps.others.append(lambda: True)

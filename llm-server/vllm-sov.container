@@ -38,6 +38,8 @@ Environment=TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1
 Environment=VLLM_MAX_AUDIO_DECODE_DURATION_S=1800
 Environment=VLLM_MAX_AUDIO_CLIP_FILESIZE_MB=64
 Environment=VLLM_MAX_AUDIO_DECODE_BYTES=1073741824
+# Without it podman kills the container 10 s after SIGTERM, whatever TimeoutStopSec says.
+StopTimeout=50
 HealthCmd=curl -fsS -o /dev/null http://127.0.0.1:8000/health
 HealthInterval=30s
 HealthTimeout=10s

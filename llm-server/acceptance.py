@@ -146,7 +146,7 @@ def session(user, body, keys, counted, together, tools_done):
 
 
 def watch(stop, seen):
-    """Every 2 seconds: busy sessions, free memory, swap and kill counters, CPU and GPU temperature."""
+    """Every 2 seconds: busy sessions, free memory, swap and kill counters, CPU temperature."""
     while True:
         try:
             seen['busy'].append(sum(bool(slot.get('is_processing')) for slot in ask('/slots', timeout=5)))
@@ -157,9 +157,10 @@ def watch(stop, seen):
         counters = dict(line.split() for line in pathlib.Path('/proc/vmstat').read_text().splitlines())
         seen['swap'].append(int(counters['pswpin']) + int(counters['pswpout']))
         seen['killed'].append(int(counters['oom_kill']))
+        # Not amdgpu's sensor: each read of it is a request to the SMU firmware, which has stopped answering under load.
         for sensor in pathlib.Path('/sys/class/hwmon').glob('hwmon*'):
             try:
-                if (sensor / 'name').read_text().strip() in ('k10temp', 'amdgpu'):
+                if (sensor / 'name').read_text().strip() == 'k10temp':
                     seen['hot'].append(int((sensor / 'temp1_input').read_text()) // 1000)
             except (OSError, ValueError):
                 pass

@@ -168,7 +168,6 @@ def data_url(width, height, fmt="PNG", mime="png"):
 class Adapter(unittest.TestCase):
     """One ltx-videos server on an ephemeral port, its jobs and weights in a temporary folder."""
 
-    weights = True
     ttl = 3600
 
     def setUp(self):
@@ -178,10 +177,10 @@ class Adapter(unittest.TestCase):
         FakeDistilledPipeline.step_seconds = 0.0
         work = Path(self.enterContext(tempfile.TemporaryDirectory()))
         self.models, self.root = work / "models", work / "jobs"
-        if self.weights:
-            for file in [*L.FILES.values(), L.VIDEO_VAES["conv"]]:
-                (self.models / file).parent.mkdir(parents=True, exist_ok=True)
-                (self.models / file).touch()
+        for file in [*L.FILES.values(), L.VIDEO_VAES["conv"]]:
+            (self.models / file).parent.mkdir(parents=True, exist_ok=True)
+            (self.models / file).touch()
+        self.args = SimpleNamespace(models=self.models, video_vae="conv", root=self.root, ttl=self.ttl)
         self.prepare()
         self.start()
 
@@ -189,8 +188,7 @@ class Adapter(unittest.TestCase):
         """Runs before the server starts."""
 
     def start(self):
-        args = SimpleNamespace(models=self.models, video_vae="conv", root=self.root, ttl=self.ttl)
-        self.server = L.Server(args)
+        self.server = L.Server(self.args)
         self.worker = threading.Thread(target=self.server.serve, daemon=True)
         self.worker.start()
         self.httpd = L.ThreadingHTTPServer(("127.0.0.1", 0), L.handler(self.server))
@@ -246,73 +244,30 @@ class Adapter(unittest.TestCase):
         return answer
 
 
-class MissingWeights(Adapter):
-    weights = False
-
-    def prepare(self):
-        # A video made before the weights went away.
-        old = self.root / "video_0123456789abcdef01234567"
-        old.mkdir(parents=True)
-        (old / "output.mp4").write_bytes(b"old video")
-        (old / "job.json").write_text(json.dumps({
-            "id": old.name, "created_at": 1, "status": "completed", "progress": 100, "size": "512x512",
-            "seconds": "5", "seed": 1, "completed_at": int(time.time()), "expires_at": int(time.time()) + 3600,
-            "error": None}))
-
-    def start(self):
-        with self.assertLogs("ltx-videos", "ERROR") as logs:
-            super().start()
-        self.logs = logs.output
-
-    def test_stays_up_without_the_gpu_and_says_why(self):
-        self.worker.join(5)
-        self.assertFalse(self.worker.is_alive(), "the worker should end, the HTTP server stay")
-        self.assertEqual(self.server.status, "unavailable")
-        self.assertNotIn("is_available", Cuda.calls, "the GPU is touched only once the weights are there")
-        self.assertTrue(any("weights are missing: 5 of 5 files" in line for line in self.logs), self.logs)
-
-        status, health, _ = self.jcall("GET", "/health")
-        self.assertEqual((status, health["status"]), (200, "unavailable"))
-        status, ready, _ = self.jcall("GET", "/ready")
-        self.assertEqual(status, 503)
-        self.assertIn("weights are missing", ready["error"]["message"])
-        self.assertIn("diffusion_models/ltx-2.5-22b-distilled-transformer-bf16.safetensors", ready["error"]["message"])
-
-        status, answer, _ = self.jcall("POST", "/v1/videos", GOOD)
-        self.assertEqual(status, 503)
-        self.assertEqual(answer["error"]["type"], "server_error")
-        self.assertIn("weights are missing", answer["error"]["message"])
-
-    def test_earlier_videos_can_still_be_fetched_and_deleted(self):
-        status, mp4, _ = self.call("GET", "/v1/videos/video_0123456789abcdef01234567/content")
-        self.assertEqual((status, mp4), (200, b"old video"))
-        self.assertEqual(self.jcall("DELETE", "/v1/videos/video_0123456789abcdef01234567")[0], 200)
-        self.assertFalse((self.root / "video_0123456789abcdef01234567").exists())
-
-
 class LoadFails(Adapter):
-    def prepare(self):
-        Gemma.fail = RuntimeError("HIP out of memory")
-
     def start(self):
-        with self.assertLogs("ltx-videos", "ERROR"):
-            super().start()
+        """The tests start it themselves."""
 
-    def test_frees_the_gpu_and_stays_up(self):
-        self.worker.join(5)
-        self.assertEqual(self.server.status, "unavailable")
-        self.assertIn("empty_cache", Cuda.calls)
-        self.assertIsNone(self.server.pipeline)
-        status, ready, _ = self.jcall("GET", "/ready")
-        self.assertEqual(status, 503)
-        self.assertIn("loading the model failed: HIP out of memory", ready["error"]["message"])
-        self.assertEqual(self.jcall("POST", "/v1/videos", GOOD)[0], 503)
+    def died(self) -> str:
+        """Runs the worker, which must end the process with status 1; returns what it logged."""
+        with mock.patch.object(L.os, "_exit", side_effect=SystemExit) as leave, \
+                self.assertLogs("ltx-videos", "ERROR") as logs, self.assertRaises(SystemExit):
+            L.Server(self.args).serve()
+        leave.assert_called_once_with(1)
+        return "\n".join(logs.output)
+
+    def test_missing_weights(self):
+        (self.models / L.FILES["upsampler"]).unlink()
+        self.assertIn(f"weights are missing: 1 of 5 files not in {self.models} ({L.FILES['upsampler']})", self.died())
+        self.assertNotIn("is_available", Cuda.calls, "the GPU is touched only once the weights are there")
 
     def test_no_gpu(self):
         Cuda.available = False
-        self.start()
-        self.worker.join(5)
-        self.assertIn("no ROCm GPU visible", self.server.problem)
+        self.assertIn("no ROCm GPU visible", self.died())
+
+    def test_the_engine_fails(self):
+        Gemma.fail = RuntimeError("HIP out of memory")
+        self.assertIn("HIP out of memory", self.died())
 
 
 class Requests(Adapter):
@@ -324,6 +279,12 @@ class Requests(Adapter):
         self.assertFalse((self.root / ".warm-up.mp4").exists())
         paths = self.server.pipeline.model_paths
         self.assertTrue(paths["video_vae_path"].endswith("vae/ltx-2.5-video-vae-conv-bf16.safetensors"))
+
+    def test_while_the_models_load(self):
+        self.server.status = "loading"
+        self.assertEqual(self.jcall("GET", "/ready")[:2], (503, {"status": "loading"}))
+        self.assertEqual(self.jcall("GET", "/health")[:2], (200, {"status": "loading"}))
+        self.assertEqual(self.jcall("POST", "/v1/videos", GOOD)[0], 503)
 
     def test_bad_requests(self):
         bad = [
@@ -466,6 +427,15 @@ class Requests(Adapter):
         self.assertEqual(self.jcall("GET", f"/v1/videos/{job['id']}/content")[0], 409)
         self.assertEqual(sorted(p.name for p in (self.root / job["id"]).iterdir()), ["job.json"])
         self.assertEqual(self.wait(self.create()["id"])[0]["status"], "completed", "the next job still runs")
+
+    def test_a_worker_that_dies_ends_the_process(self):
+        with mock.patch.object(L.os, "_exit", side_effect=SystemExit) as leave, \
+                mock.patch.object(Cuda, "reset_peak_memory_stats", side_effect=RuntimeError("HIP error")), \
+                self.assertLogs("ltx-videos", "ERROR") as logs:
+            self.create()
+            self.worker.join(5)
+        leave.assert_called_once_with(1)
+        self.assertIn("HIP error", "\n".join(logs.output))
 
     def test_chunked_body(self):
         body = json.dumps(GOOD).encode()

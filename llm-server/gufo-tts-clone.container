@@ -15,6 +15,8 @@ PublishPort=127.0.0.1:18088:8080
 # The weights `gufo model install qwen3-tts` downloaded (docs/GUIDE.md), named by their model id.
 Volume=/models/gufo-models:/models:ro,z
 Environment=GUFO_MODELS_DIR=/models
+# Without it podman kills the container 10 s after SIGTERM, whatever TimeoutStopSec says.
+StopTimeout=50
 HealthCmd=curl -fsS -o /dev/null http://127.0.0.1:8080/ready
 HealthInterval=30s
 HealthTimeout=10s

@@ -8,7 +8,9 @@ Documentation=https://github.com/mostlygeek/llama-swap#readme
 ExecStart=%h/.local/lib/llama-swap/current/llama-swap -config %h/.config/llama-swap/config.yaml -listen 0.0.0.0:8080
 Restart=always
 RestartSec=5
-# llama-swap stops the models itself (cmdStop), so systemd signals only it; the LLM may take 120 s to stop.
+# The model units have BindsTo= and After= this unit, so systemd stops them before it, as llama-swap's cmdStop also
+# does; the LLM may take 120 s to stop. KillMode=mixed sends the stop signal to llama-swap alone, not to the
+# `systemctl start --wait` it runs for each model.
 KillMode=mixed
 TimeoutStopSec=200
 

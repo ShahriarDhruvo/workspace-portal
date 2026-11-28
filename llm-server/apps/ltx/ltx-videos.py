@@ -6,7 +6,7 @@ gateway drive it as they drive MiniMax H3.
   GET    /v1/videos/{id}/content  the MP4 (H.264 and AAC, faststart) once the job completed, else 409
   DELETE /v1/videos/{id}          cancels the job and deletes its files
   GET    /ready                   200 once the models are loaded and a warm-up clip is made (llama-swap's check)
-  GET    /health                  200 while the process runs, with the status: loading, ready or unavailable
+  GET    /health                  200 while the process runs, with the status: loading or ready
 
 POST /v1/videos takes model "ltx-2.5-distilled", prompt (up to 1,024 tokens), seconds (1 to 20, as a number or a
 string; rounded up to the model's 8n+1 frames at 24 per second), size (SIZES, default 512x512), first_frame and
@@ -16,9 +16,10 @@ Errors are {"error": {"message", "type"}}, 400 for a bad request. One job runs a
 A job that ended is kept with its files for --ttl seconds, across restarts too: llama-swap stops this server
 whenever another model is asked for. Prompts are never logged or written to disk.
 
-When the weights are missing or loading fails, the server stays up without the model ("unavailable"): /ready and
-POST answer 503 with the reason, which the journal also shows, and jobs already made can still be fetched. It does
-not exit, so neither systemd nor llama-swap starts it again and again; restart it once the weights are in place.
+When the weights are missing, loading fails or the worker that makes the videos dies, the server logs the reason and
+exits with status 1. ltx.service has Restart=no, so systemd does not start it again, and llama-swap sees the unit
+end and fails the request at once. A server left up with /ready at 503 would keep the other models stopped until
+llama-swap's healthCheckTimeout, on every request, and one without its worker would queue jobs forever.
 
 install.sh puts this file in the root of the LTX-2 checkout; ltx.service runs it with that venv's Python.
 """
@@ -26,11 +27,11 @@ install.sh puts this file in the root of the LTX-2 checkout; ltx.service runs it
 import argparse
 import base64
 import binascii
-import gc
 import io
 import json
 import logging
 import math
+import os
 import re
 import secrets
 import shutil
@@ -82,6 +83,9 @@ VIDEO_VAES = {
 }
 # Share of the progress bar each part takes, from where it starts: prompt, stage 1, upscale with stage 2, decode.
 PROGRESS = {"prompt": 2, "stage 1": 6, "stage 2": 50, "decode": 80, "mux": 97}
+# ffmpeg only copies the streams of a clip of at most 20 s, and ffprobe only counts its packets: one that hangs
+# fails its job instead of holding up every job behind it.
+MUX_SECONDS = 60
 
 log = logging.getLogger("ltx-videos")
 
@@ -260,7 +264,6 @@ class Server:
         self.args = args
         self.store = Store(args.root, args.ttl)
         self.status = "loading"
-        self.problem: str | None = None  # why the model is unavailable
         self.tokenizer = None
         self.tokenizing = threading.Lock()
         self.pipeline: Pipeline | None = None
@@ -323,53 +326,39 @@ class Server:
 
     # Work
 
-    def load(self) -> bool:
-        """Loads every model onto the GPU and makes a warm-up clip. On failure the server stays up as unavailable."""
+    def load(self) -> None:
+        """Loads every model onto the GPU and makes a warm-up clip."""
         started = time.monotonic()
         models = self.args.models
         paths = {name: models / file for name, file in FILES.items()}
         paths["video_vae"] = models / VIDEO_VAES[self.args.video_vae]
         missing = [file for file in paths.values() if not file.is_file()]
         if missing:  # checked before the GPU is touched
-            return self.unavailable(
+            raise RuntimeError(
                 f"the LTX-2.5 weights are missing: {len(missing)} of {len(paths)} files not in {models} "
                 f"({', '.join(str(file.relative_to(models)) for file in missing)}); "
-                "download them from Lightricks/LTX-2.5 and restart ltx.service")
-        try:
-            if not torch.cuda.is_available():
-                raise RuntimeError("no ROCm GPU visible to torch")
-            self.tokenizer = build_gemma_hf_tokenizer(GemmaAssets.load(paths["text_encoder"]))
-            device = torch.device("cuda", torch.cuda.current_device())
-            # Every model's weights stay on the GPU between jobs instead of being read from disk for each.
-            registry = ModelRegistry(placement_policy=RetentionPolicy(clean=Placement(device)))
-            self.pipeline = Pipeline(
-                model_paths=ModelPaths.from_split(
-                    transformer_path=str(paths["transformer"]), text_encoder_path=str(paths["text_encoder"]),
-                    video_vae_path=str(paths["video_vae"]), audio_vae_path=str(paths["audio_vae"]),
-                ),
-                spatial_upsampler_path=str(paths["upsampler"]), loras=[], device=device, registry=registry,
-            )
-            warm = Job(id="warm-up", created_at=0, size="", seconds="", seed=0, width=256, height=256, frames=9,
-                       prompt="A red ball rolls slowly across a wooden table. Soft room tone.")
-            out = self.args.root / ".warm-up.mp4"
-            self.render(warm, out)
-            out.unlink()
-        except Exception as exc:
-            log.exception("loading failed")
-            self.pipeline = self.tokenizer = None
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            return self.unavailable(f"loading the model failed: {exc}; see the journal, then restart ltx.service")
+                "download them from Lightricks/LTX-2.5")
+        if not torch.cuda.is_available():
+            raise RuntimeError("no ROCm GPU visible to torch")
+        self.tokenizer = build_gemma_hf_tokenizer(GemmaAssets.load(paths["text_encoder"]))
+        device = torch.device("cuda", torch.cuda.current_device())
+        # Every model's weights stay on the GPU between jobs instead of being read from disk for each.
+        registry = ModelRegistry(placement_policy=RetentionPolicy(clean=Placement(device)))
+        self.pipeline = Pipeline(
+            model_paths=ModelPaths.from_split(
+                transformer_path=str(paths["transformer"]), text_encoder_path=str(paths["text_encoder"]),
+                video_vae_path=str(paths["video_vae"]), audio_vae_path=str(paths["audio_vae"]),
+            ),
+            spatial_upsampler_path=str(paths["upsampler"]), loras=[], device=device, registry=registry,
+        )
+        warm = Job(id="warm-up", created_at=0, size="", seconds="", seed=0, width=256, height=256, frames=9,
+                   prompt="A red ball rolls slowly across a wooden table. Soft room tone.")
+        out = self.args.root / ".warm-up.mp4"
+        self.render(warm, out)
+        out.unlink()
         self.status = "ready"
         log.info("ready in %.1f s (%s video VAE); %.1f GiB of GPU memory in use", time.monotonic() - started,
                  self.args.video_vae, torch.cuda.memory_allocated() / 2**30)
-        return True
-
-    def unavailable(self, problem: str) -> bool:
-        self.problem, self.status = problem, "unavailable"
-        log.error("%s. /ready answers 503 and new jobs are refused until then.", problem)
-        return False
 
     def render(self, job: Job, out: Path) -> None:
         """Generates the job's clip into out (MP4, not yet faststart)."""
@@ -423,11 +412,15 @@ class Server:
                 shutil.rmtree(self.store.path(job), ignore_errors=True)
 
     def serve(self) -> None:
-        """Loads the models, then makes the queued jobs' videos one after another."""
-        if not self.load():
-            return
-        while True:
-            self.run(self.store.next())
+        """Loads the models, then makes the queued jobs' videos one after another. Whatever ends it ends the process,
+        so systemd and llama-swap see it."""
+        try:
+            self.load()
+            while True:
+                self.run(self.store.next())
+        except BaseException:
+            log.exception("the worker died")
+            os._exit(1)  # sys.exit would end only this thread
 
 
 def keyframe(name: str, value: Any) -> Image.Image:
@@ -465,12 +458,13 @@ def canvas(pixels: int, aspect: float) -> tuple[int, int]:
 def faststart(raw: Path, final: Path, frames: int) -> None:
     """Moves the MP4's index to the front (playback before the download ends) and checks its streams."""
     done = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(raw), "-c", "copy",
-                           "-movflags", "+faststart", "-y", str(final)], capture_output=True, text=True)
+                           "-movflags", "+faststart", "-y", str(final)], capture_output=True, text=True,
+                          timeout=MUX_SECONDS)
     if done.returncode != 0:
         raise RuntimeError(f"ffmpeg: {done.stderr.strip()[-500:]}")
     probe = subprocess.run(["ffprobe", "-v", "error", "-count_packets", "-show_entries",
                             "stream=codec_type,codec_name,nb_read_packets", "-of", "json", str(final)],
-                           capture_output=True, text=True, check=True)
+                           capture_output=True, text=True, check=True, timeout=MUX_SECONDS)
     streams = {s["codec_type"]: s for s in json.loads(probe.stdout)["streams"]}
     video, audio = streams.get("video", {}), streams.get("audio", {})
     if video.get("codec_name") != "h264" or audio.get("codec_name") != "aac":
@@ -514,10 +508,8 @@ def handler(server: Server) -> type[BaseHTTPRequestHandler]:
         def do_GET(self) -> None:
             path = self.path.split("?", 1)[0]
             if path in ("/health", "/ready"):
-                state = {"status": server.status}
-                if server.problem:
-                    state["error"] = {"message": server.problem, "type": "server_error"}
-                return self.json(200 if path == "/health" or server.status == "ready" else 503, state)
+                ready = server.status == "ready"
+                return self.json(200 if path == "/health" or ready else 503, {"status": server.status})
             job, suffix = self.route()
             if suffix is None:
                 return self.error(404, "not found")
@@ -557,7 +549,7 @@ def handler(server: Server) -> type[BaseHTTPRequestHandler]:
             if self.path.split("?", 1)[0] != "/v1/videos":
                 return self.error(404, "not found")
             if server.status != "ready":
-                return self.error(503, server.problem or "the model is still loading")
+                return self.error(503, "the model is still loading")
             if not (self.headers.get("Content-Type") or "").startswith("application/json"):
                 return self.error(400, "send the request as JSON (Content-Type: application/json)")
             try:

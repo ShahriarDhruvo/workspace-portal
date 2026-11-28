@@ -49,6 +49,9 @@ PROMPT_MAX, LYRICS_MAX = 512, 4096
 MIN_PEAK = 0.05
 # ACE-Step's default output peak (GenerationParams.normalization_db).
 NORMALIZE_DB = -1.0
+# ffmpeg's time for the MP3. LAME encodes many times faster than a track plays, so one that takes this long has hung,
+# and the request fails.
+MP3_SECONDS = 120
 
 handlers: dict[bool, AceStepHandler] = {}
 state = {"status": "loading"}
@@ -105,7 +108,7 @@ def encode(wav: torch.Tensor, sample_rate: int, response_format: str) -> bytes:
             done = subprocess.run(
                 ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "wav", "-i", "pipe:0",
                  "-codec:a", "libmp3lame", "-q:a", "2", path],
-                input=encode(wav, sample_rate, "wav"), capture_output=True,
+                input=encode(wav, sample_rate, "wav"), capture_output=True, timeout=MP3_SECONDS,
             )
             if done.returncode != 0:
                 raise RuntimeError(f"ffmpeg: {done.stderr.decode(errors='replace').strip()}")
