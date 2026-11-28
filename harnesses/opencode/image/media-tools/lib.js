@@ -71,6 +71,12 @@ export function answer(fields, note) {
 
 export const TOOL_OF = { image: "generate_image", imageEdit: "generate_image", video: "generate_video", music: "generate_music", speech: "synthesize_speech", transcription: "transcribe_audio" };
 
+/** generate_image takes a size only as part of `model`, so its models list the string to pass for each size. */
+function sizesOf(kind, entry) {
+  if (TOOL_OF[kind] !== "generate_image") return { sizes: entry.sizes };
+  return { model_for_size: Object.fromEntries(entry.sizes.map((size) => [size, `portal/${entry.model}#${size}`])) };
+}
+
 /** The registry as list_media_models shows it, with which models are loaded when that is known. */
 export function mediaListing(kinds, loadedIds) {
   const loaded = loadedIds ? new Set(loadedIds) : null;
@@ -86,7 +92,7 @@ export function mediaListing(kinds, loadedIds) {
         ...(entry.time ? { time: entry.time } : {}),
         beside_llm: entry.besideLlm === true,
         ...(loaded ? { loaded: [entry.model, entry.clone, entry.design].some((id) => id && loaded.has(id)) } : {}),
-        ...(entry.sizes ? { sizes: entry.sizes } : {}),
+        ...(entry.sizes ? sizesOf(kind, entry) : {}),
         ...(entry.seconds ? { seconds: entry.seconds } : {}),
         ...(entry.voices ? { voices: entry.voices } : {}),
         ...(entry.languages ? { languages: entry.languages } : {}),
