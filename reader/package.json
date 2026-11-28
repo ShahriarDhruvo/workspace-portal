@@ -9,7 +9,7 @@
     "node": ">=22"
   },
   "dependencies": {
-    "defuddle": "0.19.6",
+    "defuddle": "0.19.13",
     "linkedom": "0.18.15"
   }
 }

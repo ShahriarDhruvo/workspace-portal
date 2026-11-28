@@ -74,7 +74,7 @@ function fakeDocker(setup: FakeSetup = {}) {
           else options.abortSignal?.addEventListener("abort", aborted);
           return;
         }
-        const stream = setup.stream?.() ?? Readable.from([]);
+        const stream: NodeJS.ReadableStream = setup.stream?.() ?? Readable.from([]);
         stream.on("end", () => images.set(options.options!.t as string, "sha256:new"));
         callback(null, stream);
       },

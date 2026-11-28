@@ -3,19 +3,19 @@
 # --build-arg HARNESS=<name> --build-arg HARNESS_VERSION=<version>. Build context: the repository root, of which
 # Dockerfile.dockerignore lets in this folder and the harnesses' image folders. An image holds no account: a workspace
 # runs as a UID of its own on a read-only root, with its own /home/user and /workspace mounted (../security/spec.ts).
-FROM docker.io/library/node:24-bookworm-slim@sha256:c0a93797ee78814ae6d32fcca2561fdbbe423149c3f5389aad32d86e9fd85bd4 AS base
+FROM docker.io/library/node:26-trixie-slim@sha256:abe7e5a82b61a8ef67b315b85497c9e65173387ccf2f4a029248184b8e020be5 AS base
 ARG PLAYWRIGHT_MCP_VERSION=0.0.86
 ARG PNPM_VERSION=12.23.0
 # While building only: npm's cache and logs go to /tmp, a tmpfs in every step that runs npm.
 ARG NPM_CONFIG_CACHE=/tmp/npm
-# build-essential and gdb: C and C++. libicu72: what PowerShell needs of the system. ffmpeg, sox and imagemagick: for
+# build-essential and gdb: C and C++. libicu76: what PowerShell needs of the system. ffmpeg, sox and imagemagick: for
 # cutting, mixing and checking what the media tools make (harnesses/opencode/image/media-skill).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates curl file git jq less openssh-client procps ripgrep tini unzip xz-utils zip \
       build-essential gdb \
       python3 python3-venv \
-      libicu72 \
+      libicu76 \
       ffmpeg sox imagemagick \
       chromium fonts-liberation fonts-noto-core fonts-noto-color-emoji \
  && rm -rf /var/lib/apt/lists/* \

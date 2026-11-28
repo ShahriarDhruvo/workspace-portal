@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # The gateway. Build context: the repository root, of which gateway/Dockerfile.dockerignore lets in what is copied here.
-ARG NODE_IMAGE=docker.io/library/node:24-bookworm-slim@sha256:c0a93797ee78814ae6d32fcca2561fdbbe423149c3f5389aad32d86e9fd85bd4
+ARG NODE_IMAGE=docker.io/library/node:26-trixie-slim@sha256:abe7e5a82b61a8ef67b315b85497c9e65173387ccf2f4a029248184b8e020be5
 
 FROM ${NODE_IMAGE} AS build
 # Compilers, for a platform better-sqlite3 has no prebuilt binary for.

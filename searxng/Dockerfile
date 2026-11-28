@@ -3,7 +3,7 @@
 # https://github.com/searxng/searxng/pkgs/container/searxng; docker buildx imagetools inspect
 # ghcr.io/searxng/searxng:<tag> prints the digest), run deploy/install.sh and deploy/verify-isolation.sh, and
 # search once: SearXNG changes its engines from release to release.
-FROM ghcr.io/searxng/searxng:2026.11.12-de722ab1b@sha256:0b104e2e1117b0ca83a36f3ac6ecda7d9ee948ccea6ead74750a03e1b856229a
+FROM ghcr.io/searxng/searxng:2026.11.26-b5605b8f2@sha256:462d8dbeadd7c7c304be08d47084f5caba70f47a9145a01fd25990a7944e61b7
 # Not in /etc/searxng: upstream declares that a volume, whose copy would outlive the image and hide a newer file.
 # The directory first: COPY would give one it creates the file's mode.
 RUN mkdir -p -m 0755 /usr/local/etc/searxng

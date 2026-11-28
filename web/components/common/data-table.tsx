@@ -145,7 +145,7 @@ export function DataTablePagination({
       <div className="flex items-center gap-4 sm:gap-6">
         {pageSizes.length > 1 ? (
           <div className="flex items-center gap-2">
-            <Label htmlFor={sizeId} className="text-13 font-normal text-muted-foreground max-sm:sr-only">
+            <Label htmlFor={sizeId} className="text-13 leading-5 font-normal text-muted-foreground max-sm:sr-only">
               Rows per page
             </Label>
             <Select

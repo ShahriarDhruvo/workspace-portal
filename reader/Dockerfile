@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # The page reader (reader.py). Python fetches a page and reads PDFs; Node runs Defuddle, the HTML to markdown
 # converter (extract.mjs), in a process per page. Build context: this directory.
-ARG NODE_IMAGE=docker.io/library/node:24-bookworm-slim@sha256:c0a93797ee78814ae6d32fcca2561fdbbe423149c3f5389aad32d86e9fd85bd4
+ARG NODE_IMAGE=docker.io/library/node:26-trixie-slim@sha256:abe7e5a82b61a8ef67b315b85497c9e65173387ccf2f4a029248184b8e020be5
 
 FROM ${NODE_IMAGE} AS base
 RUN apt-get update \

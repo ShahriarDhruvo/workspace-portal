@@ -16,7 +16,7 @@
     "gateway"
   ],
   "engines": {
-    "node": ">=24"
+    "node": ">=26"
   },
   "scripts": {
     "build": "npm run build -w @portal/gateway && npm run build -w @portal/web",

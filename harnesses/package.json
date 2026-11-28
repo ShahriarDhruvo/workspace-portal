@@ -10,15 +10,15 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "node --experimental-strip-types --test \"*.test.ts\" \"*/*.test.ts\""
+    "test": "node --test \"*.test.ts\" \"*/*.test.ts\""
   },
   "dependencies": {
     "@portal/core": "0.1.0",
-    "ws": "8.22.1"
+    "ws": "8.23.1"
   },
   "devDependencies": {
-    "@types/node": "24.19.2",
+    "@types/node": "26.6.11",
     "@types/ws": "8.18.2",
-    "typescript": "5.9.3"
+    "typescript": "7.0.2"
   }
 }

@@ -3,7 +3,6 @@
     "target": "ES2023",
     "lib": [
       "dom",
-      "dom.iterable",
       "ES2023"
     ],
     "module": "ESNext",

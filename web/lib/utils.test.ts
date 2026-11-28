@@ -14,9 +14,10 @@ test("cn lets the later class win within the custom scale and the theme colours"
   assert.equal(cn("bg-input/30 hover:bg-input/50", "bg-primary"), "hover:bg-input/50 bg-primary");
 });
 
-test("cn drops a line height that a later font size resets, but keeps one set after it", () => {
-  assert.equal(cn("leading-snug", "text-24"), "text-24");
+test("cn keeps a line height on either side of a font size, and drops it for a size that names its own", () => {
+  assert.equal(cn("leading-snug", "text-24"), "leading-snug text-24");
   assert.equal(cn("text-14 leading-snug"), "text-14 leading-snug");
+  assert.equal(cn("leading-snug", "text-24/8"), "text-24/8");
 });
 
 test("cn joins conditional classes and skips falsy ones", () => {

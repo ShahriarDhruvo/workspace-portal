@@ -7,7 +7,7 @@ set -eu
 . /usr/local/lib/workspace-portal/fetch.sh
 
 GO=1.27.4
-RUST=1.100.0
+RUST=1.100.1
 UV=0.13.10
 RUFF=0.17.6
 POWERSHELL=7.7.0
@@ -32,7 +32,7 @@ ln -s /usr/local/go/bin/go /usr/local/go/bin/gofmt /usr/local/bin/
 # Rust's own installer, for the compiler, cargo, the standard library, rustfmt and clippy: no rustup, so nothing
 # here looks for another toolchain. Its documentation is not unpacked.
 fetch_for "https://static.rust-lang.org/dist/rust-$RUST-$rust.tar.xz" \
-  98ee6bec240e1cfe944f17e7092412dc5ef6e008484bb668c6936d35a7d15acd a21f6a21818df07c1e2e7addb570af5444b3fa9dd61e3a207f4fb1c5a5e665c9
+  cf0d1dc00dbccc0bc63ec0bdb3da8bafe3e969cb3fbfa36dc5e6205467a50fea 480fe52727ce7372f0b2597c24e462bb3f25d1dc534a05c3e003cf7254e69153
 unpack "$work" --exclude='*/rust-docs*'
 "$work/rust-$RUST-$rust/install.sh" --prefix=/usr/local --disable-ldconfig \
   --components="rustc,cargo,rust-std-$rust,rustfmt-preview,clippy-preview"
