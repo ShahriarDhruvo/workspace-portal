@@ -86,10 +86,15 @@ export async function proxyLlm(deps: LlmProxyDeps, req: IncomingMessage, res: Se
   const image = generating !== null && IMAGE_PATH.test(pathname);
   const progress = generating ? deps.requests.begin(generating.userId, generating.keyId, image, media && { kind: media.kind, model }) : null;
   const contentType = req.headers["content-type"];
-  if (progress && image) progress.imageAsk(imageAsk(contentType, deps.config.llm.imageModels, body));
-  else if (progress && media?.model === "root") {
-    const named = mediaModelNamed(contentType, mediaModelIds(registry, media.kind), body);
-    if (named !== null) progress.mediaModel(named);
+  // The image or media model the request is for: its turn in the queue goes by it.
+  let asked = model;
+  if (progress && image) {
+    const ask = imageAsk(contentType, deps.config.llm.imageModels, body);
+    progress.imageAsk(ask);
+    asked = ask.model;
+  } else if (progress && media?.model === "root") {
+    asked = mediaModelNamed(contentType, mediaModelIds(registry, media.kind), body);
+    if (asked !== null) progress.mediaModel(asked);
   }
 
   let release: ReleaseSlot = () => undefined;
@@ -104,8 +109,8 @@ export async function proxyLlm(deps: LlmProxyDeps, req: IncomingMessage, res: Se
     const onClose = (): void => hangUp.abort();
     res.once("close", onClose);
     try {
-      if (video?.op === "create" || late) ({ release, unhold } = await deps.llm.acquireAlone(waits.userId, hangUp.signal));
-      else release = await deps.llm.acquire(waits.userId, hangUp.signal);
+      if (video?.op === "create" || late) ({ release, unhold } = await deps.llm.acquireAlone(waits.userId, model, hangUp.signal));
+      else release = await deps.llm.acquire(waits.userId, asked, hangUp.signal);
     } catch {
       progress?.finish("aborted");
       return; // the client hung up while queued

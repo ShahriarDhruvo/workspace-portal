@@ -352,7 +352,7 @@ test("a speech or transcription model beside the LLM is a session while the LLM 
   clock.now += 1500;
   await monitor.poll();
   const live = monitor.snapshot();
-  assert.deepEqual(live.sessions.map((s) => [s.userName, s.phase, s.model]), [["Alice", "writing", null], ["Bob", "transcription", "qwen3-asr-1.7b"]]);
+  assert.deepEqual(live.sessions.map((s) => [s.userName, s.phase, s.model, s.beside]), [["Alice", "writing", null, false], ["Bob", "transcription", "qwen3-asr-1.7b", true]]);
   assert.deepEqual(live.waiting.map((w) => [w.userName, w.stage]), [["Bob", "swap"]], "Fish swaps with the LLM");
   assert.deepEqual(live.generation, { kind: "transcription", making: 1, model: "qwen3-asr-1.7b", video: null, pace: null });
   for (const request of [chat, asr, fish]) request.finish("completed");

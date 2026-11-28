@@ -525,6 +525,8 @@ export interface LlmSession {
    * The image or media model the request names (one of media.json's); null for the LLM, or when it is not known. A running video job is a session too, though no request of it is in flight.
    */
   model: string | null;
+  /** Its model runs beside the LLM (media.json's besideLlm): the request takes none of the LLM's sessions. */
+  beside: boolean;
   promptTokens: number | null;
   /** Prompt tokens reused from the engine's prompt cache (not read again). */
   cachedTokens: number | null;
@@ -542,10 +544,10 @@ export interface LlmWaiting {
   userName: string | null;
   since: number;
   /**
-   * portal: in the gateway's queue (limits, or a paused queue); engine: forwarded, the engine has no free session;
-   * swap: forwarded, behind llama-swap the model it needs starts once the other model's requests are done (an image
-   * request while the LLM has requests, an LLM request while images are made); video: in the gateway's queue, which
-   * grants nothing until the video being made is downloaded.
+   * portal: in the gateway's queue (limits, a paused queue, or the requests of the model in use, which end before
+   * another model's start); engine: forwarded, the engine has no free session; swap: forwarded, behind llama-swap
+   * the model it needs is starting in place of the loaded one; video: in the gateway's queue, which grants nothing
+   * until the video being made is downloaded.
    */
   stage: "portal" | "engine" | "swap" | "video";
 }

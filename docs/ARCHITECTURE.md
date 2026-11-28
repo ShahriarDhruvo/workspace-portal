@@ -339,9 +339,17 @@ account, the same user's included. State is per listener: nothing carries betwee
   send (one below 100) becomes 502 `llm_unreachable`, as does an AI server that does not answer.
 - **Queue** (`llm-queue.ts`): generation requests take a slot, at most `LLM_MAX_CONCURRENCY` in all and
   `LLM_MAX_CONCURRENCY_PER_USER` each, first come first served; a user at the limit does not hold up the users
-  behind. An engine update pauses the queue, and requests wait instead of failing. An image request is a
-  generation like any other: behind llama-swap it holds its slot while the LLM is swapped out. So is a media
-  request (`media-routes.ts`); speech, transcription and music answer when they are done.
+  behind. An engine update pauses the queue, and requests wait instead of failing. An image or media request
+  (`media-routes.ts`) is a generation too; speech, transcription and music answer when they are done.
+- **Turns** (`llm-queue.ts`): the AI server holds the LLM or one image or media model in its place, so the
+  queue reads each request's model and gives the models their turns. A request for another model than the one
+  whose requests are in flight waits until those have ended, and every request behind it waits with it, the
+  LLM's included; requests for one model that came together are forwarded together, on one load of the model.
+  llama-swap gives no turns: it serves the loaded model's requests for as long as they keep coming
+  ([measured](MEASUREMENTS.md#requests-at-once)), so that with several agents at work an image could wait
+  without end. The models that run beside the LLM (`besideLlm` in `media.json`) wait for no turn and take none
+  of the LLM's slots: they are counted apart, up to the same two limits. A model `media.json` does not name
+  counts as the LLM.
 - **Video jobs** (`video-jobs.ts`): a video job runs after the request that created it has ended, so behind
   llama-swap no request is in flight and the next one, for any other model, would stop the video model and the
   job with it. A create waits until nothing is in flight, and nothing queued behind it goes first

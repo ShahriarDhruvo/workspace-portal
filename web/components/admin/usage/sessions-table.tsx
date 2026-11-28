@@ -190,7 +190,7 @@ const STATUS_NAMES = {
   idle: "Running",
 } as const;
 const WAITING_TITLES = {
-  portal: "In the portal's queue: all sessions are busy",
+  portal: "In the portal's queue: all sessions are busy, another model's requests are made first, or an update of the AI server is running",
   engine: "Sent to the engine, not started yet",
   swap: "Sent to the AI server: llama-swap starts the model it needs once the other model's requests are done",
   video: "In the portal's queue: a video is being made, and nothing else runs until it is downloaded",

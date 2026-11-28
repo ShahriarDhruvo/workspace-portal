@@ -90,7 +90,9 @@ const ENGINE_BADGES: Record<LlmLive["engine"], ReactNode> = {
  * runs about ten times faster than writing).
  */
 export function LlmCard({ llm, tokens, now, sessions, sessionsVersion }: LlmCardProps) {
-  const busy = llm.sessions.length;
+  // A model beside the LLM takes none of its sessions: what it makes is counted apart from them.
+  const beside = llm.sessions.filter((session) => session.beside).length;
+  const busy = llm.sessions.length - beside;
   const capacity = llm.sessionsReported && llm.engineSessions !== null ? llm.engineSessions : llm.maxConcurrency;
   return (
     <Card className="@container/llm h-full gap-0 py-0">
@@ -101,7 +103,7 @@ export function LlmCard({ llm, tokens, now, sessions, sessionsVersion }: LlmCard
             <EngineBadge llm={llm} />
           </CardTitle>
           <CardDescription className="tabular-nums">
-            {busy} of {capacity} busy · {llm.waiting.length} waiting
+            {busy} of {capacity} busy{beside > 0 ? ` · ${beside} beside the LLM` : ""} · {llm.waiting.length} waiting
           </CardDescription>
         </div>
         <div className="flex flex-wrap">

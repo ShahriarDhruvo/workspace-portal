@@ -70,8 +70,10 @@ export function compose(
   seams: Seams = {},
 ) {
   const { now } = seams;
-  const llm = new LlmQueue(config.llm.maxConcurrency, config.llm.maxConcurrencyPerUser);
   const { media, mediaModelPath, upstreamUrl, apiKey } = config.llm;
+  // The image and media models that run beside the LLM: their requests wait for no swap (media.json's besideLlm).
+  const besideLlm = besideLlmIds(media);
+  const llm = new LlmQueue(config.llm.maxConcurrency, config.llm.maxConcurrencyPerUser, besideLlm);
   const videoJobs = new VideoJobs({
     status: fetchVideoStatus((id, model) => `${upstreamUrl}${modelPrefix(mediaModelPath, model)}/v1/videos/${encodeURIComponent(id)}`, apiKey),
     log,
@@ -91,8 +93,6 @@ export function compose(
     },
     log,
   });
-  // The image and media models that run beside the LLM: their requests wait for no swap (media.json's besideLlm).
-  const besideLlm = besideLlmIds(media);
   const requests = new LlmRequests({
     besideLlm,
     now,

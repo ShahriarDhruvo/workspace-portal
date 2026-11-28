@@ -1430,6 +1430,9 @@ The page counts for each key and day the requests, the tokens in and out and the
   account is disabled or still has a temporary password.
 - **Sessions are shared:** a request with a key waits for one of the four sessions together with the workspaces,
   and one person's keys and workspace hold at most three at a time (`LLM_MAX_CONCURRENCY_PER_USER`).
+- **Each model has its turn:** a request for an image or media model that replaces the LLM waits until the
+  answers being written have ended, and LLM requests that come after it wait until it is made. The everyday
+  speech and transcription models run beside the LLM and answer at any time.
 - **Waiting is silent:** nothing reaches the program while its request waits for a session and while the model
   reads the prompt. Three 252,000-token requests at once were each answered after 8 minutes, and a fourth from the
   same person started 7.4 minutes late. The OpenAI and Anthropic libraries give up after 10 minutes unless told

@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { LlmQueue, type ReleaseSlot } from "./llm-queue.ts";
 
 /** Starts an acquire and records when (in grant order) it was granted. */
-function track(queue: LlmQueue, userId: number, order: string[], label: string, signal?: AbortSignal) {
+function track(queue: LlmQueue, userId: number, order: string[], label: string, signal?: AbortSignal, model: string | null = null) {
   const state: { release: ReleaseSlot | null; error: unknown } = { release: null, error: null };
-  const promise = queue.acquire(userId, signal).then(
+  const promise = queue.acquire(userId, model, signal).then(
     (release) => {
       order.push(label);
       state.release = release;
@@ -87,7 +87,7 @@ test("an already aborted signal is rejected immediately", async () => {
   const queue = new LlmQueue(1, 1);
   const abort = new AbortController();
   abort.abort(new Error("gone"));
-  await assert.rejects(queue.acquire(1, abort.signal), /gone/);
+  await assert.rejects(queue.acquire(1, null, abort.signal), /gone/);
   assert.equal(queue.queued, 0);
   assert.equal(queue.inFlight, 0);
 });
@@ -177,7 +177,7 @@ test("an aborted acquireAlone lets what waited behind it go", async () => {
   const order: string[] = [];
   const first = track(queue, 1, order, "a");
   const abort = new AbortController();
-  const video = queue.acquireAlone(2, abort.signal).catch(() => "aborted");
+  const video = queue.acquireAlone(2, "video", abort.signal).catch(() => "aborted");
   track(queue, 3, order, "b");
   await settle();
   assert.deepEqual(order, ["a"]);
@@ -186,4 +186,96 @@ test("an aborted acquireAlone lets what waited behind it go", async () => {
   await settle();
   assert.deepEqual(order, ["a", "b"]);
   first.state.release!();
+});
+
+test("a request for another model waits for the one in use, and those behind it wait with it", async () => {
+  const queue = new LlmQueue(4, 4);
+  const order: string[] = [];
+  const of = (label: string, model: string | null, userId = 1) => track(queue, userId, order, label, undefined, model);
+  const chat1 = of("chat1", null);
+  const image1 = of("image1", "turbo");
+  const chat2 = of("chat2", null, 2);
+  const image2 = of("image2", "turbo");
+  const other = of("ming", "ming");
+  await settle();
+  assert.deepEqual(order, ["chat1"], "the image waits for the chat, and the chat behind it for the image");
+  assert.equal(queue.queued, 4);
+
+  chat1.state.release!();
+  await settle();
+  assert.deepEqual(order, ["chat1", "image1"], "one model's requests are not made together across another's turn");
+  image1.state.release!();
+  await settle();
+  assert.deepEqual(order, ["chat1", "image1", "chat2"]);
+  chat2.state.release!();
+  await settle();
+  assert.deepEqual(order, ["chat1", "image1", "chat2", "image2"]);
+  image2.state.release!();
+  await settle();
+  assert.deepEqual(order, ["chat1", "image1", "chat2", "image2", "ming"], "two image models are two models");
+  other.state.release!();
+});
+
+test("requests for one model that arrive together are made together, up to the limits", async () => {
+  const queue = new LlmQueue(3, 2);
+  const order: string[] = [];
+  const images = ["i1", "i2", "i3"].map((label) => track(queue, 1, order, label, undefined, "turbo"));
+  const chat = track(queue, 2, order, "chat");
+  await settle();
+  assert.deepEqual(order, ["i1", "i2"], "the third is over its user's limit, and the chat waits for the image model");
+  images[0]!.state.release!();
+  await settle();
+  assert.deepEqual(order, ["i1", "i2", "i3"], "it was ahead of the chat");
+  images[1]!.state.release!();
+  images[2]!.state.release!();
+  await settle();
+  assert.deepEqual(order, ["i1", "i2", "i3", "chat"]);
+  chat.state.release!();
+});
+
+test("a model beside the LLM waits for no turn and takes none of the LLM's slots", async () => {
+  const queue = new LlmQueue(3, 2, new Set(["tts"]));
+  const order: string[] = [];
+  const chats = ["c1", "c2", "c3", "c4"].map((label, i) => track(queue, i + 1, order, label));
+  const speech = ["s1", "s2", "s3"].map((label) => track(queue, 1, order, label, undefined, "tts"));
+  const image = track(queue, 5, order, "image", undefined, "turbo");
+  const behind = track(queue, 5, order, "s4", undefined, "tts");
+  await settle();
+  assert.deepEqual(order, ["c1", "c2", "c3", "s1", "s2", "s4"], "speech goes with every LLM slot taken, up to its own limits, and past the image that waits for its turn");
+  assert.equal(queue.inFlight, 6);
+  assert.equal(queue.inFlightFor(1), 3, "one chat and two speech requests");
+
+  chats[0]!.state.release!();
+  await settle();
+  assert.equal(order.at(-1), "c4", "the fourth chat was ahead of the image");
+  for (const chat of chats.slice(1)) chat.state.release!();
+  await settle();
+  assert.equal(order.at(-1), "image", "speech in flight does not hold up the image");
+  speech[0]!.state.release!();
+  await settle();
+  assert.equal(order.at(-1), "s3");
+  for (const call of [...speech, image, behind]) call.state.release!();
+  assert.equal(queue.inFlight, 0);
+});
+
+test("acquireAlone waits for requests beside the LLM too, and they wait behind it", async () => {
+  const queue = new LlmQueue(2, 2, new Set(["tts"]));
+  const order: string[] = [];
+  const speech = track(queue, 1, order, "speech", undefined, "tts");
+  await settle();
+  let alone: { release: ReleaseSlot; unhold: ReleaseSlot } | null = null;
+  void queue.acquireAlone(2, "video").then((granted) => {
+    order.push("video");
+    alone = granted;
+  });
+  track(queue, 3, order, "speech-after", undefined, "tts");
+  await settle();
+  assert.deepEqual(order, ["speech"]);
+  speech.state.release!();
+  await settle();
+  assert.deepEqual(order, ["speech", "video"]);
+  alone!.release();
+  alone!.unhold();
+  await settle();
+  assert.deepEqual(order, ["speech", "video", "speech-after"]);
 });

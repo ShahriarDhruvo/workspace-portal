@@ -1074,6 +1074,37 @@ test("media models: speech goes to the server's own route; video to its model's,
     m.caller.userId = null;
   }));
 
+test("media models: one loaded in the LLM's place waits for the LLM's requests, and the LLM's next for it; one beside the LLM waits for nothing", () =>
+  withGateway({ media: MEDIA }, async (m) => {
+    const { alice, bob } = m.ids;
+    const post = (path: string, body: unknown) => request(m.ports.service, { method: "POST", path, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const sent = (url: string) => m.llm.requests.filter((entry) => entry.url === url).length;
+
+    m.caller.userId = alice;
+    const writing = http.request({ host: "127.0.0.1", port: m.ports.service, method: "POST", path: "/llm/v1/chat/completions", agent: false });
+    writing.on("error", () => undefined);
+    writing.end(JSON.stringify({ hold: true }));
+    await waitFor(() => m.llmQueue.inFlight === 1, "alice's chat request to reach the AI server");
+
+    m.caller.userId = bob;
+    const drama = post("/llm/v1/audio/speech", { model: "fish-drama-3", input: "hi" });
+    await waitFor(() => m.llmQueue.queued === 1, "the speech model that replaces the LLM to wait for the chat");
+    const chat = post("/llm/v1/chat/completions", { messages: [] });
+    await waitFor(() => m.llmQueue.queued === 2, "bob's chat to wait behind his speech");
+    assert.deepEqual([sent("/v1/audio/speech"), sent("/v1/chat/completions")], [0, 1], "neither reached the AI server");
+
+    // Beside the LLM: at once, for bob behind his waiting requests and for alice at her limit of one.
+    assert.equal((await post("/llm/v1/audio/speech", { model: "qwen3-tts-1.7b", input: "hi" })).status, 200);
+    m.caller.userId = alice;
+    assert.equal((await post("/llm/v1/audio/speech", { model: "qwen3-tts-1.7b", input: "hi" })).status, 200);
+    assert.deepEqual([sent("/v1/audio/speech"), m.llmQueue.queued], [2, 2]);
+
+    writing.destroy();
+    assert.deepEqual([(await drama).status, (await chat).status], [200, 200]);
+    assert.deepEqual(m.llm.requests.slice(-2).map((entry) => entry.url), ["/v1/audio/speech", "/v1/chat/completions"], "in the order they came");
+    m.caller.userId = null;
+  }));
+
 test("agent and service servers wait at most a minute for request headers, and never time out a request", () => {
   for (const server of [g.createAgentServer(), g.createServiceServer({ kind: "private" })]) {
     assert.equal(server.headersTimeout, 60_000, "a client that never finishes its headers is dropped (slowloris)");

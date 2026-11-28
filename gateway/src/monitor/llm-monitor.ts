@@ -266,6 +266,7 @@ export class LlmMonitor {
     // Behind llama-swap: the LLM is stopped while an image or media model has its memory, or is starting again.
     const llmStopped = this.#engine === "unloaded";
     const behind = queuedBehind(active);
+    const besideLlm = this.#options.besideLlm;
 
     if (this.#sessionsReported) {
       for (const track of [...this.#tracks.values()].sort((a, b) => a.slot - b.slot)) {
@@ -277,6 +278,7 @@ export class LlmMonitor {
           userName: null,
           phase: track.generatedTokens > 0 ? "writing" : track.processedTokens > 0 ? "reading" : "preparing",
           model: null,
+          beside: false,
           promptTokens: track.promptTokens,
           cachedTokens: track.cachedTokens,
           processedTokens: track.processedTokens,
@@ -288,24 +290,25 @@ export class LlmMonitor {
       }
       // A model beside the LLM (media.json's besideLlm: speech and transcription): no session of the LLM's, and no
       // swap to wait for.
-      const beside = this.#options.besideLlm;
       for (const request of active) {
         const model = request.media?.model ?? request.image?.model ?? null;
-        if (request.forwardedAt === null || model === null || !beside?.has(model) || behind.has(request.id)) continue;
+        if (request.forwardedAt === null || model === null || !besideLlm?.has(model) || behind.has(request.id)) continue;
         served.add(request.id);
-        sessions.push(mediaSession(request.userId, request.media?.kind ?? "image", model, request.forwardedAt));
+        sessions.push(mediaSession(request.userId, request.media?.kind ?? "image", model, request.forwardedAt, true));
       }
     } else {
       for (const request of active) {
         const llm = request.image === null && request.media === null;
         if (request.forwardedAt === null || (llm && llmStopped) || behind.has(request.id)) continue;
         served.add(request.id);
+        const model = request.media?.model ?? request.image?.model ?? null;
         sessions.push({
           slot: null,
           userId: request.userId,
           userName: null,
           phase: request.media?.kind ?? (request.image !== null ? "image" : request.firstTokenAt === null ? "reading" : "writing"),
-          model: request.media?.model ?? request.image?.model ?? null,
+          model,
+          beside: model !== null && besideLlm?.has(model) === true,
           promptTokens: null,
           cachedTokens: null,
           processedTokens: null,
@@ -320,7 +323,7 @@ export class LlmMonitor {
     // A running video job is its user's session though no request of it is in flight.
     const { video } = this.#options;
     const jobs = video?.jobs.active() ?? [];
-    for (const job of jobs) sessions.push(mediaSession(job.userId, "video", job.model, job.startedAt));
+    for (const job of jobs) sessions.push(mediaSession(job.userId, "video", job.model, job.startedAt, false));
     const held = queue.held;
     const waiting: LlmWaiting[] = queue.waiting().map(({ userId, since }) => ({ userId, userName: null, since, stage: held ? "video" : "portal" }));
     for (const request of active) {
@@ -460,6 +463,6 @@ function queuedBehind(active: readonly ActiveLlmRequest[]): Set<number> {
 }
 
 /** A media model's request, or a running video job, as a row of the sessions table. */
-function mediaSession(userId: number, phase: GenerationKind, model: string | null, startedAt: number): LlmSession {
-  return { slot: null, userId, userName: null, phase, model, promptTokens: null, cachedTokens: null, processedTokens: null, generatedTokens: 0, readTps: null, writeTps: null, startedAt };
+function mediaSession(userId: number, phase: GenerationKind, model: string | null, startedAt: number, beside: boolean): LlmSession {
+  return { slot: null, userId, userName: null, phase, model, beside, promptTokens: null, cachedTokens: null, processedTokens: null, generatedTokens: 0, readTps: null, writeTps: null, startedAt };
 }
