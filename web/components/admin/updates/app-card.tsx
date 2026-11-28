@@ -13,7 +13,7 @@ import {
   type AppPackageRow,
 } from "@/lib/app-updates";
 import { formatBytes } from "@/lib/format";
-import { cutOffText, drainLimitText, isJobActive, type Loaded } from "@/lib/update-jobs";
+import { cutOffText, drainLimitText, isJobActive, staleReleasesText, type Loaded } from "@/lib/update-jobs";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { GuardedButton } from "@/components/common/guarded-button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -192,7 +192,7 @@ function AppCard({ entry, overview, unreachable, unreachableMessage, engineJob, 
           <WarningIcon />
           <AlertTitle className="line-clamp-none">{source} can&apos;t be reached</AlertTitle>
           <AlertDescription>
-            {releases.error} The versions shown are from the last check; updates may fail until it answers.
+            {releases.error} {staleReleasesText(releases.checkedAt)}
           </AlertDescription>
         </Alert>
       ) : null}

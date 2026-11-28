@@ -3,7 +3,7 @@
 import { useRef } from "react";
 import { removeEngineImage, restartEngineNow, updateEngine } from "@/lib/actions/updates";
 import type { AppUpdateJob, EngineImage, EngineOverview, UpdateDrain } from "@portal/core/wire";
-import { cutOffText, drainLimitText, isJobActive, type Loaded } from "@/lib/update-jobs";
+import { cutOffText, drainLimitText, isJobActive, staleReleasesText, type Loaded } from "@/lib/update-jobs";
 import {
   enginePackageRows,
   engineRemoveBlocker,
@@ -148,7 +148,7 @@ export function EngineCard({ data, appJob, onChanged }: EngineCardProps) {
           <WarningIcon />
           <AlertTitle className="line-clamp-none">The image registry can&apos;t be reached</AlertTitle>
           <AlertDescription>
-            {overview.releases.error} The versions shown are from the last check; updates may fail until it answers.
+            {overview.releases.error} {staleReleasesText(overview.releases.checkedAt)}
           </AlertDescription>
         </Alert>
       ) : null}

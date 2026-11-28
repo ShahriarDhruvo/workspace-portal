@@ -37,6 +37,12 @@ export function drainLimitText(minutes: number): string {
   return `Requests still running after ${minutes} ${minutes === 1 ? "minute" : "minutes"} are cut off: their agents get an error and may retry. A video still being made then is lost.`;
 }
 
+/** What the versions on a card are while its releases can't be read; `checkedAt` is null until a check has succeeded. */
+export function staleReleasesText(checkedAt: number | null): string {
+  const shown = checkedAt === null ? "No check has succeeded yet, so only the installed versions are shown" : "The versions shown are from the last check";
+  return `${shown}; updates may fail until it answers.`;
+}
+
 /** The "Restart now" dialog's warning. */
 export function cutOffText(drain: Pick<UpdateDrain, "inFlight" | "video"> | null): string {
   if (drain === null || (drain.inFlight === 0 && !drain.video)) return "Requests still running are cut off: their agents get an error and may retry.";
