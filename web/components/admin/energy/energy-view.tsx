@@ -48,6 +48,8 @@ export function EnergyView({ initial }: { initial: EnergyMonth }) {
   // Each month's days start on the table's first page.
   const { rows, pagination } = usePagination(data.days, data.month);
   const currency = data.location?.currency ?? null;
+  // A price that stands in for a month not yet published: periods are whole months, so a month's days share one.
+  const estimate = data.days.find((day) => day.price?.estimate)?.price;
   // Both servers' kWh on every day of the month, those still to come included.
   const byDay = new Map(data.days.map((day) => [day.day, day]));
   const points = daysOfMonth(data.month).map((day) => {
@@ -132,7 +134,14 @@ export function EnergyView({ initial }: { initial: EnergyMonth }) {
         {by === "Users" ? (
           <UserEnergy data={data} currency={currency} />
         ) : (
-          <DataTable footer={<DataTablePagination {...pagination} label="Energy pages" />} tableProps={{ "aria-label": "Energy per day" }}>
+          <DataTable
+            footer={<DataTablePagination {...pagination} label="Energy pages" />}
+            tableProps={{
+              "aria-label": "Energy per day",
+              // A narrow screen keeps the day, the total and the cost: each server's energy is under the total, the price under the cost.
+              className: "max-md:[&_:is(th,td):is(:nth-child(2),:nth-child(3),:nth-child(5))]:hidden max-md:[&_td]:align-top",
+            }}
+          >
             <TableHeader>
               <TableRow>
                 <DataTableHead>Day</DataTableHead>
@@ -151,21 +160,41 @@ export function EnergyView({ initial }: { initial: EnergyMonth }) {
                   <TableRow key={day.day}>
                     <TableCell>
                       {formatDay(day.day)}
-                      {day.day === data.today ? <span className="ml-2 text-muted-foreground">so far</span> : null}
+                      {day.day === data.today ? <span className="ml-2 text-muted-foreground max-md:ml-0 max-md:block">so far</span> : null}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">{formatKwh(day.llmKwh)}</TableCell>
                     <TableCell className="text-right tabular-nums">{formatKwh(day.portalKwh)}</TableCell>
-                    <TableCell className="text-right font-medium tabular-nums">{formatKwh(day.kwh)}</TableCell>
+                    {/* The lines under the total wrap rather than push the table wider than a small phone. */}
+                    <TableCell className="text-right font-medium tabular-nums max-md:whitespace-normal">
+                      {formatKwh(day.kwh)}
+                      <div className="text-12 font-normal text-muted-foreground md:hidden">
+                        <div>AI server {formatKwh(day.llmKwh)}</div>
+                        <div>Portal server {formatKwh(day.portalKwh)}</div>
+                      </div>
+                    </TableCell>
                     <TableCell className="text-right text-muted-foreground tabular-nums">
                       <PriceValue price={day.price} currency={currency} />
                     </TableCell>
-                    <TableCell className="text-right font-medium tabular-nums">{formatMoney(day.cost, currency)}</TableCell>
+                    <TableCell className="text-right font-medium tabular-nums">
+                      {formatMoney(day.cost, currency)}
+                      {day.price && currency ? (
+                        <div className="text-12 font-normal text-muted-foreground md:hidden">
+                          <PriceValue price={day.price} currency={currency} /> {priceUnit(currency)}
+                        </div>
+                      ) : null}
+                    </TableCell>
                   </TableRow>
                 ))
               )}
             </TableBody>
           </DataTable>
         )}
+        {/* A phone opens no tooltip: what an underlined price's tooltip says is written out. */}
+        {by === "Servers" && estimate ? (
+          <p className="text-13 text-muted-foreground md:hidden">
+            An underlined price is the {formatPricePeriod(estimate.period)} average, the latest published.
+          </p>
+        ) : null}
       </div>
     </>
   );

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { AGENT_NAMES, type WorkspaceInfo } from "@portal/core/wire";
+import { AGENT_NAMES, WORKSPACE_KIND_NAMES, type WorkspaceInfo } from "@portal/core/wire";
 import { formatBytes, formatDuration, formatVersion } from "@/lib/format";
 import { formatElapsed } from "@/lib/live-format";
 import { DataTable, DataTableEmpty, DataTableHead, DataTablePagination, usePagination } from "@/components/common/data-table";
@@ -71,8 +71,22 @@ export function WorkspacesCard({ workspaces, names, maxRunning, now }: Workspace
             {maxRunning === null ? `${running} running` : `${running} of ${maxRunning} running`}
           </span>
         </CardTitle>
+        {/* A narrow screen has no AI requests heading to carry the tooltip, and a phone opens none: it is written out. */}
+        {list.length > 0 ? (
+          <p className="text-13 text-muted-foreground md:hidden">
+            AI requests are a user&apos;s requests running on the AI server now: text, images and media.
+          </p>
+        ) : null}
       </CardHeader>
-      <DataTable variant="flush" footer={<DataTablePagination {...pagination} label="Workspaces pages" />}>
+      <DataTable
+        variant="flush"
+        footer={<DataTablePagination {...pagination} label="Workspaces pages" />}
+        tableProps={{
+          // Below a wide screen the type and the harness are under the name; on a narrow one the status and the numbers are too.
+          className:
+            "max-xl:[&_:is(th,td):is(:nth-child(2),:nth-child(3))]:hidden max-md:[&_:is(th,td):not(:first-child,:last-child)]:hidden",
+        }}
+      >
         <TableHeader>
           <TableRow>
             <DataTableHead>User</DataTableHead>
@@ -97,37 +111,67 @@ export function WorkspacesCard({ workspaces, names, maxRunning, now }: Workspace
             rows.map((workspace) => {
               const state = status(workspace);
               const name = names.get(workspace.userId) ?? `User #${workspace.userId}`;
+              const harness = (
+                <span className="flex items-baseline gap-1.5">
+                  {workspace.agent ? AGENT_NAMES[workspace.agent] : "—"}
+                  {workspace.agentVersion ? (
+                    <span className="font-mono text-12 text-muted-foreground">{formatVersion(workspace.agentVersion)}</span>
+                  ) : null}
+                </span>
+              );
+              // Where the columns are folded the reason is written out: a touch screen opens no tooltip.
+              const statusText = (
+                <>
+                  <span className="flex items-center gap-1.5">
+                    <StatusDot tone={state.tone} pulse={state.pulse} />
+                    {state.label}
+                  </span>
+                  {state.title ? <span className="block text-12 wrap-anywhere text-muted-foreground xl:hidden">{state.title}</span> : null}
+                </>
+              );
+              const memory = workspace.memoryBytes === null ? "—" : formatBytes(workspace.memoryBytes);
+              const viewers = workspace.connections.owner + workspace.connections.admin;
+              const upFor = workspace.startedAt === null ? "—" : formatElapsed(now - workspace.startedAt);
               return (
                 <TableRow key={workspace.userId}>
-                  <TableCell>
-                    <Link href={`/admin/users/${workspace.userId}`} className="block max-w-48 truncate font-medium" title={name}>
+                  <TableCell className="max-md:whitespace-normal">
+                    <Link
+                      href={`/admin/users/${workspace.userId}`}
+                      className="block font-medium max-md:wrap-anywhere md:max-w-48 md:truncate"
+                      title={name}
+                    >
                       {name}
                     </Link>
+                    <div className="flex items-baseline gap-1 text-12 text-muted-foreground xl:hidden">
+                      {WORKSPACE_KIND_NAMES[workspace.kind]} · {harness}
+                    </div>
+                    <div className="mt-1 md:hidden">{statusText}</div>
+                    <dl className="mt-1 flex flex-wrap gap-x-3 text-12 tabular-nums md:hidden">
+                      {[
+                        ["Memory", memory],
+                        ["AI requests", workspace.llmInFlight],
+                        ["Viewers", viewers],
+                        ["Up for", upFor],
+                      ].map(([label, value]) => (
+                        <div key={label} className="flex gap-1 whitespace-nowrap">
+                          <dt className="text-muted-foreground">{label}</dt>
+                          <dd>{value}</dd>
+                        </div>
+                      ))}
+                    </dl>
                   </TableCell>
                   <TableCell>
                     <KindBadge kind={workspace.kind} />
                   </TableCell>
-                  <TableCell>
-                    <span className="flex items-baseline gap-1.5">
-                      {workspace.agent ? AGENT_NAMES[workspace.agent] : "—"}
-                      {workspace.agentVersion ? (
-                        <span className="font-mono text-12 text-muted-foreground">{formatVersion(workspace.agentVersion)}</span>
-                      ) : null}
-                    </span>
+                  <TableCell>{harness}</TableCell>
+                  <TableCell title={state.title ?? undefined} className="max-xl:whitespace-normal">
+                    {statusText}
                   </TableCell>
-                  <TableCell title={state.title ?? undefined}>
-                    <span className="flex items-center gap-1.5">
-                      <StatusDot tone={state.tone} pulse={state.pulse} />
-                      {state.label}
-                    </span>
-                  </TableCell>
-                  <TableCell className={number}>{workspace.memoryBytes === null ? "—" : formatBytes(workspace.memoryBytes)}</TableCell>
+                  <TableCell className={number}>{memory}</TableCell>
                   <TableCell className={number}>{workspace.llmInFlight}</TableCell>
-                  <TableCell className={number}>{workspace.connections.owner + workspace.connections.admin}</TableCell>
-                  <TableCell className={`${number} text-muted-foreground`}>
-                    {workspace.startedAt === null ? "—" : formatElapsed(now - workspace.startedAt)}
-                  </TableCell>
-                  <TableCell className="w-0">
+                  <TableCell className={number}>{viewers}</TableCell>
+                  <TableCell className={`${number} text-muted-foreground`}>{upFor}</TableCell>
+                  <TableCell className="w-0 max-md:align-top">
                     <OpenWorkspaceForm userId={workspace.userId} compact />
                   </TableCell>
                 </TableRow>
