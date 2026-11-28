@@ -806,9 +806,9 @@ at a time, no reference voice unless the row names one. Times run from sending t
   by a person was done.
 - The weights take 43 GB on disk.
 
-### Agent turns with the image and speech models
+### Agent turns with the media models
 
-Three turns of OpenCode 2.4.2 in one Private workspace on the test servers, November 27, 2026, each one prompt in
+Four turns of OpenCode 2.4.2 in one Private workspace on the test servers, November 27, 2026, each one prompt in
 plain words, nobody else on the AI server. Times run from the prompt to the last reply, to within 2 s.
 
 | Asked for | What the agent did | Time |
@@ -816,10 +816,16 @@ plain words, nobody else on the AI server. Times run from the prompt to the last
 | A picture, then the same picture with one colour changed | One `generate_image` in an `execute` script with no model named, so Ming-Image made it; then one with `images`, which went to Turbo. Both files saved and shown in the reply | 166 s |
 | Three quick wide draft thumbnails | One script with three calls in `Promise.all`, each naming `portal/Qwen-Image-2.1-Turbo#1344x768`. Turbo was loaded once and ran for 62 s; the three files are 1344 × 768 | 113 s |
 | Two lines of a radio play "in the best quality", one whispered, one excited | Two `synthesize_speech` calls in one message with `[whisper]` and `[excited]`. Drama 3 was loaded once and ran for 52 s; the agent then transcribed both lines and found every word | 111 s |
+| One quick draft video clip, "the shortest length you can" | One `generate_video` in the fast tier, 5 s at 512x512. MiniMax H3 made the 5.2 s clip; the agent cut three frames from it with ffmpeg and showed them | 274 s |
 
 - In the third turn the agent first asked the quality tier for a built-in voice and then for a described one. The
-  tool refused both at once, with no model swap, but the two rounds are in the time. The tool's description has
-  since been changed to say what each tier takes; the turn was not repeated with it.
+  tool refused both at once, with no model swap, but the two rounds are in the time. The tool's description was
+  then changed to say what each tier takes, and the media skill to say how one speaker keeps one voice. The same
+  prompt again, on the rebuilt image: no refused call. The agent made a sample with a built-in voice in the fast
+  tier and gave it to both quality lines as `reference_audio`; 157 s, the sample and two transcriptions included.
+- After the fourth turn the agent wrote that it could not look at the frames. It can: asked to in a next turn, it
+  opened a frame with `read` and described the teapot, the steam and the window behind it. The media skill said
+  "open" the images and frames; it now names `read`.
 
 ### Fish S2-Pro and ACE-Step
 
