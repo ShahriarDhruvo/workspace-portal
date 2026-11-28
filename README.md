@@ -214,8 +214,10 @@ server too, and Admin > Updates updates its engine: see [hostd/README.md](hostd/
 
 [`llm-server/`](llm-server) holds what the reference AI server runs: llama-swap's configuration, the models'
 unit files, the media programs' installers, a full-load test, and fan control for the one board it was tested on.
-[docs/GUIDE.md](docs/GUIDE.md) sets up both servers step by step from a fresh Fedora, the model downloads
-included.
+`sudo bash llm-server/install.sh` there puts the configuration and the unit files in place, restarts llama-swap
+when one changed, and runs portal-hostd's installer again: run it after each `git pull`
+([llm-server/README.md](llm-server/README.md#install)). [docs/GUIDE.md](docs/GUIDE.md) sets up both servers step
+by step from a fresh Fedora, the model downloads included.
 
 ## Security model
 

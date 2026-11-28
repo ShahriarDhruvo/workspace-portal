@@ -6,6 +6,7 @@ step; the measurements behind these choices are in [docs/MEASUREMENTS.md](../doc
 
 | File | What it is |
 |---|---|
+| `install.sh` | The installer: `sudo bash llm-server/install.sh` copies the files below to where each row says, starts llama-swap, or restarts it when a file changed, and runs portal-hostd's installer where that is installed. Run it after every `git pull` and after a change of your own to one of these files. [Install](#install) says what it leaves alone. |
 | `llama-swap.yaml` | [llama-swap](https://github.com/mostlygeek/llama-swap) v277's configuration, to `~/.config/llama-swap/config.yaml`: one address, port 8080, for the LLM, the image models and the media models, which do not fit in memory together. A request names its model; llama-swap starts that model's unit and, for a model of an exclusive group (`llm`, `images`, `media`), first stops the other groups' models, once their requests have finished. The image and media models run one at a time. The everyday speech and transcription models (group `speech`) start beside whatever runs, the LLM included, one at a time. The LLM starts with llama-swap. LTX-2.5's entry is commented out until its weights are in ([docs/GUIDE.md](../docs/GUIDE.md#ltx-25)). Its own routes (`/api`, `/ui`, `/logs`, `/running`, `/upstream` among them) are the admin's: the portal passes none of them on to workspaces or API keys. The gateway itself reaches video and music at `/upstream/<model>/` (`MEDIA_MODEL_PATH`), as llama-swap routes neither, and the LLM's `/slots` the same way. |
 | `llama-swap.service` | The systemd user unit that runs llama-swap at boot, to `~/.config/systemd/user/`: the release `~/.local/lib/llama-swap/current` points at. It listens on every interface without a login: open port 8080 in the firewall to the portal server alone. |
 | `apps.json`, `apps/` | The programs besides Gufo that **Admin > Updates** updates through portal-hostd (llama-swap, vLLM, the media programs), and each one's `install.sh VERSION DEST`, which builds a version beside the others. portal-hostd's installer copies them; [hostd/README.md](../hostd/README.md#other-software) describes the keys. llama-swap's downloads a release and checks it against the checksums GitHub publishes with it. fish-speech's, ACE-Step's and LTX-2's each build the upstream tag's checkout with a Python environment of its own (uv, Python 3.12, PyTorch for ROCm with gfx1151's kernels) and copy in the portal's server for it: `fish-speech-openai.py` (OpenAI's `/v1/audio/speech`, WAV only), `acestep-sync.py` (the portal's `/v1/audio/music`, one track per request, both XL models in one process) and `ltx-videos.py` (Gufo's video job API, one job at a time). `apps/ltx/test_ltx_videos.py` tests that last one without a GPU, weights or LTX-2: `python3 -m unittest llm-server/apps/ltx/test_ltx_videos.py`. `apps/ming/` builds Ming-Image the same way, from a commit, as the project has no releases, so it is not in `apps.json` and **Admin > Updates** does not offer it. Its server, `ming-images.py`, answers OpenAI's `/v1/images/generations` as Gufo answers it for Qwen-Image, one image at a time, and makes new images only: `/v1/images/edits` gets 404 and an `image` in a generation 400, because its edits damaged the picture ([measurements](../docs/MEASUREMENTS.md#qwen-image-21-turbo-edits-and-fast-images)). `apps/ming/test_ming_images.py` tests it without a GPU, weights or Ming-Image. The Ming-Image and LTX servers exit with status 1 when their weights are missing or loading fails, LTX's also when its worker dies: their units do not restart, so llama-swap fails the request at once instead of waiting out its 600-second health check with the LLM stopped. The Ming-Image and fish-speech servers make one output at a time and drop a waiting request whose client has hung up. |
@@ -22,6 +23,27 @@ step; the measurements behind these choices are in [docs/MEASUREMENTS.md](../doc
 | `fans/` | Fan curve and power profile for one machine, the Bosgame M5 (board AXB35-02, BIOS 3.11). |
 | `apu-tuning.service` | At every boot, with RyzenAdj: a curve offset of -25 on every CPU core, and the power and temperature limits at the firmware's maximum (132 W sustained, 140 W slow, 160 W peak, 98 °C). It runs after the fan service has selected the Performance profile, as selecting a profile resets the limits. It goes to `/etc/systemd/system/`. -50 froze the test machine five times ([Freezes](../docs/MEASUREMENTS.md#freezes)). |
 | `watchdog.conf` | Has systemd keep the chipset's watchdog (`sp5100_tco`) armed, so a hang of 30 seconds reboots the machine. It goes to `/etc/systemd/system.conf.d/`. |
+
+## Install
+
+```sh
+sudo bash llm-server/install.sh                # for the sudo user; --user NAME for another
+```
+
+It needs llama-swap's release in `~/.local/lib/llama-swap/current` first ([docs/GUIDE.md](../docs/GUIDE.md#8-start-the-models)).
+What it writes: `wait-gpu-memory`, `llama-swap.yaml`, `llama-swap.service`, the units of `media/`, the quadlets,
+`media/cache.env` and `media/ai-studio-cache.sh`, and each media program's adapter (`apps/<id>/*.py`) into the
+version of that program in use. A file that is already the checkout's is not touched.
+
+- **The installed files are the checkout's.** A change made to an installed file is lost with the next run: change
+  the file in `llm-server/` and run the installer. The one exception is a quadlet's `Image=` line, which
+  **Admin > Updates** sets: the installer keeps the installed one.
+- **A restart of llama-swap** follows when a file changed. It stops every model and cuts off the requests in
+  progress, then loads the LLM; the installer waits up to 5 minutes for it.
+- **portal-hostd's installer** runs at the end with the settings in `/etc/portal-hostd/hostd.conf`, so
+  **Admin > Updates** gets this checkout's `apps.json` and install scripts. The token is kept and not printed.
+- **Not installed:** the programs and their weights, which the guide's steps and **Admin > Updates** install, and
+  `fans/`, `apu-tuning.service` and `watchdog.conf`, which belong to one machine.
 
 ## Fans
 

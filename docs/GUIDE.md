@@ -618,22 +618,27 @@ podman pull "$(sed -n 's/^Image=//p' ~/workspace-portal/llm-server/gufo.containe
 **AI server**:
 
 ```sh
-mkdir -p ~/.local/bin ~/.local/lib/llama-swap ~/.config/llama-swap ~/.config/systemd/user ~/.config/containers/systemd
+mkdir -p ~/.local/lib/llama-swap
 cd ~/workspace-portal/llm-server
 sh apps/llama-swap/install.sh 277 ~/.local/lib/llama-swap/277
 echo 277 > ~/.local/lib/llama-swap/277/.portal-version
 ln -s 277 ~/.local/lib/llama-swap/current
-install -m 755 wait-gpu-memory ~/.local/bin/
-cp gufo.container ~/.config/containers/systemd/
-cp llama-swap.yaml ~/.config/llama-swap/config.yaml
-cp llama-swap.service ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now llama-swap.service
+sudo bash install.sh
 ```
+
+**You should see** a line `install.sh: wrote ...` for each file, then `install.sh: the LLM is ready`, and at the end
+that portal-hostd is not installed here: it comes with [the portal](#live-monitoring-energy-and-gufo-updates).
 
 llama-swap's release is checked against the checksums GitHub publishes with it. Each release gets a folder of its
 own under `~/.local/lib/llama-swap`, and `current` points at the one that runs: that is how **Admin > Updates**
 installs a newer one beside it and can switch back.
+
+`install.sh` is the AI server's installer. It copies the checkout's settings to where they are read: llama-swap's
+configuration and unit, the quadlets of Gufo's models and of vLLM, the units of the other media programs, the
+script that waits for free memory, and `/etc/ai-studio/cache.env`. Then it starts llama-swap, or restarts it when a
+file changed, and waits until the LLM is ready. Run it again after every `git pull`, and after a change of your own
+to a file in `llm-server/`: what it installs is the checkout's, so a change made to an installed file is lost with
+the next run. The one exception is the `Image=` line of a quadlet, which **Admin > Updates** sets.
 
 Neither Gufo nor llama-swap has a login. The models listen on this machine only (ports 18080 to 18091); this lets
 the portal server, and nobody else, reach llama-swap on port 8080.
@@ -695,15 +700,15 @@ Measured on the test machine, with the model files already in the page cache:
 <details>
 <summary>Other session layouts</summary>
 
-Change `--sessions` and `--context` in `~/.config/containers/systemd/gufo.container`, then run the lines below.
+Change `--sessions` and `--context` in `~/workspace-portal/llm-server/gufo.container`, then run the lines below.
 What the disk cache holds was made for the old layout: Gufo cannot use it and does not delete it, so they empty
-it while the models are stopped.
+it while the models are stopped. The installer puts the changed file in place and starts llama-swap again. A later
+`git pull` keeps your change, and stops with a message if the update changes the same file.
 
 ```sh
-systemctl --user daemon-reload
 systemctl --user stop llama-swap.service
 podman unshare sh -c 'rm -rf /models/gufo-cache/disk/*'
-systemctl --user start llama-swap.service
+sudo bash ~/workspace-portal/llm-server/install.sh
 ```
 
 | Layout | Flags | Use it when |
@@ -801,18 +806,16 @@ df -h /models /
 
 **You should see** at least `400G` free on `/models` and `60G` on `/`.
 
-Installs uv and FFmpeg, which the media programs build and run with, and their folders. `/etc/ai-studio/cache.env`
-names the folders in `/var/cache/ai-studio` where they keep what they compile and download, so a swap or a reboot
-does not do it again; `/etc/profile.d/ai-studio-cache.sh` gives your shell the same names. MiniMax H3 keeps its
-jobs and their MP4s in `/models/gufo-cache/video-jobs` for an hour, as user 1000 of its container.
+Installs uv and FFmpeg, which the media programs build and run with, and their folders. `/etc/ai-studio/cache.env`,
+which the installer of [step 8](#8-start-the-models) put there, names the folders in `/var/cache/ai-studio` where
+they keep what they compile and download, so a swap or a reboot does not do it again;
+`/etc/profile.d/ai-studio-cache.sh` gives your shell the same names at its next login. MiniMax H3 keeps its jobs and
+their MP4s in `/models/gufo-cache/video-jobs` for an hour, as user 1000 of its container.
 
 **AI server**:
 
 ```sh
 sudo dnf install -y uv ffmpeg-free
-cd ~/workspace-portal/llm-server
-sudo install -D -m 644 media/cache.env /etc/ai-studio/cache.env
-sudo install -m 644 media/ai-studio-cache.sh /etc/profile.d/
 sudo install -d -o "$USER" -g "$(id -gn)" /opt/ai-studio /var/cache/ai-studio
 mkdir -p /opt/ai-studio/ming /opt/ai-studio/fish-speech /opt/ai-studio/acestep /opt/ai-studio/vllm-sov
 mkdir -p /var/cache/ai-studio/{hf,torch,triton,miopen,vllm,comgr}
@@ -897,22 +900,10 @@ uv pip install --no-deps --python-version 3.12 --python-platform x86_64-manylinu
 3.0.0-beta in /opt/ai-studio/fish-speech/3.0.0-beta`, later
 `installed ACE-Step 0.1.8 (...) in /opt/ai-studio/acestep/0.1.8`, and at the end uv's list of what it installed.
 
-Puts the units in place, Turbo's quadlet among them. Like the LLM's, they have no `[Install]`: llama-swap starts
-each with its first request and stops it when a model of another group is asked for; the two image models are one
-group and run one at a time. They listen on this machine only (ports 18081 to 18091), so the firewall stays as it
-is. Restarting llama-swap stops every model and loads the LLM again.
-
-**AI server**:
-
-```sh
-cd ~/workspace-portal/llm-server
-cp gufo-image-turbo.container gufo-video.container gufo-tts.container gufo-tts-clone.container \
-  gufo-tts-design.container gufo-asr.container vllm-sov.container ~/.config/containers/systemd/
-cp media/ming.service media/fish-speech.service media/acestep.service ~/.config/systemd/user/
-cp llama-swap.yaml ~/.config/llama-swap/config.yaml
-systemctl --user daemon-reload
-systemctl --user restart llama-swap.service
-```
+The models' units and quadlets are in place since [step 8](#8-start-the-models), Turbo's among them. Like the
+LLM's, they have no `[Install]`: llama-swap starts each with its first request and stops it when a model of another
+group is asked for; the two image models are one group and run one at a time. They listen on this machine only
+(ports 18081 to 18091), so the firewall stays as it is.
 
 **AI server**, check speech and transcription beside the LLM:
 
@@ -1080,7 +1071,7 @@ and llama-swap fails every request for it at once.
 Accept the licence at [huggingface.co/Lightricks/LTX-2.5](https://huggingface.co/Lightricks/LTX-2.5) with your
 Hugging Face account, and create a read token at
 [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens). Then build LTX-2 1.6.3 like the other
-media programs, put its unit in place and save the token; paste it when asked.
+media programs and save the token; paste it when asked. Its unit, `ltx.service`, is in place since step 8.
 
 **AI server**:
 
@@ -1090,8 +1081,6 @@ mkdir -p /opt/ai-studio/ltx
 bash apps/ltx/install.sh 1.6.3 /opt/ai-studio/ltx/1.6.3
 echo 1.6.3 > /opt/ai-studio/ltx/1.6.3/.portal-version
 ln -s 1.6.3 /opt/ai-studio/ltx/current
-cp media/ltx.service ~/.config/systemd/user/
-systemctl --user daemon-reload
 HF_TOKEN_PATH=$HOME/.cache/huggingface/token /opt/ai-studio/ltx/current/.venv/bin/hf auth login
 ```
 
@@ -1139,18 +1128,18 @@ EOF
 
 **You should see** six lines that start with `OK`. Delete a file marked `FAILED` and run the download again.
 
-Turns LTX-2.5 on in llama-swap: its entry, commented out in the configuration, and its place in the `media` group.
-A later copy of `llm-server/llama-swap.yaml` turns it off again; run these lines after it. The restart stops every
-model. As with H3, run the check while the portal sends nothing.
+Turns LTX-2.5 on in llama-swap: its entry, commented out in `llm-server/llama-swap.yaml`, and its place in the
+`media` group. The installer puts the changed file in place and restarts llama-swap, which stops every model. A
+later `git pull` keeps the change. As with H3, run the check while the portal sends nothing.
 
 **AI server**:
 
 ```sh
+cd ~/workspace-portal/llm-server
 sed -i -e 's|^  # ltx-2.5-distilled:$|  ltx-2.5-distilled:|' \
   -e '/^  ltx-2.5-distilled:$/,/checkEndpoint/s|^  #   |    |' \
-  -e 's|acestep-1.5-xl-base\]$|acestep-1.5-xl-base, ltx-2.5-distilled]|' ~/.config/llama-swap/config.yaml
-systemctl --user restart llama-swap.service
-until curl -s http://127.0.0.1:8080/running | grep -q '"state":"ready"'; do sleep 2; done
+  -e 's|acestep-1.5-xl-base\]$|acestep-1.5-xl-base, ltx-2.5-distilled]|' llama-swap.yaml
+sudo bash install.sh
 v=http://127.0.0.1:8080/upstream/ltx-2.5-distilled/v1/videos
 id=$(curl -s $v -H 'Content-Type: application/json' -d '{"model":"ltx-2.5-distilled","prompt":"A red ceramic teapot on a wooden table, steam rising","size":"512x512","seconds":5}' | jq -r .id)
 while curl -s $v/$id | jq -r .status | grep -qxE 'queued|in_progress'; do sleep 10; done
@@ -1691,6 +1680,21 @@ sudo firewall-cmd --zone=FedoraServer --list-rich-rules
 <details>
 <summary>Updating the AI server</summary>
 
+**The files of this repository**: llama-swap's configuration, the models' units and quadlets, the media programs'
+adapters, portal-hostd, and the list of programs under **Admin > Updates**. The installer of
+[step 8](#8-start-the-models) puts them all in place. It restarts llama-swap when one of them changed, which stops
+every model and cuts off the requests in progress, so run it when nobody is working.
+
+**AI server**:
+
+```sh
+cd ~/workspace-portal && git pull --ff-only
+sudo bash llm-server/install.sh
+```
+
+**You should see** a line `install.sh: wrote ...` for each changed file and `install.sh: the LLM is ready`, or
+`install.sh: nothing changed: llama-swap keeps running`; then portal-hostd's own lines, up to `health check passed`.
+
 **After a kernel update**, `dkms status` must list `ec_su_axb35/m5-2` as installed for the new kernel, and the
 speed check from [step 9](#9-test-it) should still show the same numbers. If the new kernel misbehaves, boot the
 previous one:
@@ -1728,8 +1732,8 @@ update's log says so. llama-swap's own restart stops every model. **Use…** swi
 > notes, and try a transcription after it. No newer vLLM was tried with the plugin: on November 27, 2026 kyuz0's
 > image went up to 0.33.0 and vLLM itself to 0.34.0, which still writes no `srt` or `vtt`.
 
-**An install from before these cards** has llama-swap in `~/.local/bin`. Move it into the folder layout once; the
-running llama-swap goes on serving until its next restart:
+**An install from before these cards** has llama-swap in `~/.local/bin`. Move it into the folder layout once. The
+installer then restarts llama-swap from the new folder, which stops every model:
 
 **AI server**:
 
@@ -1740,14 +1744,12 @@ mkdir -p ~/.local/lib/llama-swap
 sh llm-server/apps/llama-swap/install.sh "$V" ~/.local/lib/llama-swap/"$V"
 echo "$V" > ~/.local/lib/llama-swap/"$V"/.portal-version
 ln -s "$V" ~/.local/lib/llama-swap/current
-cp llm-server/llama-swap.service ~/.config/systemd/user/
-systemctl --user daemon-reload
-sudo bash hostd/install.sh llm --portal PORTAL_IP
+sudo bash llm-server/install.sh
+rm ~/.local/bin/llama-swap
 ```
 
 **You should see** `install.sh: updates of other software: ...` among the installer's lines, and a llama-swap card
-on **Admin > Updates**. Its first update restarts llama-swap from the new folder; after that,
-`rm ~/.local/bin/llama-swap`.
+on **Admin > Updates**. This path was not run with the installer.
 
 </details>
 
@@ -1760,7 +1762,7 @@ every person's files and chat history, and `config/` the model settings and the 
 numeric owners and modes, because each workspace's files belong to a user ID of their own, and stop the portal
 while `db/` is copied: `sudo docker compose down`, afterwards `sudo docker compose up -d`. On the AI server only
 `~/.config/containers/systemd/*.container`, where **Admin > Updates** writes the versions of Gufo and vLLM, and
-`~/.config/llama-swap/config.yaml`.
+your own changes to the files in `~/workspace-portal/llm-server`.
 
 </details>
 
@@ -1858,18 +1860,15 @@ sudo bash deploy/verify-isolation.sh
 - **The image and speech models changed.** New images come from Ming-Image-0.2-Design and Qwen-Image-2.1-Turbo,
   changes to images from Turbo, and the quality speech model is Fish Audio Drama 3. Gufo's Qwen-Image-2.1 and Fish
   Audio S2-Pro are gone. On an AI server set up before, run the [media models](#media-models) step's lines for
-  what it lacks: Ming-Image's folders, download, build and `media/ming.service`; Turbo's download and
-  `gufo-image-turbo.container`; Drama 3's folder and download and the new `media/fish-speech.service`. Then remove
-  the old unit and weights and load the new `llama-swap.yaml`:
+  what it lacks: Ming-Image's folders, download and build; Turbo's download; Drama 3's folder and download. Then
+  remove the old unit and weights, and let the installer put the new units and `llama-swap.yaml` in place:
 
   ```sh
   rm -f ~/.config/containers/systemd/gufo-image.container
   podman run --rm --user 0 -e GUFO_MODELS_DIR=/models -v /models/gufo-models:/models:z \
     "$(sed -n 's/^Image=//p' ~/workspace-portal/llm-server/gufo.container)" gufo model remove qwen-image-2.1
   rm -rf /models/fishaudio-s2-pro
-  cp ~/workspace-portal/llm-server/llama-swap.yaml ~/.config/llama-swap/config.yaml
-  systemctl --user daemon-reload
-  systemctl --user restart llama-swap.service
+  sudo bash ~/workspace-portal/llm-server/install.sh
   ```
 
   On the portal server, install `llm-server/media.json` again, as that step's **Portal server** block does. This
@@ -1888,9 +1887,10 @@ sudo bash deploy/verify-isolation.sh
 - **A new agent** (OpenCode, for an install from before it) stays off, because the installer keeps
   `WORKSPACE_AGENTS` in your `.env`: add `opencode` to it, as in `WORKSPACE_AGENTS=qwen,dsh,opencode`, and run the
   installer again. It builds the agent's image: 4.2 to 4.9 GB, of which the agents' images share 3.7 GB.
-- **portal-hostd on the AI server** updates separately: `cd ~/workspace-portal && git pull --ff-only && sudo bash
-  hostd/install.sh llm --portal PORTAL_IP` there. It keeps its token and restarts only if something changed. It
-  also installs the list of programs **Admin > Updates** updates there, and their install scripts.
+- **The AI server** updates separately: `cd ~/workspace-portal && git pull --ff-only && sudo bash
+  llm-server/install.sh` there ([Updating the AI server](#day-to-day)). It puts the models' settings in place and
+  runs portal-hostd's installer, which keeps its token and restarts only if something changed, and installs the
+  list of programs **Admin > Updates** updates there with their install scripts.
 - **Chromium and the other system packages** inside the workspace images: `sudo bash deploy/update-image.sh
   --refresh` rebuilds the images with today's packages.
 - **Going back:** `git log --oneline` lists the versions. `git checkout COMMIT` and the installer again bring that
@@ -1907,7 +1907,7 @@ sudo bash deploy/verify-isolation.sh
 | Linux shows only about 62 GB | UMA is still at 64 GB. Redo the first command of [step 5](#5-unlock-the-memory) and reboot. |
 | GTT total is about half the RAM | The kernel options are not active. Check `cat /proc/cmdline`; they apply after a reboot. |
 | `gufo.service` stays `activating` | It loads the model and waits for the first health check: 17 to 18 seconds on the test machine. |
-| Gufo is stopped while loading | Loading took over 10 minutes, usually a slow disk. Raise `TimeoutStartSec` in `gufo.container` and `healthCheckTimeout` in `~/.config/llama-swap/config.yaml`. |
+| Gufo is stopped while loading | Loading took over 10 minutes, usually a slow disk. Raise `TimeoutStartSec` in `llm-server/gufo.container` and `healthCheckTimeout` in `llm-server/llama-swap.yaml`, then run `sudo bash llm-server/install.sh`. |
 | An image takes minutes before it starts | llama-swap stops the LLM only once every running LLM request has ended, and agents' requests can run for minutes. `curl -s http://127.0.0.1:8080/running` shows what runs. |
 | A unit fails with `wait-gpu-memory: ... GiB needed` | The model before it still held the memory after 60 seconds. `journalctl --user -u gufo`, or with the image or media unit's name (`ming` or `gufo-image-turbo` for images), says why; the next request of that model tries again. |
 | Prompts wait, and the workspace says a video is being made | A video holds the AI server until it is downloaded. **Admin > Usage** shows how far it is; stopping the agent's turn cancels it. |
